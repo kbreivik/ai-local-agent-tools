@@ -12,8 +12,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from api.db import init_db
+from api.logger import ensure_started as _start_logger, flush_now as _flush_logger
 from api.websocket import manager
-from api.routers import tools, agent, status, logs
+from api.routers import tools, agent, status, logs, alerts, memory as memory_router, elastic as elastic_router
+from api.collectors import manager as collector_manager
+from api.memory.client import close_client as _close_memory
+from api.memory.ingest import ingest_runbooks
 
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", "8000"))
@@ -32,13 +36,24 @@ CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "true").lower() == "true"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await _start_logger()
+    collector_manager.start_all()
+    # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
+    try:
+        await ingest_runbooks()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Memory ingest skipped: %s", e)
     yield
+    collector_manager.stop_all()
+    await _close_memory()
+    await _flush_logger()
 
 
 app = FastAPI(
     title="HP1 AI Agent API",
     description="Local AI infrastructure orchestration — Docker Swarm + Kafka",
-    version="1.2.0",
+    version="1.6.0",
     lifespan=lifespan,
 )
 
@@ -55,6 +70,9 @@ app.include_router(tools.router)
 app.include_router(agent.router)
 app.include_router(status.router)
 app.include_router(logs.router)
+app.include_router(alerts.router)
+app.include_router(memory_router.router)
+app.include_router(elastic_router.router)
 
 
 @app.get("/api/health")
@@ -62,7 +80,7 @@ async def health():
     return {
         "status": "ok",
         "service": "HP1-AI-Agent",
-        "version": "1.2.0",
+        "version": "1.6.0",
         "ws_clients": manager.active_count,
     }
 

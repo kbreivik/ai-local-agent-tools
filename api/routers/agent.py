@@ -60,11 +60,11 @@ class RunRequest(BaseModel):
 
 class RunResponse(BaseModel):
     session_id: str
-    operation_id: int
+    operation_id: str
     message: str
 
 
-async def _stream_agent(task: str, session_id: str, operation_id: int):
+async def _stream_agent(task: str, session_id: str, operation_id: str):
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
 
@@ -139,6 +139,17 @@ async def _stream_agent(task: str, session_id: str, operation_id: int):
                 except json.JSONDecodeError:
                     fn_args = {}
 
+                # Retrieve memory context before executing
+                from api.memory.hooks import before_tool_call, after_tool_call as _mem_after
+                mem_context = await before_tool_call(fn_name, fn_args)
+                if mem_context:
+                    await manager.send_line(
+                        "memory",
+                        f"[memory] {len(mem_context)} relevant engram(s) activated",
+                        tool=fn_name,
+                        status="ok",
+                    )
+
                 t0 = time.monotonic()
                 try:
                     result = await asyncio.get_event_loop().run_in_executor(
@@ -151,6 +162,9 @@ async def _stream_agent(task: str, session_id: str, operation_id: int):
                 duration_ms = int((time.monotonic() - t0) * 1000)
                 result_status = result.get("status", "error") if isinstance(result, dict) else "error"
                 result_msg = result.get("message", "") if isinstance(result, dict) else str(result)
+
+                # Store tool execution in memory (non-blocking)
+                _mem_after(fn_name, fn_args, result, result_status, duration_ms)
 
                 # Log to SQLite
                 await logger_mod.log_tool_call(
@@ -179,13 +193,22 @@ async def _stream_agent(task: str, session_id: str, operation_id: int):
                         tool=fn_name,
                         status="escalated",
                     )
-                    # Auto-escalate
+                    # Auto-escalate — enrich reason with relevant memory context
                     try:
+                        from api.memory.client import get_client as _get_mem
+                        esc_context = await _get_mem().activate(
+                            [fn_name, result_status, result_msg[:80]], max_results=2
+                        )
+                        esc_mem_hint = ""
+                        if esc_context:
+                            esc_mem_hint = " | Memory: " + "; ".join(
+                                a.get("concept", "") for a in esc_context
+                            )
                         esc = await asyncio.get_event_loop().run_in_executor(
                             None,
                             lambda: invoke_tool(
                                 "escalate",
-                                {"reason": f"Tool '{fn_name}' returned {result_status}: {result_msg}"},
+                                {"reason": f"Tool '{fn_name}' returned {result_status}: {result_msg}{esc_mem_hint}"},
                             ),
                         )
                         await logger_mod.log_tool_call(

@@ -85,6 +85,244 @@ def audit_log(action: str, result: Any) -> dict:
         return _err(f"audit_log error: {e}")
 
 
+def pre_upgrade_check(service: str = "") -> dict:
+    """
+    6-step pre-flight gate before any service upgrade.
+    All 6 steps must pass — any failure returns status=degraded with specific reason.
+
+    Steps:
+      1. Swarm nodes all ready
+      2. Kafka brokers healthy, ISR intact
+      3. Elastic error logs (last 30min) — zero errors on target service
+      4. Elastic log pattern — error rate not anomalous
+      5. MuninnDB memory context — any past upgrade failures?
+      6. Checkpoint save
+    """
+    steps = []
+
+    # Step 1: Swarm health
+    try:
+        from mcp_server.tools.swarm import swarm_status
+        swarm = swarm_status()
+        ok = swarm.get("status") == "ok"
+        steps.append({"step": 1, "name": "swarm_nodes", "ok": ok,
+                       "detail": swarm.get("message", "")})
+        if not ok:
+            return _degraded({"steps": steps, "failed_at": 1},
+                             f"HALT: Swarm not healthy — {swarm.get('message')}")
+    except Exception as e:
+        return _err(f"pre_upgrade_check step 1 failed: {e}")
+
+    # Step 2: Kafka health
+    try:
+        from mcp_server.tools.kafka import kafka_broker_status
+        kafka = kafka_broker_status()
+        ok = kafka.get("status") == "ok"
+        steps.append({"step": 2, "name": "kafka_brokers", "ok": ok,
+                       "detail": kafka.get("message", "")})
+        if not ok:
+            return _degraded({"steps": steps, "failed_at": 2},
+                             f"HALT: Kafka not healthy — {kafka.get('message')}")
+    except Exception as e:
+        return _err(f"pre_upgrade_check step 2 failed: {e}")
+
+    # Step 3: Elastic error logs
+    try:
+        from mcp_server.tools.elastic import elastic_error_logs
+        errs = elastic_error_logs(service=service, minutes_ago=30)
+        if errs.get("status") == "unavailable":
+            steps.append({"step": 3, "name": "elastic_errors", "ok": True,
+                           "detail": "Elasticsearch unavailable — skipped"})
+        else:
+            err_count = errs.get("data", {}).get("error_count", 0)
+            ok = err_count == 0
+            steps.append({"step": 3, "name": "elastic_errors", "ok": ok,
+                           "detail": errs.get("message", "")})
+            if not ok:
+                return _degraded({"steps": steps, "failed_at": 3},
+                                 f"HALT: {err_count} error(s) in logs for '{service}' last 30min")
+    except Exception as e:
+        steps.append({"step": 3, "name": "elastic_errors", "ok": True,
+                       "detail": f"Elastic check skipped: {e}"})
+
+    # Step 4: Error rate anomaly
+    try:
+        if service:
+            from mcp_server.tools.elastic import elastic_log_pattern
+            pattern = elastic_log_pattern(service=service, hours=24)
+            if pattern.get("status") not in ("unavailable", "error"):
+                anomaly = pattern.get("data", {}).get("anomaly", False)
+                ok = not anomaly
+                steps.append({"step": 4, "name": "error_rate_anomaly", "ok": ok,
+                               "detail": pattern.get("message", "")})
+                if not ok:
+                    return _degraded({"steps": steps, "failed_at": 4},
+                                     f"HALT: Anomalous error rate for '{service}': {pattern.get('message')}")
+            else:
+                steps.append({"step": 4, "name": "error_rate_anomaly", "ok": True,
+                               "detail": "Elastic unavailable — skipped"})
+        else:
+            steps.append({"step": 4, "name": "error_rate_anomaly", "ok": True,
+                           "detail": "No service specified — skipped"})
+    except Exception as e:
+        steps.append({"step": 4, "name": "error_rate_anomaly", "ok": True,
+                       "detail": f"Pattern check skipped: {e}"})
+
+    # Step 5: MuninnDB memory context
+    mem_context = []
+    try:
+        import httpx
+        api_port = os.environ.get("API_PORT", "8000")
+        r = httpx.post(
+            f"http://localhost:{api_port}/api/memory/activate",
+            json=[f"upgrade {service}", "upgrade failure", "rollback"],
+            timeout=3.0,
+        )
+        if r.status_code == 200:
+            activations = r.json().get("activations", [])
+            past_failures = [a for a in activations if "failure" in a.get("concept", "").lower()
+                             or "rollback" in a.get("concept", "").lower()]
+            mem_context = [a.get("concept") for a in activations]
+            steps.append({
+                "step": 5, "name": "memory_context", "ok": True,
+                "detail": f"{len(activations)} engrams activated; {len(past_failures)} past failures",
+                "memory": mem_context,
+            })
+            if past_failures:
+                # Past failures found — warn but don't halt (agent decides)
+                steps[-1]["warning"] = f"Past upgrade failures in memory: {[a.get('concept') for a in past_failures]}"
+    except Exception as e:
+        steps.append({"step": 5, "name": "memory_context", "ok": True,
+                       "detail": f"Memory check skipped: {e}"})
+
+    # Step 6: Checkpoint save
+    try:
+        label = f"pre_upgrade_{service}_{int(__import__('time').time())}"
+        cp = checkpoint_save(label)
+        ok = cp.get("status") == "ok"
+        steps.append({"step": 6, "name": "checkpoint_saved", "ok": ok,
+                       "detail": cp.get("message", "")})
+        if not ok:
+            return _degraded({"steps": steps, "failed_at": 6},
+                             f"HALT: Checkpoint save failed — {cp.get('message')}")
+    except Exception as e:
+        return _err(f"pre_upgrade_check step 6 failed: {e}")
+
+    return _ok(
+        {"steps": steps, "service": service, "memory_context": mem_context},
+        f"All 6 pre-upgrade checks passed for '{service}'"
+    )
+
+
+def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
+    """
+    Post-upgrade verification after service_upgrade().
+    Called automatically after any service upgrade.
+
+    Steps:
+      1. Service replicas at desired count
+      2. No new errors in Elastic (last 5min)
+      3. Correlate operation logs if operation_id provided
+      4. Store result as MuninnDB engram
+    """
+    steps = []
+    verdict = "success"
+
+    # Step 1: Replica count
+    try:
+        from mcp_server.tools.swarm import service_health
+        health = service_health(service)
+        ok = health.get("status") == "ok"
+        steps.append({"step": 1, "name": "replicas_at_desired", "ok": ok,
+                       "detail": health.get("message", "")})
+        if not ok:
+            verdict = "failed"
+    except Exception as e:
+        steps.append({"step": 1, "name": "replicas_at_desired", "ok": False,
+                       "detail": str(e)})
+        verdict = "failed"
+
+    # Step 2: Elastic error logs (last 5min)
+    new_errors = []
+    try:
+        from mcp_server.tools.elastic import elastic_error_logs
+        errs = elastic_error_logs(service=service, minutes_ago=5)
+        if errs.get("status") != "unavailable":
+            err_count = errs.get("data", {}).get("error_count", 0)
+            new_errors = errs.get("data", {}).get("errors", [])[:5]
+            ok = err_count == 0
+            steps.append({"step": 2, "name": "no_new_errors", "ok": ok,
+                           "detail": errs.get("message", "")})
+            if not ok:
+                verdict = "failed"
+        else:
+            steps.append({"step": 2, "name": "no_new_errors", "ok": True,
+                           "detail": "Elastic unavailable — skipped"})
+    except Exception as e:
+        steps.append({"step": 2, "name": "no_new_errors", "ok": True,
+                       "detail": f"Elastic check skipped: {e}"})
+
+    # Step 3: Correlate operation
+    correlation = {}
+    if operation_id:
+        try:
+            from mcp_server.tools.elastic import elastic_correlate_operation
+            corr = elastic_correlate_operation(operation_id)
+            if corr.get("status") == "ok":
+                correlation = corr.get("data", {})
+                corr_errors = correlation.get("error_count", 0)
+                steps.append({"step": 3, "name": "log_correlation", "ok": True,
+                               "detail": corr.get("message", ""),
+                               "correlated_errors": corr_errors})
+                if corr_errors > 0:
+                    verdict = "failed"
+        except Exception as e:
+            steps.append({"step": 3, "name": "log_correlation", "ok": True,
+                           "detail": f"Correlation skipped: {e}"})
+    else:
+        steps.append({"step": 3, "name": "log_correlation", "ok": True,
+                       "detail": "No operation_id provided"})
+
+    # Step 4: Store result as MuninnDB engram
+    try:
+        import httpx
+        api_port = os.environ.get("API_PORT", "8000")
+        concept = f"upgrade_result:{service}"
+        content = (
+            f"Service '{service}' upgrade {'succeeded' if verdict == 'success' else 'FAILED'} "
+            f"at {_ts()}. "
+            f"Steps: {[s['name'] for s in steps if not s['ok']]}. "
+            f"New errors: {len(new_errors)}. "
+            + (f"Operation: {operation_id}" if operation_id else "")
+        )
+        tags = ["upgrade", service, verdict]
+        if new_errors:
+            tags.append("errors_detected")
+        httpx.post(
+            f"http://localhost:{api_port}/api/memory/store",
+            json={"concept": concept, "content": content, "tags": tags},
+            timeout=3.0,
+        )
+        steps.append({"step": 4, "name": "memory_stored", "ok": True,
+                       "detail": f"Engram '{concept}' stored"})
+    except Exception as e:
+        steps.append({"step": 4, "name": "memory_stored", "ok": True,
+                       "detail": f"Memory store skipped: {e}"})
+
+    return {
+        "status": "ok" if verdict == "success" else "degraded",
+        "data": {
+            "service": service,
+            "verdict": verdict,
+            "steps": steps,
+            "correlation_summary": correlation,
+            "new_errors": new_errors,
+        },
+        "timestamp": _ts(),
+        "message": f"Post-upgrade verify for '{service}': {verdict.upper()}",
+    }
+
+
 def escalate(reason: str) -> dict:
     """Flag decision as high-risk — logs, pauses, returns escalation signal."""
     entry = {

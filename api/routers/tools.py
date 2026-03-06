@@ -25,7 +25,7 @@ async def get_tool(tool_name: str):
 
 @router.post("/{tool_name}/invoke")
 async def invoke(tool_name: str, params: dict = {}):
-    """Directly invoke a tool (bypasses agent loop). Logs to SQLite."""
+    """Directly invoke a tool (bypasses agent loop). Logs to DB."""
     import uuid
     session_id = str(uuid.uuid4())
     op_id = await logger_mod.log_operation(session_id, f"direct:{tool_name}")
