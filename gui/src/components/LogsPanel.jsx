@@ -36,9 +36,11 @@ function levelBg(lvl = '') {
 }
 
 function LogLine({ entry }) {
-  const ts = entry.timestamp
-    ? new Date(entry.timestamp).toLocaleTimeString()
-    : '??:??:??'
+  const ts = (() => {
+    if (!entry.timestamp) return 'N/A'
+    const d = new Date(entry.timestamp)
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
+  })()
   const lvl = (entry.level || 'info').toLowerCase()
   const svc = entry.service || entry.container || entry.hostname || ''
 

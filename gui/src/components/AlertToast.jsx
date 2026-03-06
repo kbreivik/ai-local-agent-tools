@@ -6,6 +6,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchAlerts, dismissAlert, dismissAllAlerts } from '../api'
 
+const fmtTs = (ts) => {
+  if (!ts) return 'N/A'
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
+}
+
 const SEVERITY_STYLE = {
   critical: 'bg-red-900 border-red-600 text-red-200',
   warning:  'bg-yellow-900 border-yellow-600 text-yellow-200',
@@ -34,7 +40,7 @@ function Toast({ alert, onDismiss }) {
       <div className="flex-1 min-w-0">
         <div className="font-semibold font-mono">{alert.component}</div>
         <div className="opacity-90 mt-0.5 leading-tight">{alert.message}</div>
-        <div className="opacity-60 mt-1">{new Date(alert.timestamp).toLocaleTimeString()}</div>
+        <div className="opacity-60 mt-1">{fmtTs(alert.timestamp)}</div>
       </div>
       <button
         onClick={() => onDismiss(alert.id)}

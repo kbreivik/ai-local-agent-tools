@@ -37,9 +37,12 @@ export default function ElasticStatus() {
   }
 
   const stale = stats.stale
-  const lastIngest = stats.last_ingest
-    ? new Date(stats.last_ingest).toLocaleTimeString()
-    : null
+  const fmtTs = (ts) => {
+    if (!ts) return 'N/A'
+    const d = new Date(ts)
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
+  }
+  const lastIngest = fmtTs(stats.last_ingest)
 
   const kibanaUrl = import.meta.env.VITE_KIBANA_URL
 

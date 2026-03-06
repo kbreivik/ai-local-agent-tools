@@ -23,7 +23,11 @@ const STATUS_COLOR = {
 function Line({ msg }) {
   const { line, icon } = TYPE_STYLE[msg.type] ?? TYPE_STYLE.step
   const statusColor = STATUS_COLOR[msg.status] ?? ''
-  const ts = new Date(msg.timestamp).toLocaleTimeString()
+  const ts = (() => {
+    if (!msg.timestamp) return 'N/A'
+    const d = new Date(msg.timestamp)
+    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
+  })()
 
   return (
     <div className={`flex gap-2 py-0.5 font-mono text-xs leading-relaxed ${line}`}>
