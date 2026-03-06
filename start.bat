@@ -34,7 +34,7 @@ if exist "%PROJECT_DIR%.env" (
 )
 
 echo.
-echo  HP1 AI Agent v1.6.0
+echo  HP1 AI Agent v1.6.5
 echo  ===================
 echo  API  ^> http://localhost:8000
 echo  GUI  ^> http://localhost:5173
