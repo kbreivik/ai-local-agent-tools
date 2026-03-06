@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "infra-agent": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "D:/claude_code/FAJK/HP1-AI-Agent-v1",
+      "env": {
+        "DOCKER_HOST": "npipe:////./pipe/docker_engine",
+        "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092,localhost:9093,localhost:9094",
+        "AUDIT_LOG_PATH": "D:/claude_code/FAJK/HP1-AI-Agent-v1/logs/audit.log",
+        "CHECKPOINT_PATH": "D:/claude_code/FAJK/HP1-AI-Agent-v1/checkpoints",
+        "CODE_INDEX_PATH": "D:/claude_code/FAJK/HP1-AI-Agent-v1/.code-index",
+        "LM_STUDIO_API_KEY": "sk-lm-YOUR_KEY_HERE"
+      }
+    },
+    "jcodemunch": {
+      "command": "jcodemunch-mcp",
+      "env": {
+        "CODE_INDEX_PATH": "D:/claude_code/FAJK/HP1-AI-Agent-v1/.code-index"
+      }
+    }
+  }
+}
