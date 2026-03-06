@@ -1,0 +1,23 @@
+services:
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.4
+    user: root
+    container_name: filebeat
+    command: filebeat -e --strict.perms=false
+    environment:
+      - ELASTIC_URL=${ELASTIC_URL:-http://host.docker.internal:9200}
+      - NODE_ROLE=${NODE_ROLE:-worker}
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+      - filebeat_data:/usr/share/filebeat/data
+    restart: unless-stopped
+
+# ── Swarm global service variant ──────────────────────────────────────────────
+# For production: docker config create filebeat-config filebeat.yml
+# Then: docker stack deploy -c docker-compose.filebeat.swarm.yml filebeat-stack
+
+volumes:
+  filebeat_data:

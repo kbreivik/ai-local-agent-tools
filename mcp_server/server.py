@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastmcp import FastMCP
 
-from mcp_server.tools import swarm, kafka, orchestration
+from mcp_server.tools import swarm, kafka, orchestration, elastic
 
 mcp = FastMCP("HP1-AI-Agent")
 
@@ -112,6 +112,68 @@ def audit_log(action: str, result: str) -> dict:
 def escalate(reason: str) -> dict:
     """Flag decision as high-risk, log and pause."""
     return orchestration.escalate(reason)
+
+
+@mcp.tool()
+def pre_upgrade_check_full(service: str = "") -> dict:
+    """6-step pre-upgrade gate: swarm + kafka + elastic errors + log pattern + memory + checkpoint."""
+    return orchestration.pre_upgrade_check(service)
+
+
+@mcp.tool()
+def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
+    """Post-upgrade verification: replicas + no new errors + log correlation + memory engram."""
+    return orchestration.post_upgrade_verify(service, operation_id)
+
+
+# ── Elasticsearch log tools ───────────────────────────────────────────────────
+
+@mcp.tool()
+def elastic_cluster_health() -> dict:
+    """Full Elasticsearch cluster health: status, nodes, shards, indices."""
+    return elastic.elastic_cluster_health()
+
+
+@mcp.tool()
+def elastic_search_logs(
+    query: str = "",
+    service: str = "",
+    node: str = "",
+    minutes_ago: int = 60,
+    size: int = 50,
+) -> dict:
+    """Search infrastructure logs. Filter by service, node, time range, keyword."""
+    return elastic.elastic_search_logs(query, service, node, minutes_ago, size)
+
+
+@mcp.tool()
+def elastic_error_logs(service: str = "", minutes_ago: int = 30) -> dict:
+    """Recent error/critical logs. Returns status=degraded if errors found."""
+    return elastic.elastic_error_logs(service, minutes_ago)
+
+
+@mcp.tool()
+def elastic_kafka_logs(broker_id: str = "", minutes_ago: int = 60) -> dict:
+    """Kafka broker log analysis: leader elections, ISR changes, offline partitions."""
+    return elastic.elastic_kafka_logs(broker_id, minutes_ago)
+
+
+@mcp.tool()
+def elastic_log_pattern(service: str, hours: int = 24) -> dict:
+    """Error rate trend for a service. Flags anomaly if current hour > 2x average."""
+    return elastic.elastic_log_pattern(service, hours)
+
+
+@mcp.tool()
+def elastic_index_stats() -> dict:
+    """hp1-logs-* index stats and Filebeat freshness check."""
+    return elastic.elastic_index_stats()
+
+
+@mcp.tool()
+def elastic_correlate_operation(operation_id: str) -> dict:
+    """Correlate a PostgreSQL operation_id with contemporaneous Elasticsearch logs."""
+    return elastic.elastic_correlate_operation(operation_id)
 
 
 if __name__ == "__main__":

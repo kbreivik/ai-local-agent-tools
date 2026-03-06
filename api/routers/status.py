@@ -1,41 +1,160 @@
-"""GET /api/status — live infrastructure status snapshots."""
-import asyncio
-from fastapi import APIRouter
-import api.logger as logger_mod
+"""
+GET /api/status — live infrastructure status from DB snapshots.
+
+All data comes from the status_snapshots table, written by background collectors.
+Never calls Docker/Kafka/ES directly — that's the collectors' job.
+"""
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Query
+
+from api.db.base import get_engine
+from api.db import queries as q
 
 router = APIRouter(prefix="/api/status", tags=["status"])
 
 
-def _run_sync(fn):
-    """Run a sync tool function and return result safely."""
-    try:
-        return fn()
-    except Exception as e:
-        return {"status": "error", "message": str(e), "data": None}
+def _snap_state(snap: dict) -> dict:
+    """Extract state from snapshot row, inject last_updated timestamp."""
+    if not snap:
+        return {"health": "unknown", "message": "No data yet — collector starting"}
+    state = snap.get("state") or {}
+    if isinstance(state, str):
+        import json
+        try:
+            state = json.loads(state)
+        except Exception:
+            state = {}
+    state["last_updated"] = snap.get("timestamp")
+    return state
 
+
+# ── Main status endpoint ───────────────────────────────────────────────────────
 
 @router.get("")
 async def get_status():
-    """Returns current health of all infrastructure components."""
-    import sys, os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    """Latest snapshot per component + collector status."""
+    from api.collectors import manager as coll_mgr
 
-    from mcp_server.tools.swarm import swarm_status, service_list
-    from mcp_server.tools.kafka import kafka_broker_status
+    async with get_engine().connect() as conn:
+        swarm_snap     = await q.get_latest_snapshot(conn, "swarm")
+        kafka_snap     = await q.get_latest_snapshot(conn, "kafka_cluster")
+        elastic_snap   = await q.get_latest_snapshot(conn, "elasticsearch")
 
-    swarm, services, kafka = await asyncio.gather(
-        asyncio.get_event_loop().run_in_executor(None, swarm_status),
-        asyncio.get_event_loop().run_in_executor(None, service_list),
-        asyncio.get_event_loop().run_in_executor(None, kafka_broker_status),
-    )
+    swarm_state   = _snap_state(swarm_snap)
+    kafka_state   = _snap_state(kafka_snap)
+    elastic_state = _snap_state(elastic_snap)
 
-    # Persist snapshots
-    for component, state in [("swarm", swarm), ("services", services), ("kafka", kafka)]:
-        await logger_mod.log_status_snapshot(component, state)
+    # Derive filebeat from elastic state
+    filebeat_state = elastic_state.get("filebeat", {"status": "unconfigured"})
 
     return {
-        "swarm": swarm,
-        "services": services,
-        "kafka": kafka,
-        "elasticsearch": {"status": "unknown", "message": "Not deployed", "data": None},
+        "swarm":         swarm_state,
+        "kafka":         kafka_state,
+        "elasticsearch": elastic_state,
+        "filebeat":      filebeat_state,
+        "collectors":    coll_mgr.status(),
+    }
+
+
+# ── History / sparklines ───────────────────────────────────────────────────────
+
+@router.get("/history/{component}")
+async def get_history(
+    component: str,
+    hours: int = Query(24, ge=1, le=168),
+):
+    """Returns snapshot history for a component for the last N hours."""
+    # Use space separator to match SQLite's storage format for string comparisons
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    async with get_engine().connect() as conn:
+        rows = await q.get_snapshots_since(conn, component, since, limit=500)
+
+    # Return slim records for sparkline rendering
+    slim = []
+    for r in rows:
+        state = r.get("state") or {}
+        if isinstance(state, str):
+            import json
+            try:
+                state = json.loads(state)
+            except Exception:
+                state = {}
+        slim.append({
+            "timestamp": r.get("timestamp"),
+            "health": state.get("health", "unknown"),
+            "is_healthy": r.get("is_healthy", False),
+        })
+    return {"component": component, "hours": hours, "history": slim}
+
+
+# ── Detailed endpoints ─────────────────────────────────────────────────────────
+
+@router.get("/nodes")
+async def get_nodes():
+    """Swarm node detail from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "swarm")
+    state = _snap_state(snap)
+    return {
+        "nodes": state.get("nodes", []),
+        "node_count": state.get("node_count", 0),
+        "health": state.get("health", "unknown"),
+        "last_updated": state.get("last_updated"),
+    }
+
+
+@router.get("/services")
+async def get_services():
+    """Swarm service detail from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "swarm")
+    state = _snap_state(snap)
+    return {
+        "services": state.get("services", []),
+        "service_count": state.get("service_count", 0),
+        "health": state.get("health", "unknown"),
+        "last_updated": state.get("last_updated"),
+    }
+
+
+@router.get("/brokers")
+async def get_brokers():
+    """Kafka broker detail from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "kafka_cluster")
+    state = _snap_state(snap)
+    return {
+        "brokers": state.get("brokers", []),
+        "broker_count": state.get("broker_count", 0),
+        "controller_id": state.get("controller_id"),
+        "health": state.get("health", "unknown"),
+        "last_updated": state.get("last_updated"),
+    }
+
+
+@router.get("/lag")
+async def get_consumer_lag():
+    """Consumer group lag from latest Kafka snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "kafka_cluster")
+    state = _snap_state(snap)
+    return {
+        "consumer_lag": state.get("consumer_lag", {}),
+        "health": state.get("health", "unknown"),
+        "last_updated": state.get("last_updated"),
+    }
+
+
+@router.get("/topics")
+async def get_topics():
+    """Kafka topic list from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "kafka_cluster")
+    state = _snap_state(snap)
+    return {
+        "topics": state.get("topics", []),
+        "topic_count": state.get("topic_count", 0),
+        "under_replicated_partitions": state.get("under_replicated_partitions", 0),
+        "last_updated": state.get("last_updated"),
     }

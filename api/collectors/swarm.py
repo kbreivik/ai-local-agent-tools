@@ -1,0 +1,198 @@
+"""
+SwarmCollector — polls Docker Swarm every SWARM_POLL_INTERVAL seconds.
+
+Collects: node list (id, hostname, role, state, availability),
+service list (name, desired vs running replicas, image, update_state),
+and derives an overall health signal:
+  healthy  — all nodes active, all services at desired replicas
+  degraded — 1+ nodes drain/pause OR 1+ services under-replicated
+  critical — manager quorum at risk OR majority services failed
+  error    — cannot reach Docker daemon
+"""
+import asyncio
+import logging
+import os
+
+from api.collectors.base import BaseCollector
+
+log = logging.getLogger(__name__)
+
+
+class SwarmCollector(BaseCollector):
+    component = "swarm"
+
+    def __init__(self):
+        super().__init__()
+        self.interval = int(os.environ.get("SWARM_POLL_INTERVAL", "30"))
+
+    async def poll(self) -> dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._collect_sync)
+
+    def _collect_sync(self) -> dict:
+        import docker
+        from docker.errors import DockerException
+
+        host = os.environ.get("DOCKER_HOST", "npipe:////./pipe/docker_engine")
+        try:
+            client = docker.DockerClient(base_url=host, timeout=10)
+        except Exception as e:
+            return {
+                "health": "error",
+                "error": str(e),
+                "message": f"Cannot connect to Docker: {e}",
+                "nodes": [], "services": [],
+                "node_count": 0, "service_count": 0,
+            }
+
+        try:
+            # ── Nodes ──────────────────────────────────────────────────────────
+            nodes = client.nodes.list()
+            node_data = []
+            manager_count = 0
+            active_managers = 0
+            degraded_nodes = []
+
+            for node in nodes:
+                attrs = node.attrs
+                spec = attrs.get("Spec", {})
+                st = attrs.get("Status", {})
+                mgr = attrs.get("ManagerStatus", {})
+                desc = attrs.get("Description", {})
+                engine = desc.get("Engine", {})
+                platform = desc.get("Platform", {})
+
+                role = spec.get("Role", "unknown")
+                state = st.get("State", "unknown")
+                avail = spec.get("Availability", "active")
+
+                if role == "manager":
+                    manager_count += 1
+                    if state == "ready" and avail == "active":
+                        active_managers += 1
+
+                if state != "ready" or avail not in ("active",):
+                    degraded_nodes.append(spec.get("Name", "?"))
+
+                node_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "hostname": spec.get("Name", desc.get("Hostname", "unknown")),
+                    "role": role,
+                    "state": state,
+                    "availability": avail,
+                    "leader": mgr.get("Leader", False),
+                    "addr": st.get("Addr", ""),
+                    "engine_version": engine.get("EngineVersion", ""),
+                    "os": f"{platform.get('OS','')}/{platform.get('Architecture','')}",
+                })
+
+            # ── Services ───────────────────────────────────────────────────────
+            services = client.services.list()
+            svc_data = []
+            degraded_services = []
+            failed_services = []
+
+            for svc in services:
+                attrs = svc.attrs
+                spec = attrs.get("Spec", {})
+                task_tmpl = spec.get("TaskTemplate", {})
+                container_spec = task_tmpl.get("ContainerSpec", {})
+                replicated = spec.get("Mode", {}).get("Replicated", {})
+                desired = replicated.get("Replicas", 0) if replicated else 0
+
+                tasks = svc.tasks(filters={"desired-state": "running"})
+                running = sum(
+                    1 for t in tasks
+                    if t.get("Status", {}).get("State") == "running"
+                )
+
+                name = spec.get("Name", "unknown")
+                update_st = attrs.get("UpdateStatus", {})
+
+                if desired > 0:
+                    if running == 0:
+                        failed_services.append(name)
+                    elif running < desired:
+                        degraded_services.append(name)
+
+                # Strip image digest for display
+                image = container_spec.get("Image", "unknown")
+                image = image.split("@")[0]
+
+                svc_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "name": name,
+                    "image": image,
+                    "desired_replicas": desired,
+                    "running_replicas": running,
+                    "mode": "replicated" if replicated else "global",
+                    "update_state": update_st.get("State", ""),
+                })
+
+            client.close()
+
+            # ── Health determination ────────────────────────────────────────────
+            quorum = (manager_count // 2) + 1 if manager_count else 1
+            if active_managers < quorum:
+                health = "critical"
+                message = (
+                    f"Manager quorum at risk: {active_managers}/{manager_count} active "
+                    f"(need {quorum})"
+                )
+            elif failed_services:
+                health = "critical"
+                message = f"Services with 0 replicas: {failed_services}"
+            elif degraded_nodes or degraded_services:
+                health = "degraded"
+                parts = []
+                if degraded_nodes:
+                    parts.append(f"nodes not active: {degraded_nodes}")
+                if degraded_services:
+                    parts.append(f"under-replicated: {degraded_services}")
+                message = "; ".join(parts)
+            else:
+                health = "healthy"
+                message = (
+                    f"{len(node_data)} nodes ({manager_count} mgr), "
+                    f"{len(svc_data)} services — all healthy"
+                )
+
+            return {
+                "health": health,
+                "message": message,
+                "nodes": node_data,
+                "services": svc_data,
+                "node_count": len(node_data),
+                "service_count": len(svc_data),
+                "manager_count": manager_count,
+                "active_managers": active_managers,
+                "degraded_nodes": degraded_nodes,
+                "degraded_services": degraded_services,
+                "failed_services": failed_services,
+            }
+
+        except DockerException as e:
+            try:
+                client.close()
+            except Exception:
+                pass
+            return {
+                "health": "error",
+                "error": str(e),
+                "message": f"Docker error: {e}",
+                "nodes": [], "services": [],
+                "node_count": 0, "service_count": 0,
+            }
+        except Exception as e:
+            try:
+                client.close()
+            except Exception:
+                pass
+            log.warning("SwarmCollector._collect_sync error: %s", e)
+            return {
+                "health": "error",
+                "error": str(e),
+                "message": f"Swarm collection error: {e}",
+                "nodes": [], "services": [],
+                "node_count": 0, "service_count": 0,
+            }

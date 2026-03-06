@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.4
+    user: root
+    command: filebeat -e --strict.perms=false
+    configs:
+      - source: filebeat-config
+        target: /usr/share/filebeat/filebeat.yml
+        mode: 0440
+    environment:
+      - ELASTIC_URL=${ELASTIC_URL}
+      - NODE_ROLE={{.Node.Labels.role}}
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+    networks:
+      - hp1_net
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+
+configs:
+  filebeat-config:
+    external: true
+
+networks:
+  hp1_net:
+    external: true
+    name: hp1_net

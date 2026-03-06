@@ -49,6 +49,83 @@ export async function fetchModels() {
   return r.json()
 }
 
+export async function fetchStats() {
+  const r = await fetch(`${BASE}/api/logs/stats`)
+  return r.json()
+}
+
+export async function fetchStatusHistory(component, hours = 24) {
+  const r = await fetch(`${BASE}/api/status/history/${component}?hours=${hours}`)
+  return r.json()
+}
+
+export async function fetchAlerts(limit = 20) {
+  const r = await fetch(`${BASE}/api/alerts/recent?limit=${limit}`)
+  return r.json()
+}
+
+export async function dismissAlert(alertId) {
+  const r = await fetch(`${BASE}/api/alerts/${alertId}/dismiss`, { method: 'POST' })
+  return r.json()
+}
+
+export async function dismissAllAlerts() {
+  const r = await fetch(`${BASE}/api/alerts/dismiss-all`, { method: 'POST' })
+  return r.json()
+}
+
+export async function fetchOperations({ limit = 50, offset = 0, status = 'all' } = {}) {
+  const p = new URLSearchParams({ limit, offset, status })
+  const r = await fetch(`${BASE}/api/logs/operations?${p}`)
+  return r.json()
+}
+
+export async function fetchOperationDetail(opId) {
+  const r = await fetch(`${BASE}/api/logs/operations/${opId}`)
+  return r.json()
+}
+
+export async function fetchEscalations(limit = 50) {
+  const r = await fetch(`${BASE}/api/logs/escalations?limit=${limit}`)
+  return r.json()
+}
+
+export async function resolveEscalation(escId) {
+  const r = await fetch(`${BASE}/api/logs/escalations/${escId}/resolve`, { method: 'POST' })
+  return r.json()
+}
+
+// ── Memory (MuninnDB) ─────────────────────────────────────────────────────────
+
+export async function fetchMemoryHealth() {
+  const r = await fetch(`${BASE}/api/memory/health`)
+  return r.json()
+}
+
+export async function fetchMemoryRecent(limit = 20) {
+  const r = await fetch(`${BASE}/api/memory/recent?limit=${limit}`)
+  return r.json()
+}
+
+export async function searchMemory(q, limit = 20) {
+  const r = await fetch(`${BASE}/api/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+  return r.json()
+}
+
+export async function activateMemory(context, maxResults = 5) {
+  const r = await fetch(`${BASE}/api/memory/activate?max_results=${maxResults}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(context),
+  })
+  return r.json()
+}
+
+export async function deleteMemoryEngram(id) {
+  const r = await fetch(`${BASE}/api/memory/${id}`, { method: 'DELETE' })
+  return r.ok
+}
+
 // ── WebSocket ────────────────────────────────────────────────────────────────
 
 const WS_BASE = (() => {

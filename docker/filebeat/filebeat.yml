@@ -1,0 +1,65 @@
+filebeat.inputs:
+  # Docker container logs — all containers on this node
+  - type: filestream
+    id: docker-containers
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*-json.log
+    parsers:
+      - ndjson:
+          target: "json"
+          message_key: log
+          overwrite_keys: true
+          add_error_key: true
+    prospector:
+      scanner:
+        symlinks: true
+
+  # System logs
+  - type: filestream
+    id: system-logs
+    enabled: true
+    paths:
+      - /var/log/syslog
+      - /var/log/auth.log
+    ignore_older: 24h
+    ignore_inactive: since_last_start
+
+  # Kafka broker logs (if mounted)
+  - type: filestream
+    id: kafka-logs
+    enabled: true
+    paths:
+      - /var/log/kafka/*.log
+    ignore_older: 24h
+
+processors:
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_fields:
+      target: ''
+      fields:
+        hp1_node_role: ${NODE_ROLE:unknown}
+        hp1_environment: prototype
+
+output.elasticsearch:
+  hosts: ["${ELASTIC_URL:http://localhost:9200}"]
+  index: "hp1-logs-%{+yyyy.MM.dd}"
+  # Bulk settings for performance
+  bulk_max_size: 256
+  worker: 1
+
+setup.template.enabled: false
+setup.ilm.enabled: false
+
+# Logging
+logging.level: warning
+logging.to_files: false
+
+# Performance
+queue.mem:
+  events: 2048
+  flush.min_events: 256
+  flush.timeout: 5s

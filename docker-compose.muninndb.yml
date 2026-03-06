@@ -1,0 +1,37 @@
+services:
+  muninndb:
+    image: ghcr.io/scrypster/muninndb:latest
+    container_name: muninndb
+    # Publish 9475 — socat proxy (sharing our netns) will listen here and forward to 127.0.0.1:8475
+    ports:
+      - "9475:9475"
+    volumes:
+      - muninndb-data:/data
+    environment:
+      MUNINNDB_DATA: /data
+    # Use daemon mode (default) + tail to keep container alive
+    entrypoint: ["sh", "-c"]
+    command: ["muninndb-server --daemon --data /data && tail -f /dev/null"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://127.0.0.1:8475/api/engrams > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  muninndb-proxy:
+    image: alpine/socat:latest
+    container_name: muninndb-proxy
+    # Share MuninnDB's network namespace so 127.0.0.1 IS muninndb's loopback
+    network_mode: "service:muninndb"
+    # Proxy: 0.0.0.0:9475 → 127.0.0.1:8475 (muninndb REST)
+    command: TCP-LISTEN:9475,bind=0.0.0.0,reuseaddr,fork TCP:127.0.0.1:8475
+    depends_on:
+      muninndb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  muninndb-data:
+    external: true
