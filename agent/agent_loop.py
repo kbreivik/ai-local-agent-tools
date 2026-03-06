@@ -30,13 +30,24 @@ RULES — you must follow these exactly:
 6. Call checkpoint_save() before any risky operation.
 7. Never skip a check step, even if the previous step succeeded.
 
+EFFICIENCY RULES:
+- Never dedicate a full step to only audit_log() calls. Call audit_log() immediately
+  after the tool it documents, in the same step — combine them in one response.
+- Never re-check something already checked in this session unless a tool returned
+  degraded or failed. Redundant re-checks waste steps.
+- Before upgrading any service, call service_current_version() to confirm the running
+  image. If current image == target image, skip the upgrade, log "already at target
+  version", and continue. Never upgrade a service that is already at the target version.
+- Use service_resolve_image() to find the latest stable tag before upgrading. Never
+  upgrade to an intermediate version when a newer stable version is already available.
+
 Your task: Perform a rolling upgrade of the 'workload' service from nginx:1.25-alpine to
 nginx:1.26-alpine while Kafka is under load, with health gates at every step.
 
 Available tools: swarm_status, service_list, service_health, service_upgrade,
-service_rollback, node_drain, pre_upgrade_check, kafka_broker_status,
-kafka_consumer_lag, kafka_topic_health, kafka_rolling_restart_safe, pre_kafka_check,
-checkpoint_save, checkpoint_restore, audit_log, escalate.
+service_rollback, service_current_version, node_drain, pre_upgrade_check,
+kafka_broker_status, kafka_consumer_lag, kafka_topic_health, kafka_rolling_restart_safe,
+pre_kafka_check, checkpoint_save, checkpoint_restore, audit_log, escalate.
 
 Think step by step. Log reasoning. Never skip verifications."""
 
@@ -46,6 +57,8 @@ TOOLS = [
     {"type": "function", "function": {"name": "service_health", "description": "Specific service ready/degraded/failed state", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "service_upgrade", "description": "Rolling upgrade with health gate", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "image": {"type": "string"}}, "required": ["name", "image"]}}},
     {"type": "function", "function": {"name": "service_rollback", "description": "Revert service to previous image", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
+    {"type": "function", "function": {"name": "service_current_version", "description": "Currently running image tag for a service — call before deciding to upgrade", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
+    {"type": "function", "function": {"name": "service_resolve_image", "description": "Resolve latest stable semver tag for an image from Docker Hub — use before upgrade to avoid intermediate versions", "parameters": {"type": "object", "properties": {"image": {"type": "string"}}, "required": ["image"]}}},
     {"type": "function", "function": {"name": "node_drain", "description": "Safe drain before maintenance", "parameters": {"type": "object", "properties": {"node_id": {"type": "string"}}, "required": ["node_id"]}}},
     {"type": "function", "function": {"name": "pre_upgrade_check", "description": "Full swarm readiness gate", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "kafka_broker_status", "description": "Broker health, leader election state", "parameters": {"type": "object", "properties": {}, "required": []}}},
@@ -65,6 +78,8 @@ TOOL_MAP = {
     "service_health": lambda args: swarm.service_health(args["name"]),
     "service_upgrade": lambda args: swarm.service_upgrade(args["name"], args["image"]),
     "service_rollback": lambda args: swarm.service_rollback(args["name"]),
+    "service_current_version": lambda args: swarm.service_current_version(args["name"]),
+    "service_resolve_image": lambda args: swarm.service_resolve_image(args["image"]),
     "node_drain": lambda args: swarm.node_drain(args["node_id"]),
     "pre_upgrade_check": lambda args: swarm.pre_upgrade_check(),
     "kafka_broker_status": lambda args: kafka.kafka_broker_status(),

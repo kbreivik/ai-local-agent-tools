@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: HP1 AI Agent — start FastAPI backend + React dev server
+:: HP1 AI Agent -- start FastAPI backend + React dev server
 :: Usage: start.bat [api-only | gui-only | pg | migrate]
 
 set PROJECT_DIR=%~dp0
@@ -28,13 +28,14 @@ set CORS_ALLOW_ALL=true
 :: If .env exists, load it (DATABASE_URL etc.)
 if exist "%PROJECT_DIR%.env" (
     for /f "usebackq tokens=1,* delims==" %%a in ("%PROJECT_DIR%.env") do (
-        if not "%%a"=="" if not "%%a:~0,1%"=="#" set %%a=%%b
+        set "_envkey=%%a"
+        if not "!_envkey!"=="" if not "!_envkey:~0,1!"=="#" set "%%a=%%b"
     )
 )
 
 echo.
-echo  HP1 AI Agent v1.3
-echo  =================
+echo  HP1 AI Agent v1.6.0
+echo  ===================
 echo  API  ^> http://localhost:8000
 echo  GUI  ^> http://localhost:5173
 echo  Docs ^> http://localhost:8000/docs
@@ -45,7 +46,7 @@ if defined DATABASE_URL (
 )
 echo.
 
-:: pg — start only the postgres container first, then full stack
+:: pg -- start only the postgres container first, then full stack
 if "%1"=="pg" (
     echo Starting Postgres container...
     cd /d "%PROJECT_DIR%"
@@ -62,7 +63,7 @@ if "%1"=="pg" (
     goto :start_both
 )
 
-:: migrate — run SQLite to Postgres migration
+:: migrate -- run SQLite to Postgres migration
 if "%1"=="migrate" (
     cd /d "%PROJECT_DIR%"
     python -m api.db.migrate_sqlite

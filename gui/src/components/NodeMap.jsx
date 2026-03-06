@@ -6,57 +6,60 @@
  */
 import { useEffect, useState, useCallback } from 'react'
 import { fetchStatus } from '../api'
+import VersionBadge from '../utils/VersionBadge'
+import { useOptions } from '../context/OptionsContext'
 
 const HEALTH_BG = {
-  ready:   'bg-green-900 border-green-700',
-  down:    'bg-red-900 border-red-700',
-  unknown: 'bg-slate-800 border-slate-700',
+  ready:   'bg-white border-green-400',
+  down:    'bg-white border-red-400',
+  unknown: 'bg-white border-gray-300',
 }
 
-const HEALTH_GLOW = {
-  ready:   'text-green-400',
-  down:    'text-red-400',
-  unknown: 'text-slate-500',
+const HEALTH_TEXT_CLS = {
+  ready:   'text-green-600',
+  down:    'text-red-600',
+  unknown: 'text-gray-400',
 }
 
-function NodeCard({ node, isSelected, onClick, kafkaBroker }) {
+function NodeCard({ node, isSelected, onClick, kafkaBroker, size = 'medium' }) {
   const stateKey = node.state === 'ready' ? 'ready' : node.state === 'down' ? 'down' : 'unknown'
-  const border = isSelected ? 'border-blue-500 ring-1 ring-blue-500' : HEALTH_BG[stateKey]
+  const border   = isSelected ? 'border-blue-500 ring-2 ring-blue-300 bg-blue-50' : HEALTH_BG[stateKey]
+  const padding  = size === 'small' ? 'p-2' : size === 'large' ? 'p-4' : 'p-3'
 
   return (
     <button
       onClick={onClick}
-      className={`relative flex flex-col items-center p-3 rounded-lg border text-xs transition-all hover:opacity-90 ${border} ${isSelected ? '' : HEALTH_BG[stateKey]}`}
+      className={`relative flex flex-col items-center ${padding} rounded-lg border-2 text-xs transition-all hover:shadow-md ${border}`}
     >
       {/* Role badge */}
       <span className={`absolute top-1 right-1 text-xs px-1 rounded font-bold ${
-        node.role === 'manager' ? 'bg-blue-800 text-blue-300' : 'bg-slate-700 text-slate-400'
+        node.role === 'manager' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'
       }`}>
         {node.role === 'manager' ? 'M' : 'W'}
       </span>
 
       {/* Leader star */}
       {node.leader && (
-        <span className="absolute top-1 left-1 text-yellow-400 text-xs" title="Swarm Leader">★</span>
+        <span className="absolute top-1 left-1 text-yellow-500 text-xs" title="Swarm Leader">★</span>
       )}
 
-      {/* Health dot */}
-      <div className={`w-3 h-3 rounded-full mb-1.5 ${
-        node.state === 'ready' ? 'bg-green-500' :
-        node.state === 'down' ? 'bg-red-500' : 'bg-slate-500'
+      {/* Health dot — 14px with ring */}
+      <div className={`w-3.5 h-3.5 rounded-full mb-1.5 ring-2 ring-offset-2 ring-offset-white ${
+        node.state === 'ready' ? 'bg-green-500 ring-green-300' :
+        node.state === 'down'  ? 'bg-red-500  ring-red-300'   : 'bg-gray-300'
       }`} />
 
       {/* Hostname */}
-      <span className="text-slate-200 font-semibold truncate max-w-full text-center" title={node.hostname}>
+      <span className="text-gray-800 font-semibold truncate max-w-full text-center" title={node.hostname}>
         {node.hostname.split('.')[0]}
       </span>
 
       {/* State */}
-      <span className={`mt-0.5 ${HEALTH_GLOW[stateKey]}`}>{node.state}</span>
+      <span className={`mt-0.5 ${HEALTH_TEXT_CLS[stateKey]}`}>{node.state}</span>
 
       {/* Kafka badge */}
       {kafkaBroker && (
-        <span className="mt-1 text-xs bg-orange-900 text-orange-300 px-1.5 rounded font-mono">
+        <span className="mt-1 text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 rounded font-mono">
           Kafka {kafkaBroker.id}
           {kafkaBroker.is_controller && ' ★'}
         </span>
@@ -65,15 +68,15 @@ function NodeCard({ node, isSelected, onClick, kafkaBroker }) {
   )
 }
 
-function NodeDetail({ node, onClose }) {
+function NodeDetail({ node, onClose, showVersionBadges }) {
   if (!node) return null
   return (
-    <div className="mt-4 p-3 bg-slate-900 rounded-lg border border-slate-700 text-xs">
+    <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200 text-xs">
       <div className="flex justify-between items-center mb-3">
-        <span className="text-slate-200 font-semibold">{node.hostname}</span>
-        <button onClick={onClose} className="text-slate-500 hover:text-slate-300">×</button>
+        <span className="text-gray-900 font-semibold">{node.hostname}</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-700">×</button>
       </div>
-      <div className="space-y-1.5">
+      <div className="divide-y divide-gray-100">
         {[
           ['ID', node.id],
           ['Role', node.role],
@@ -81,21 +84,32 @@ function NodeDetail({ node, onClose }) {
           ['Availability', node.availability],
           ['Address', node.addr],
           ['OS', node.os],
-          ['Engine', node.engine_version],
         ].map(([k, v]) => v && (
-          <div key={k} className="flex justify-between gap-2">
-            <span className="text-slate-500 shrink-0">{k}</span>
-            <span className="text-slate-300 text-right truncate font-mono" title={v}>{v}</span>
+          <div key={k} className="flex justify-between gap-2 py-1">
+            <span className="text-gray-500 shrink-0">{k}</span>
+            <span className="text-gray-800 text-right truncate font-mono" title={v}>{v}</span>
           </div>
         ))}
+        {node.engine_version && (
+          <div className="flex justify-between gap-2 items-center py-1">
+            <span className="text-gray-500 shrink-0">Engine</span>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-800 font-mono">{node.engine_version}</span>
+              {showVersionBadges && (
+                <VersionBadge image="docker" currentTag={node.engine_version} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
 export default function NodeMap({ compact = false }) {
-  const [status, setStatus] = useState(null)
+  const [status,   setStatus]   = useState(null)
   const [selected, setSelected] = useState(null)
+  const { nodeCardSize, showVersionBadges } = useOptions()
 
   const refresh = useCallback(() => {
     fetchStatus()
@@ -110,7 +124,7 @@ export default function NodeMap({ compact = false }) {
   }, [refresh])
 
   if (!status) {
-    return <p className="text-xs text-slate-500 animate-pulse p-3">Loading cluster map…</p>
+    return <p className="text-xs text-gray-400 animate-pulse p-3">Loading cluster map…</p>
   }
 
   const nodes = status.swarm?.nodes ?? []
@@ -137,7 +151,7 @@ export default function NodeMap({ compact = false }) {
   return (
     <div className={compact ? 'px-2 py-2' : 'p-4'}>
       {nodes.length === 0 ? (
-        <p className="text-xs text-slate-500 italic">
+        <p className="text-xs text-gray-400 italic">
           {status.swarm?.health === 'error'
             ? `Docker unreachable: ${status.swarm.message}`
             : 'No nodes yet — waiting for collector poll'}
@@ -147,7 +161,7 @@ export default function NodeMap({ compact = false }) {
           {managers.length > 0 && (
             <div className="mb-3">
               {!compact && (
-                <p className="text-xs text-slate-500 uppercase font-semibold mb-2">
+                <p className="text-xs text-gray-500 uppercase font-semibold mb-2">
                   Managers ({managers.length})
                 </p>
               )}
@@ -159,6 +173,7 @@ export default function NodeMap({ compact = false }) {
                     isSelected={selected === n.id}
                     onClick={() => setSelected(selected === n.id ? null : n.id)}
                     kafkaBroker={brokerByNode[n.id]}
+                    size={nodeCardSize}
                   />
                 ))}
               </div>
@@ -168,7 +183,7 @@ export default function NodeMap({ compact = false }) {
           {workers.length > 0 && (
             <div>
               {!compact && (
-                <p className="text-xs text-slate-500 uppercase font-semibold mb-2">
+                <p className="text-xs text-gray-500 uppercase font-semibold mb-2">
                   Workers ({workers.length})
                 </p>
               )}
@@ -180,6 +195,7 @@ export default function NodeMap({ compact = false }) {
                     isSelected={selected === n.id}
                     onClick={() => setSelected(selected === n.id ? null : n.id)}
                     kafkaBroker={brokerByNode[n.id]}
+                    size={nodeCardSize}
                   />
                 ))}
               </div>
@@ -190,6 +206,7 @@ export default function NodeMap({ compact = false }) {
             <NodeDetail
               node={selectedNode}
               onClose={() => setSelected(null)}
+              showVersionBadges={showVersionBadges}
             />
           )}
         </>

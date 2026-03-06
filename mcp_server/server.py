@@ -33,6 +33,18 @@ def service_health(name: str) -> dict:
 
 
 @mcp.tool()
+def service_current_version(name: str) -> dict:
+    """Currently running image tag for a service — call before deciding to upgrade."""
+    return swarm.service_current_version(name)
+
+
+@mcp.tool()
+def service_resolve_image(image: str) -> dict:
+    """Resolve latest stable semver tag for an image from Docker Hub."""
+    return swarm.service_resolve_image(image)
+
+
+@mcp.tool()
 def service_upgrade(name: str, image: str) -> dict:
     """Rolling upgrade with health gate."""
     return swarm.service_upgrade(name, image)

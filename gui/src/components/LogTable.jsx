@@ -3,6 +3,12 @@ import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, res
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
+const fmtTs = (ts) => {
+  if (!ts) return 'N/A'
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
+}
+
 async function fetchCorrelation(opId) {
   const r = await fetch(`${BASE}/api/elastic/correlate/${opId}`)
   return r.json()
@@ -38,7 +44,7 @@ function safeObj(v) {
 const TC_FILTERS = ['all', 'ok', 'degraded', 'failed', 'escalated', 'error']
 
 function TcRow({ log, expanded, onClick }) {
-  const ts = new Date(log.timestamp).toLocaleTimeString()
+  const ts = fmtTs(log.timestamp)
   const params = safeObj(log.params)
   const result = safeObj(log.result)
   return (
@@ -130,7 +136,7 @@ function CorrelationView({ operationId }) {
             {corr.all_logs?.slice(0, 30).map((lg, i) => (
               <div key={i} className="flex gap-2">
                 <span className="text-slate-600 shrink-0">
-                  {lg.timestamp ? new Date(lg.timestamp).toLocaleTimeString() : ''}
+                  {fmtTs(lg.timestamp)}
                 </span>
                 <span className={`shrink-0 uppercase w-10 ${
                   lg.level?.toLowerCase() === 'error' ? 'text-red-400' :
@@ -243,7 +249,7 @@ function OpsView({ refreshTick }) {
                   <tr key={op.id} className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer"
                       onClick={() => openDetail(op)}>
                     <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
-                      {new Date(op.started_at).toLocaleTimeString()}
+                      {fmtTs(op.started_at)}
                     </td>
                     <td className="px-2 py-1.5 text-slate-300 truncate max-w-[160px]">{op.label ?? '—'}</td>
                     <td className="px-2 py-1.5"><Badge status={op.status} /></td>
@@ -261,7 +267,7 @@ function OpsView({ refreshTick }) {
                         <div className="text-xs text-slate-400 mb-1 font-semibold">Tool calls ({detail.tool_calls?.length ?? 0})</div>
                         {detail.tool_calls?.map(tc => (
                           <div key={tc.id} className="flex gap-3 py-0.5 border-b border-slate-800">
-                            <span className="text-slate-500 w-20 shrink-0">{new Date(tc.timestamp).toLocaleTimeString()}</span>
+                            <span className="text-slate-500 w-20 shrink-0">{fmtTs(tc.timestamp)}</span>
                             <span className="text-blue-300 font-mono w-36 shrink-0 truncate">{tc.tool_name}</span>
                             <Badge status={tc.status} />
                             <span className="text-slate-500">{tc.duration_ms}ms</span>
@@ -319,7 +325,7 @@ function EscView({ refreshTick }) {
               {escs.map(e => (
                 <tr key={e.id} className="border-b border-slate-800 hover:bg-slate-800">
                   <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
-                    {new Date(e.timestamp).toLocaleTimeString()}
+                    {fmtTs(e.timestamp)}
                   </td>
                   <td className="px-2 py-1.5 text-slate-300 truncate max-w-[200px]">{e.reason}</td>
                   <td className="px-2 py-1.5">

@@ -228,6 +228,9 @@ def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
     steps = []
     verdict = "success"
 
+    # Allow Swarm replicas time to converge before checking health
+    time.sleep(20)
+
     # Step 1: Replica count
     try:
         from mcp_server.tools.swarm import service_health
@@ -243,16 +246,21 @@ def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
         verdict = "failed"
 
     # Step 2: Elastic error logs (last 5min)
+    # GroupCoordinator partition resignation is normal KRaft behavior during
+    # broker shutdown — exclude these from the failure determination.
+    _KAFKA_NORMAL = ("GroupCoordinator", "Resigned from", "resignation")
     new_errors = []
     try:
         from mcp_server.tools.elastic import elastic_error_logs
         errs = elastic_error_logs(service=service, minutes_ago=5)
         if errs.get("status") != "unavailable":
-            err_count = errs.get("data", {}).get("error_count", 0)
-            new_errors = errs.get("data", {}).get("errors", [])[:5]
-            ok = err_count == 0
-            steps.append({"step": 2, "name": "no_new_errors", "ok": ok,
-                           "detail": errs.get("message", "")})
+            all_errors = errs.get("data", {}).get("errors", [])
+            real_errors = [e for e in all_errors
+                           if not any(p in e.get("message", "") for p in _KAFKA_NORMAL)]
+            new_errors = real_errors[:5]
+            ok = len(real_errors) == 0
+            detail = f"No errors" if ok else f"{len(real_errors)} error(s) (excluded {len(all_errors) - len(real_errors)} normal KRaft messages)"
+            steps.append({"step": 2, "name": "no_new_errors", "ok": ok, "detail": detail})
             if not ok:
                 verdict = "failed"
         else:

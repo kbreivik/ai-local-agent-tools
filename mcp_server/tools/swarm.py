@@ -1,10 +1,44 @@
 """Docker Swarm management tools."""
 import os
+import re
+import urllib.request
+import json as _json
 from datetime import datetime, timezone
 from typing import Any
 
 import docker
 from docker.errors import APIError, DockerException
+
+
+def _latest_stable_tag(image: str) -> str | None:
+    """
+    Query Docker Hub for the highest stable semver tag of an image.
+    Filters out 'latest', release candidates, and pre-release labels.
+    Returns the tag string (e.g. "3.8.1") or None on failure.
+    """
+    # Split registry/repo from tag — we only want the repo part
+    repo = image.split(":")[0].split("@")[0]
+    # Docker Hub API path: official images use library/<name>
+    if "/" not in repo:
+        repo = f"library/{repo}"
+    url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=25&ordering=last_updated"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            data = _json.loads(r.read())
+        tags = [t["name"] for t in data.get("results", [])]
+        # Keep only strict semver tags (1, 2, or 3 numeric components)
+        semver_re = re.compile(r"^\d+\.\d+(\.\d+)?$")
+        stable = [t for t in tags if semver_re.match(t)]
+        if not stable:
+            return None
+        # Sort by tuple of ints descending
+        def _ver(t):
+            parts = t.split(".")
+            return tuple(int(x) for x in parts) + (0,) * (3 - len(parts))
+        stable.sort(key=_ver, reverse=True)
+        return stable[0]
+    except Exception:
+        return None
 
 
 def _client() -> docker.DockerClient:
@@ -131,6 +165,42 @@ def service_health(name: str) -> dict:
         return _err(f"service_health error: {e}")
 
 
+def service_current_version(name: str) -> dict:
+    """Return the currently running image tag for a service (digest stripped)."""
+    try:
+        client = _client()
+        services = client.services.list(filters={"name": name})
+        if not services:
+            client.close()
+            return _err(f"Service '{name}' not found")
+        svc = services[0]
+        container_spec = svc.attrs.get("Spec", {}).get("TaskTemplate", {}).get("ContainerSpec", {})
+        image_full = container_spec.get("Image", "unknown")
+        tag = image_full.split("@")[0] if "@" in image_full else image_full
+        client.close()
+        return _ok({"name": name, "image": tag, "image_with_digest": image_full},
+                   f"Service '{name}' running {tag}")
+    except DockerException as e:
+        return _err(f"Docker connection failed: {e}")
+    except Exception as e:
+        return _err(f"service_current_version error: {e}")
+
+
+def service_resolve_image(image: str) -> dict:
+    """
+    Resolve the latest stable semver tag for an image from Docker Hub.
+    Returns the highest stable version found. Use before service_upgrade()
+    to avoid upgrading to an intermediate version.
+    """
+    base = image.split(":")[0].split("@")[0]
+    tag = _latest_stable_tag(base)
+    if tag is None:
+        return _err(f"Could not resolve latest stable tag for '{base}' from Docker Hub")
+    resolved = f"{base}:{tag}"
+    return _ok({"image": base, "latest_stable_tag": tag, "resolved": resolved},
+               f"Latest stable tag for '{base}': {tag}")
+
+
 def service_upgrade(name: str, image: str) -> dict:
     """Rolling upgrade with health gate — verifies health before returning."""
     try:
@@ -144,18 +214,36 @@ def service_upgrade(name: str, image: str) -> dict:
         if pre_check["status"] != "ok":
             client.close()
             return _err(f"Pre-upgrade check failed: {pre_check['message']}", pre_check["data"])
-        svc.update(image=image)
+        # Docker Swarm update API rejects tag@sha256:digest format — strip digest
+        clean_image = image.split("@")[0] if "@" in image else image
+        desired = svc.attrs.get("Spec", {}).get("Mode", {}).get("Replicated", {}).get("Replicas", 1)
+        svc.update(image=clean_image)
         import time
-        for _ in range(30):
-            time.sleep(2)
-            health = service_health(name)
-            if health["status"] == "ok":
+        # Poll task state every 5s for up to 90s.
+        # Filter to tasks with DesiredState=="running" (current tasks); ignore
+        # DesiredState=="shutdown" tasks — those are the old replicas being stopped.
+        # Converging states (starting/preparing/pending/assigned/accepted) are not failures.
+        TERMINAL_FAIL = {"failed", "rejected"}
+        for _ in range(18):
+            time.sleep(5)
+            tasks = svc.tasks()
+            current = [t for t in tasks if t.get("DesiredState") == "running"]
+            if not current:
+                continue  # tasks not scheduled yet
+            running = [t for t in current if t.get("Status", {}).get("State") == "running"]
+            failed  = [t for t in current if t.get("Status", {}).get("State") in TERMINAL_FAIL]
+            if len(running) >= desired:
                 client.close()
                 return _ok({"name": name, "new_image": image}, f"Service '{name}' upgraded to {image}")
-            if health["status"] == "failed":
+            if failed:
                 client.close()
-                return {"status": "failed", "data": health["data"], "timestamp": _ts(),
-                        "message": f"Upgrade failed: service went to failed state"}
+                rollback_result = service_rollback(name)
+                return {"status": "failed",
+                        "data": {"name": name, "failed_tasks": len(failed), "running": len(running)},
+                        "timestamp": _ts(),
+                        "message": f"Upgrade failed: {len(failed)} task(s) reached failed/rejected state — rollback attempted",
+                        "rollback": {"attempted": True, "status": rollback_result.get("status"),
+                                     "message": rollback_result.get("message")}}
         client.close()
         return _degraded({"name": name, "image": image}, "Upgrade timed out waiting for healthy state")
     except DockerException as e:

@@ -182,14 +182,22 @@ def pre_kafka_check() -> dict:
         admin.close()
 
         degraded_topics = []
+        zero_partition_topics = []
         for topic in topics:
             if topic.startswith("__"):
                 continue  # skip internal topics
             health = kafka_topic_health(topic)
-            if health["status"] == "degraded":
-                degraded_topics.append(topic)
-            elif health["status"] == "error":
+            if health["status"] == "error":
                 return _err(f"Error checking topic '{topic}': {health['message']}")
+            partition_count = health.get("data", {}).get("partition_count", 0)
+            if partition_count == 0:
+                zero_partition_topics.append(topic)
+            elif health["status"] == "degraded":
+                degraded_topics.append(topic)
+
+        if zero_partition_topics:
+            return _degraded({"zero_partition_topics": zero_partition_topics},
+                             f"Topics with 0 partitions (not healthy): {zero_partition_topics}")
 
         if degraded_topics:
             return _degraded({"degraded_topics": degraded_topics},
