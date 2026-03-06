@@ -26,8 +26,11 @@ def _err(message: str, data: Any = None) -> dict:
     return {"status": "error", "data": data, "timestamp": _ts(), "message": message}
 
 
-def _unavailable(reason: str = "ELASTIC_URL not configured") -> dict:
-    return {"status": "unavailable", "data": None, "timestamp": _ts(), "message": reason}
+def _unavailable(reason: str = "") -> dict:
+    msg = reason or (
+        "Elasticsearch not configured — set ELASTIC_URL env var to enable log queries"
+    )
+    return {"status": "degraded", "data": None, "timestamp": _ts(), "message": msg}
 
 
 def _index() -> str:
@@ -121,7 +124,10 @@ def elastic_search_logs(
     Returns: list of {timestamp, message, service, node, level, container}.
     """
     if not _es_url():
-        return _unavailable()
+        return _unavailable(
+            "elastic_search_logs unavailable: ELASTIC_URL not set. "
+            "Configure Elasticsearch to enable log search."
+        )
     try:
         must = [_time_range(minutes_ago)]
         if query:
@@ -208,7 +214,10 @@ def elastic_kafka_logs(broker_id: str = "", minutes_ago: int = 60) -> dict:
     Returns structured events, not raw log lines.
     """
     if not _es_url():
-        return _unavailable()
+        return _unavailable(
+            "elastic_kafka_logs unavailable: ELASTIC_URL not set. "
+            "Configure Elasticsearch to enable Kafka log analysis."
+        )
     try:
         kafka_patterns = [
             "LeaderElection", "ISR", "OfflinePartitions", "UnderReplicated",

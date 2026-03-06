@@ -10,35 +10,40 @@ import docker
 from docker.errors import APIError, DockerException
 
 
-def _latest_stable_tag(image: str) -> str | None:
+_SEMVER3_RE    = re.compile(r"^\d+\.\d+\.\d+$")
+_PRERELEASE_RE = re.compile(r"(rc|alpha|beta|snapshot|dev|preview)", re.IGNORECASE)
+
+
+def _ver_tuple(tag: str) -> tuple:
+    parts = tag.split(".")
+    return tuple(int(x) for x in parts[:3])
+
+
+def _stable_tags_sorted(image: str, page_size: int = 100) -> list:
     """
-    Query Docker Hub for the highest stable semver tag of an image.
-    Filters out 'latest', release candidates, and pre-release labels.
-    Returns the tag string (e.g. "3.8.1") or None on failure.
+    Fetch Docker Hub tags for an image and return all strict stable semver (X.Y.Z)
+    tags sorted descending. Excludes rc/alpha/beta/snapshot/dev/preview.
+    Returns empty list on failure or no stable tags found.
     """
-    # Split registry/repo from tag — we only want the repo part
     repo = image.split(":")[0].split("@")[0]
-    # Docker Hub API path: official images use library/<name>
     if "/" not in repo:
         repo = f"library/{repo}"
-    url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=25&ordering=last_updated"
+    url = (
+        f"https://hub.docker.com/v2/repositories/{repo}/tags"
+        f"?page_size={page_size}&ordering=last_updated"
+    )
     try:
         with urllib.request.urlopen(url, timeout=8) as r:
             data = _json.loads(r.read())
         tags = [t["name"] for t in data.get("results", [])]
-        # Keep only strict semver tags (1, 2, or 3 numeric components)
-        semver_re = re.compile(r"^\d+\.\d+(\.\d+)?$")
-        stable = [t for t in tags if semver_re.match(t)]
-        if not stable:
-            return None
-        # Sort by tuple of ints descending
-        def _ver(t):
-            parts = t.split(".")
-            return tuple(int(x) for x in parts) + (0,) * (3 - len(parts))
-        stable.sort(key=_ver, reverse=True)
-        return stable[0]
+        stable = [
+            t for t in tags
+            if _SEMVER3_RE.match(t) and not _PRERELEASE_RE.search(t)
+        ]
+        stable.sort(key=_ver_tuple, reverse=True)
+        return stable
     except Exception:
-        return None
+        return []
 
 
 def _client() -> docker.DockerClient:
@@ -186,19 +191,66 @@ def service_current_version(name: str) -> dict:
         return _err(f"service_current_version error: {e}")
 
 
-def service_resolve_image(image: str) -> dict:
+def service_resolve_image(image: str, resolve_previous: bool = True) -> dict:
     """
-    Resolve the latest stable semver tag for an image from Docker Hub.
-    Returns the highest stable version found. Use before service_upgrade()
-    to avoid upgrading to an intermediate version.
+    Resolve stable semver tags for an image from Docker Hub.
+    When resolve_previous=True (default) also returns previous_major,
+    previous_minor, and the full sorted all_stable list — useful for
+    downgrade target selection.
     """
     base = image.split(":")[0].split("@")[0]
-    tag = _latest_stable_tag(base)
-    if tag is None:
-        return _err(f"Could not resolve latest stable tag for '{base}' from Docker Hub")
-    resolved = f"{base}:{tag}"
-    return _ok({"image": base, "latest_stable_tag": tag, "resolved": resolved},
-               f"Latest stable tag for '{base}': {tag}")
+    tags = _stable_tags_sorted(base, page_size=100)
+    if not tags:
+        return _err(f"Could not resolve stable tags for '{base}' from Docker Hub")
+
+    latest = tags[0]
+    result: dict = {
+        "image":             base,
+        "latest_stable_tag": latest,
+        "resolved":          f"{base}:{latest}",
+    }
+
+    if resolve_previous:
+        latest_v = _ver_tuple(latest)
+        prev_major = next(
+            (t for t in tags if _ver_tuple(t)[0] < latest_v[0]),
+            None,
+        )
+        prev_minor = next(
+            (t for t in tags
+             if _ver_tuple(t)[0] == latest_v[0] and _ver_tuple(t)[1] < latest_v[1]),
+            None,
+        )
+        result["previous_major"] = prev_major
+        result["previous_minor"] = prev_minor
+        result["all_stable"]     = tags
+
+    msg = f"Latest stable for '{base}': {latest}"
+    if resolve_previous and len(tags) > 1:
+        msg += f" ({len(tags)} stable versions found)"
+    return _ok(result, msg)
+
+
+def service_version_history(image: str, count: int = 5) -> dict:
+    """
+    Return the last {count} stable semver versions for an image from Docker Hub,
+    sorted descending. Use when downgrading — pick the version immediately below
+    the current running version from the returned list.
+    """
+    base = image.split(":")[0].split("@")[0]
+    tags = _stable_tags_sorted(base, page_size=100)
+    if not tags:
+        return _err(f"Could not fetch version history for '{base}' from Docker Hub")
+    selected = tags[:count]
+    return _ok(
+        {
+            "image":        base,
+            "count":        len(selected),
+            "versions":     selected,
+            "total_stable": len(tags),
+        },
+        f"Last {len(selected)} stable versions for '{base}': {', '.join(selected)}",
+    )
 
 
 def service_upgrade(name: str, image: str) -> dict:

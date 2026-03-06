@@ -39,9 +39,23 @@ def service_current_version(name: str) -> dict:
 
 
 @mcp.tool()
-def service_resolve_image(image: str) -> dict:
-    """Resolve latest stable semver tag for an image from Docker Hub."""
-    return swarm.service_resolve_image(image)
+def service_resolve_image(image: str, resolve_previous: bool = True) -> dict:
+    """
+    Resolve latest stable semver tag for an image from Docker Hub.
+    When resolve_previous=True also returns previous_major, previous_minor,
+    and the full sorted all_stable list for downgrade target selection.
+    """
+    return swarm.service_resolve_image(image, resolve_previous)
+
+
+@mcp.tool()
+def service_version_history(image: str, count: int = 5) -> dict:
+    """
+    Return the last {count} stable semver versions for an image from Docker Hub,
+    sorted descending. Use when downgrading — pick the version immediately below
+    the current running version.
+    """
+    return swarm.service_version_history(image, count)
 
 
 @mcp.tool()
