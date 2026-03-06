@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchTools, invokeTool, runAgent } from '../api'
+import { useAgent } from '../context/AgentContext'
 
 const CATEGORY_COLOR = {
   swarm:         'bg-blue-900 text-blue-300',
@@ -124,13 +125,18 @@ function ToolCard({ tool, onResult }) {
   )
 }
 
-export default function CommandPanel({ onResult }) {
-  const [tools, setTools]       = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [category, setCategory] = useState('all')
-  const [task, setTask]         = useState('')
-  const [agentBusy, setAgentBusy] = useState(false)
-  const [agentMsg, setAgentMsg]   = useState('')
+// mode="panel" — narrow, inside the slide-in side panel (360px)
+// mode="tab"   — full width, rendered when Commands tab is active
+export default function CommandPanel({ onResult, mode = 'panel' }) {
+  const { markRunning, markDone } = useAgent()
+  const [tools, setTools]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [category, setCategory]     = useState('all')
+  const [task, setTask]             = useState('')
+  const [agentBusy, setAgentBusy]   = useState(false)
+  const [agentMsg, setAgentMsg]     = useState('')
+
+  const isTab = mode === 'tab'
 
   useEffect(() => {
     fetchTools()
@@ -146,32 +152,43 @@ export default function CommandPanel({ onResult }) {
     if (!task.trim()) return
     setAgentBusy(true)
     setAgentMsg('')
+    markRunning()
     try {
       const r = await runAgent(task)
       setAgentMsg(`Started — session ${r.session_id?.slice(0, 8)}`)
       onResult?.()
+      // Agent completion is signalled via the WS stream; markDone called on 'done' event
+      // For now optimistically mark success — OutputPanel WS handles live status
     } catch (e) {
       setAgentMsg(`Error: ${e.message}`)
+      markDone(false)
     } finally {
       setAgentBusy(false)
     }
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="px-3 py-2 border-b border-slate-700">
-        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Commands</span>
-      </div>
+  const inner = (
+    <div className="flex flex-col h-full" data-component="CommandPanel">
+      {/* Header (hidden in tab mode — the tab itself is the header) */}
+      {!isTab && (
+        <div className="px-3 py-2 border-b border-slate-700 shrink-0">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Commands</span>
+        </div>
+      )}
 
       {/* Agent task input */}
-      <div className="px-3 py-2 border-b border-slate-700 bg-slate-900">
-        <p className="text-xs text-slate-500 mb-1 font-bold uppercase">Agent Task</p>
+      <div className={`px-3 py-2 border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : ''}`}>
+        {isTab && (
+          <p className="text-sm font-semibold text-slate-300 mb-2">Agent Task</p>
+        )}
+        {!isTab && (
+          <p className="text-xs text-slate-500 mb-1 font-bold uppercase">Agent Task</p>
+        )}
         <textarea
           value={task}
           onChange={e => setTask(e.target.value)}
           placeholder="Describe a task for the agent…"
-          rows={2}
+          rows={isTab ? 3 : 2}
           className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 resize-none focus:outline-none focus:border-blue-500"
         />
         <button
@@ -189,7 +206,7 @@ export default function CommandPanel({ onResult }) {
       </div>
 
       {/* Category filter */}
-      <div className="flex gap-1 px-3 py-2 border-b border-slate-700 flex-wrap">
+      <div className={`flex gap-1 border-b border-slate-700 flex-wrap shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
         {categories.map(c => (
           <button
             key={c}
@@ -205,16 +222,35 @@ export default function CommandPanel({ onResult }) {
         ))}
       </div>
 
-      {/* Tool list */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
+      {/* Tool list — 2-column grid in tab mode, single column in panel mode */}
+      <div className={`flex-1 overflow-y-auto ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
         {loading && <p className="text-xs text-slate-500 animate-pulse">Loading tools…</p>}
         {!loading && visible.length === 0 && (
           <p className="text-xs text-slate-600">No tools found.</p>
         )}
-        {visible.map(tool => (
-          <ToolCard key={tool.name} tool={tool} onResult={onResult} />
-        ))}
+        <div className={isTab ? 'grid grid-cols-2 gap-x-4' : ''}>
+          {visible.map(tool => (
+            <ToolCard key={tool.name} tool={tool} onResult={onResult} />
+          ))}
+        </div>
       </div>
     </div>
   )
+
+  if (isTab) {
+    // Tab mode: full-height container, centered up to a comfortable max-width
+    return (
+      <div className="flex flex-col h-full w-full bg-slate-950">
+        <div className="px-4 py-2 border-b border-slate-700 bg-slate-900 shrink-0 flex items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Commands</span>
+          <span className="text-slate-600 text-xs">— execute tools or run agent tasks</span>
+        </div>
+        <div className="flex-1 overflow-hidden max-w-5xl w-full mx-auto">
+          {inner}
+        </div>
+      </div>
+    )
+  }
+
+  return inner
 }

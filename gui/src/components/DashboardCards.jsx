@@ -448,7 +448,7 @@ export default function DashboardCards() {
   const cardProps = { loading: loading && !snap, lastUpdated, onRefresh: refresh, maxHeight: cardMaxHeight }
 
   return (
-    <div className="grid grid-cols-2 gap-3 p-3 overflow-auto flex-1 min-h-0 items-start content-start">
+    <div className="grid grid-cols-2 gap-3 p-3 overflow-auto flex-1 min-h-0 items-start content-start w-full">
       <SwarmNodesCard     {...cardProps} data={snap?.swarm} />
       <KafkaBrokersCard   {...cardProps} data={snap?.kafka} />
       <SwarmServicesCard  {...cardProps} data={snap?.swarm} showVersionBadges={showVersionBadges} />
