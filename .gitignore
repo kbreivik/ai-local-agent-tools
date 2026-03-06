@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Secrets — never commit
+.env
+*.env
+mcp.json
+.mcp.json
+
+# Runtime artifacts
+logs/*.log
+checkpoints/*.json
+.code-index/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
