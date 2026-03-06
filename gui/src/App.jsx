@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
@@ -12,13 +12,25 @@ import DashboardCards from './components/DashboardCards'
 import OptionsModal   from './components/OptionsModal'
 import { OptionsProvider, useOptions } from './context/OptionsContext'
 import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelContext'
+import { AgentProvider, useAgent } from './context/AgentContext'
 import { fetchHealth, fetchStats, runAgent } from './api'
+// Dev-only layout test harness — renders as overlay at ?test=layout
+const _showLayoutTest = import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get('test') === 'layout'
+const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
 const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Output']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
 function Header({ activeTab, onTab }) {
+  const { agentState, clearState } = useAgent()
+
+  const handleTab = (tab) => {
+    if (tab === 'Output' && agentState && agentState !== 'running') clearState()
+    onTab(tab)
+  }
+
   return (
     <header className="flex items-center justify-between px-4 py-0 bg-white border-b border-gray-300 shrink-0">
       <div className="flex items-center gap-3">
@@ -28,20 +40,32 @@ function Header({ activeTab, onTab }) {
           {MAIN_TABS.map(tab => (
             <button
               key={tab}
-              onClick={() => onTab(tab)}
+              onClick={() => handleTab(tab)}
               className={`text-xs px-3 py-3 border-b-2 transition-colors ${
                 activeTab === tab
                   ? 'border-blue-500 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-900'
               }`}
             >
-              {tab}
+              {tab === 'Output' ? (
+                <span className="flex items-center gap-1">
+                  Output
+                  {agentState === 'running' && (
+                    <span data-testid="output-badge" className="text-yellow-500 animate-pulse text-xs">⚡</span>
+                  )}
+                  {agentState === 'success' && (
+                    <span data-testid="output-badge" className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                  )}
+                  {agentState === 'failed' && (
+                    <span data-testid="output-badge" className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                  )}
+                </span>
+              ) : tab}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Right side: settings gear only */}
       <div className="flex items-center gap-2">
         <OptionsModal />
       </div>
@@ -80,7 +104,6 @@ function SubBar() {
   return (
     <div className="flex items-center h-8 bg-white border-b border-gray-200 shrink-0 overflow-x-auto">
 
-      {/* Commands toggle — leftmost */}
       <button
         onClick={togglePanel}
         title="Toggle Commands panel (Ctrl+Shift+C)"
@@ -94,7 +117,6 @@ function SubBar() {
         <span>Commands</span>
       </button>
 
-      {/* Stats items */}
       {stats ? (
         <>
           <StatItem label="Runs"       value={stats.total_operations} />
@@ -113,7 +135,6 @@ function SubBar() {
         </div>
       )}
 
-      {/* Right-aligned: API + WS + version */}
       <div className="flex items-center ml-auto">
         <div className="flex items-center px-3 border-l border-gray-200 h-8">
           <span className="text-gray-400 text-xs mr-1">API</span>
@@ -138,18 +159,14 @@ function SubBar() {
   )
 }
 
-// ── Commands side panel ───────────────────────────────────────────────────────
+// ── Commands side panel ────────────────────────────────────────────────────────
+// Width is controlled entirely by the CSS grid column — this div fills 100% of it.
 
 function CommandSidePanel() {
-  const { panelOpen, closePanel } = useCommandPanel()
+  const { closePanel } = useCommandPanel()
 
   return (
-    <div
-      className={`shrink-0 overflow-hidden bg-white border-r border-gray-200 transition-all duration-200 ease-in-out flex flex-col ${
-        panelOpen ? 'max-w-[360px] opacity-100' : 'max-w-0 opacity-0'
-      }`}
-      style={{ width: '360px' }}
-    >
+    <div className="w-full h-full flex flex-col bg-white border-r border-gray-200 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50 shrink-0">
         <div className="flex items-center gap-2">
           <Terminal size={13} className="text-gray-500" />
@@ -163,8 +180,9 @@ function CommandSidePanel() {
           ✕
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        <CommandPanel />
+      <div className="flex-1 overflow-hidden">
+        {/* mode="panel" — narrow dark-themed panel */}
+        <CommandPanel mode="panel" />
       </div>
     </div>
   )
@@ -172,7 +190,8 @@ function CommandSidePanel() {
 
 // ── Agent task bar (bottom of Dashboard only) ─────────────────────────────────
 
-function AgentTaskBar() {
+function AgentTaskBar({ onRun }) {
+  const { markRunning, markDone } = useAgent()
   const [task, setTask] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg,  setMsg]  = useState('')
@@ -181,11 +200,14 @@ function AgentTaskBar() {
     if (!task.trim()) return
     setBusy(true)
     setMsg('')
+    markRunning()
     try {
       const r = await runAgent(task)
       setMsg(`Started — session ${r.session_id?.slice(0, 8)}`)
+      onRun?.()
     } catch (e) {
       setMsg(`Error: ${e.message}`)
+      markDone(false)
     } finally {
       setBusy(false)
     }
@@ -278,6 +300,14 @@ function AppShell() {
 
   const triggerLogRefresh = () => setLogRefresh(n => n + 1)
 
+  // CSS grid column widths:
+  //   Commands tab active → full width (0px panel col + 1fr main)
+  //   Panel open          → 360px panel col + 1fr main
+  //   Panel closed        → 0px panel col + 1fr main (0px collapses the panel)
+  const gridCols = (panelOpen && activeTab !== 'Commands')
+    ? '360px 1fr'
+    : '0px 1fr'
+
   return (
     <div className="flex flex-col h-screen bg-gray-100 overflow-hidden">
       {/* Row 1: logo + tabs + gear */}
@@ -286,10 +316,26 @@ function AppShell() {
       {/* Row 2: commands toggle + stats + API status */}
       <SubBar />
 
-      {/* Main content */}
-      <div className="flex flex-1 overflow-hidden min-h-0">
-        <CommandSidePanel />
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
+      {/* Main content — CSS Grid controls panel vs content widths */}
+      <div
+        className="flex-1 overflow-hidden min-h-0"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: gridCols,
+          transition: 'grid-template-columns 200ms ease-in-out',
+        }}
+      >
+        {/* ── Column 1: Commands side panel (0px when closed or Commands tab) ── */}
+        <div className="overflow-hidden" data-testid="commands-panel-col">
+          {/* Unmount panel content when Commands tab is active to avoid duplicate render */}
+          {activeTab !== 'Commands' && <CommandSidePanel />}
+        </div>
+
+        {/* ── Column 2: Main content ── */}
+        <div
+          className="flex flex-col overflow-hidden min-w-0 min-h-0"
+          data-testid="main-content"
+        >
           {activeTab === 'Dashboard' && (
             <DashboardView logRefresh={logRefresh} onLogRefresh={triggerLogRefresh} />
           )}
@@ -297,8 +343,9 @@ function AppShell() {
           {activeTab === 'Cluster' && <ClusterView />}
 
           {activeTab === 'Commands' && (
-            <div className="flex flex-1 overflow-hidden min-h-0 bg-gray-50">
-              <CommandPanel onResult={triggerLogRefresh} />
+            // Single CommandPanel instance at full width — mode="tab"
+            <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+              <CommandPanel mode="tab" onResult={triggerLogRefresh} />
             </div>
           )}
 
@@ -326,12 +373,17 @@ function AppShell() {
             </div>
           )}
         </div>
-
       </div>
 
-      {activeTab === 'Dashboard' && <AgentTaskBar />}
+      {activeTab === 'Dashboard' && <AgentTaskBar onRun={triggerLogRefresh} />}
 
       <AlertToast />
+
+      {_showLayoutTest && LayoutTest && (
+        <Suspense fallback={null}>
+          <LayoutTest />
+        </Suspense>
+      )}
     </div>
   )
 }
@@ -342,7 +394,9 @@ function AppWithPanelProvider() {
   const { commandsPanelDefault } = useOptions()
   return (
     <CommandPanelProvider defaultOpen={commandsPanelDefault === 'visible'}>
-      <AppShell />
+      <AgentProvider>
+        <AppShell />
+      </AgentProvider>
     </CommandPanelProvider>
   )
 }
