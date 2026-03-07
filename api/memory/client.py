@@ -13,7 +13,12 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-MUNINNDB_URL = os.environ.get("MUNINNDB_URL", "http://localhost:9475")
+MUNINNDB_URL = (
+    os.environ.get("MUNINN_URL")
+    or os.environ.get("MUNINNDB_URL")
+    or "http://localhost:9475"
+)
+log.info("[MuninnDB] using URL: %s", MUNINNDB_URL)
 _TIMEOUT = 3.0
 
 
