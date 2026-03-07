@@ -7,6 +7,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { fetchStatus, fetchMemoryHealth, fetchHealth } from '../api'
 import { useOptions } from '../context/OptionsContext'
 import VersionBadge from '../utils/VersionBadge'
+import CardFilterBar, { ALL_CARD_KEYS } from './CardFilterBar'
+
+const FILTER_KEY = 'hp1_cardFilter'
 
 // ── Health colour maps ─────────────────────────────────────────────────────────
 
@@ -54,36 +57,54 @@ function RowDot({ ok, degraded }) {
 // ── Shared style constants ─────────────────────────────────────────────────────
 
 const S = {
-  header:      { padding: '6px 10px', lineHeight: 1 },
-  headerTitle: { fontSize: '0.75rem', fontWeight: 600, color: '#111827', lineHeight: 1 },
-  headerMeta:  { fontSize: '0.7rem',  color: '#9ca3af' },
-  body:        { padding: '6px 10px' },
-  countRow:    { display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 },
-  bigNum:      { fontSize: '1rem', fontWeight: 700, color: '#111827', lineHeight: 1, margin: 0 },
-  countLabel:  { fontSize: '0.75rem', color: '#6b7280' },
-  countStatus: { marginLeft: 'auto', fontSize: '0.72rem', fontWeight: 600, fontFamily: 'monospace' },
+  header:      { padding: '8px 12px', lineHeight: 1 },
+  headerTitle: { fontSize: '0.8rem', fontWeight: 600, color: '#111827', lineHeight: 1 },
+  headerMeta:  { fontSize: '0.7rem', color: '#9ca3af' },
+  body:        { padding: '8px 12px' },
+  countRow:    { display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 },
+  bigNum:      { fontSize: '1.1rem', fontWeight: 600, color: '#111827', lineHeight: 1.2, margin: 0 },
+  countLabel:  { fontSize: '0.8rem', color: '#6b7280' },
+  countStatus: { marginLeft: 'auto', fontSize: '0.75rem', fontWeight: 600, fontFamily: 'monospace' },
   row:         { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                 paddingTop: 2, paddingBottom: 2, borderTop: '1px solid #f9fafb',
-                 fontSize: '0.75rem', lineHeight: 1.3 },
+                 paddingTop: 3, paddingBottom: 3, borderTop: '1px solid #f9fafb',
+                 fontSize: '0.8rem', lineHeight: 1.4 },
   rowInner:    { display: 'flex', alignItems: 'center', gap: 6 },
   rowMono:     { fontFamily: 'monospace', color: '#374151' },
   rowFaint:    { fontFamily: 'monospace', color: '#9ca3af', flexShrink: 0 },
-  summary:     { fontSize: '0.7rem', color: '#6b7280', marginTop: 2,
-                 paddingTop: 4, borderTop: '1px solid #f3f4f6', lineHeight: 1.3 },
-  sectionLabel:{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase',
-                 color: '#9ca3af', letterSpacing: '0.04em', marginBottom: 2, marginTop: 2 },
+  summary:     { fontSize: '0.75rem', color: '#6b7280', marginTop: 4,
+                 paddingTop: 6, borderTop: '1px solid #f3f4f6', lineHeight: 1.3 },
+  sectionLabel:{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase',
+                 color: '#9ca3af', letterSpacing: '0.04em', marginBottom: 2, marginTop: 4 },
   collectorRow:{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                 paddingTop: 2, paddingBottom: 2, fontSize: '0.72rem', lineHeight: 1.3,
+                 paddingTop: 3, paddingBottom: 3, fontSize: '0.8rem', lineHeight: 1.4,
                  borderTop: '1px solid #f9fafb' },
 }
 
 // ── Card shell ─────────────────────────────────────────────────────────────────
 
-function Card({ title, health, lastUpdated, onRefresh, loading, maxHeight, children }) {
+function Card({ title, health, lastUpdated, onRefresh, loading, minHeight, maxHeight, minWidth, maxWidth, children }) {
+  const cardRootStyle = {
+    height:        '100%',
+    margin:        0,
+    minHeight:     minHeight ? `${minHeight}px` : undefined,
+    maxHeight:     maxHeight ? `${maxHeight}px` : undefined,
+    minWidth:      minWidth  ? `${minWidth}px`  : undefined,
+    maxWidth:      maxWidth  ? `${maxWidth}px`  : undefined,
+    display:       'flex',
+    flexDirection: 'column',
+    boxSizing:     'border-box',
+    overflow:      'hidden',
+  }
+  const bodyStyle = {
+    ...S.body,
+    flex:      1,
+    minHeight: 0,
+    overflowY: 'auto',
+  }
   return (
-    <div className="bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between bg-gray-50 border-b border-gray-200 shrink-0" style={S.header}>
+    <div className="bg-white border border-gray-200 shadow-sm rounded-lg" style={cardRootStyle}>
+      {/* Header — always visible */}
+      <div className="flex items-center justify-between bg-gray-50 border-b border-gray-200" style={{ ...S.header, flexShrink: 0 }}>
         <div className="flex items-center gap-2">
           <Dot health={health} />
           <span style={S.headerTitle}>{title}</span>
@@ -102,11 +123,8 @@ function Card({ title, health, lastUpdated, onRefresh, loading, maxHeight, child
         </div>
       </div>
 
-      {/* Body */}
-      <div
-        className="overflow-y-auto"
-        style={{ ...S.body, ...(maxHeight ? { maxHeight } : {}) }}
-      >
+      {/* Body — scrolls when content exceeds maxHeight minus header */}
+      <div style={bodyStyle}>
         {loading && !children
           ? <p style={{ fontSize: '0.75rem', color: '#9ca3af', padding: '4px 0' }}>Loading…</p>
           : children}
@@ -117,13 +135,13 @@ function Card({ title, health, lastUpdated, onRefresh, loading, maxHeight, child
 
 // ── Card: Swarm Nodes ──────────────────────────────────────────────────────────
 
-function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
+function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const nodes  = data?.nodes ?? []
   const health = data?.health ?? 'unknown'
 
   return (
     <Card title="Swarm Nodes" health={health} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {data ? (
         <>
           <div style={S.countRow}>
@@ -160,13 +178,13 @@ function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
 
 // ── Card: Kafka Brokers ────────────────────────────────────────────────────────
 
-function KafkaBrokersCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
+function KafkaBrokersCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const brokers = data?.brokers ?? []
   const health  = data?.health ?? 'unknown'
 
   return (
     <Card title="Kafka Brokers" health={health} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {data ? (
         <>
           <div style={S.countRow}>
@@ -205,14 +223,14 @@ function KafkaBrokersCard({ data, loading, lastUpdated, onRefresh, maxHeight }) 
 
 // ── Card: Swarm Services ───────────────────────────────────────────────────────
 
-function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, maxHeight, showVersionBadges }) {
+function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth, showVersionBadges }) {
   const services   = data?.services ?? []
   const allOk      = services.length > 0 && services.every(s => s.running_replicas === s.desired_replicas)
   const cardHealth = allOk ? 'ok' : (services.length === 0 ? 'unknown' : 'degraded')
 
   return (
     <Card title="Swarm Services" health={cardHealth} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {data ? (
         <>
           <div style={S.countRow}>
@@ -232,8 +250,8 @@ function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, maxHeight, s
               const imgTag    = colonIdx >= 0 ? imageBase.slice(colonIdx + 1) : ''
 
               return (
-                <div key={s.id} style={{ paddingTop: 2, paddingBottom: 2, borderTop: '1px solid #f9fafb' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', lineHeight: 1.3 }}>
+                <div key={s.id} style={{ paddingTop: 3, paddingBottom: 3, borderTop: '1px solid #f9fafb' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', lineHeight: 1.4 }}>
                     <div style={S.rowInner}>
                       <RowDot ok={ok} degraded={!ok} />
                       <span style={{ ...S.rowMono, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.name}>{name}</span>
@@ -264,13 +282,13 @@ function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, maxHeight, s
 
 // ── Card: Elasticsearch ────────────────────────────────────────────────────────
 
-function ElasticsearchCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
+function ElasticsearchCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const health = data?.health ?? 'unknown'
   const shards = data?.shards ?? {}
 
   return (
     <Card title="Elasticsearch" health={health} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {data ? (
         health === 'unconfigured' ? (
           <p style={{ fontSize: '0.75rem', color: '#9ca3af', fontStyle: 'italic', padding: '2px 0' }}>Not configured</p>
@@ -321,14 +339,14 @@ function ElasticsearchCard({ data, loading, lastUpdated, onRefresh, maxHeight })
 
 // ── Card: MuninnDB ─────────────────────────────────────────────────────────────
 
-function MuninnDBCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
+function MuninnDBCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const health = !data                      ? 'unknown'
                : data.status === 'ok'       ? 'ok'
                : (data.status ?? 'unknown')
 
   return (
     <Card title="MuninnDB Memory" health={health} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {data ? (
         <>
           <div style={S.countRow}>
@@ -363,7 +381,7 @@ function MuninnDBCard({ data, loading, lastUpdated, onRefresh, maxHeight }) {
 
 // ── Card: System Summary ───────────────────────────────────────────────────────
 
-function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefresh, maxHeight }) {
+function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const collectors      = statusData?.collectors ?? {}
   const apiOk           = apiHealth?.status === 'ok'
   const allCollectorsOk = Object.values(collectors).every(c => c.running)
@@ -371,7 +389,7 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
 
   return (
     <Card title="System Summary" health={overallHealth} lastUpdated={lastUpdated}
-          onRefresh={onRefresh} loading={loading} maxHeight={maxHeight}>
+          onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
       {apiHealth ? (
         <>
           <div>
@@ -420,13 +438,44 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 export default function DashboardCards() {
-  const { dashboardRefreshInterval, cardMaxHeight, showVersionBadges } = useOptions()
+  const { dashboardRefreshInterval, cardMinHeight, cardMaxHeight, cardMinWidth, cardMaxWidth, showVersionBadges } = useOptions()
 
   const [snap,        setSnap]        = useState(null)
   const [memHealth,   setMemHealth]   = useState(null)
   const [apiHealth,   setApiHealth]   = useState(null)
   const [loading,     setLoading]     = useState(true)
   const [lastUpdated, setLastUpdated] = useState(null)
+
+  // Card filter — persisted to localStorage
+  const [activeFilters, setActiveFilters] = useState(() => {
+    try {
+      const saved = localStorage.getItem(FILTER_KEY)
+      return saved ? JSON.parse(saved) : ALL_CARD_KEYS.map(c => c.key)
+    } catch {
+      return ALL_CARD_KEYS.map(c => c.key)
+    }
+  })
+
+  const toggleFilter = (key) => {
+    setActiveFilters(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    setActiveFilters(prev => {
+      const allKeys = ALL_CARD_KEYS.map(c => c.key)
+      const allActive = allKeys.every(k => prev.includes(k))
+      const next = allActive ? [] : allKeys
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  // Returns display style: undefined (visible) or 'none' (hidden, not unmounted)
+  const vis = (key) => activeFilters.includes(key) ? {} : { display: 'none' }
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -451,20 +500,57 @@ export default function DashboardCards() {
     return () => clearInterval(id)
   }, [refresh, dashboardRefreshInterval])
 
-  const cardProps = { loading: loading && !snap, lastUpdated, onRefresh: refresh, maxHeight: cardMaxHeight }
+  const cardProps = {
+    loading: loading && !snap,
+    lastUpdated,
+    onRefresh:  refresh,
+    minHeight:  cardMinHeight,
+    maxHeight:  cardMaxHeight,
+    minWidth:   cardMinWidth,
+    maxWidth:   cardMaxWidth,
+  }
+
+  const _min = cardMinWidth ?? 280
+  const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
+  const gridStyle = {
+    display:             'grid',
+    gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
+    ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
+    rowGap:              '4px',
+    columnGap:           '8px',
+    alignContent:        'start',
+    padding:             '8px',
+    width:               '100%',
+  }
 
   return (
-    <div
-      className="overflow-auto flex-1 min-h-0 items-start content-start w-full"
-      style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, padding: 8 }}
-    >
-      <SwarmNodesCard     {...cardProps} data={snap?.swarm} />
-      <KafkaBrokersCard   {...cardProps} data={snap?.kafka} />
-      <SwarmServicesCard  {...cardProps} data={snap?.swarm} showVersionBadges={showVersionBadges} />
-      <ElasticsearchCard  {...cardProps} data={snap?.elasticsearch} />
-      <MuninnDBCard       {...cardProps} data={memHealth} loading={loading && !memHealth} />
-      <SystemSummaryCard  {...cardProps} statusData={snap} apiHealth={apiHealth}
-                          loading={loading && !apiHealth} />
+    <div className="flex flex-col flex-1 overflow-hidden min-h-0 w-full">
+      <CardFilterBar
+        activeFilters={activeFilters}
+        onToggle={toggleFilter}
+        onToggleAll={toggleAll}
+      />
+      <div className="overflow-auto flex-1 min-h-0 w-full" style={gridStyle}>
+        <div style={vis('swarm_nodes')}>
+          <SwarmNodesCard     {...cardProps} data={snap?.swarm} />
+        </div>
+        <div style={vis('kafka_brokers')}>
+          <KafkaBrokersCard   {...cardProps} data={snap?.kafka} />
+        </div>
+        <div style={vis('swarm_services')}>
+          <SwarmServicesCard  {...cardProps} data={snap?.swarm} showVersionBadges={showVersionBadges} />
+        </div>
+        <div style={vis('elasticsearch')}>
+          <ElasticsearchCard  {...cardProps} data={snap?.elasticsearch} />
+        </div>
+        <div style={vis('muninndb')}>
+          <MuninnDBCard       {...cardProps} data={memHealth} loading={loading && !memHealth} />
+        </div>
+        <div style={vis('system_summary')}>
+          <SystemSummaryCard  {...cardProps} statusData={snap} apiHealth={apiHealth}
+                              loading={loading && !apiHealth} />
+        </div>
+      </div>
     </div>
   )
 }

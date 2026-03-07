@@ -152,7 +152,7 @@ function CorrelationView({ operationId }) {
   )
 }
 
-function ToolCallsView({ refreshTick }) {
+export function ToolCallsView({ refreshTick }) {
   const [filter, setFilter] = useState('all')
   const [logs, setLogs]     = useState([])
   const [total, setTotal]   = useState(0)
@@ -207,7 +207,7 @@ function ToolCallsView({ refreshTick }) {
 
 // ── Operations view ───────────────────────────────────────────────────────────
 
-function OpsView({ refreshTick }) {
+export function OpsView({ refreshTick }) {
   const [ops, setOps]       = useState([])
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState(null)  // {op, tool_calls}
@@ -289,7 +289,7 @@ function OpsView({ refreshTick }) {
 
 // ── Escalations view ──────────────────────────────────────────────────────────
 
-function EscView({ refreshTick }) {
+export function EscView({ refreshTick }) {
   const [escs, setEscs]     = useState([])
   const [loading, setLoading] = useState(false)
 
@@ -351,7 +351,7 @@ function EscView({ refreshTick }) {
 
 // ── Stats view ────────────────────────────────────────────────────────────────
 
-function StatsView() {
+export function StatsView() {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
 

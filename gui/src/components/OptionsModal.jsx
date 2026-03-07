@@ -294,29 +294,80 @@ function AIServicesTab({ draft, update }) {
 
 // ── Tab: Display ──────────────────────────────────────────────────────────────
 
+const CARD_DEFAULTS = { cardMinHeight: 70, cardMaxHeight: 200, cardMinWidth: 300, cardMaxWidth: null }
+
+function DimRow({ label, fieldKey, value, defaultVal, min, max, invalid, update }) {
+  const inputStyle = {
+    width: 72, background: '#1e293b',
+    border: `1px solid ${invalid ? '#ef4444' : '#475569'}`,
+    borderRadius: 4, padding: '3px 8px',
+    fontSize: 11, color: '#e2e8f0', outline: 'none',
+  }
+  const isEmpty = value === null || value === undefined || value === ''
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+      <span style={{ fontSize: 11, color: '#94a3b8', width: 82, flexShrink: 0 }}>{label}</span>
+      <input
+        type="number" step={10} min={min} max={max}
+        value={isEmpty ? '' : value}
+        placeholder={defaultVal === null ? 'no limit' : String(defaultVal)}
+        onChange={e => update(fieldKey, e.target.value === '' ? null : Number(e.target.value))}
+        style={inputStyle}
+      />
+      <span style={{ fontSize: 10, color: '#475569' }}>px</span>
+      <button
+        onClick={() => update(fieldKey, defaultVal)}
+        style={{ fontSize: 12, color: '#64748b', background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1 }}
+        title="Reset to default"
+      >↺</button>
+    </div>
+  )
+}
+
 function DisplayTab({ draft, update }) {
+  const minH = draft.cardMinHeight ?? 70
+  const maxH = draft.cardMaxHeight ?? 200
+  const minW = draft.cardMinWidth  ?? 300
+  const maxW = draft.cardMaxWidth
+
+  const heightInvalid = minH != null && maxH != null && Number(minH) >= Number(maxH)
+  const widthInvalid  = minW != null && maxW != null && Number(minW) >= Number(maxW)
+
   return (
     <div>
-      <Field label="Card Minimum Height (px)">
-        <input
-          type="number"
-          min={60}
-          max={400}
-          value={draft.cardMinHeight}
-          onChange={e => update('cardMinHeight', Number(e.target.value))}
-          className="w-24 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-        />
-      </Field>
-      <Field label="Card Maximum Height (px)">
-        <input
-          type="number"
-          min={80}
-          max={800}
-          value={draft.cardMaxHeight}
-          onChange={e => update('cardMaxHeight', Number(e.target.value))}
-          className="w-24 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-        />
-      </Field>
+      {/* Dashboard Cards */}
+      <div className="mb-5">
+        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+          Dashboard Cards
+        </h3>
+        <DimRow label="Min Height" fieldKey="cardMinHeight" value={draft.cardMinHeight} defaultVal={70}  min={50}  max={200}  invalid={heightInvalid} update={update} />
+        <DimRow label="Max Height" fieldKey="cardMaxHeight" value={draft.cardMaxHeight} defaultVal={200} min={100} max={600}  invalid={heightInvalid} update={update} />
+        <DimRow label="Min Width"  fieldKey="cardMinWidth"  value={draft.cardMinWidth}  defaultVal={300} min={200} max={800}  invalid={widthInvalid}  update={update} />
+        <DimRow label="Max Width"  fieldKey="cardMaxWidth"  value={draft.cardMaxWidth}  defaultVal={null} min={200} max={1200} invalid={widthInvalid} update={update} />
+        {(heightInvalid || widthInvalid) && (
+          <p style={{ color: '#ef4444', fontSize: 11, marginBottom: 8 }}>Min must be less than Max</p>
+        )}
+
+        {/* Live preview card */}
+        <p style={{ fontSize: 11, color: '#64748b', marginBottom: 6, marginTop: 12 }}>Preview</p>
+        <div style={{
+          minHeight:   minH  ? `${minH}px`  : undefined,
+          maxHeight:   maxH  ? `${maxH}px`  : undefined,
+          minWidth:    minW  ? `${minW}px`  : undefined,
+          maxWidth:    maxW  ? `${maxW}px`  : undefined,
+          border: '1px solid #e5e7eb', borderRadius: 6,
+          padding: 8, fontSize: 12, color: '#6b7280',
+          overflow: 'auto', resize: 'both',
+          background: '#fff',
+        }}>
+          Preview card — resize to test<br />
+          <span style={{ fontSize: 10, color: '#9ca3af' }}>
+            min {minH}×{minW}px / max {maxH ?? '∞'}×{maxW ?? '∞'}px
+          </span>
+        </div>
+      </div>
+
+      {/* Node card size */}
       <Field label="Node Card Size (Cluster view)">
         <div className="flex gap-4">
           {[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']].map(([v, l]) => (
@@ -346,24 +397,38 @@ function DisplayTab({ draft, update }) {
 
 export default function OptionsModal() {
   const options = useOptions()
-  const [open,    setOpen]    = useState(false)
-  const [tab,     setTab]     = useState('General')
-  const [draft,   setDraft]   = useState(null)
-  const [saving,  setSaving]  = useState(false)
+  const [open,     setOpen]    = useState(false)
+  const [tab,      setTab]     = useState('General')
+  const [draft,    setDraft]   = useState(null)
+  const [snapshot, setSnapshot] = useState(null)
+  const [saving,   setSaving]  = useState(false)
+
+  const LIVE_KEYS = ['cardMinHeight', 'cardMaxHeight', 'cardMinWidth', 'cardMaxWidth']
 
   const openModal = () => {
-    setDraft({ ...options })
+    const snap = { ...options }
+    setSnapshot(snap)
+    setDraft(snap)
     setTab('General')
     setOpen(true)
   }
 
   const closeModal = () => {
+    // Revert live-applied dimension changes back to last saved values
+    if (snapshot) {
+      LIVE_KEYS.forEach(k => options.setOption(k, snapshot[k]))
+    }
     setOpen(false)
     setDraft(null)
+    setSnapshot(null)
   }
 
   const update = (key, value) => {
     setDraft(prev => ({ ...prev, [key]: value }))
+    // Apply dimension controls live so cards update as user types
+    if (LIVE_KEYS.includes(key)) {
+      options.setOption(key, value)
+    }
   }
 
   const save = async () => {
@@ -383,7 +448,10 @@ export default function OptionsModal() {
     } catch { /* ignore */ }
 
     setSaving(false)
-    closeModal()
+    // Close directly — do NOT call closeModal() because it would revert LIVE_KEYS back to snapshot
+    setOpen(false)
+    setDraft(null)
+    setSnapshot(null)
   }
 
   if (!open) {

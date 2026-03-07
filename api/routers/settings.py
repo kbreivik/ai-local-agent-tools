@@ -1,10 +1,13 @@
 """GET/POST /api/settings — non-secret infrastructure settings."""
+import logging
 import os
 import re
 from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -76,10 +79,15 @@ class SettingsBody(BaseModel):
 
 @router.post("")
 async def update_settings(body: SettingsBody):
-    """Update infrastructure settings in .env file."""
-    path = _env_file()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    """
+    Settings are read-only via API — edit .env directly to change them.
 
+    This endpoint intentionally does NOT write to .env. Writing to .env from
+    the API was the root cause of .env values being lost between restarts
+    (partial rewrites discarded lines not in the known key set).
+
+    To update settings: stop the server, edit .env, restart.
+    """
     updates = {
         "DOCKER_HOST":              body.dockerHost,
         "KAFKA_BOOTSTRAP_SERVERS":  body.kafkaBootstrapServers,
@@ -87,29 +95,17 @@ async def update_settings(body: SettingsBody):
         "KIBANA_URL":               body.kibanaUrl,
         "MUNINN_URL":               body.muninndbUrl,
     }
-    # Remove None entries
     updates = {k: v for k, v in updates.items() if v is not None}
 
-    # Update existing lines or append
-    existing_keys = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line)
-            continue
-        if "=" in stripped:
-            k = stripped.split("=", 1)[0].strip()
-            if k in updates:
-                new_lines.append(f'{k}={updates[k]}')
-                existing_keys.add(k)
-                continue
-        new_lines.append(line)
-
-    # Append keys not already in file
     for k, v in updates.items():
-        if k not in existing_keys:
-            new_lines.append(f"{k}={v}")
+        logger.warning(
+            "POST /api/settings: would have written %s=%r to .env — skipped. "
+            "Edit .env directly and restart the server.",
+            k, v,
+        )
 
-    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    return {"status": "ok", "updated": list(updates.keys())}
+    return {
+        "status": "readonly",
+        "message": "Settings are managed via .env. Edit .env and restart the server to apply changes.",
+        "requested_updates": list(updates.keys()),
+    }

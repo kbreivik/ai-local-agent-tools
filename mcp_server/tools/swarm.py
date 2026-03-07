@@ -13,6 +13,28 @@ from docker.errors import APIError, DockerException
 _SEMVER3_RE    = re.compile(r"^\d+\.\d+\.\d+$")
 _PRERELEASE_RE = re.compile(r"(rc|alpha|beta|snapshot|dev|preview)", re.IGNORECASE)
 
+_VENDOR_SWITCH_PHRASES = ("switch image", "change vendor", "migrate to")
+
+
+def _image_vendor(image: str) -> str:
+    """
+    Extract the org/vendor prefix from a Docker image reference.
+
+    Examples:
+      apache/kafka:4.2.0          → "apache"
+      confluentinc/cp-kafka:7.6   → "confluentinc"
+      nginx:1.25                  → ""        (Docker Hub official — no org)
+      registry.example.com/org/app → "org"   (skip registry hostname)
+    """
+    base = image.split("@")[0].split(":")[0]   # strip digest and tag
+    parts = base.split("/")
+    if len(parts) == 1:
+        return ""   # official Docker Hub image (e.g. "nginx")
+    # If the first segment looks like a hostname (contains "." or ":"), skip it
+    if "." in parts[0] or ":" in parts[0]:
+        return parts[1] if len(parts) > 2 else ""
+    return parts[0]
+
 
 def _ver_tuple(tag: str) -> tuple:
     parts = tag.split(".")
@@ -236,7 +258,21 @@ def service_version_history(image: str, count: int = 5) -> dict:
     Return the last {count} stable semver versions for an image from Docker Hub,
     sorted descending. Use when downgrading — pick the version immediately below
     the current running version from the returned list.
+
+    IMPORTANT: If passed a service name instead of an image (no '/' in string),
+    this function auto-resolves the running image via service_current_version().
+    Always call service_current_version() first to confirm what is actually running.
     """
+    # Auto-resolve service name → actual Docker image
+    if "/" not in image and ":" not in image:
+        svc_result = service_current_version(image)
+        if svc_result["status"] != "ok":
+            return _err(
+                f"Could not resolve service '{image}' to an image: {svc_result['message']}. "
+                f"Call service_current_version('{image}') directly to diagnose."
+            )
+        image = svc_result["data"]["image"]
+
     base = image.split(":")[0].split("@")[0]
     tags = _stable_tags_sorted(base, page_size=100)
     if not tags:
@@ -253,8 +289,14 @@ def service_version_history(image: str, count: int = 5) -> dict:
     )
 
 
-def service_upgrade(name: str, image: str) -> dict:
-    """Rolling upgrade with health gate — verifies health before returning."""
+def service_upgrade(name: str, image: str, task_hint: str = "") -> dict:
+    """
+    Rolling upgrade with health gate — verifies health before returning.
+
+    task_hint: Optional excerpt from the user's original task. Used only to
+               detect explicit vendor-switch intent ("switch image", "change
+               vendor", "migrate to") which bypasses the vendor lock guardrail.
+    """
     try:
         client = _client()
         services = client.services.list(filters={"name": name})
@@ -262,6 +304,39 @@ def service_upgrade(name: str, image: str) -> dict:
             client.close()
             return _err(f"Service '{name}' not found")
         svc = services[0]
+
+        # ── Vendor lock guardrail ─────────────────────────────────────────────
+        current_image = (
+            svc.attrs.get("Spec", {})
+               .get("TaskTemplate", {})
+               .get("ContainerSpec", {})
+               .get("Image", "")
+        )
+        current_vendor  = _image_vendor(current_image)
+        proposed_vendor = _image_vendor(image)
+
+        if (current_vendor or proposed_vendor) and current_vendor != proposed_vendor:
+            # Allow bypass only when the task explicitly requests a vendor switch
+            hint_lower = task_hint.lower()
+            if not any(phrase in hint_lower for phrase in _VENDOR_SWITCH_PHRASES):
+                client.close()
+                return {
+                    "status": "failed",
+                    "message": (
+                        f"Image vendor mismatch. Current image uses '{current_vendor or 'official'}', "
+                        f"proposed image uses '{proposed_vendor or 'official'}'. Switching image vendors "
+                        f"requires explicit confirmation. Use escalate() if this is intentional."
+                    ),
+                    "data": {
+                        "current_image":  current_image,
+                        "proposed_image": image,
+                        "current_vendor":  current_vendor or "official",
+                        "proposed_vendor": proposed_vendor or "official",
+                    },
+                    "timestamp": _ts(),
+                }
+        # ─────────────────────────────────────────────────────────────────────
+
         pre_check = pre_upgrade_check()
         if pre_check["status"] != "ok":
             client.close()

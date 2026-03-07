@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { fetchTools, invokeTool, runAgent } from '../api'
 import { useAgent } from '../context/AgentContext'
+import { useTask } from '../context/TaskContext'
+import ChoiceBar from './ChoiceBar'
+import ClarificationWidget from './ClarificationWidget'
+import { useAgentOutput } from '../context/AgentOutputContext'
 
 const CATEGORY_COLOR = {
   swarm:         'bg-blue-900 text-blue-300',
@@ -129,10 +133,11 @@ function ToolCard({ tool, onResult }) {
 // mode="tab"   — full width, rendered when Commands tab is active
 export default function CommandPanel({ onResult, mode = 'panel' }) {
   const { markRunning, markDone } = useAgent()
+  const { task, setTask }         = useTask()
+  const { pendingChoices, clearChoices } = useAgentOutput()
   const [tools, setTools]           = useState([])
   const [loading, setLoading]       = useState(true)
   const [category, setCategory]     = useState('all')
-  const [task, setTask]             = useState('')
   const [agentBusy, setAgentBusy]   = useState(false)
   const [agentMsg, setAgentMsg]     = useState('')
 
@@ -152,13 +157,12 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
     if (!task.trim()) return
     setAgentBusy(true)
     setAgentMsg('')
+    clearChoices()
     markRunning()
     try {
       const r = await runAgent(task)
       setAgentMsg(`Started — session ${r.session_id?.slice(0, 8)}`)
       onResult?.()
-      // Agent completion is signalled via the WS stream; markDone called on 'done' event
-      // For now optimistically mark success — OutputPanel WS handles live status
     } catch (e) {
       setAgentMsg(`Error: ${e.message}`)
       markDone(false)
@@ -167,17 +171,15 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
     }
   }
 
+  const pickChoice = (text) => {
+    setTask(text)
+    clearChoices()
+  }
+
   const inner = (
     <div className="flex flex-col h-full" data-component="CommandPanel">
-      {/* Header (hidden in tab mode — the tab itself is the header) */}
-      {!isTab && (
-        <div className="px-3 py-2 border-b border-slate-700 shrink-0">
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Commands</span>
-        </div>
-      )}
-
       {/* Agent task input */}
-      <div className={`px-3 py-2 border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : ''}`}>
+      <div className={`border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
         {isTab && (
           <p className="text-sm font-semibold text-slate-300 mb-2">Agent Task</p>
         )}
@@ -188,8 +190,9 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
           value={task}
           onChange={e => setTask(e.target.value)}
           placeholder="Describe a task for the agent…"
-          rows={isTab ? 3 : 2}
-          className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 resize-none focus:outline-none focus:border-blue-500"
+          rows={isTab ? 6 : 4}
+          className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 resize-vertical focus:outline-none focus:border-blue-500"
+          style={{ minHeight: isTab ? 120 : 80 }}
         />
         <button
           onClick={runAgentTask}
@@ -204,6 +207,8 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
         </button>
         {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
       </div>
+      <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
+      <ClarificationWidget dark />
 
       {/* Category filter */}
       <div className={`flex gap-1 border-b border-slate-700 flex-wrap shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>

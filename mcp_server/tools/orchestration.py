@@ -331,6 +331,36 @@ def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
     }
 
 
+def plan_action(summary: str, steps: list, risk_level: str = "medium", reversible: bool = True) -> dict:
+    """
+    Submit a plan for user approval before executing destructive operations.
+    REQUIRED before calling: service_upgrade, service_rollback, node_drain,
+    checkpoint_restore, kafka_rolling_restart_safe.
+    Do NOT call for read-only tools.
+    Returns {"approved": True} to proceed or {"approved": False} to cancel.
+    The agent loop intercepts this call and suspends until the user responds.
+    """
+    # This body is never executed — the agent loop intercepts this tool call.
+    return _ok(
+        {"approved": False, "message": "plan_action was not intercepted by agent loop"},
+        "plan_action not intercepted"
+    )
+
+
+def clarifying_question(question: str, options: list = None) -> dict:
+    """
+    Ask the user a clarifying question before proceeding.
+    Use when the task is ambiguous, underspecified, or could apply to multiple
+    services. ALWAYS call this before assuming which service, version, or scope
+    to act on. The agent loop intercepts this call and suspends until the user
+    answers — do not call any other tools until the answer is returned.
+    """
+    # This body is never executed — the agent loop intercepts this tool call
+    # before invoke_tool() is reached and handles it asynchronously.
+    return _ok({"question": question, "answer": "not_intercepted"},
+               "clarifying_question was not intercepted by agent loop")
+
+
 def escalate(reason: str) -> dict:
     """Flag decision as high-risk — logs, pauses, returns escalation signal."""
     entry = {
