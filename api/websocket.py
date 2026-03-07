@@ -40,15 +40,19 @@ class ConnectionManager:
             for ws in dead:
                 self._connections.remove(ws)
 
-    async def send_line(self, line_type: str, content: str, tool: str = "", status: str = ""):
+    async def send_line(self, line_type: str, content: str, tool: str = "", status: str = "",
+                        session_id: str = ""):
         """Send a typed output line to all GUI clients."""
-        await self.broadcast({
+        msg: dict[str, Any] = {
             "type": line_type,       # "step" | "tool" | "reasoning" | "halt" | "done" | "error"
             "content": content,
             "tool": tool,
             "status": status,        # "ok" | "degraded" | "failed" | "escalated" | ""
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if session_id:
+            msg["session_id"] = session_id
+        await self.broadcast(msg)
 
     @property
     def active_count(self) -> int:
