@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { createOutputStream } from '../api'
+import { useEffect, useRef } from 'react'
+import { useAgentOutput } from '../context/AgentOutputContext'
+import { useTask } from '../context/TaskContext'
+import ChoiceBar from './ChoiceBar'
+import ClarificationWidget from './ClarificationWidget'
 
 const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
@@ -42,78 +45,80 @@ function Line({ msg }) {
   )
 }
 
-export default function OutputPanel({ running }) {
-  const [lines, setLines]   = useState([])
-  const [wsState, setWsState] = useState('disconnected')
+const AGENT_BADGE = {
+  status:   { label: 'Status',   cls: 'bg-blue-900 text-blue-300'   },
+  action:   { label: 'Action',   cls: 'bg-orange-900 text-orange-300' },
+  research: { label: 'Research', cls: 'bg-purple-900 text-purple-300' },
+}
+
+export default function OutputPanel() {
+  const { outputLines, isRunning, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType } = useAgentOutput()
+  const { setTask } = useTask()
   const bottomRef = useRef(null)
-  const wsRef     = useRef(null)
 
+  const pickChoice = (text) => {
+    setTask(text)
+    clearChoices()
+  }
+
+  // Auto-scroll to bottom when new lines arrive
   useEffect(() => {
-    let reconnect = true
-    let timeout
-
-    function connect() {
-      if (!reconnect) return
-      const ws = createOutputStream(
-        (msg) => setLines(prev => [...prev.slice(-500), msg]),  // cap at 500 lines
-        () => setWsState('connected'),
-        () => {
-          setWsState('disconnected')
-          if (reconnect) timeout = setTimeout(connect, 3000)
-        },
-      )
-      wsRef.current = ws
-      setWsState('connecting')
-    }
-
-    connect()
-
-    return () => {
-      reconnect = false
-      clearTimeout(timeout)
-      wsRef.current?.close()
-    }
-  }, [])
-
-  // Auto-scroll when new lines arrive while running
-  useEffect(() => {
-    if (running) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [lines, running])
-
-  const clear = () => setLines([])
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [outputLines])
 
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
-        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          Live Output
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+            Live Output
+          </span>
+          {isRunning && agentType && AGENT_BADGE[agentType] && (
+            <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${AGENT_BADGE[agentType].cls}`}>
+              {AGENT_BADGE[agentType].label}
+            </span>
+          )}
+          {isRunning && (
+            <span className="text-yellow-400 animate-pulse text-xs">⚡ Running…</span>
+          )}
+          {!isRunning && lastAgentType && AGENT_BADGE[lastAgentType] && (
+            <span className={`text-xs px-1.5 py-0.5 rounded opacity-50 ${AGENT_BADGE[lastAgentType].cls}`}>
+              {AGENT_BADGE[lastAgentType].label}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           <span className={`flex items-center gap-1 text-xs ${
-            wsState === 'connected' ? 'text-green-400' :
+            wsState === 'connected'  ? 'text-green-400' :
             wsState === 'connecting' ? 'text-yellow-400 animate-pulse' : 'text-red-400'
           }`}>
             <span className="w-1.5 h-1.5 rounded-full bg-current inline-block" />
             {wsState}
           </span>
-          <button onClick={clear} className="text-xs text-slate-500 hover:text-slate-300">
+          <button onClick={clearOutput} className="text-xs text-slate-500 hover:text-slate-300">
             clear
           </button>
         </div>
       </div>
 
+      <ClarificationWidget dark />
+
       {/* Output stream */}
       <div className="flex-1 overflow-y-auto px-3 py-2 bg-slate-950">
-        {lines.length === 0 && (
+        {outputLines.length === 0 && (
           <p className="text-xs text-slate-600 mt-4">
             Waiting for agent output…<br />
-            Run a tool or agent task from the Commands panel.
+            Run a tool or agent task from the Commands panel or Dashboard.
           </p>
         )}
-        {lines.map((m, i) => <Line key={i} msg={m} />)}
+        {outputLines
+          .filter(m => m && m.type !== 'pong' && m.content)
+          .map((m, i) => <Line key={i} msg={m} />)
+        }
         <div ref={bottomRef} />
       </div>
+      <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
     </div>
   )
 }
