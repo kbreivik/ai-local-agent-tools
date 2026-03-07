@@ -44,6 +44,24 @@ export async function runAgent(task, sessionId = '') {
   return r.json()
 }
 
+export async function sendConfirmation(sessionId, approved) {
+  const r = await fetch(`${BASE}/api/agent/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, approved }),
+  })
+  return r.json()
+}
+
+export async function sendClarification(sessionId, answer) {
+  const r = await fetch(`${BASE}/api/agent/clarify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, answer }),
+  })
+  return r.json()
+}
+
 export async function fetchModels() {
   const r = await fetch(`${BASE}/api/agent/models`)
   return r.json()
@@ -124,6 +142,25 @@ export async function activateMemory(context, maxResults = 5) {
 export async function deleteMemoryEngram(id) {
   const r = await fetch(`${BASE}/api/memory/${id}`, { method: 'DELETE' })
   return r.ok
+}
+
+export async function fetchMemoryPatterns() {
+  const r = await fetch(`${BASE}/api/memory/patterns`)
+  return r.json()
+}
+
+export async function fetchMemoryDocs() {
+  const r = await fetch(`${BASE}/api/memory/docs`)
+  return r.json()
+}
+
+export async function triggerDocFetch(component = null, force = false) {
+  const r = await fetch(`${BASE}/api/memory/fetch-docs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ component, force }),
+  })
+  return r.json()
 }
 
 // ── WebSocket ────────────────────────────────────────────────────────────────

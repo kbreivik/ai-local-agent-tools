@@ -1,35 +1,76 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
 import StatusPanel    from './components/StatusPanel'
-import LogTable       from './components/LogTable'
 import NodeMap        from './components/NodeMap'
-import AlertToast     from './components/AlertToast'
+import AlertToast        from './components/AlertToast'
+import PlanConfirmModal  from './components/PlanConfirmModal'
 import MemoryPanel    from './components/MemoryPanel'
 import LogsPanel      from './components/LogsPanel'
+import TestsPanel     from './components/TestsPanel'
 import DashboardCards from './components/DashboardCards'
 import OptionsModal   from './components/OptionsModal'
 import { OptionsProvider, useOptions } from './context/OptionsContext'
 import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelContext'
-import { AgentProvider, useAgent } from './context/AgentContext'
-import { fetchHealth, fetchStats, runAgent } from './api'
+import { AgentProvider } from './context/AgentContext'
+import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
+import { TaskProvider } from './context/TaskContext'
+import { fetchHealth, fetchStats } from './api'
 // Dev-only layout test harness — renders as overlay at ?test=layout
 const _showLayoutTest = import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('test') === 'layout'
 const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
-const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Output']
+const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Output', 'Tests']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
 function Header({ activeTab, onTab }) {
-  const { agentState, clearState } = useAgent()
+  const { isRunning, outputLines } = useAgentOutput()
+  const [lastSeenCount,    setLastSeenCount]    = useState(0)
+  const [lastRunToolCount, setLastRunToolCount] = useState(0)
+  const [lastRunHadError,  setLastRunHadError]  = useState(false)
+  const [outputBadge,      setOutputBadge]      = useState(false)
+  const prevIsRunning = useRef(false)
+
+  const unread = outputLines.length - lastSeenCount
+
+  // When a run completes, capture tool call count + error state from that run
+  useEffect(() => {
+    if (prevIsRunning.current && !isRunning) {
+      const toolCalls = outputLines.filter(m => m.type === 'tool').length
+      const hasError  = outputLines.some(m => m.type === 'halt' || m.type === 'error')
+      setLastRunToolCount(toolCalls)
+      setLastRunHadError(hasError)
+    }
+    prevIsRunning.current = isRunning
+  }, [isRunning, outputLines])
+
+  // Listen for agent-done custom event from AgentOutputContext
+  useEffect(() => {
+    const handler = () => {
+      if (activeTab !== 'Output') setOutputBadge(true)
+    }
+    window.addEventListener('agent-done', handler)
+    return () => window.removeEventListener('agent-done', handler)
+  }, [activeTab])
 
   const handleTab = (tab) => {
-    if (tab === 'Output' && agentState && agentState !== 'running') clearState()
+    if (tab === 'Output') {
+      setLastSeenCount(outputLines.length)
+      setOutputBadge(false)
+    }
     onTab(tab)
   }
+
+  // Keep lastSeenCount in sync when Output tab is already active
+  useEffect(() => {
+    if (activeTab === 'Output') {
+      setLastSeenCount(outputLines.length)
+      setOutputBadge(false)
+    }
+  }, [activeTab, outputLines.length])
 
   return (
     <header className="flex items-center justify-between px-4 py-0 bg-white border-b border-gray-300 shrink-0">
@@ -50,14 +91,24 @@ function Header({ activeTab, onTab }) {
               {tab === 'Output' ? (
                 <span className="flex items-center gap-1">
                   Output
-                  {agentState === 'running' && (
+                  {isRunning && (
                     <span data-testid="output-badge" className="text-yellow-500 animate-pulse text-xs">⚡</span>
                   )}
-                  {agentState === 'success' && (
+                  {!isRunning && outputBadge && activeTab !== 'Output' && (
                     <span data-testid="output-badge" className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
                   )}
-                  {agentState === 'failed' && (
-                    <span data-testid="output-badge" className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                  {!isRunning && !outputBadge && unread > 0 && activeTab !== 'Output' && (
+                    <span className="text-gray-400 text-xs font-normal">({unread})</span>
+                  )}
+                </span>
+              ) : tab === 'Logs' ? (
+                <span className="flex items-center gap-1">
+                  Logs
+                  {lastRunHadError && activeTab !== 'Logs' && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
+                  )}
+                  {!lastRunHadError && lastRunToolCount > 0 && activeTab !== 'Logs' && (
+                    <span className="text-gray-400 text-xs font-normal">({lastRunToolCount})</span>
                   )}
                 </span>
               ) : tab}
@@ -84,19 +135,31 @@ function StatItem({ label, value, accent }) {
   )
 }
 
+const SUBBAR_BADGE = {
+  status:   { label: 'Status',   color: '#93c5fd' },
+  action:   { label: 'Action',   color: '#fdba74' },
+  research: { label: 'Research', color: '#d8b4fe' },
+}
+
 function SubBar() {
   const { panelOpen, togglePanel } = useCommandPanel()
+  const { wsState, agentType, lastAgentType } = useAgentOutput()
   const [stats,  setStats]  = useState(null)
   const [health, setHealth] = useState(null)
 
   useEffect(() => {
+    const refreshStats = () => fetchStats().then(setStats).catch(() => setStats(null))
     const loadAll = () => {
-      fetchStats().then(setStats).catch(() => {})
-      fetchHealth().then(setHealth).catch(() => {})
+      refreshStats()
+      fetchHealth().then(setHealth).catch(() => setHealth(null))
     }
     loadAll()
     const id = setInterval(loadAll, 30_000)
-    return () => clearInterval(id)
+    window.addEventListener('agent-done', refreshStats)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('agent-done', refreshStats)
+    }
   }, [])
 
   const topTool = stats?.most_used_tools?.[0]
@@ -136,6 +199,20 @@ function SubBar() {
       )}
 
       <div className="flex items-center ml-auto">
+        {/* Agent type indicator */}
+        {(agentType || lastAgentType) && (() => {
+          const type = agentType || lastAgentType
+          const badge = SUBBAR_BADGE[type]
+          return badge ? (
+            <div className="flex items-center px-3 border-l border-gray-200 h-8 gap-1">
+              <span className="text-gray-400 text-xs">Agent:</span>
+              <span className="text-xs font-medium" style={{ color: badge.color }}>
+                {badge.label}
+              </span>
+              {agentType && <span className="text-yellow-500 animate-pulse text-xs">⚡</span>}
+            </div>
+          ) : null
+        })()}
         <div className="flex items-center px-3 border-l border-gray-200 h-8">
           <span className="text-gray-400 text-xs mr-1">API</span>
           <span className="text-gray-800 text-xs font-medium">:8000</span>
@@ -143,12 +220,10 @@ function SubBar() {
             health?.status === 'ok' ? 'bg-green-500' : 'bg-gray-400'
           }`} />
         </div>
-        {health?.ws_clients !== undefined && (
-          <div className="flex items-center px-3 border-l border-gray-200 h-8">
-            <span className="text-gray-400 text-xs">WS:</span>
-            <span className="text-gray-800 text-xs font-medium ml-1">{health.ws_clients}</span>
-          </div>
-        )}
+        <div className="flex items-center px-3 border-l border-gray-200 h-8 gap-1">
+          <span className="text-gray-400 text-xs">WS</span>
+          <span style={{ color: wsState === 'connected' ? '#22c55e' : wsState === 'connecting' ? '#eab308' : '#9ca3af', fontSize: '0.6rem', lineHeight: 1 }}>●</span>
+        </div>
         {health?.version && (
           <div className="flex items-center px-3 border-l border-gray-200 h-8">
             <span className="text-gray-400 text-xs font-mono">v{health.version}</span>
@@ -188,76 +263,13 @@ function CommandSidePanel() {
   )
 }
 
-// ── Agent task bar (bottom of Dashboard only) ─────────────────────────────────
-
-function AgentTaskBar({ onRun }) {
-  const { markRunning, markDone } = useAgent()
-  const [task, setTask] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg,  setMsg]  = useState('')
-
-  const submit = async () => {
-    if (!task.trim()) return
-    setBusy(true)
-    setMsg('')
-    markRunning()
-    try {
-      const r = await runAgent(task)
-      setMsg(`Started — session ${r.session_id?.slice(0, 8)}`)
-      onRun?.()
-    } catch (e) {
-      setMsg(`Error: ${e.message}`)
-      markDone(false)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onKey = (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit()
-  }
-
-  return (
-    <div className="shrink-0 border-t border-gray-200 bg-gray-50 px-4 py-3">
-      <div className="flex items-start gap-3 max-w-4xl mx-auto">
-        <div className="flex-1">
-          <textarea
-            value={task}
-            onChange={e => setTask(e.target.value)}
-            onKeyDown={onKey}
-            placeholder="Describe a task for the agent… (Ctrl+Enter to run)"
-            rows={2}
-            className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-xs text-gray-900 resize-none focus:outline-none focus:border-blue-500"
-          />
-          {msg && <p className="text-xs text-gray-500 mt-1">{msg}</p>}
-        </div>
-        <button
-          onClick={submit}
-          disabled={busy || !task.trim()}
-          className={`mt-0.5 px-4 py-2 rounded text-xs font-bold transition-colors shrink-0 ${
-            busy || !task.trim()
-              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              : 'bg-green-600 hover:bg-green-700 text-white'
-          }`}
-        >
-          {busy ? '⏳ Running…' : 'Run Agent'}
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DashboardView({ logRefresh, onLogRefresh }) {
+function DashboardView() {
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      <div className="flex-1 overflow-hidden min-h-0">
-        <DashboardCards />
-      </div>
-      <div className="h-48 shrink-0 border-t border-gray-200 flex flex-col overflow-hidden bg-white">
-        <LogTable refreshTick={logRefresh} />
-      </div>
+      <DashboardCards />
     </div>
   )
 }
@@ -294,11 +306,8 @@ function ClusterView() {
 // ── App shell ─────────────────────────────────────────────────────────────────
 
 function AppShell() {
-  const [logRefresh, setLogRefresh] = useState(0)
-  const [activeTab,  setActiveTab]  = useState('Dashboard')
+  const [activeTab, setActiveTab] = useState('Dashboard')
   const { panelOpen } = useCommandPanel()
-
-  const triggerLogRefresh = () => setLogRefresh(n => n + 1)
 
   // CSS grid column widths:
   //   Commands tab active → full width (0px panel col + 1fr main)
@@ -337,7 +346,7 @@ function AppShell() {
           data-testid="main-content"
         >
           {activeTab === 'Dashboard' && (
-            <DashboardView logRefresh={logRefresh} onLogRefresh={triggerLogRefresh} />
+            <DashboardView />
           )}
 
           {activeTab === 'Cluster' && <ClusterView />}
@@ -345,13 +354,13 @@ function AppShell() {
           {activeTab === 'Commands' && (
             // Single CommandPanel instance at full width — mode="tab"
             <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-              <CommandPanel mode="tab" onResult={triggerLogRefresh} />
+              <CommandPanel mode="tab" />
             </div>
           )}
 
           {activeTab === 'Logs' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
-              <div className="flex-1 bg-white overflow-hidden">
+              <div className="flex-1 overflow-hidden">
                 <LogsPanel />
               </div>
             </div>
@@ -372,12 +381,19 @@ function AppShell() {
               </div>
             </div>
           )}
+
+          {activeTab === 'Tests' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden">
+                <TestsPanel />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {activeTab === 'Dashboard' && <AgentTaskBar onRun={triggerLogRefresh} />}
-
       <AlertToast />
+      <PlanConfirmModal />
 
       {_showLayoutTest && LayoutTest && (
         <Suspense fallback={null}>
@@ -404,7 +420,11 @@ function AppWithPanelProvider() {
 export default function App() {
   return (
     <OptionsProvider>
-      <AppWithPanelProvider />
+      <AgentOutputProvider>
+        <TaskProvider>
+          <AppWithPanelProvider />
+        </TaskProvider>
+      </AgentOutputProvider>
     </OptionsProvider>
   )
 }
