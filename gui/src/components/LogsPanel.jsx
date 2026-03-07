@@ -1,12 +1,13 @@
 /**
- * LogsPanel — live Elasticsearch log stream + error summary.
- * Polls /api/elastic/logs every 5s for recent entries (tail -f style).
- * Filter bar: service | level | keyword.
- * Color-coded by level.
+ * LogsPanel — unified Logs tab.
+ * Sub-tabs: Live Logs | Tool Calls | Operations | Escalations | Stats
+ * Live Logs: streams Elasticsearch log events (poll-based).
+ * Other tabs: agent tool-call / operation / escalation / stats tables.
  */
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { ToolCallsView, OpsView, EscView, StatsView } from './LogTable'
 
-const BASE = import.meta.env.VITE_API_BASE ?? ''
+const BASE    = import.meta.env.VITE_API_BASE ?? ''
 const POLL_MS = 5_000
 
 const LEVEL_STYLE = {
@@ -25,15 +26,8 @@ const LEVEL_BG = {
   warn:     'bg-yellow-950',
   warning:  'bg-yellow-950',
 }
-
-function levelStyle(lvl = '') {
-  const l = lvl.toLowerCase()
-  return LEVEL_STYLE[l] ?? 'text-slate-400'
-}
-function levelBg(lvl = '') {
-  const l = lvl.toLowerCase()
-  return LEVEL_BG[l] ?? ''
-}
+function levelStyle(lvl = '') { return LEVEL_STYLE[lvl.toLowerCase()] ?? 'text-slate-400' }
+function levelBg(lvl = '')    { return LEVEL_BG[lvl.toLowerCase()]    ?? '' }
 
 function LogLine({ entry }) {
   const ts = (() => {
@@ -74,29 +68,26 @@ function ErrorSummary({ errors }) {
   )
 }
 
-export default function LogsPanel() {
+function LiveLogsView() {
   const [logs, setLogs]           = useState([])
   const [errors, setErrors]       = useState({})
   const [available, setAvailable] = useState(true)
   const [filter, setFilter]       = useState({ service: '', level: '', q: '' })
   const [paused, setPaused]       = useState(false)
-  const listRef                   = useRef(null)
   const seenIds                   = useRef(new Set())
 
   const fetchLogs = useCallback(async () => {
     try {
       const p = new URLSearchParams({
-        minutes_ago: 1,
-        size: 100,
+        minutes_ago: 1, size: 100,
         ...(filter.service && { service: filter.service }),
-        ...(filter.level  && { level:   filter.level }),
-        ...(filter.q      && { q:       filter.q }),
+        ...(filter.level   && { level:   filter.level   }),
+        ...(filter.q       && { q:       filter.q       }),
       })
       const r = await fetch(`${BASE}/api/elastic/logs?${p}`)
       const d = await r.json()
       if (d.available === false) { setAvailable(false); return }
       setAvailable(true)
-
       const newEntries = (d.logs || []).filter(e => !seenIds.current.has(e.id))
       newEntries.forEach(e => seenIds.current.add(e.id))
       if (newEntries.length > 0) {
@@ -114,8 +105,7 @@ export default function LogsPanel() {
   }, [])
 
   useEffect(() => {
-    fetchLogs()
-    fetchErrors()
+    fetchLogs(); fetchErrors()
     if (paused) return
     const id = setInterval(() => { fetchLogs(); fetchErrors() }, POLL_MS)
     return () => clearInterval(id)
@@ -129,19 +119,41 @@ export default function LogsPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700 shrink-0">
-        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          Live Logs
-        </span>
+      {/* Controls */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-800 shrink-0">
+        <div className="flex gap-2">
+          <input
+            value={filter.service}
+            onChange={e => handleFilterChange('service', e.target.value)}
+            placeholder="service…"
+            className="w-24 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
+          />
+          <select
+            value={filter.level}
+            onChange={e => handleFilterChange('level', e.target.value)}
+            className="bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
+          >
+            <option value="">all levels</option>
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+            <option value="critical">critical</option>
+          </select>
+          <input
+            value={filter.q}
+            onChange={e => handleFilterChange('q', e.target.value)}
+            placeholder="keyword…"
+            className="w-32 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
+          />
+        </div>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${available ? 'bg-green-500' : 'bg-red-600 animate-pulse'}`} />
           <button
             onClick={() => setPaused(p => !p)}
             className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-              paused
-                ? 'border-yellow-700 text-yellow-400 bg-yellow-950'
-                : 'border-slate-700 text-slate-500 hover:text-slate-300'
+              paused ? 'border-yellow-700 text-yellow-400 bg-yellow-950'
+                     : 'border-slate-700 text-slate-500 hover:text-slate-300'
             }`}
           >
             {paused ? '▶ Resume' : '⏸ Pause'}
@@ -150,67 +162,64 @@ export default function LogsPanel() {
             onClick={() => { seenIds.current.clear(); setLogs([]); fetchLogs() }}
             className="text-xs text-slate-500 hover:text-slate-300"
             title="Clear"
-          >
-            ✕
-          </button>
+          >✕</button>
         </div>
       </div>
 
-      {/* Filter bar */}
-      <div className="flex gap-2 px-3 py-1.5 border-b border-slate-800 shrink-0">
-        <input
-          value={filter.service}
-          onChange={e => handleFilterChange('service', e.target.value)}
-          placeholder="service…"
-          className="w-24 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
-        />
-        <select
-          value={filter.level}
-          onChange={e => handleFilterChange('level', e.target.value)}
-          className="bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
-        >
-          <option value="">all levels</option>
-          <option value="debug">debug</option>
-          <option value="info">info</option>
-          <option value="warn">warn</option>
-          <option value="error">error</option>
-          <option value="critical">critical</option>
-        </select>
-        <input
-          value={filter.q}
-          onChange={e => handleFilterChange('q', e.target.value)}
-          placeholder="keyword…"
-          className="flex-1 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
-        />
-      </div>
-
-      {/* Error summary bar */}
       <ErrorSummary errors={errors} />
 
-      {/* Log stream */}
-      <div
-        ref={listRef}
-        className="flex-1 overflow-y-auto font-mono"
-      >
+      <div className="flex-1 overflow-y-auto font-mono">
         {!available && (
           <p className="text-xs text-slate-500 p-4 text-center">
             Elasticsearch unavailable — set ELASTIC_URL to enable log streaming
           </p>
         )}
         {available && logs.length === 0 && (
-          <p className="text-xs text-slate-600 p-4 text-center italic">
-            Waiting for log events…
-          </p>
+          <p className="text-xs text-slate-600 p-4 text-center italic">Waiting for log events…</p>
         )}
-        {logs.map((entry, i) => (
-          <LogLine key={entry.id || i} entry={entry} />
-        ))}
+        {logs.map((entry, i) => <LogLine key={entry.id || i} entry={entry} />)}
       </div>
 
-      {/* Footer */}
       <div className="px-3 py-1 border-t border-slate-800 shrink-0 flex justify-between">
         <p className="text-xs text-slate-700">{logs.length} entries buffered</p>
         {paused && <p className="text-xs text-yellow-600">⏸ Paused</p>}
+      </div>
+    </div>
+  )
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────────
+
+const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats']
+
+export default function LogsPanel() {
+  const [tab, setTab] = useState('Live Logs')
+
+  return (
+    <div className="flex flex-col h-full bg-slate-950">
+      {/* Sub-tab bar */}
+      <div className="flex items-center border-b border-slate-700 shrink-0 px-3 pt-1">
+        {TABS.map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`text-xs px-3 py-1.5 border-b-2 transition-colors whitespace-nowrap ${
+              tab === t
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 overflow-hidden min-h-0">
+        {tab === 'Live Logs'   && <LiveLogsView />}
+        {tab === 'Tool Calls'  && <ToolCallsView refreshTick={0} />}
+        {tab === 'Operations'  && <OpsView refreshTick={0} />}
+        {tab === 'Escalations' && <EscView refreshTick={0} />}
+        {tab === 'Stats'       && <StatsView />}
       </div>
     </div>
   )

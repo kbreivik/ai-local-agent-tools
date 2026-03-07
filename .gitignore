@@ -11,14 +11,26 @@ venv/
 
 # Secrets — never commit
 .env
-*.env
+.env.local
+.env.*.local
 mcp.json
 .mcp.json
+# .env.defaults IS committed (no secrets, just structure — see .env.defaults)
 
 # Runtime artifacts
 logs/*.log
 checkpoints/*.json
 .code-index/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-bak
+data/*.db.bak
+data/test_results.json
+data/docs_manifest.json
+
+# Claude Code internal
+.claude/
 
 # IDE
 .vscode/

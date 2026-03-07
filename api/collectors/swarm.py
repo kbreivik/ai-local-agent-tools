@@ -115,8 +115,9 @@ class SwarmCollector(BaseCollector):
                     elif running < desired:
                         degraded_services.append(name)
 
-                # Strip image digest for display
+                # Strip image digest for display (reads from Spec, i.e. desired image)
                 image = container_spec.get("Image", "unknown")
+                log.debug("[Swarm] %s image from spec: %s", name, image)
                 image = image.split("@")[0]
 
                 svc_data.append({

@@ -31,8 +31,10 @@ const DEFAULTS = {
   requireConfirmation:   true,
 
   // Display
-  cardMinHeight:           120,
-  cardMaxHeight:           280,
+  cardMinHeight:           70,
+  cardMaxHeight:           200,
+  cardMinWidth:            300,
+  cardMaxWidth:            null,
   nodeCardSize:            'medium',
   showVersionBadges:       true,
   showMemoryEngrams:       true,
@@ -44,8 +46,10 @@ const OptionsContext = createContext(null)
 export function OptionsProvider({ children }) {
   const [options, setOptions] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      return saved ? { ...DEFAULTS, ...JSON.parse(saved) } : { ...DEFAULTS }
+      const saved   = localStorage.getItem(STORAGE_KEY)
+      const parsed  = saved ? JSON.parse(saved) : {}
+      console.log('[Options] Loaded from storage:', parsed)
+      return { ...DEFAULTS, ...parsed }
     } catch {
       return { ...DEFAULTS }
     }
@@ -56,8 +60,13 @@ export function OptionsProvider({ children }) {
   }
 
   const saveOptions = (newOptions) => {
-    const merged = { ...options, ...newOptions }
+    // Strip any function keys that may have leaked in from the context object
+    const dataOnly = Object.fromEntries(
+      Object.entries(newOptions).filter(([, v]) => typeof v !== 'function')
+    )
+    const merged = { ...DEFAULTS, ...options, ...dataOnly }
     setOptions(merged)
+    console.log('[Options] Saved to storage:', merged)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
   }
 
