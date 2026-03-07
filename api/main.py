@@ -15,6 +15,7 @@ from api.db import init_db
 from api.logger import ensure_started as _start_logger, flush_now as _flush_logger
 from api.websocket import manager
 from api.routers import tools, agent, status, logs, alerts, memory as memory_router, elastic as elastic_router, settings as settings_router
+from api.routers import tests_api as tests_router
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
@@ -74,6 +75,7 @@ app.include_router(alerts.router)
 app.include_router(memory_router.router)
 app.include_router(elastic_router.router)
 app.include_router(settings_router.router)
+app.include_router(tests_router.router)
 
 
 @app.get("/api/health")
