@@ -44,6 +44,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "ALTER TABLE operations ADD COLUMN feedback_at TEXT",
         "ALTER TABLE operations ADD COLUMN final_answer TEXT",
     ]),
+    (6, "Add operation_log table and owner_user to operations (Phase 8 — auth)", [
+        "ALTER TABLE operations ADD COLUMN owner_user TEXT",
+        """CREATE TABLE IF NOT EXISTS operation_log (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            content TEXT,
+            metadata TEXT,
+            timestamp TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_session ON operation_log(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operation_log(timestamp)",
+    ]),
 ]
 
 

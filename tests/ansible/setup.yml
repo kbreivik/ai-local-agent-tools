@@ -1,0 +1,31 @@
+---
+# Setup: deploy swarm stacks from project files
+- name: Copy stack files to manager
+  hosts: swarm_managers[0]
+  become: yes
+  vars:
+    project_root: "{{ playbook_dir }}/../../"
+  tasks:
+    - name: Create deploy directory
+      file:
+        path: /opt/hp1-deploy
+        state: directory
+        mode: '0755'
+
+    - name: Copy swarm stack file
+      copy:
+        src: "{{ project_root }}/docker/swarm-stack.yml"
+        dest: /opt/hp1-deploy/swarm-stack.yml
+
+    - name: Copy kafka stack file
+      copy:
+        src: "{{ project_root }}/docker/kafka-stack.yml"
+        dest: /opt/hp1-deploy/kafka-stack.yml
+
+    - name: Deploy workload stack
+      command: docker stack deploy -c /opt/hp1-deploy/swarm-stack.yml workload
+      register: swarm_deploy
+
+    - name: Deploy Kafka stack
+      command: docker stack deploy -c /opt/hp1-deploy/kafka-stack.yml kafka
+      register: kafka_deploy

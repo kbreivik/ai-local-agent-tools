@@ -1,0 +1,55 @@
+---
+# Teardown: stop all Docker stacks and prune resources on all nodes
+- name: Remove all Docker stacks
+  hosts: swarm_managers[0]
+  become: yes
+  tasks:
+    - name: List running stacks
+      command: docker stack ls --format "{{ '{{' }}.Name{{ '}}' }}"
+      register: stacks
+      changed_when: false
+
+    - name: Remove each stack
+      command: "docker stack rm {{ item }}"
+      loop: "{{ stacks.stdout_lines }}"
+      when: stacks.stdout_lines | length > 0
+      ignore_errors: yes
+
+    - name: Wait for services to be removed
+      command: docker service ls -q
+      register: services
+      until: services.stdout_lines | length == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+      ignore_errors: yes
+
+- name: Prune Docker resources on all nodes
+  hosts: swarm_managers:swarm_workers
+  become: yes
+  tasks:
+    - name: Remove stopped containers
+      command: docker container prune -f
+      ignore_errors: yes
+
+    - name: Remove unused networks
+      command: docker network prune -f
+      ignore_errors: yes
+
+    - name: Remove unused volumes
+      command: docker volume prune -f
+      ignore_errors: yes
+
+- name: Prune Docker on Elastic nodes
+  hosts: elastic
+  become: yes
+  tasks:
+    - name: Remove stopped containers
+      command: docker container prune -f
+      ignore_errors: yes
+    - name: Remove unused networks
+      command: docker network prune -f
+      ignore_errors: yes
+    - name: Remove unused volumes
+      command: docker volume prune -f
+      ignore_errors: yes

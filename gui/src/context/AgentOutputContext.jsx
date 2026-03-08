@@ -10,6 +10,8 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 
 const AgentOutputContext = createContext(null)
 
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+
 // ── Module-level singleton ────────────────────────────────────────────────────
 
 let _ws             = null
@@ -17,6 +19,7 @@ let _wsUrl          = null
 let _pingTimer      = null
 let _msgListeners   = new Set()
 let _stateListeners = new Set()
+let _replayListeners = new Set()
 
 function _notifyState(state) {
   _stateListeners.forEach(fn => fn(state))
@@ -40,6 +43,38 @@ function _ensureWS(url) {
     _pingTimer = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send('ping')
     }, 20_000)
+    // Fetch replay for the most recent active session
+    const token = localStorage.getItem('hp1_auth_token')
+    if (token) {
+      fetch(`${API_BASE}/api/agent/sessions/active`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          const sessions = data?.sessions || []
+          if (sessions.length > 0) {
+            const latestSession = sessions[0]
+            return fetch(`${API_BASE}/api/agent/session/${latestSession.session_id}/replay`, {
+              headers: { Authorization: `Bearer ${token}` },
+            })
+          }
+          return null
+        })
+        .then(r => r?.ok ? r.json() : null)
+        .then(data => {
+          if (data?.lines?.length) {
+            const replayLines = data.lines.map((l, i) => ({
+              id: `replay-${i}`,
+              type: l.type || 'step',
+              content: l.content || '',
+              timestamp: l.timestamp,
+              replayed: true,
+            }))
+            _replayListeners.forEach(fn => fn(replayLines))
+          }
+        })
+        .catch(() => {})
+    }
   }
 
   ws.onmessage = (e) => {
@@ -79,7 +114,8 @@ export function AgentOutputProvider({ children }) {
   const feedStartRef    = useRef(null)  // timestamp when current run started
 
   useEffect(() => {
-    const url = `ws://${location.hostname}:8000/ws/output`
+    const token = localStorage.getItem('hp1_auth_token')
+    const url = `ws://${location.hostname}:8000/ws/output${token ? `?token=${token}` : ''}`
     _ensureWS(url)
 
     if (_ws) {
@@ -181,12 +217,18 @@ export function AgentOutputProvider({ children }) {
       }
     }
 
+    const onReplay = (replayLines) => {
+      setOutputLines(prev => [...replayLines, ...prev])
+    }
+
     _stateListeners.add(onState)
     _msgListeners.add(onMsg)
+    _replayListeners.add(onReplay)
 
     return () => {
       _stateListeners.delete(onState)
       _msgListeners.delete(onMsg)
+      _replayListeners.delete(onReplay)
     }
   }, [])
 

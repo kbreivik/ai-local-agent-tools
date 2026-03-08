@@ -71,15 +71,18 @@ async def log_operation_start(
     label: str,
     triggered_by: str = "api",
     model_used: str = "",
+    owner_user: str = "admin",
 ) -> str:
     """Create operation record immediately. Returns UUID str (caller needs the ID)."""
     async with get_engine().begin() as conn:
-        return await q.create_operation(conn, session_id, label, triggered_by, model_used)
+        return await q.create_operation(
+            conn, session_id, label, triggered_by, model_used, owner_user=owner_user
+        )
 
 
 # Legacy alias used by existing callers
-async def log_operation(session_id: str, label: str) -> str:
-    return await log_operation_start(session_id, label)
+async def log_operation(session_id: str, label: str, owner_user: str = "admin") -> str:
+    return await log_operation_start(session_id, label, owner_user=owner_user)
 
 
 async def log_operation_complete(

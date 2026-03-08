@@ -8,6 +8,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastmcp import FastMCP
 
 from mcp_server.tools import swarm, kafka, orchestration, elastic
+from mcp_server.tools.docker_engine import (
+    docker_engine_version,
+    docker_engine_check_update,
+    docker_engine_update,
+)
+from mcp_server.tools import ingest as ingest_tools
 
 mcp = FastMCP("HP1-AI-Agent")
 
@@ -200,6 +206,58 @@ def elastic_index_stats() -> dict:
 def elastic_correlate_operation(operation_id: str) -> dict:
     """Correlate a PostgreSQL operation_id with contemporaneous Elasticsearch logs."""
     return elastic.elastic_correlate_operation(operation_id)
+
+
+# ── Docker Engine tools ───────────────────────────────────────────────────────
+
+@mcp.tool()
+def docker_engine_version_tool() -> dict:
+    """Get the current Docker Engine version on the remote Debian 12 host via SSH."""
+    return docker_engine_version()
+
+
+@mcp.tool()
+def docker_engine_check_update_tool() -> dict:
+    """Check if a Docker Engine update is available. Runs apt-get update then apt-cache policy docker-ce."""
+    return docker_engine_check_update()
+
+
+@mcp.tool()
+def docker_engine_update_tool(dry_run: bool = True) -> dict:
+    """
+    Upgrade Docker Engine on the remote Debian 12 host via apt-get.
+    DESTRUCTIVE — requires plan_action() approval before calling with dry_run=False.
+    dry_run=True runs a simulation. dry_run=False performs the actual upgrade.
+    """
+    return docker_engine_update(dry_run)
+
+
+# ── Ingest tools ──────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def ingest_url(url: str, tags: list = None, label: str = "") -> dict:
+    """
+    Fetch a URL, store its content locally and in MuninnDB for long-term recall.
+    IMPORTANT: This tool requires user approval via the GUI before the content is stored.
+    Call this when you find relevant documentation, runbooks, or reference material at a URL.
+    Returns preview of content and whether it's new or updated.
+    """
+    return ingest_tools.ingest_url(url, tags, label)
+
+
+@mcp.tool()
+def ingest_pdf(filename: str, tags: list = None) -> dict:
+    """
+    Ingest a PDF file that has already been uploaded to data/docs/.
+    Stores content in MuninnDB for long-term recall.
+    """
+    return ingest_tools.ingest_pdf(filename, tags)
+
+
+@mcp.tool()
+def check_internet_connectivity() -> dict:
+    """Check if the agent host has internet access."""
+    return ingest_tools.check_internet_connectivity()
 
 
 if __name__ == "__main__":

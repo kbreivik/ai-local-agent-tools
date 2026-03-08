@@ -2,34 +2,45 @@
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''  // empty = use Vite proxy
 
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+
+export function getAuthToken() {
+  return localStorage.getItem('hp1_auth_token') || ''
+}
+
+export function authHeaders() {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 // ── REST ─────────────────────────────────────────────────────────────────────
 
 export async function fetchHealth() {
-  const r = await fetch(`${BASE}/api/health`)
+  const r = await fetch(`${BASE}/api/health`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchTools(refresh = false) {
-  const r = await fetch(`${BASE}/api/tools${refresh ? '?refresh=true' : ''}`)
+  const r = await fetch(`${BASE}/api/tools${refresh ? '?refresh=true' : ''}`, { headers: { ...authHeaders() } })
   const d = await r.json()
   return d.tools ?? []
 }
 
 export async function fetchStatus() {
-  const r = await fetch(`${BASE}/api/status`)
+  const r = await fetch(`${BASE}/api/status`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchLogs({ status = 'all', limit = 100, offset = 0, tool = '' } = {}) {
   const p = new URLSearchParams({ status, limit, offset, ...(tool ? { tool } : {}) })
-  const r = await fetch(`${BASE}/api/logs?${p}`)
+  const r = await fetch(`${BASE}/api/logs?${p}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function invokeTool(toolName, params = {}) {
   const r = await fetch(`${BASE}/api/tools/${toolName}/invoke`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(params),
   })
   return r.json()
@@ -38,7 +49,7 @@ export async function invokeTool(toolName, params = {}) {
 export async function runAgent(task, sessionId = '') {
   const r = await fetch(`${BASE}/api/agent/run`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ task, session_id: sessionId }),
   })
   return r.json()
@@ -47,7 +58,7 @@ export async function runAgent(task, sessionId = '') {
 export async function sendConfirmation(sessionId, approved) {
   const r = await fetch(`${BASE}/api/agent/confirm`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ session_id: sessionId, approved }),
   })
   return r.json()
@@ -56,108 +67,108 @@ export async function sendConfirmation(sessionId, approved) {
 export async function sendClarification(sessionId, answer) {
   const r = await fetch(`${BASE}/api/agent/clarify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ session_id: sessionId, answer }),
   })
   return r.json()
 }
 
 export async function fetchModels() {
-  const r = await fetch(`${BASE}/api/agent/models`)
+  const r = await fetch(`${BASE}/api/agent/models`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchStats() {
-  const r = await fetch(`${BASE}/api/logs/stats`)
+  const r = await fetch(`${BASE}/api/logs/stats`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchStatusHistory(component, hours = 24) {
-  const r = await fetch(`${BASE}/api/status/history/${component}?hours=${hours}`)
+  const r = await fetch(`${BASE}/api/status/history/${component}?hours=${hours}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchAlerts(limit = 20) {
-  const r = await fetch(`${BASE}/api/alerts/recent?limit=${limit}`)
+  const r = await fetch(`${BASE}/api/alerts/recent?limit=${limit}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function dismissAlert(alertId) {
-  const r = await fetch(`${BASE}/api/alerts/${alertId}/dismiss`, { method: 'POST' })
+  const r = await fetch(`${BASE}/api/alerts/${alertId}/dismiss`, { method: 'POST', headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function dismissAllAlerts() {
-  const r = await fetch(`${BASE}/api/alerts/dismiss-all`, { method: 'POST' })
+  const r = await fetch(`${BASE}/api/alerts/dismiss-all`, { method: 'POST', headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchOperations({ limit = 50, offset = 0, status = 'all' } = {}) {
   const p = new URLSearchParams({ limit, offset, status })
-  const r = await fetch(`${BASE}/api/logs/operations?${p}`)
+  const r = await fetch(`${BASE}/api/logs/operations?${p}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchOperationDetail(opId) {
-  const r = await fetch(`${BASE}/api/logs/operations/${opId}`)
+  const r = await fetch(`${BASE}/api/logs/operations/${opId}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchEscalations(limit = 50) {
-  const r = await fetch(`${BASE}/api/logs/escalations?limit=${limit}`)
+  const r = await fetch(`${BASE}/api/logs/escalations?limit=${limit}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function resolveEscalation(escId) {
-  const r = await fetch(`${BASE}/api/logs/escalations/${escId}/resolve`, { method: 'POST' })
+  const r = await fetch(`${BASE}/api/logs/escalations/${escId}/resolve`, { method: 'POST', headers: { ...authHeaders() } })
   return r.json()
 }
 
 // ── Memory (MuninnDB) ─────────────────────────────────────────────────────────
 
 export async function fetchMemoryHealth() {
-  const r = await fetch(`${BASE}/api/memory/health`)
+  const r = await fetch(`${BASE}/api/memory/health`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchMemoryRecent(limit = 20) {
-  const r = await fetch(`${BASE}/api/memory/recent?limit=${limit}`)
+  const r = await fetch(`${BASE}/api/memory/recent?limit=${limit}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function searchMemory(q, limit = 20) {
-  const r = await fetch(`${BASE}/api/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+  const r = await fetch(`${BASE}/api/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function activateMemory(context, maxResults = 5) {
   const r = await fetch(`${BASE}/api/memory/activate?max_results=${maxResults}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(context),
   })
   return r.json()
 }
 
 export async function deleteMemoryEngram(id) {
-  const r = await fetch(`${BASE}/api/memory/${id}`, { method: 'DELETE' })
+  const r = await fetch(`${BASE}/api/memory/${id}`, { method: 'DELETE', headers: { ...authHeaders() } })
   return r.ok
 }
 
 export async function fetchMemoryPatterns() {
-  const r = await fetch(`${BASE}/api/memory/patterns`)
+  const r = await fetch(`${BASE}/api/memory/patterns`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function fetchMemoryDocs() {
-  const r = await fetch(`${BASE}/api/memory/docs`)
+  const r = await fetch(`${BASE}/api/memory/docs`, { headers: { ...authHeaders() } })
   return r.json()
 }
 
 export async function triggerDocFetch(component = null, force = false) {
   const r = await fetch(`${BASE}/api/memory/fetch-docs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ component, force }),
   })
   return r.json()
@@ -166,7 +177,7 @@ export async function triggerDocFetch(component = null, force = false) {
 export async function submitFeedback(sessionId, rating) {
   const r = await fetch(`${BASE}/api/feedback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ session_id: sessionId, rating }),
   })
   return r.json()
@@ -180,7 +191,9 @@ const WS_BASE = (() => {
 })()
 
 export function createOutputStream(onMessage, onOpen, onClose) {
-  const ws = new WebSocket(`${WS_BASE}/ws/output`)
+  const token = getAuthToken()
+  const wsUrl = `${WS_BASE}/ws/output${token ? `?token=${token}` : ''}`
+  const ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
     onOpen?.()

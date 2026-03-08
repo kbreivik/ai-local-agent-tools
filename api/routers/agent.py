@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
 
 from api.websocket import manager
+from api.auth import get_current_user
 import api.logger as logger_mod
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -27,6 +28,7 @@ def _lm_key():   return os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from api.tool_registry import get_registry, invoke_tool
+from api.lock import plan_lock
 
 
 def _build_tools_spec() -> list[dict]:
@@ -47,6 +49,7 @@ def _build_tools_spec() -> list[dict]:
 DESTRUCTIVE_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "checkpoint_restore", "kafka_rolling_restart_safe",
+    "docker_engine_update",
 })
 
 # Per-session cancellation flags — set by POST /api/agent/stop
@@ -132,7 +135,7 @@ _AGENT_BADGE_COLOR = {
 }
 
 
-async def _stream_agent(task: str, session_id: str, operation_id: str):
+async def _stream_agent(task: str, session_id: str, operation_id: str, owner_user: str = "admin"):
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
     from api.agents.router import classify_task, filter_tools, get_prompt
@@ -370,6 +373,24 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
                 messages.append({"role": "user", "content": block_msg})
                 continue  # Re-enter while loop to call plan_action
 
+            # Also block if global lock is held by a different session
+            if _destructive_req and plan_lock.is_locked_by_other(session_id):
+                lock_info = plan_lock.get_info()
+                block_msg = (
+                    f"STOP. Destructive tool(s) {sorted(_destructive_req)} blocked — "
+                    f"global plan lock held by {lock_info['owner_user']}. "
+                    "Wait for the other operation to complete."
+                )
+                await manager.send_line("step", f"[lock] Blocked by global lock (owner: {lock_info['owner_user']})", status="ok", session_id=session_id)
+                for _btc in msg.tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": _btc.id,
+                        "content": json.dumps({"status": "locked", "message": block_msg}),
+                    })
+                messages.append({"role": "user", "content": block_msg})
+                continue
+
             halt = False
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
@@ -412,53 +433,67 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
                 try:
                     if fn_name == "plan_action":
                         plan_action_called = True
-                        # Intercept: broadcast plan to GUI, suspend until approved/rejected
-                        plan = {
-                            "summary":    fn_args.get("summary", ""),
-                            "steps":      fn_args.get("steps") or [],
-                            "risk_level": fn_args.get("risk_level", "medium"),
-                            "reversible": fn_args.get("reversible", True),
-                        }
-                        await manager.broadcast({
-                            "type":       "plan_pending",
-                            "plan":       plan,
-                            "session_id": session_id,
-                            "timestamp":  datetime.now(timezone.utc).isoformat(),
-                        })
-                        await manager.send_line(
-                            "step",
-                            f"[plan] Waiting for user approval: {plan['summary']}",
-                            status="ok", session_id=session_id,
-                        )
-                        from api.confirmation import wait_for_confirmation
-                        from api.memory.feedback import record_feedback_signal as _rfs
-                        approved = await wait_for_confirmation(session_id)
-                        if approved:
-                            positive_signals += 1
-                            asyncio.create_task(_rfs(
-                                task, "plan_approved", plan["summary"][:120]
-                            ))
+                        # Try to acquire the global destructive lock
+                        lock_ok = await plan_lock.acquire(session_id, owner_user)
+                        if not lock_ok:
+                            lock_info = plan_lock.get_info()
                             result = {
-                                "status":   "ok",
-                                "approved": True,
-                                "message":  "User confirmed. Proceed with plan.",
-                                "data":     {"approved": True},
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                            await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
-                        else:
-                            negative_signals += 1
-                            asyncio.create_task(_rfs(
-                                task, "plan_cancelled", plan["summary"][:120]
-                            ))
-                            result = {
-                                "status":   "ok",
+                                "status": "locked",
                                 "approved": False,
-                                "message":  "User cancelled. Do not proceed.",
-                                "data":     {"approved": False},
+                                "message": f"System locked by {lock_info['owner_user']} (session {lock_info['session_id'][:8]}). Wait for their plan to complete.",
+                                "data": {"approved": False},
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             }
-                            await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
+                            await manager.send_line("step", f"[lock] Destructive lock held by {lock_info['owner_user']} — plan blocked", status="ok", session_id=session_id)
+                        else:
+                            # Intercept: broadcast plan to GUI, suspend until approved/rejected
+                            plan = {
+                                "summary":    fn_args.get("summary", ""),
+                                "steps":      fn_args.get("steps") or [],
+                                "risk_level": fn_args.get("risk_level", "medium"),
+                                "reversible": fn_args.get("reversible", True),
+                            }
+                            await manager.broadcast({
+                                "type":       "plan_pending",
+                                "plan":       plan,
+                                "session_id": session_id,
+                                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                            })
+                            await manager.send_line(
+                                "step",
+                                f"[plan] Waiting for user approval: {plan['summary']}",
+                                status="ok", session_id=session_id,
+                            )
+                            from api.confirmation import wait_for_confirmation
+                            from api.memory.feedback import record_feedback_signal as _rfs
+                            approved = await wait_for_confirmation(session_id)
+                            if approved:
+                                positive_signals += 1
+                                asyncio.create_task(_rfs(
+                                    task, "plan_approved", plan["summary"][:120]
+                                ))
+                                result = {
+                                    "status":   "ok",
+                                    "approved": True,
+                                    "message":  "User confirmed. Proceed with plan.",
+                                    "data":     {"approved": True},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                                await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
+                            else:
+                                negative_signals += 1
+                                asyncio.create_task(_rfs(
+                                    task, "plan_cancelled", plan["summary"][:120]
+                                ))
+                                result = {
+                                    "status":   "ok",
+                                    "approved": False,
+                                    "message":  "User cancelled. Do not proceed.",
+                                    "data":     {"approved": False},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                                await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
+                            await plan_lock.release(session_id)
 
                     elif fn_name == "clarifying_question":
                         # Intercept: broadcast question to GUI, suspend until answered
@@ -648,17 +683,21 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
     except Exception as _oe:
         log.debug("record_outcome error: %s", _oe)
 
+    # Release plan lock if this session holds it
+    await plan_lock.release(session_id)
+
     if last_reasoning:
         await logger_mod.set_operation_final_answer(session_id, last_reasoning)
     await logger_mod.complete_operation(operation_id, final_status)
 
 
 @router.post("/run", response_model=RunResponse)
-async def run_agent(req: RunRequest, background_tasks: BackgroundTasks):
+async def run_agent(req: RunRequest, background_tasks: BackgroundTasks,
+                    user: str = Depends(get_current_user)):
     """Start an agent task. Streams output to ws://host:8000/ws/output."""
     session_id = req.session_id or str(uuid.uuid4())
-    operation_id = await logger_mod.log_operation(session_id, req.task[:120])
-    background_tasks.add_task(_stream_agent, req.task, session_id, operation_id)
+    operation_id = await logger_mod.log_operation(session_id, req.task[:120], owner_user=user)
+    background_tasks.add_task(_stream_agent, req.task, session_id, operation_id, user)
     return RunResponse(
         session_id=session_id,
         operation_id=operation_id,
@@ -677,9 +716,10 @@ class ConfirmRequest(BaseModel):
 
 
 @router.post("/confirm")
-async def confirm_plan(req: ConfirmRequest):
+async def confirm_plan(req: ConfirmRequest, user: str = Depends(get_current_user)):
     """Resolve a pending plan_action() call in the agent loop."""
     from api.confirmation import resolve_confirmation
+    # Any authenticated user can confirm (ownership enforced by GUI; backend trusts auth)
     ok = resolve_confirmation(req.session_id, req.approved)
     if not ok:
         return {"status": "error", "message": f"No pending plan for session '{req.session_id}'"}
