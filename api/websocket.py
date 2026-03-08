@@ -2,7 +2,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import WebSocket
 
@@ -18,7 +18,17 @@ class ConnectionManager:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket, token: Optional[str] = None):
+        """Accept the WebSocket connection. If token is provided, validate it.
+        Invalid token closes the connection with code 1008 (policy violation).
+        """
+        if token:
+            try:
+                from api.auth import decode_token
+                decode_token(token)
+            except Exception:
+                await ws.close(code=1008)
+                return
         await ws.accept()
         async with self._get_lock():
             self._connections.append(ws)
@@ -30,6 +40,19 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict[str, Any]):
         payload = json.dumps(message)
+        # Store line for session replay
+        session_id = message.get("session_id", "")
+        msg_type = message.get("type", "")
+        content = message.get("content", "")
+        if session_id:
+            try:
+                from api.session_store import store_line
+                metadata = {k: v for k, v in message.items()
+                            if k not in ("session_id", "type", "content", "timestamp")}
+                store_line(session_id, msg_type, content, metadata)
+            except Exception:
+                pass
+
         async with self._get_lock():
             dead = []
             for ws in self._connections:
@@ -53,6 +76,14 @@ class ConnectionManager:
         if session_id:
             msg["session_id"] = session_id
         await self.broadcast(msg)
+
+    async def get_replay(self, session_id: str) -> list[dict]:
+        """Return stored lines for a session from DB."""
+        try:
+            from api.session_store import get_replay_lines
+            return await get_replay_lines(session_id)
+        except Exception:
+            return []
 
     @property
     def active_count(self) -> int:

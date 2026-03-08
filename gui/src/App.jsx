@@ -17,12 +17,16 @@ import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
 import { fetchHealth, fetchStats } from './api'
+import { AuthProvider, useAuth } from './context/AuthContext'
+import LoginScreen from './components/LoginScreen'
+import LockBadge from './components/LockBadge'
+import IngestPanel from './components/IngestPanel'
 // Dev-only layout test harness — renders as overlay at ?test=layout
 const _showLayoutTest = import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('test') === 'layout'
 const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
-const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Output', 'Tests']
+const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Ingest', 'Output', 'Tests']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
@@ -117,7 +121,8 @@ function Header({ activeTab, onTab }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 h-full">
+        <UserBadge />
         <OptionsModal />
       </div>
     </header>
@@ -211,10 +216,11 @@ function SubBar() {
               <span className="text-xs font-medium" style={{ color: badge.color }}>
                 {badge.label}
               </span>
-              {agentType && <span className="text-yellow-500 animate-pulse text-xs">⚡</span>}
+              {agentType && <span className="text-yellow-500 animate-pulse text-xs">&#9889;</span>}
             </div>
           ) : null
         })()}
+        <LockBadge />
         <div className="flex items-center px-3 border-l border-gray-200 h-8">
           <span className="text-gray-400 text-xs mr-1">API</span>
           <span className="text-gray-800 text-xs font-medium">:8000</span>
@@ -383,6 +389,14 @@ function AppShell() {
             </div>
           )}
 
+          {activeTab === 'Ingest' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 bg-white overflow-hidden">
+                <IngestPanel />
+              </div>
+            </div>
+          )}
+
           {activeTab === 'Output' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden">
@@ -413,6 +427,38 @@ function AppShell() {
   )
 }
 
+// ── Auth components ────────────────────────────────────────────────────────────
+
+function UserBadge() {
+  const { user, logout } = useAuth()
+  if (!user) return null
+  return (
+    <div className="flex items-center gap-2 px-3 border-l border-gray-200 h-full">
+      <span className="text-xs text-gray-500">{user}</span>
+      <button
+        onClick={logout}
+        className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+        title="Sign out"
+      >
+        Sign out
+      </button>
+    </div>
+  )
+}
+
+function AuthGate({ children }) {
+  const { isAuthed, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+        <div className="text-gray-500 text-sm font-mono">Loading\u2026</div>
+      </div>
+    )
+  }
+  if (!isAuthed) return <LoginScreen />
+  return children
+}
+
 // ── Root with providers ────────────────────────────────────────────────────────
 
 function AppWithPanelProvider() {
@@ -428,12 +474,16 @@ function AppWithPanelProvider() {
 
 export default function App() {
   return (
-    <OptionsProvider>
-      <AgentOutputProvider>
-        <TaskProvider>
-          <AppWithPanelProvider />
-        </TaskProvider>
-      </AgentOutputProvider>
-    </OptionsProvider>
+    <AuthProvider>
+      <AuthGate>
+        <OptionsProvider>
+          <AgentOutputProvider>
+            <TaskProvider>
+              <AppWithPanelProvider />
+            </TaskProvider>
+          </AgentOutputProvider>
+        </OptionsProvider>
+      </AuthGate>
+    </AuthProvider>
   )
 }

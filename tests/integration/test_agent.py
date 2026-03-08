@@ -40,6 +40,18 @@ DESTRUCTIVE_TOOLS = frozenset({
 })
 
 
+def _get_test_token() -> str:
+    """Get a JWT token for test API calls."""
+    try:
+        import httpx as _hx
+        r = _hx.post(f"{API_BASE}/api/auth/login", json={"username": "admin", "password": "superduperadmin"}, timeout=5)
+        if r.status_code == 200:
+            return r.json().get("access_token", "")
+    except Exception:
+        pass
+    return ""
+
+
 # ── Test definition ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -1088,6 +1100,7 @@ CATEGORY_ORDER = [
 async def run_all_tests(
     categories: list[str] | None,
     http: httpx.AsyncClient,
+    args=None,
 ) -> list[TestResult]:
     cases = TEST_CASES
     if categories:
@@ -1110,6 +1123,25 @@ async def run_all_tests(
         steps_str = f"{tc.max_steps or tc.max_steps_allowed or '?'}s-limit" if (tc.max_steps or tc.max_steps_allowed) else ""
         crit_mark = " [CRITICAL]" if tc.critical else ""
         print(f"  → {tc.id}{crit_mark}  {tc.task!r:.60}… ", end="", flush=True)
+
+        if args is not None and getattr(args, "ansible_reset", False):
+            import httpx as _hx
+            print(f"\n  [reset] Running {getattr(args, 'reset_mode', None) or 'default'} reset before {tc.id}...")
+            try:
+                _params = {"mode": args.reset_mode} if args.reset_mode else {}
+                _r = _hx.post(
+                    f"{API_BASE}/api/ansible/reset",
+                    params=_params,
+                    headers={"Authorization": f"Bearer {_get_test_token()}"},
+                    timeout=700,
+                )
+                if _r.status_code == 200 and _r.json().get("status") == "ok":
+                    print(f"  [reset] Reset OK")
+                else:
+                    print(f"  [reset] Reset failed: {_r.text[:200]}")
+            except Exception as _e:
+                print(f"  [reset] Reset error: {_e}")
+            print(f"  → {tc.id}{crit_mark}  {tc.task!r:.60}… ", end="", flush=True)
 
         result = await run_test(tc, http)
         results.append(result)
@@ -1333,6 +1365,18 @@ def main() -> None:
         "--list", action="store_true",
         help="List all test cases and exit",
     )
+    parser.add_argument(
+        "--ansible-reset", action="store_true",
+        help="Reset infra via Ansible/Proxmox before each test case",
+    )
+    parser.add_argument(
+        "--ansible-reset-suite", action="store_true",
+        help="Reset infra once before the full test suite",
+    )
+    parser.add_argument(
+        "--reset-mode", choices=["ansible", "proxmox"], default=None,
+        help="Override reset mode from config",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -1363,7 +1407,25 @@ def main() -> None:
                 print("Preflight failed — aborting.\n")
                 sys.exit(1)
 
-            results = await run_all_tests(args.category, http)
+            if args.ansible_reset_suite:
+                import httpx as _hx
+                print(f"  [reset] Running suite-level {args.reset_mode or 'default'} reset before test suite...")
+                try:
+                    _params = {"mode": args.reset_mode} if args.reset_mode else {}
+                    _r = _hx.post(
+                        f"{API_BASE}/api/ansible/reset",
+                        params=_params,
+                        headers={"Authorization": f"Bearer {_get_test_token()}"},
+                        timeout=700,
+                    )
+                    if _r.status_code == 200 and _r.json().get("status") == "ok":
+                        print(f"  [reset] Suite reset OK\n")
+                    else:
+                        print(f"  [reset] Suite reset failed: {_r.text[:200]}\n")
+                except Exception as _e:
+                    print(f"  [reset] Suite reset error: {_e}\n")
+
+            results = await run_all_tests(args.category, http, args)
             save_results(results)
             if args.baseline:
                 save_baseline(results)

@@ -4,10 +4,11 @@ import socket
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+from typing import Optional
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,9 +16,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from api.db import init_db
 from api.logger import ensure_started as _start_logger, flush_now as _flush_logger
 from api.websocket import manager
+from api.auth import get_current_user
 from api.routers import tools, agent, status, logs, alerts, memory as memory_router, elastic as elastic_router, settings as settings_router
 from api.routers import tests_api as tests_router
 from api.routers import feedback as feedback_router
+from api.routers.auth import router as auth_router
+from api.routers.lock import router as lock_router
+from api.routers.ansible import router as ansible_router
+from api.routers.ingest import router as ingest_router
+from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
@@ -40,6 +47,7 @@ CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "true").lower() == "true"
 async def lifespan(app: FastAPI):
     await init_db()
     await _start_logger()
+    await _start_session_store()
     collector_manager.start_all()
     # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
     try:
@@ -56,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HP1 AI Agent API",
     description="Local AI infrastructure orchestration — Docker Swarm + Kafka",
-    version="1.6.5",
+    version="1.8.0",
     lifespan=lifespan,
 )
 
@@ -69,6 +77,7 @@ app.add_middleware(
 )
 
 # Routers
+app.include_router(auth_router)
 app.include_router(tools.router)
 app.include_router(agent.router)
 app.include_router(status.router)
@@ -79,6 +88,9 @@ app.include_router(elastic_router.router)
 app.include_router(settings_router.router)
 app.include_router(tests_router.router)
 app.include_router(feedback_router.router)
+app.include_router(lock_router)
+app.include_router(ansible_router)
+app.include_router(ingest_router)
 
 
 def _get_host_ips() -> dict:
@@ -105,21 +117,40 @@ def _get_host_ips() -> dict:
         return {"hostname": "unknown", "lan_ips": [], "all_ips": []}
 
 
+@app.get("/api/agent/session/{session_id}/replay")
+async def session_replay(session_id: str, user: str = Depends(get_current_user)):
+    from api.session_store import get_replay_lines
+    lines = await get_replay_lines(session_id)
+    return {"session_id": session_id, "lines": lines}
+
+
+@app.get("/api/agent/sessions/active")
+async def active_sessions(user: str = Depends(get_current_user)):
+    from api.session_store import get_active_sessions
+    return {"sessions": await get_active_sessions()}
+
+
 @app.get("/api/health")
 async def health():
     return {
         "status": "ok",
         "service": "HP1-AI-Agent",
-        "version": "1.6.5",
+        "version": "1.8.0",
         "ws_clients": manager.active_count,
         "network": _get_host_ips(),
     }
 
 
 @app.websocket("/ws/output")
-async def websocket_output(ws: WebSocket):
-    """WebSocket endpoint — streams agent output to GUI in real time."""
-    await manager.connect(ws)
+async def websocket_output(ws: WebSocket, token: Optional[str] = Query(default=None)):
+    """WebSocket endpoint — streams agent output to GUI in real time.
+    Pass ?token=<jwt> to authenticate. Invalid token closes with code 1008.
+    """
+    await manager.connect(ws, token=token)
+    # If connect rejected the ws (invalid token), it's closed; the ws won't be in connections.
+    # We still need to guard the receive loop.
+    if ws not in manager._connections:
+        return
     try:
         # Keep alive — client can send pings
         while True:

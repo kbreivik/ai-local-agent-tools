@@ -56,6 +56,7 @@ operations = Table(
     Column("feedback", Text),
     Column("feedback_at", Text),
     Column("final_answer", Text),
+    Column("owner_user", Text),
 )
 
 tool_calls = Table(
@@ -102,4 +103,14 @@ audit_log = Table(
     _json_col("detail"),
     _ts_col("timestamp", nullable=False, server_default=func.now()),
     Column("source", Text),
+)
+
+operation_log = Table(
+    "operation_log", metadata,
+    _uuid_col("id", primary_key=True),
+    Column("session_id", Text, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("content", Text),
+    _json_col("metadata"),
+    _ts_col("timestamp", nullable=False, server_default=func.now()),
 )

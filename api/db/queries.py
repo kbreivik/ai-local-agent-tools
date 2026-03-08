@@ -63,6 +63,7 @@ async def create_operation(
     label: str,
     triggered_by: str = "agent",
     model_used: str = "",
+    owner_user: str = "admin",
 ) -> str:
     op_id = _new_id()
     await conn.execute(operations.insert().values(
@@ -73,6 +74,7 @@ async def create_operation(
         status="running",
         triggered_by=triggered_by,
         model_used=model_used,
+        owner_user=owner_user,
     ))
     return op_id
 

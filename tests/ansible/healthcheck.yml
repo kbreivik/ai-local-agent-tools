@@ -1,0 +1,25 @@
+---
+# Healthcheck: wait for all services to be healthy
+- name: Wait for Swarm services to be healthy
+  hosts: swarm_managers[0]
+  become: yes
+  tasks:
+    - name: Wait for all services to reach desired replica count
+      shell: |
+        desired=$(docker service ls --format "{{ '{{' }}.Replicas{{ '}}' }}" | awk -F'/' '{sum += $2} END {print sum}')
+        running=$(docker service ls --format "{{ '{{' }}.Replicas{{ '}}' }}" | awk -F'/' '{sum += $1} END {print sum}')
+        [ "$running" = "$desired" ]
+      register: health_check
+      until: health_check.rc == 0
+      retries: 36
+      delay: 5
+      changed_when: false
+
+    - name: Report final service status
+      command: docker service ls
+      register: service_list
+      changed_when: false
+
+    - name: Show service list
+      debug:
+        msg: "{{ service_list.stdout_lines }}"

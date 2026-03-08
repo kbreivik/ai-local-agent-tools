@@ -41,9 +41,11 @@ STATUS_AGENT_TOOLS = frozenset({
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_index_stats",
     "audit_log", "escalate", "clarifying_question",
     "get_host_network",
+    "docker_engine_version", "docker_engine_check_update",
+    "check_internet_connectivity",
 })
 
-# Research agent — read-only + elastic search + correlation
+# Research agent — read-only + elastic search + correlation + ingestion
 RESEARCH_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
@@ -52,6 +54,8 @@ RESEARCH_AGENT_TOOLS = frozenset({
     "elastic_kafka_logs", "elastic_correlate_operation", "audit_log",
     "escalate", "clarifying_question",
     "get_host_network",
+    "docker_engine_version", "docker_engine_check_update",
+    "ingest_url", "ingest_pdf", "check_internet_connectivity",
 })
 
 # Action agent — all tools including destructive ones
@@ -184,7 +188,8 @@ EXECUTION RULES — NON-NEGOTIABLE:
 
 DESTRUCTIVE TOOLS (ALWAYS require plan_action first):
   service_upgrade, service_rollback, node_drain,
-  checkpoint_restore, kafka_rolling_restart_safe
+  checkpoint_restore, kafka_rolling_restart_safe,
+  docker_engine_update
 
 WORKFLOW FOR DESTRUCTIVE ACTIONS — MANDATORY, NO EXCEPTIONS:
   Step 1: Gather information: call service_list(), pre_upgrade_check(), version tools as needed.
@@ -212,7 +217,8 @@ READ-ONLY TOOLS (never need plan_action):
   elastic_search_logs, elastic_log_pattern, elastic_index_stats,
   elastic_kafka_logs, elastic_correlate_operation, pre_upgrade_check,
   pre_kafka_check, kafka_topic_health, kafka_consumer_lag,
-  post_upgrade_verify, clarifying_question, escalate
+  post_upgrade_verify, clarifying_question, escalate,
+  docker_engine_version, docker_engine_check_update
 
 ESCALATE BLOCKED RULE:
 - If escalate() returns status=blocked: this means you tried to escalate too early.

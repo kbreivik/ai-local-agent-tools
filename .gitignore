@@ -28,6 +28,13 @@ data/*.db-bak
 data/*.db.bak
 data/test_results.json
 data/docs_manifest.json
+data/ansible_config.json
+tests/ansible/inventory.ini
+
+# Ingested document content (keep manifest.json for metadata)
+data/docs/*.txt
+data/docs/*.html
+data/docs/*.pdf
 
 # Claude Code internal
 .claude/
