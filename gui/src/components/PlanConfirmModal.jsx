@@ -37,7 +37,13 @@ function Countdown({ seconds, onExpire }) {
 
 export default function PlanConfirmModal() {
   const { pendingPlan, clearPlan } = useAgentOutput()
-  const [sending, setSending] = useState(false)
+  const [sending,   setSending]   = useState(false)
+  const [confirmed, setConfirmed] = useState(false)  // required checkbox for HIGH risk
+
+  // Reset checkbox whenever a new plan arrives
+  useEffect(() => {
+    if (pendingPlan) setConfirmed(false)
+  }, [pendingPlan?.summary])
 
   const respond = useCallback(async (approved) => {
     if (sending || !pendingPlan) return
@@ -103,19 +109,30 @@ export default function PlanConfirmModal() {
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Steps</p>
             <div className="space-y-1.5">
               {steps.map((s, i) => {
-                const stepRisk  = RISK_STYLE[s.risk] || RISK_STYLE.medium
-                const argsStr   = typeof s.args_preview === 'object'
+                // Model sends steps as plain strings — handle both string and object format
+                if (typeof s === 'string') {
+                  return (
+                    <div key={i} className="flex items-start gap-2 bg-slate-800 rounded px-3 py-2">
+                      <span className="text-slate-500 text-xs font-mono shrink-0 w-5">{i + 1}.</span>
+                      <p className="text-slate-200 text-xs leading-relaxed">{s}</p>
+                    </div>
+                  )
+                }
+                // Structured object format {tool, risk, args_preview, description}
+                const stepRisk = RISK_STYLE[s.risk] || RISK_STYLE.medium
+                const argsStr  = typeof s.args_preview === 'object'
                   ? Object.entries(s.args_preview || {}).map(([k, v]) => `${k}: ${v}`).join(', ')
                   : (s.args_preview || '')
                 return (
                   <div key={i} className="flex items-start gap-2 bg-slate-800 rounded px-3 py-2">
-                    <span className="text-slate-500 text-xs font-mono shrink-0 w-4">{i + 1}.</span>
+                    <span className="text-slate-500 text-xs font-mono shrink-0 w-5">{i + 1}.</span>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-blue-300 text-xs font-mono">{s.tool}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {s.tool && <span className="text-blue-300 text-xs font-mono">{s.tool}</span>}
                         <span className={`text-xs px-1.5 py-0.5 rounded ${stepRisk.badge}`}>
                           {(s.risk || 'medium').toLowerCase()}
                         </span>
+                        {s.description && <span className="text-slate-200 text-xs">{s.description}</span>}
                       </div>
                       {argsStr && (
                         <p className="text-slate-400 text-xs mt-0.5 truncate">{argsStr}</p>
@@ -125,6 +142,23 @@ export default function PlanConfirmModal() {
                 )
               })}
             </div>
+          </div>
+        )}
+
+        {/* High-risk confirmation checkbox */}
+        {riskLevel === 'high' && (
+          <div className="px-5 pb-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={e => setConfirmed(e.target.checked)}
+                className="w-4 h-4 accent-red-500"
+              />
+              <span className="text-red-300 text-xs font-semibold">
+                I have reviewed this plan and understand the risks
+              </span>
+            </label>
           </div>
         )}
 
@@ -139,8 +173,9 @@ export default function PlanConfirmModal() {
           </button>
           <button
             onClick={() => respond(true)}
-            disabled={sending}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 ${
+            disabled={sending || (riskLevel === 'high' && !confirmed)}
+            title={riskLevel === 'high' && !confirmed ? 'Check the confirmation box first' : ''}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               riskLevel === 'high'
                 ? 'bg-red-700 hover:bg-red-600 text-white'
                 : 'bg-green-700 hover:bg-green-600 text-white'
