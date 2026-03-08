@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, resolveEscalation, fetchStats } from '../api'
 
+const FEEDBACK_ICON = { thumbs_up: '👍', thumbs_down: '👎' }
+
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 const fmtTs = (ts) => {
@@ -208,9 +210,10 @@ export function ToolCallsView({ refreshTick }) {
 // ── Operations view ───────────────────────────────────────────────────────────
 
 export function OpsView({ refreshTick }) {
-  const [ops, setOps]       = useState([])
+  const [ops, setOps]         = useState([])
   const [loading, setLoading] = useState(false)
-  const [detail, setDetail] = useState(null)  // {op, tool_calls}
+  const [detail, setDetail]   = useState(null)  // {op, tool_calls}
+  const [ratedOnly, setRatedOnly] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -227,24 +230,34 @@ export function OpsView({ refreshTick }) {
     fetchOperationDetail(op.id).then(setDetail).catch(() => {})
   }
 
+  const visible = ratedOnly ? ops.filter(op => op.feedback) : ops
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center px-3 py-1.5 border-b border-slate-700 shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-700 shrink-0">
         <span className="text-xs text-slate-500 uppercase font-bold">Operations</span>
+        <button
+          onClick={() => setRatedOnly(r => !r)}
+          className={`text-xs px-2 py-0.5 rounded transition-colors ${
+            ratedOnly ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+          }`}
+        >
+          Rated only
+        </button>
         <button onClick={load} className="ml-auto text-xs text-slate-500 hover:text-slate-300">↺</button>
       </div>
       <div className="flex-1 overflow-auto">
         {loading && <p className="text-xs text-slate-500 p-3 animate-pulse">Loading…</p>}
-        {!loading && ops.length === 0 && <p className="text-xs text-slate-600 p-3">No operations yet.</p>}
-        {ops.length > 0 && (
+        {!loading && visible.length === 0 && <p className="text-xs text-slate-600 p-3">No operations yet.</p>}
+        {visible.length > 0 && (
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 bg-slate-900 border-b border-slate-700">
-              <tr>{['Started','Label','Status','Duration','Model','Calls'].map(h => (
+              <tr>{['Started','Label','Status','Duration','Model','Calls','Feedback'].map(h => (
                 <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
               ))}</tr>
             </thead>
             <tbody>
-              {ops.map(op => (
+              {visible.map(op => (
                 <>
                   <tr key={op.id} className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer"
                       onClick={() => openDetail(op)}>
@@ -260,10 +273,13 @@ export function OpsView({ refreshTick }) {
                       {op.model_used?.split('/').pop() ?? '—'}
                     </td>
                     <td className="px-2 py-1.5 text-slate-500">{op.tool_call_count ?? 0}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      {FEEDBACK_ICON[op.feedback] ?? <span className="text-slate-700">—</span>}
+                    </td>
                   </tr>
                   {detail?.operation?.id === op.id && (
                     <tr key={`${op.id}-detail`} className="bg-slate-900">
-                      <td colSpan={6} className="px-3 py-2">
+                      <td colSpan={7} className="px-3 py-2">
                         <div className="text-xs text-slate-400 mb-1 font-semibold">Tool calls ({detail.tool_calls?.length ?? 0})</div>
                         {detail.tool_calls?.map(tc => (
                           <div key={tc.id} className="flex gap-3 py-0.5 border-b border-slate-800">

@@ -128,9 +128,9 @@ function Header({ activeTab, onTab }) {
 
 function StatItem({ label, value, accent }) {
   return (
-    <div className="flex items-center px-3 border-r border-gray-200 h-full shrink-0">
-      <span className="text-gray-400 text-xs mr-1">{label}:</span>
-      <span className={`text-xs font-medium ${accent ? 'text-orange-600' : 'text-gray-800'}`}>{value ?? '—'}</span>
+    <div className="flex items-center px-2 border-r border-gray-200 h-full min-w-0">
+      <span className="text-gray-400 text-xs mr-1 shrink-0">{label}:</span>
+      <span className={`text-xs font-medium truncate ${accent ? 'text-orange-600' : 'text-gray-800'}`}>{value ?? '—'}</span>
     </div>
   )
 }
@@ -165,7 +165,7 @@ function SubBar() {
   const topTool = stats?.most_used_tools?.[0]
 
   return (
-    <div className="flex items-center h-8 bg-white border-b border-gray-200 shrink-0 overflow-x-auto">
+    <div className="flex items-center h-8 bg-white border-b border-gray-200 shrink-0 overflow-hidden">
 
       <button
         onClick={togglePanel}
@@ -180,23 +180,25 @@ function SubBar() {
         <span>Commands</span>
       </button>
 
-      {stats ? (
-        <>
-          <StatItem label="Runs"       value={stats.total_operations} />
-          <StatItem label="Tool Calls" value={stats.total_tool_calls} />
-          <StatItem label="Success"    value={`${stats.success_rate}%`} />
-          <StatItem label="Avg"        value={stats.avg_duration_ms ? `${stats.avg_duration_ms}ms` : '—'} />
-          <StatItem label="Top Tool"
-            value={topTool ? `${topTool.tool.split('_').slice(0, 2).join('_')} ×${topTool.count}` : '—'} />
-          {stats.escalations_unresolved > 0 && (
-            <StatItem label="Escalations" value={`⚠ ${stats.escalations_unresolved}`} accent />
-          )}
-        </>
-      ) : (
-        <div className="flex items-center px-3 border-r border-gray-200 h-full">
-          <span className="text-xs text-gray-400">Loading…</span>
-        </div>
-      )}
+      <div className="flex items-center min-w-0 overflow-hidden h-full">
+        {stats ? (
+          <>
+            <StatItem label="Runs"       value={stats.total_operations} />
+            <StatItem label="Tool Calls" value={stats.total_tool_calls} />
+            <StatItem label="Success"    value={`${stats.success_rate}%`} />
+            <StatItem label="Avg"        value={stats.avg_duration_ms ? `${stats.avg_duration_ms}ms` : '—'} />
+            <StatItem label="Top Tool"
+              value={topTool ? `${topTool.tool.split('_').slice(0, 2).join('_')} ×${topTool.count}` : '—'} />
+            {stats.escalations_unresolved > 0 && (
+              <StatItem label="Escalations" value={`⚠ ${stats.escalations_unresolved}`} accent />
+            )}
+          </>
+        ) : (
+          <div className="flex items-center px-2 border-r border-gray-200 h-full">
+            <span className="text-xs text-gray-400">Loading…</span>
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center ml-auto">
         {/* Agent type indicator */}
@@ -308,6 +310,13 @@ function ClusterView() {
 function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const { panelOpen } = useCommandPanel()
+
+  // "Full log →" link in AgentFeed navigates to Output tab
+  useEffect(() => {
+    const handler = () => setActiveTab('Output')
+    window.addEventListener('navigate-to-output', handler)
+    return () => window.removeEventListener('navigate-to-output', handler)
+  }, [])
 
   // CSS grid column widths:
   //   Commands tab active → full width (0px panel col + 1fr main)

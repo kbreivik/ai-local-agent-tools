@@ -8,6 +8,7 @@ const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
   reasoning: { line: 'text-slate-300',  icon: '💭' },
   tool:      { line: 'text-blue-300',   icon: '⚙' },
+  memory:    { line: 'text-slate-500',  icon: '◈' },
   halt:      { line: 'text-orange-400', icon: '⚠' },
   done:      { line: 'text-green-400',  icon: '✓' },
   error:     { line: 'text-red-400',    icon: '✗' },
@@ -52,7 +53,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel() {
-  const { outputLines, isRunning, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -61,7 +62,6 @@ export default function OutputPanel() {
     clearChoices()
   }
 
-  // Auto-scroll to bottom when new lines arrive
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [outputLines])
@@ -74,15 +74,15 @@ export default function OutputPanel() {
           <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
             Live Output
           </span>
-          {isRunning && agentType && AGENT_BADGE[agentType] && (
+          {runState === 'running' && agentType && AGENT_BADGE[agentType] && (
             <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${AGENT_BADGE[agentType].cls}`}>
               {AGENT_BADGE[agentType].label}
             </span>
           )}
-          {isRunning && (
+          {runState === 'running' && (
             <span className="text-yellow-400 animate-pulse text-xs">⚡ Running…</span>
           )}
-          {!isRunning && lastAgentType && AGENT_BADGE[lastAgentType] && (
+          {runState === 'idle' && lastAgentType && AGENT_BADGE[lastAgentType] && (
             <span className={`text-xs px-1.5 py-0.5 rounded opacity-50 ${AGENT_BADGE[lastAgentType].cls}`}>
               {AGENT_BADGE[lastAgentType].label}
             </span>
@@ -96,6 +96,14 @@ export default function OutputPanel() {
             <span className="w-1.5 h-1.5 rounded-full bg-current inline-block" />
             {wsState}
           </span>
+          {runState === 'running' && (
+            <button
+              onClick={stopAgent}
+              className="text-xs px-2 py-0.5 rounded border border-red-700 text-red-400 hover:bg-red-950 transition-colors"
+            >
+              ⏹ Stop
+            </button>
+          )}
           <button onClick={clearOutput} className="text-xs text-slate-500 hover:text-slate-300">
             clear
           </button>

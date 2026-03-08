@@ -53,6 +53,9 @@ operations = Table(
     Column("triggered_by", Text),
     Column("model_used", Text),
     Column("total_duration_ms", Integer),
+    Column("feedback", Text),
+    Column("feedback_at", Text),
+    Column("final_answer", Text),
 )
 
 tool_calls = Table(

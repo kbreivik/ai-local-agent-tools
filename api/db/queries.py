@@ -115,6 +115,41 @@ async def get_operation(conn: AsyncConnection, op_id: str) -> dict:
     return _row_to_dict(row) if row else {}
 
 
+async def get_operation_by_session(conn: AsyncConnection, session_id: str) -> dict:
+    """Return the most recent operation for a given session_id."""
+    result = await conn.execute(
+        select(operations)
+        .where(operations.c.session_id == session_id)
+        .order_by(desc(operations.c.started_at))
+        .limit(1)
+    )
+    row = result.fetchone()
+    return _row_to_dict(row) if row else {}
+
+
+async def set_operation_feedback(
+    conn: AsyncConnection, session_id: str, feedback: str
+) -> bool:
+    now = _now().isoformat()
+    r = await conn.execute(
+        update(operations)
+        .where(operations.c.session_id == session_id)
+        .values(feedback=feedback, feedback_at=now)
+    )
+    return r.rowcount > 0
+
+
+async def set_operation_final_answer(
+    conn: AsyncConnection, session_id: str, final_answer: str
+) -> bool:
+    r = await conn.execute(
+        update(operations)
+        .where(operations.c.session_id == session_id)
+        .values(final_answer=final_answer)
+    )
+    return r.rowcount > 0
+
+
 # ── Tool Calls ────────────────────────────────────────────────────────────────
 
 async def create_tool_call(

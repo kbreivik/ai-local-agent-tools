@@ -1,5 +1,6 @@
 """FastAPI application entry point — HP1 AI Agent backend."""
 import os
+import socket
 import sys
 from contextlib import asynccontextmanager
 
@@ -16,6 +17,7 @@ from api.logger import ensure_started as _start_logger, flush_now as _flush_logg
 from api.websocket import manager
 from api.routers import tools, agent, status, logs, alerts, memory as memory_router, elastic as elastic_router, settings as settings_router
 from api.routers import tests_api as tests_router
+from api.routers import feedback as feedback_router
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
@@ -76,6 +78,31 @@ app.include_router(memory_router.router)
 app.include_router(elastic_router.router)
 app.include_router(settings_router.router)
 app.include_router(tests_router.router)
+app.include_router(feedback_router.router)
+
+
+def _get_host_ips() -> dict:
+    try:
+        hostname = socket.gethostname()
+        try:
+            all_ips = socket.gethostbyname_ex(hostname)[2]
+        except Exception:
+            all_ips = [socket.gethostbyname(hostname)]
+        lan_ips = [
+            ip for ip in all_ips
+            if not ip.startswith('127.')
+            and not ip.startswith('172.')
+            and not ip.startswith('169.')
+        ]
+        return {
+            "hostname": hostname,
+            "lan_ips":  lan_ips,
+            "all_ips":  all_ips,
+            "api_url":  f"http://{lan_ips[0]}:8000" if lan_ips else None,
+            "gui_url":  f"http://{lan_ips[0]}:5173" if lan_ips else None,
+        }
+    except Exception:
+        return {"hostname": "unknown", "lan_ips": [], "all_ips": []}
 
 
 @app.get("/api/health")
@@ -85,6 +112,7 @@ async def health():
         "service": "HP1-AI-Agent",
         "version": "1.6.5",
         "ws_clients": manager.active_count,
+        "network": _get_host_ips(),
     }
 
 

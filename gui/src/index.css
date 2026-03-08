@@ -1,4 +1,5 @@
 @import "tailwindcss";
 
 * { box-sizing: border-box; }
-body { margin: 0; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, monospace; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { background: #0f172a; color: #e2e8f0; font-family: ui-monospace, monospace; }

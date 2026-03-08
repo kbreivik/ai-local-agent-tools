@@ -99,9 +99,23 @@ for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":8000 "') do (
 :start_both
 :: Start both in separate windows
 start "HP1 FastAPI" cmd /k "cd /d %PROJECT_DIR% && python run_api.py"
-timeout /t 2 /nobreak >nul
+
+:: Wait for API to be healthy (poll /api/health up to 20 seconds)
+echo  Waiting for API to start...
+set _api_wait=0
+:api_health_wait
+timeout /t 1 /nobreak >nul
+curl -s -o nul -w "%%{http_code}" http://localhost:8000/api/health 2>nul | findstr "200" >nul
+if errorlevel 1 (
+    set /a _api_wait+=1
+    if %_api_wait% lss 20 goto api_health_wait
+    echo [WARN] API did not respond after 20s — check the HP1 FastAPI window for errors.
+) else (
+    echo  API  ^> healthy at http://localhost:8000
+)
+
 start "HP1 React" cmd /k "cd /d %PROJECT_DIR%\gui && npm run dev"
-echo [HP1] Started. API: http://localhost:8000  GUI: http://localhost:5173
+echo  GUI  ^> starting at http://localhost:5173
 echo [HP1] .env loaded from: %PROJECT_DIR%.env
 pause >nul
 goto :eof

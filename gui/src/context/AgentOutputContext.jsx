@@ -11,13 +11,12 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 const AgentOutputContext = createContext(null)
 
 // ── Module-level singleton ────────────────────────────────────────────────────
-// These live outside React — they survive every re-render and re-mount.
 
 let _ws             = null
 let _wsUrl          = null
 let _pingTimer      = null
-let _msgListeners   = new Set()   // (msg: object) => void
-let _stateListeners = new Set()   // (state: string) => void
+let _msgListeners   = new Set()
+let _stateListeners = new Set()
 
 function _notifyState(state) {
   _stateListeners.forEach(fn => fn(state))
@@ -30,8 +29,6 @@ function _scheduleReconnect() {
 function _ensureWS(url) {
   if (!url) return
   _wsUrl = url
-
-  // Already open or connecting — do nothing
   if (_ws && _ws.readyState < 2) return
 
   const ws = new WebSocket(url)
@@ -48,7 +45,6 @@ function _ensureWS(url) {
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data)
-      // Drop pong keepalives and any message with no meaningful content
       if (!msg || msg.type === 'pong') return
       if (!msg.content && !msg.text && !msg.message && !msg.type) return
       _msgListeners.forEach(fn => fn(msg))
@@ -59,7 +55,6 @@ function _ensureWS(url) {
     clearInterval(_pingTimer)
     _pingTimer = null
     _notifyState('disconnected')
-    // Only reconnect if this is still the active WS (prevents stale sockets reconnecting)
     if (_ws === ws) _scheduleReconnect()
   }
 
@@ -68,21 +63,25 @@ function _ensureWS(url) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function AgentOutputProvider({ children }) {
-  const [outputLines,         setOutputLines]         = useState([])
-  const [isRunning,           setIsRunning]           = useState(false)
-  const [wsState,             setWsState]             = useState('disconnected')
+  const [outputLines,          setOutputLines]          = useState([])
+  const [feedLines,            setFeedLines]            = useState([])
+  const [isRunning,            setIsRunning]            = useState(false)
+  const [runState,             setRunState]             = useState('idle')  // 'idle'|'running'|'stopping'
+  const [wsState,              setWsState]              = useState('disconnected')
   const [pendingChoices,       setPendingChoices]       = useState([])
   const [pendingClarification, setPendingClarification] = useState(null)
   const [pendingPlan,          setPendingPlan]          = useState(null)
   const [agentType,            setAgentType]            = useState(null)
   const [lastAgentType,        setLastAgentType]        = useState(null)
-  const agentTypeRef = useRef(null)
+  const [currentSessionId,     setCurrentSessionId]     = useState(null)
+  const agentTypeRef    = useRef(null)
+  const sessionIdRef    = useRef(null)
+  const feedStartRef    = useRef(null)  // timestamp when current run started
 
   useEffect(() => {
     const url = `ws://${location.hostname}:8000/ws/output`
     _ensureWS(url)
 
-    // Sync wsState to current WS readyState on (re)mount
     if (_ws) {
       if (_ws.readyState === WebSocket.CONNECTING) setWsState('connecting')
       else if (_ws.readyState === WebSocket.OPEN)  setWsState('connected')
@@ -93,23 +92,28 @@ export function AgentOutputProvider({ children }) {
     const onMsg = (msg) => {
       const t = msg.type
 
-      // Agent type broadcast at start of each run
+      // ── agent_start ────────────────────────────────────────────────────────
       if (t === 'agent_start') {
-        agentTypeRef.current = msg.agent_type || null
+        agentTypeRef.current  = msg.agent_type || null
+        sessionIdRef.current  = msg.session_id || null
+        feedStartRef.current  = Date.now()
         setAgentType(msg.agent_type || null)
+        setCurrentSessionId(msg.session_id || null)
+        setRunState('running')
+        // Add to raw log stream
+        setOutputLines(prev => [...prev.slice(-500), msg])
+        // Reset inline feed
+        setFeedLines([{ type: 'start' }])
         return
       }
 
-      // Plan pending — show confirm modal, don't add to output stream
+      // ── plan_pending ───────────────────────────────────────────────────────
       if (t === 'plan_pending') {
-        setPendingPlan({
-          ...(msg.plan || {}),
-          sessionId: msg.session_id || '',
-        })
+        setPendingPlan({ ...(msg.plan || {}), sessionId: msg.session_id || '' })
         return
       }
 
-      // Clarification request — don't add to output stream, show widget instead
+      // ── clarification_needed ───────────────────────────────────────────────
       if (t === 'clarification_needed') {
         setPendingClarification({
           question:  msg.question  || '',
@@ -119,8 +123,42 @@ export function AgentOutputProvider({ children }) {
         return
       }
 
+      // ── add every non-start message to the raw log ─────────────────────────
       setOutputLines(prev => [...prev.slice(-500), msg])
 
+      // ── update inline feed ─────────────────────────────────────────────────
+      if (t === 'tool') {
+        const toolName = msg.tool   || ''
+        const status   = msg.status || 'ok'
+        // Skip audit_log and blocked calls in the inline feed
+        if (toolName !== 'audit_log' && status !== 'blocked') {
+          setFeedLines(prev => [...prev, { type: 'tool', toolName, status, content: msg.content }])
+        }
+      } else if (t === 'reasoning') {
+        // Keep only the latest thought — replace any previous one
+        setFeedLines(prev => {
+          const without = prev.filter(l => l.type !== 'thought')
+          return [...without, { type: 'thought', content: msg.content }]
+        })
+      } else if (t === 'halt') {
+        setFeedLines(prev => [...prev, { type: 'tool', toolName: 'escalate', status: 'error', content: msg.content }])
+      } else if (t === 'done') {
+        const elapsed = feedStartRef.current
+          ? ((Date.now() - feedStartRef.current) / 1000).toFixed(1)
+          : '?'
+        const stepsMatch = msg.content?.match(/after (\d+) steps/)
+        const steps = stepsMatch ? parseInt(stepsMatch[1]) : '?'
+        const doneSessionId = sessionIdRef.current || msg.session_id || ''
+        setFeedLines(prev => [...prev, { type: 'done', steps, elapsed, sessionId: doneSessionId }])
+      } else if (t === 'error') {
+        const isCancelled = msg.status === 'cancelled'
+        setFeedLines(prev => [
+          ...prev,
+          { type: isCancelled ? 'cancelled' : 'error', text: msg.content },
+        ])
+      }
+
+      // ── isRunning / terminal state ─────────────────────────────────────────
       if (t === 'step' || t === 'tool' || t === 'reasoning' || t === 'halt') {
         setIsRunning(true)
         setPendingChoices([])
@@ -128,9 +166,12 @@ export function AgentOutputProvider({ children }) {
         setIsRunning(false)
         setPendingClarification(null)
         setPendingPlan(null)
+        setTimeout(() => setRunState('idle'), 500)
         if (agentTypeRef.current) setLastAgentType(agentTypeRef.current)
         agentTypeRef.current = null
+        sessionIdRef.current = null
         setAgentType(null)
+        setCurrentSessionId(null)
         if (t === 'done') {
           console.log('[DEBUG] agent done received, choices:', msg.choices)
           const choices = msg.choices?.length > 0 ? msg.choices : []
@@ -143,7 +184,6 @@ export function AgentOutputProvider({ children }) {
     _stateListeners.add(onState)
     _msgListeners.add(onMsg)
 
-    // Cleanup only removes listeners — the WS itself stays alive
     return () => {
       _stateListeners.delete(onState)
       _msgListeners.delete(onMsg)
@@ -152,25 +192,45 @@ export function AgentOutputProvider({ children }) {
 
   const clearOutput = useCallback(() => {
     setOutputLines([])
+    setFeedLines([])
     setIsRunning(false)
+    setRunState('idle')
     setPendingChoices([])
     setPendingClarification(null)
     setPendingPlan(null)
     agentTypeRef.current = null
+    sessionIdRef.current = null
     setAgentType(null)
+    setCurrentSessionId(null)
   }, [])
 
-  const clearChoices        = useCallback(() => setPendingChoices([]), [])
-  const clearClarification  = useCallback(() => setPendingClarification(null), [])
-  const clearPlan           = useCallback(() => setPendingPlan(null), [])
+  const stopAgent = useCallback(async () => {
+    setRunState('stopping')
+    const sid = sessionIdRef.current
+    if (!sid) { setRunState('idle'); return }
+    try {
+      await fetch('/api/agent/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      })
+    } catch { /* ignore — optimistic UI already updated */ }
+  }, [])
+
+  const clearChoices       = useCallback(() => setPendingChoices([]), [])
+  const clearClarification = useCallback(() => setPendingClarification(null), [])
+  const clearPlan          = useCallback(() => setPendingPlan(null), [])
 
   return (
     <AgentOutputContext.Provider value={{
-      outputLines, isRunning, wsState, clearOutput,
+      outputLines, feedLines,
+      isRunning, runState, setRunState,
+      wsState, clearOutput,
       pendingChoices, clearChoices,
       pendingClarification, clearClarification,
       pendingPlan, clearPlan,
       agentType, lastAgentType,
+      currentSessionId, stopAgent,
     }}>
       {children}
     </AgentOutputContext.Provider>

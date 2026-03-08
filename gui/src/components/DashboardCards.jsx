@@ -135,8 +135,22 @@ function Card({ title, health, lastUpdated, onRefresh, loading, minHeight, maxHe
 
 // ── Card: Swarm Nodes ──────────────────────────────────────────────────────────
 
+function sortIPs(ips) {
+  return [...ips].sort((a, b) => {
+    if (a.startsWith('127.') || a === 'localhost') return 1
+    if (b.startsWith('127.') || b === 'localhost') return -1
+    const pa = a.split('.').map(Number)
+    const pb = b.split('.').map(Number)
+    for (let i = 0; i < 4; i++) {
+      const diff = (pa[i] || 0) - (pb[i] || 0)
+      if (diff !== 0) return diff
+    }
+    return 0
+  })
+}
+
 function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
-  const nodes  = data?.nodes ?? []
+  const nodes  = [...(data?.nodes ?? [])].sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''))
   const health = data?.health ?? 'unknown'
 
   return (
@@ -179,7 +193,7 @@ function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxH
 // ── Card: Kafka Brokers ────────────────────────────────────────────────────────
 
 function KafkaBrokersCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
-  const brokers = data?.brokers ?? []
+  const brokers = [...(data?.brokers ?? [])].sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
   const health  = data?.health ?? 'unknown'
 
   return (
@@ -224,7 +238,11 @@ function KafkaBrokersCard({ data, loading, lastUpdated, onRefresh, minHeight, ma
 // ── Card: Swarm Services ───────────────────────────────────────────────────────
 
 function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth, showVersionBadges }) {
-  const services   = data?.services ?? []
+  const services   = [...(data?.services ?? [])].sort((a, b) => {
+    const shortA = a.name.replace(/^[\w-]+-stack_/, '')
+    const shortB = b.name.replace(/^[\w-]+-stack_/, '')
+    return shortA.localeCompare(shortB)
+  })
   const allOk      = services.length > 0 && services.every(s => s.running_replicas === s.desired_replicas)
   const cardHealth = allOk ? 'ok' : (services.length === 0 ? 'unknown' : 'degraded')
 
@@ -381,11 +399,37 @@ function MuninnDBCard({ data, loading, lastUpdated, onRefresh, minHeight, maxHei
 
 // ── Card: System Summary ───────────────────────────────────────────────────────
 
+function CopyableIP({ ip }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(ip).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <span
+      onClick={copy}
+      title={copied ? 'Copied!' : 'Click to copy'}
+      style={{
+        fontFamily: 'monospace', fontSize: '0.72rem', color: '#2563eb',
+        cursor: 'pointer', textDecoration: copied ? 'none' : 'underline dotted',
+        opacity: copied ? 0.6 : 1,
+      }}
+    >
+      {copied ? '✓ copied' : ip}
+    </span>
+  )
+}
+
 function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefresh, minHeight, maxHeight, minWidth, maxWidth }) {
   const collectors      = statusData?.collectors ?? {}
   const apiOk           = apiHealth?.status === 'ok'
   const allCollectorsOk = Object.values(collectors).every(c => c.running)
   const overallHealth   = !apiHealth ? 'unknown' : (apiOk && allCollectorsOk ? 'ok' : 'degraded')
+  const net             = apiHealth?.network ?? {}
+  const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
+  const sortedLanIPs     = sortIPs(net.lan_ips ?? [])
 
   return (
     <Card title="System Summary" health={overallHealth} lastUpdated={lastUpdated}
@@ -409,11 +453,11 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
               </div>
             )}
           </div>
-          {Object.keys(collectors).length > 0 && (
+          {sortedCollectors.length > 0 && (
             <>
               <p style={S.sectionLabel}>Collectors</p>
               <div>
-                {Object.entries(collectors).map(([name, c]) => (
+                {sortedCollectors.map(([name, c]) => (
                   <div key={name} style={S.collectorRow}>
                     <span style={{ color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -424,6 +468,35 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
                     </div>
                   </div>
                 ))}
+              </div>
+            </>
+          )}
+          {net.hostname && (
+            <>
+              <p style={S.sectionLabel}>Network</p>
+              <div>
+                <div style={S.collectorRow}>
+                  <span style={{ color: '#374151', fontSize: '0.75rem', flexShrink: 0 }}>Host</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#374151' }}>{net.hostname}</span>
+                </div>
+                {sortedLanIPs.map(ip => (
+                  <div key={ip} style={S.collectorRow}>
+                    <span style={{ color: '#374151', fontSize: '0.75rem', flexShrink: 0 }}>LAN</span>
+                    <CopyableIP ip={ip} />
+                  </div>
+                ))}
+                {net.api_url && (
+                  <div style={S.collectorRow}>
+                    <span style={{ color: '#374151', fontSize: '0.75rem', flexShrink: 0 }}>API</span>
+                    <CopyableIP ip={net.api_url} />
+                  </div>
+                )}
+                {net.gui_url && (
+                  <div style={S.collectorRow}>
+                    <span style={{ color: '#374151', fontSize: '0.75rem', flexShrink: 0 }}>GUI</span>
+                    <CopyableIP ip={net.gui_url} />
+                  </div>
+                )}
               </div>
             </>
           )}
