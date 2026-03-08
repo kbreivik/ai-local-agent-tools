@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt as _pyjwt  # PyJWT — already installed
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -34,18 +34,18 @@ def authenticate(username: str, password: str) -> Optional[str]:
 def create_token(username: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=EXPIRE_HOURS)
     payload = {"sub": username, "exp": expire}
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return _pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> str:
     """Return username or raise HTTPException 401."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = _pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
         if not username:
             raise HTTPException(status_code=401, detail="Invalid token")
         return username
-    except JWTError:
+    except _pyjwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
