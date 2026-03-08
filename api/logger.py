@@ -146,6 +146,17 @@ async def log_escalation(
     )
 
 
+async def set_operation_feedback(session_id: str, feedback: str) -> None:
+    """Update feedback field on operation by session_id (immediate write)."""
+    async with get_engine().begin() as conn:
+        await q.set_operation_feedback(conn, session_id, feedback)
+
+
+async def set_operation_final_answer(session_id: str, final_answer: str) -> None:
+    """Store agent final answer on operation by session_id (enqueued)."""
+    _enqueue(q.set_operation_final_answer, session_id=session_id, final_answer=final_answer)
+
+
 async def log_audit(
     event_type: str,
     entity_id: str | None = None,

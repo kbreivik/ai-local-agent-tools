@@ -6,6 +6,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 
+# Load .env if present (key=value lines, skip comments and blanks)
+_env_file = ROOT / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _, _v = _line.partition("=")
+        _k = _k.strip()
+        if _k and not os.environ.get(_k):   # don't overwrite already-set env vars
+            os.environ[_k] = _v.strip()
+
 # Load API key from mcp.json if not set
 if not os.environ.get("LM_STUDIO_API_KEY"):
     try:

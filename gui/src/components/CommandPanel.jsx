@@ -4,13 +4,74 @@ import { useAgent } from '../context/AgentContext'
 import { useTask } from '../context/TaskContext'
 import ChoiceBar from './ChoiceBar'
 import ClarificationWidget from './ClarificationWidget'
+import AgentFeed from './AgentFeed'
 import { useAgentOutput } from '../context/AgentOutputContext'
+
+// ── Tool name humanization ────────────────────────────────────────────────────
+
+function humanizeTool(name) {
+  if (!name) return ''
+  return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
+function humanizeCategory(cat) {
+  if (!cat) return ''
+  return cat.charAt(0).toUpperCase() + cat.slice(1)
+}
+
+// ── Category badge colors ─────────────────────────────────────────────────────
 
 const CATEGORY_COLOR = {
   swarm:         'bg-blue-900 text-blue-300',
   kafka:         'bg-purple-900 text-purple-300',
   orchestration: 'bg-amber-900 text-amber-300',
+  elastic:       'bg-teal-900 text-teal-300',
+  network:       'bg-green-900 text-green-300',
 }
+
+// ── Traffic light run button ──────────────────────────────────────────────────
+
+function TrafficLightButton({ runState, onRun, taskEmpty }) {
+  if (runState === 'running') {
+    return (
+      <button
+        disabled
+        className="mt-1 w-full py-1.5 rounded text-xs font-bold bg-amber-500 text-white cursor-not-allowed"
+        style={{ pointerEvents: 'none' }}
+      >
+        <span className="inline-block animate-spin mr-1" style={{ display: 'inline-block' }}>⏳</span>
+        {' '}Running…
+      </button>
+    )
+  }
+  if (runState === 'stopping') {
+    return (
+      <button
+        disabled
+        className="mt-1 w-full py-1.5 rounded text-xs font-bold bg-red-600 text-white cursor-not-allowed"
+        style={{ pointerEvents: 'none' }}
+      >
+        ⏹ Stop
+      </button>
+    )
+  }
+  // idle
+  return (
+    <button
+      onClick={onRun}
+      disabled={taskEmpty}
+      className={`mt-1 w-full py-1.5 rounded text-xs font-bold transition-colors ${
+        taskEmpty
+          ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+          : 'bg-green-600 hover:bg-green-700 text-white'
+      }`}
+    >
+      ⚡ Run Agent
+    </button>
+  )
+}
+
+// ── Tool param field ──────────────────────────────────────────────────────────
 
 function ParamField({ param, value, onChange }) {
   const type = param.type === 'boolean' ? 'checkbox' : 'text'
@@ -40,6 +101,8 @@ function ParamField({ param, value, onChange }) {
     </div>
   )
 }
+
+// ── Tool card ─────────────────────────────────────────────────────────────────
 
 function ToolCard({ tool, onResult }) {
   const [open, setOpen]     = useState(false)
@@ -78,9 +141,9 @@ function ToolCard({ tool, onResult }) {
         onClick={() => setOpen(o => !o)}
       >
         <span className={`text-xs px-1.5 py-0.5 rounded font-mono shrink-0 ${badge}`}>
-          {tool.category}
+          {humanizeCategory(tool.category)}
         </span>
-        <span className="text-sm text-slate-200 font-mono flex-1">{tool.name}</span>
+        <span className="text-sm text-slate-200 flex-1">{humanizeTool(tool.name)}</span>
         <span className="text-slate-600 text-xs">{open ? '▲' : '▼'}</span>
       </button>
 
@@ -129,17 +192,18 @@ function ToolCard({ tool, onResult }) {
   )
 }
 
+// ── CommandPanel ──────────────────────────────────────────────────────────────
 // mode="panel" — narrow, inside the slide-in side panel (360px)
 // mode="tab"   — full width, rendered when Commands tab is active
+
 export default function CommandPanel({ onResult, mode = 'panel' }) {
   const { markRunning, markDone } = useAgent()
   const { task, setTask }         = useTask()
-  const { pendingChoices, clearChoices } = useAgentOutput()
-  const [tools, setTools]           = useState([])
-  const [loading, setLoading]       = useState(true)
-  const [category, setCategory]     = useState('all')
-  const [agentBusy, setAgentBusy]   = useState(false)
-  const [agentMsg, setAgentMsg]     = useState('')
+  const { pendingChoices, clearChoices, runState, setRunState, stopAgent } = useAgentOutput()
+  const [tools, setTools]     = useState([])
+  const [loading, setLoading] = useState(true)
+  const [category, setCategory] = useState('all')
+  const [agentMsg, setAgentMsg] = useState('')
 
   const isTab = mode === 'tab'
 
@@ -154,20 +218,20 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
   const visible = category === 'all' ? tools : tools.filter(t => t.category === category)
 
   const runAgentTask = async () => {
-    if (!task.trim()) return
-    setAgentBusy(true)
+    if (!task.trim() || runState !== 'idle') return
+    // Immediately go amber — don't wait for API
+    setRunState('running')
     setAgentMsg('')
     clearChoices()
     markRunning()
     try {
       const r = await runAgent(task)
-      setAgentMsg(`Started — session ${r.session_id?.slice(0, 8)}`)
+      setAgentMsg(`Session ${r.session_id?.slice(0, 8)}`)
       onResult?.()
     } catch (e) {
       setAgentMsg(`Error: ${e.message}`)
+      setRunState('idle')
       markDone(false)
-    } finally {
-      setAgentBusy(false)
     }
   }
 
@@ -194,19 +258,15 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
           className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 resize-vertical focus:outline-none focus:border-blue-500"
           style={{ minHeight: isTab ? 120 : 80 }}
         />
-        <button
-          onClick={runAgentTask}
-          disabled={agentBusy || !task.trim()}
-          className={`mt-1 w-full py-1.5 rounded text-xs font-bold transition-colors ${
-            agentBusy || !task.trim()
-              ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-              : 'bg-green-700 hover:bg-green-600 text-white'
-          }`}
-        >
-          {agentBusy ? '⏳ Agent running…' : '⚡ Run Agent'}
-        </button>
+        <TrafficLightButton
+          runState={runState}
+          onRun={runAgentTask}
+          taskEmpty={!task.trim()}
+        />
         {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
       </div>
+      {/* Inline agent feed — below Run button, above tool list */}
+      <AgentFeed />
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
       <ClarificationWidget dark />
 
@@ -216,13 +276,13 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
           <button
             key={c}
             onClick={() => setCategory(c)}
-            className={`text-xs px-2 py-0.5 rounded capitalize transition-colors ${
+            className={`text-xs px-2 py-0.5 rounded transition-colors ${
               category === c
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
             }`}
           >
-            {c}
+            {c === 'all' ? 'All' : humanizeCategory(c)}
           </button>
         ))}
       </div>
@@ -243,7 +303,6 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
   )
 
   if (isTab) {
-    // Tab mode: full-height container, centered up to a comfortable max-width
     return (
       <div className="flex flex-col h-full w-full bg-slate-950">
         <div className="px-4 py-2 border-b border-slate-700 bg-slate-900 shrink-0 flex items-center gap-2">

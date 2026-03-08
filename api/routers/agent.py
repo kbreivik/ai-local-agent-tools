@@ -49,49 +49,61 @@ DESTRUCTIVE_TOOLS = frozenset({
     "checkpoint_restore", "kafka_rolling_restart_safe",
 })
 
-_CHOICE_SIGNAL = re.compile(
-    r'(would you like|what would you like|what.*next|next step|next action'
-    r'|suggest|option|choose|shall i|should i|do you want|how would you|'
-    r'here are.*option|here are.*choice|here are.*action|here are.*step'
-    r'|please (choose|select|let me know)|you (can|could|may))',
-    re.IGNORECASE,
-)
+# Per-session cancellation flags — set by POST /api/agent/stop
+_cancel_flags: dict[str, bool] = {}
 
-# Past-tense verbs that indicate a summary, not a suggestion
-_PAST_TENSE = re.compile(
-    r'^(performed|verified|saved|upgraded|downgraded|confirmed|checked|'
-    r'completed|executed|applied|deployed|restarted|rolled|logged|fetched|'
-    r'collected|inspected|reviewed)',
+# Trigger phrases that must appear before a numbered list for it to be choices.
+# Choices are only valid when the agent explicitly labels them as options/actions.
+_CHOICE_TRIGGERS = [
+    r'suggested next actions?:',
+    r'available actions?:',
+    r'next steps?:',
+    r'you can:',
+    r'options?:',
+    r'would you like(?: to)?:',
+    r'please (choose|select):',
+    r'here are.*(?:option|action|step|choice)',
+    r'what would you like',
+    r'shall i',
+    r'should i',
+]
+_CHOICE_TRIGGER_RE = re.compile(
+    '|'.join(_CHOICE_TRIGGERS),
     re.IGNORECASE,
 )
 
 
 def _extract_choices(text: str) -> list[str] | None:
     """
-    Extract numbered list items only when the agent is explicitly offering
-    options/next steps — not when summarising past actions.
+    Extract numbered list items ONLY from after an explicit trigger phrase.
 
-    Guards:
-    1. Text must contain a forward-looking signal phrase.
-    2. Extracted items must NOT start with a past-tense action verb.
-    Returns None if fewer than 2 valid choices found.
+    Valid triggers: 'Suggested next actions:', 'You can:', 'Options:',
+    'Next steps:', 'Would you like to:', 'Available actions:', etc.
+
+    Numbered lists that appear as section headers (e.g. '1. **Swarm Status**:')
+    or as summary paragraphs are NOT extracted as choices.
+    Returns None if no trigger found or fewer than 2 valid choices found.
     """
-    if not _CHOICE_SIGNAL.search(text):
-        print("[DEBUG choices] no signal phrase — skipping extraction")
+    m = _CHOICE_TRIGGER_RE.search(text)
+    if not m:
         return None
 
+    # Only extract items from AFTER the trigger phrase
+    relevant = text[m.end():]
     choices = []
-    for line in text.split('\n'):
-        m = re.match(r'^\s*\d+[.)]\s+(.+)', line)
-        if m:
-            val = re.sub(r'\*+|_+|`+', '', m.group(1))
+    for line in relevant.split('\n'):
+        item_m = re.match(r'^\s*\d+[.)]\s+(.+)', line)
+        if item_m:
+            val = re.sub(r'\*+|_+|`+', '', item_m.group(1))
             val = val.strip().rstrip(':').strip()
-            if val and not _PAST_TENSE.match(val):
+            if val and len(val) > 3:
                 choices.append(val)
+        elif line.strip() and not line.strip().startswith('-') and choices:
+            # Stop at the first non-list line after we've started collecting
+            # (avoids grabbing unrelated numbered lists further down)
+            break
 
-    result = choices[:5] if len(choices) >= 2 else None
-    print(f"[DEBUG choices] extracted: {result}")
-    return result
+    return choices[:5] if len(choices) >= 2 else None
 
 
 class RunRequest(BaseModel):
@@ -197,6 +209,9 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
     tools_used_names: list[str] = []
     positive_signals = 0
     negative_signals = 0
+    _audit_logged = False        # allow at most one audit_log call per run
+    plan_action_called = False   # track if plan_action was called this run
+    _last_blocked_tool = None    # name of most recently blocked tool
 
     # Broadcast agent type so GUI can display badge
     await manager.broadcast({
@@ -210,12 +225,25 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
     await manager.send_line("step", f"Model: {model} | Agent: {_AGENT_LABEL[agent_type]}", status="ok", session_id=session_id)
 
     step = 0
-    max_steps = 40
+    _MAX_STEPS_BY_TYPE = {"status": 8, "research": 12, "action": 20}
+    max_steps = _MAX_STEPS_BY_TYPE.get(agent_type, 20)
     final_status = "completed"
     last_reasoning = ""
 
     try:
         while step < max_steps:
+            # Check cancellation flag before each step
+            if _cancel_flags.pop(session_id, False):
+                await manager.broadcast({
+                    "type":       "error",
+                    "session_id": session_id,
+                    "content":    "Stopped by user.",
+                    "status":     "cancelled",
+                    "timestamp":  datetime.now(timezone.utc).isoformat(),
+                })
+                final_status = "cancelled"
+                break
+
             step += 1
             await manager.send_line("step", f"── Step {step} ──", session_id=session_id)
 
@@ -362,8 +390,28 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
                     )
 
                 t0 = time.monotonic()
+                # Block duplicate audit_log calls — the model tends to loop on it.
+                # One audit_log per session is sufficient.
+                if fn_name == "audit_log" and _audit_logged:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps({
+                            "status": "ok",
+                            "message": "Audit already recorded for this session.",
+                        }),
+                    })
+                    await manager.send_line(
+                        "step", "[audit_log] skipped — already logged once this run",
+                        status="ok", session_id=session_id,
+                    )
+                    continue
+                if fn_name == "audit_log":
+                    _audit_logged = True
+
                 try:
                     if fn_name == "plan_action":
+                        plan_action_called = True
                         # Intercept: broadcast plan to GUI, suspend until approved/rejected
                         plan = {
                             "summary":    fn_args.get("summary", ""),
@@ -440,7 +488,27 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
                             "data":    {"question": question, "answer": answer},
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         }
+                    elif fn_name == "escalate" and agent_type == "action" and not plan_action_called:
+                        # Fix 2: Block premature escalation — agent must plan first
+                        _last_blocked_tool = "escalate"
+                        result = {
+                            "status": "blocked",
+                            "message": (
+                                "escalate() blocked. You MUST call plan_action() next. "
+                                "Do not call audit_log. Do not stop. "
+                                "Call plan_action() with your proposed upgrade steps NOW. "
+                                "plan_action() is the required next step."
+                            ),
+                            "data": None,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await manager.send_line(
+                            "step",
+                            "[safety] escalate() blocked — plan_action() must be called next",
+                            status="ok", session_id=session_id,
+                        )
                     else:
+                        _last_blocked_tool = None   # successful tool call clears blocked state
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
@@ -477,7 +545,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
                     "content": json.dumps(result),
                 })
 
-                if result_status in ("degraded", "failed"):
+                if result_status in ("degraded", "failed", "escalated") or (fn_name == "escalate" and result_status != "blocked"):
                     negative_signals += 1
                     from api.memory.feedback import record_feedback_signal as _rfs2
                     asyncio.create_task(_rfs2(
@@ -520,6 +588,21 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
             if halt:
                 await manager.send_line("halt", "Agent halted — human review required.",
                                         status="escalated", session_id=session_id)
+                break
+
+            # Fix 1C: if entire step was only audit_log calls, the agent is done
+            # Exception: if escalate was just blocked, the model may call audit_log
+            # as a confused "done" signal — don't treat it as completion; let loop continue.
+            _step_names = [tc.function.name for tc in msg.tool_calls]
+            if (_step_names and all(n == "audit_log" for n in _step_names)
+                    and _last_blocked_tool != "escalate"):
+                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                await manager.broadcast({
+                    "type": "done", "session_id": session_id, "agent_type": agent_type,
+                    "content": f"Agent finished after {step} steps.",
+                    "status": "ok", "choices": choices or [],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
                 break
 
         else:
@@ -565,6 +648,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str):
     except Exception as _oe:
         log.debug("record_outcome error: %s", _oe)
 
+    if last_reasoning:
+        await logger_mod.set_operation_final_answer(session_id, last_reasoning)
     await logger_mod.complete_operation(operation_id, final_status)
 
 
@@ -610,6 +695,19 @@ async def clarify_agent(req: ClarifyRequest):
     if not ok:
         return {"status": "error", "message": f"No pending clarification for session '{req.session_id}'"}
     return {"status": "ok", "message": "Clarification received"}
+
+
+class StopRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/stop")
+async def stop_agent(req: StopRequest):
+    """Signal the running agent loop for a session to cancel after its current step."""
+    if not req.session_id:
+        return {"status": "error", "message": "session_id required"}
+    _cancel_flags[req.session_id] = True
+    return {"status": "ok", "message": f"Stop signal sent for session '{req.session_id}'"}
 
 
 @router.get("/models")

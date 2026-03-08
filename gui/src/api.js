@@ -163,6 +163,15 @@ export async function triggerDocFetch(component = null, force = false) {
   return r.json()
 }
 
+export async function submitFeedback(sessionId, rating) {
+  const r = await fetch(`${BASE}/api/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, rating }),
+  })
+  return r.json()
+}
+
 // ── WebSocket ────────────────────────────────────────────────────────────────
 
 const WS_BASE = (() => {

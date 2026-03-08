@@ -167,7 +167,10 @@ def kafka_rolling_restart_safe() -> dict:
 
 
 def pre_kafka_check() -> dict:
-    """Full Kafka readiness gate — blocks if not ready."""
+    """Full Kafka readiness gate — checks all brokers and topics before any Kafka operation.
+    Call this tool when asked to 'run pre_kafka_check', 'check kafka readiness', or
+    'verify kafka is ready'. Returns ok if all brokers are up and all topics are healthy,
+    degraded if any topic is under-replicated or has zero partitions, error if brokers are down."""
     try:
         broker_status = kafka_broker_status()
         if broker_status["status"] != "ok":

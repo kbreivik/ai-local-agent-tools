@@ -1,0 +1,32 @@
+These agent tests failed. Fix without breaking passing tests.
+Run: python -m tests.integration.test_agent after fixing.
+
+CRITICAL (fix first):
+(none)
+
+NON-CRITICAL:
+  status-version-01 [status]: 'what version is the workload service running? call service_current_version'
+    FAIL: TIMEOUT after 90s
+    tools_called: ['service_current_version', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log']
+  status-elastic-01 [status]: 'is elasticsearch healthy?'
+    FAIL: TIMEOUT after 120s
+    tools_called: ['elastic_cluster_health', 'elastic_index_stats', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log', 'audit_log']
+  research-kafkacheck-01 [research]: 'call pre_kafka_check to verify kafka pre-flight status'
+    FAIL: Expected tool 'pre_kafka_check' not called (called: ['service_list', 'swarm_status', 'kafka_broker_status', 'elastic_cluster_health', 'elastic_index_stats', 'escalate'])
+    tools_called: ['service_list', 'swarm_status', 'kafka_broker_status', 'elastic_cluster_health', 'elastic_index_stats', 'escalate']
+  action-upgrade-01 [action]: 'upgrade workload-stack_workload to nginx:1.27-alpine'
+    FAIL: Expected tool 'plan_action' not called (called: ['service_list', 'service_current_version', 'pre_upgrade_check', 'escalate'])
+    FAIL: Expected plan_pending, none triggered
+    tools_called: ['service_list', 'service_current_version', 'pre_upgrade_check', 'escalate']
+  action-kafka-restart-01 [action]: 'perform a rolling restart of kafka brokers'
+    FAIL: Expected tool 'plan_action' not called (called: ['pre_kafka_check', 'escalate'])
+    FAIL: Expected plan_pending, none triggered
+    tools_called: ['pre_kafka_check', 'escalate']
+
+ADVISORY (soft):
+  action-rollback-01 [action]: 'rollback kafka-stack_kafka1 to previous version'
+    FAIL: Expected plan_pending, none triggered
+    tools_called: ['service_list', 'service_current_version', 'service_version_history', 'pre_upgrade_check', 'pre_kafka_check', 'kafka_broker_status', 'elastic_error_logs', 'elastic_log_pattern', 'escalate']
+  action-drain-01 [action]: 'drain node 0sj1zr8f1pcm for maintenance'
+    FAIL: Expected plan_pending, none triggered
+    tools_called: ['swarm_status', 'service_list', 'pre_upgrade_check', 'checkpoint_save', 'escalate']

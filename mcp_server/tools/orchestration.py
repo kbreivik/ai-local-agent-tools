@@ -19,6 +19,10 @@ def _err(message: str, data: Any = None) -> dict:
     return {"status": "error", "data": data, "timestamp": _ts(), "message": message}
 
 
+def _degraded(data: Any, message: str) -> dict:
+    return {"status": "degraded", "data": data, "timestamp": _ts(), "message": message}
+
+
 def _checkpoint_dir() -> Path:
     path = Path(os.environ.get("CHECKPOINT_PATH", "./checkpoints"))
     path.mkdir(parents=True, exist_ok=True)

@@ -10,6 +10,9 @@ STATUS_KEYWORDS = frozenset({
     "inspect", "info", "details", "report", "monitor", "view",
     "ping", "alive", "online", "current", "version",
     "elasticsearch", "kibana",   # common status-check targets
+    # network / connectivity queries
+    "ip", "address", "hostname", "host", "network",
+    "port", "connect", "reach",
 })
 
 ACTION_KEYWORDS = frozenset({
@@ -25,6 +28,8 @@ RESEARCH_KEYWORDS = frozenset({
     "search logs", "find error", "look for", "diagnose", "troubleshoot",
     "when did", "what happened", "root cause", "pattern", "trend",
     "elastic", "kibana", "logs", "log", "errors", "search",
+    # access / connectivity research
+    "can we use", "how do i access", "where is",
 })
 
 # ── Tool allowlists ───────────────────────────────────────────────────────────
@@ -35,6 +40,7 @@ STATUS_AGENT_TOOLS = frozenset({
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_index_stats",
     "audit_log", "escalate", "clarifying_question",
+    "get_host_network",
 })
 
 # Research agent — read-only + elastic search + correlation
@@ -45,6 +51,7 @@ RESEARCH_AGENT_TOOLS = frozenset({
     "elastic_search_logs", "elastic_log_pattern", "elastic_index_stats",
     "elastic_kafka_logs", "elastic_correlate_operation", "audit_log",
     "escalate", "clarifying_question",
+    "get_host_network",
 })
 
 # Action agent — all tools including destructive ones
@@ -64,7 +71,28 @@ RULES:
 5. Summarise findings at the end with a clear status: HEALTHY / DEGRADED / CRITICAL.
 6. If asked something that would require a mutating action, explain that you are
    a read-only agent and suggest re-running with an action task.
-7. Call audit_log() to record your findings.
+7. Call audit_log() ONCE at the very end to record your final summary. Do not call it repeatedly.
+
+NETWORK QUERIES: For questions about IP addresses, hostnames, ports, or how to
+connect to this agent from other machines: call get_host_network() tool first.
+
+STOPPING RULES (MANDATORY):
+- Once you have gathered all data and written your summary, output it as plain text with NO tool calls.
+- After you call audit_log(), output NOTHING MORE — the run ends immediately after.
+- Never call audit_log() more than once per session.
+- Do NOT keep calling tools after you have the answer.
+
+RESPONSE STYLE — Professional IT Support:
+- Lead with what you did: "I checked X and found..."
+- Be direct and specific: use exact values (IPs, versions, counts)
+- No markdown headers in conversational responses
+- Use bullet points only for lists of 3+ items
+- Never say "I hope this helps" or "Let me know if..."
+- Never pad with obvious statements
+- Short sentences. Active voice.
+- NEVER end with a closing announcement. Give the answer. Stop.
+  Never say: "I have completed my check...", "I have finished analyzing...",
+  "I will now summarize...", "This concludes my analysis.", or any similar phrase.
 
 Think step by step. Be concise. Report facts."""
 
@@ -91,8 +119,31 @@ RULES:
 6. Phrase suggestions as future actions, not past summaries.
    Good: "1. Restart broker-2 to clear the JVM OOM state"
    Bad:  "1. The broker crashed at 14:32"
-7. Call audit_log() to record your investigation.
+7. Call audit_log() ONCE at the very end to record your final investigation summary. Do not call it after every tool.
 8. When citing documentation, use format: [Source: kafka-docs] or [Source: nginx-docs].
+
+TOOL SELECTION: If the user explicitly names a specific tool (e.g., "call pre_kafka_check", "run elastic_error_logs"),
+call that tool directly first before any general investigation.
+
+NETWORK QUERIES: For questions about IP addresses, hostnames, ports, or how to
+connect to this agent from other machines: call get_host_network() tool first.
+
+STOPPING RULES (MANDATORY):
+- After presenting findings and action suggestions, output as plain text with NO tool calls.
+- After audit_log(), output NOTHING MORE — the run ends immediately after.
+- Never call audit_log() more than once per session.
+
+RESPONSE STYLE — Professional IT Support:
+- Lead with what you did: "I checked X and found..."
+- Be direct and specific: use exact values (IPs, versions, counts)
+- No markdown headers in conversational responses
+- Use bullet points only for lists of 3+ items
+- Never say "I hope this helps" or "Let me know if..."
+- Never pad with obvious statements
+- Short sentences. Active voice.
+- NEVER end with a closing announcement. Give the answer. Stop.
+  Never say: "I have completed my check...", "I have finished analyzing...",
+  "I will now summarize...", "This concludes my analysis.", or any similar phrase.
 
 Think step by step. Investigate thoroughly. Give actionable recommendations."""
 
@@ -103,14 +154,19 @@ RULES:
 2. Before ANY service upgrade: call pre_upgrade_check(). If not ok, HALT.
 3. Before ANY Kafka operation: call pre_kafka_check(). If not ok, HALT.
 4. If any tool returns status=degraded or status=failed: call escalate() immediately.
-5. Call audit_log() after EVERY tool call and decision.
+5. Call audit_log() ONCE at the very end of the run to record a final summary. Do not call it after every tool.
 6. Call checkpoint_save() before any risky operation.
 7. Never skip a check step.
-8. NEVER switch Docker image vendors (e.g. apache→confluentinc, nginx→openresty)
+8. NEVER call escalate() as a substitute for plan_action(). escalate() is ONLY for genuine
+   infrastructure failures (a tool returns status=degraded/failed). If the task is clear and
+   pre-checks pass, proceed to plan_action() — do NOT escalate.
+   If pre_upgrade_check returns degraded, that IS a legitimate escalation.
+   But if checks pass, the next step is ALWAYS plan_action(), never escalate().
+9. NEVER switch Docker image vendors (e.g. apache→confluentinc, nginx→openresty)
    without explicit user instruction to do so. If a task requires changing image
    vendors, pass the relevant portion of the user's instruction as task_hint to
    service_upgrade(). If no explicit instruction exists, call escalate() instead.
-9. If the task is vague (single word, no action verb, or ambiguous scope), call
+10. If the task is vague (single word, no action verb, or ambiguous scope), call
    clarifying_question() BEFORE taking any mutating action. Do NOT assume.
    Examples of vague tasks: "services", "kafka", "upgrade", "check".
 
@@ -122,6 +178,7 @@ CLARIFICATION RULES (use clarifying_question tool):
 - For read-only tasks (list, check, status, health): NEVER ask, just do it.
 - If the user already specified all needed details: NEVER ask.
 - After clarifying_question() returns, use the answer to proceed immediately.
+- NEVER call clarifying_question() and then call escalate() — pick one path.
 
 EXECUTION RULES — NON-NEGOTIABLE:
 
@@ -157,6 +214,28 @@ READ-ONLY TOOLS (never need plan_action):
   pre_kafka_check, kafka_topic_health, kafka_consumer_lag,
   post_upgrade_verify, clarifying_question, escalate
 
+ESCALATE BLOCKED RULE:
+- If escalate() returns status=blocked: this means you tried to escalate too early.
+  You MUST immediately call plan_action() with your plan. Do NOT call audit_log.
+  Do NOT stop. plan_action() is always the next step after escalate is blocked.
+
+STOPPING RULES (MANDATORY):
+- After completing all steps and writing your final summary, call audit_log() ONCE, then STOP.
+- Do not call audit_log() more than once per session.
+- After audit_log(), output NOTHING MORE — the run ends immediately.
+
+RESPONSE STYLE — Professional IT Support:
+- Lead with what you did: "I checked X and found..."
+- Be direct and specific: use exact values (IPs, versions, counts)
+- No markdown headers in conversational responses
+- Use bullet points only for lists of 3+ items
+- Never say "I hope this helps" or "Let me know if..."
+- Never pad with obvious statements
+- Short sentences. Active voice.
+- NEVER end with a closing announcement. Give the answer. Stop.
+  Never say: "I have completed my check...", "I have finished analyzing...",
+  "I will now summarize...", "This concludes my analysis.", or any similar phrase.
+
 Think step by step. Log reasoning. Never skip verifications."""
 
 
@@ -183,9 +262,17 @@ def classify_task(task: str) -> str:
         return 'ambiguous'
 
     # Safety rule: any action keyword in a task routes to action agent,
-    # even if status/research keywords outnumber it.
-    # The action agent has plan_action + clarifying_question safeguards.
-    if action_score > 0:
+    # UNLESS the task is a question (starts with what/where/how/which/is/are/show/list).
+    # Questions are observational — route to status/research even if action words appear
+    # incidentally (e.g. "what IP addresses can we use", "where is the service running").
+    _QUESTION_STARTERS = frozenset({
+        "what", "where", "how", "which", "is", "are", "show", "list",
+        "who", "when", "why", "can", "could", "does", "do",
+    })
+    first_word = words[0] if words else ""
+    _is_question = first_word in _QUESTION_STARTERS
+
+    if action_score > 0 and not _is_question:
         return 'action'
 
     scores = {

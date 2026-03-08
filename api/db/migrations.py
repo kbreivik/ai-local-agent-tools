@@ -39,6 +39,11 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (4, "Add memory_context to tool_calls (Phase 5 — MuninnDB engram IDs)", [
         "ALTER TABLE tool_calls ADD COLUMN memory_context TEXT",
     ]),
+    (5, "Add feedback columns to operations (Phase 7 — thumbs feedback)", [
+        "ALTER TABLE operations ADD COLUMN feedback TEXT",
+        "ALTER TABLE operations ADD COLUMN feedback_at TEXT",
+        "ALTER TABLE operations ADD COLUMN final_answer TEXT",
+    ]),
 ]
 
 

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HP1-AI-Agent Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0e1a; color: #c8d8f0; font-family: 'Courier New', monospace; padding: 20px; filter: brightness(1.4); }
+  h1 { color: #00d4ff; font-size: 14px; letter-spacing: 3px; margin-bottom: 4px; }
+  .sub { font-size: 9px; color: #4a6080; letter-spacing: 2px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab { padding: 5px 14px; font-size: 9px; letter-spacing: 2px; cursor: pointer;
+    border-radius: 3px; border: 1px solid #1e2d4a; background: transparent;
+    color: #4a6080; font-family: 'Courier New', monospace; }
+  .tab.active { border-color: #00d4ff; background: #00d4ff22; color: #00d4ff; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ARCH */
+  .layer { border: 1px dashed #1e2d4a; border-radius: 4px; padding: 10px; margin-bottom: 8px; }
+  .layer-label { font-size: 8px; color: #4a6080; letter-spacing: 2px; margin-bottom: 8px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .box { padding: 6px 10px; border-radius: 3px; border: 1.5px solid; text-align: center;
+    min-width: 90px; flex: 1; }
+  .box-title { font-size: 9.5px; font-weight: bold; }
+  .box-sub { font-size: 8px; color: #4a6080; margin-top: 2px; }
+  .accent { border-color: #00d4ff; color: #00d4ff; background: #00d4ff11; }
+  .green  { border-color: #00ff88; color: #00ff88; background: #00ff8811; }
+  .amber  { border-color: #ffb800; color: #ffb800; background: #ffb80011; }
+  .red    { border-color: #ff4444; color: #ff4444; background: #ff444411; }
+  .purple { border-color: #a855f7; color: #a855f7; background: #a855f711; }
+  .muted  { border-color: #4a6080; color: #4a6080; background: #4a608011; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .pulse { animation: pulse 2s infinite; }
+
+  /* FLOW */
+  .steps { display: flex; align-items: center; flex-wrap: nowrap; overflow-x: auto; gap: 0; padding-bottom: 8px; }
+  .step { min-width: 80px; padding: 8px 4px; border-radius: 4px; cursor: pointer;
+    text-align: center; border: 1.5px solid #1e2d4a; background: #0f1628;
+    transition: all 0.3s; flex-shrink: 0; }
+  .step-icon { font-size: 20px; line-height: 1; }
+  .step-label { font-size: 8px; margin-top: 4px; line-height: 1.3; color: #4a6080; }
+  .connector { width: 14px; height: 2px; background: #1e2d4a; flex-shrink: 0; transition: background 0.4s; }
+  .detail { margin-top: 14px; padding: 12px 16px; border-radius: 4px; font-size: 12px; line-height: 1.7; }
+  .step-num { font-weight: bold; margin-right: 8px; }
+  .dots { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #1e2d4a; cursor: pointer; transition: background 0.3s; }
+
+  .stats { margin-top: 16px; padding-top: 12px; border-top: 1px solid #1e2d4a;
+    display: flex; gap: 20px; flex-wrap: wrap; font-size: 9px; color: #4a6080; }
+  .stats span { color: #00d4ff; }
+</style>
+</head>
+<body>
+
+<h1>HP1-AI-AGENT</h1>
+<div class="sub">LOCAL AI INFRASTRUCTURE CONTROL PLANE — v1.6.5</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="show('arch',this)">ARCHITECTURE</button>
+  <button class="tab" onclick="show('flow',this)">PROCESS FLOW</button>
+</div>
+
+<!-- ARCHITECTURE -->
+<div id="arch" class="panel active">
+  <div class="layer">
+    <div class="layer-label">PRESENTATION · GUI :5173</div>
+    <div class="row">
+      <div class="box accent"><div class="box-title">Dashboard</div><div class="box-sub">:5173</div></div>
+      <div class="box accent"><div class="box-title">Commands</div><div class="box-sub">slide-in panel</div></div>
+      <div class="box accent pulse"><div class="box-title">Output Panel</div><div class="box-sub">WS feed</div></div>
+      <div class="box accent"><div class="box-title">Logs / Tests</div><div class="box-sub">audit trail</div></div>
+      <div class="box purple"><div class="box-title">Memory View</div><div class="box-sub">engrams</div></div>
+      <div class="box green"><div class="box-title">Plan Confirm</div><div class="box-sub">modal</div></div>
+      <div class="box amber"><div class="box-title">Clarify</div><div class="box-sub">widget</div></div>
+    </div>
+  </div>
+
+  <div style="text-align:center;color:#4a6080;font-size:11px;margin:-2px 0">↕ HTTP / WebSocket</div>
+
+  <div class="layer">
+    <div class="layer-label">API LAYER · FastAPI :8000</div>
+    <div class="row">
+      <div class="box green"><div class="box-title">Agent Router</div><div class="box-sub">keyword classify</div></div>
+      <div class="box amber pulse"><div class="box-title">Agent Loop</div><div class="box-sub">step engine</div></div>
+      <div class="box accent"><div class="box-title">WS Manager</div><div class="box-sub">broadcast</div></div>
+      <div class="box green"><div class="box-title">Collectors</div><div class="box-sub">swarm/kafka/es</div></div>
+      <div class="box purple"><div class="box-title">Memory Hooks</div><div class="box-sub">before/after</div></div>
+      <div class="box red"><div class="box-title">Safety Gates</div><div class="box-sub">plan + vendor</div></div>
+      <div class="box amber"><div class="box-title">Test Runner</div><div class="box-sub">38 cases</div></div>
+    </div>
+  </div>
+
+  <div style="text-align:center;color:#4a6080;font-size:11px;margin:-2px 0">↕ Tool calls / responses</div>
+
+  <div class="layer">
+    <div class="layer-label">AGENTS + LOCAL AI</div>
+    <div class="row">
+      <div class="box accent"><div class="box-title">Status Agent</div><div class="box-sub">read-only tools</div></div>
+      <div class="box red pulse"><div class="box-title">Action Agent</div><div class="box-sub">+ plan gate</div></div>
+      <div class="box purple"><div class="box-title">Research Agent</div><div class="box-sub">RAG + docs</div></div>
+      <div class="box amber" style="flex:2"><div class="box-title">LM Studio — Qwen3-Coder-30B</div><div class="box-sub">local inference :1234</div></div>
+      <div class="box red"><div class="box-title">Claude API</div><div class="box-sub">escalation only</div></div>
+    </div>
+  </div>
+
+  <div style="text-align:center;color:#4a6080;font-size:11px;margin:-2px 0">↕ MCP tool calls</div>
+
+  <div class="layer">
+    <div class="layer-label">MCP TOOLS</div>
+    <div class="row">
+      <div class="box green"><div class="box-title">Swarm Tools</div><div class="box-sub">10 tools</div></div>
+      <div class="box amber"><div class="box-title">Kafka Tools</div><div class="box-sub">6 tools</div></div>
+      <div class="box accent"><div class="box-title">Elastic Tools</div><div class="box-sub">7 tools</div></div>
+      <div class="box purple"><div class="box-title">Orchestration</div><div class="box-sub">plan/escalate/ckpt</div></div>
+      <div class="box green"><div class="box-title">Network</div><div class="box-sub">host / IPs</div></div>
+      <div class="box red"><div class="box-title">Safety Guards</div><div class="box-sub">vendor + drain lock</div></div>
+    </div>
+  </div>
+
+  <div style="text-align:center;color:#4a6080;font-size:11px;margin:-2px 0">↕ Read / Write</div>
+
+  <div class="layer">
+    <div class="layer-label">DATA LAYER</div>
+    <div class="row">
+      <div class="box accent"><div class="box-title">SQLite</div><div class="box-sub">hp1_agent.db</div></div>
+      <div class="box purple"><div class="box-title">MuninnDB</div><div class="box-sub">:9475 · 20 engrams</div></div>
+      <div class="box green"><div class="box-title">Elasticsearch</div><div class="box-sub">:9200</div></div>
+      <div class="box amber"><div class="box-title">Docker Swarm</div><div class="box-sub">1 node</div></div>
+      <div class="box red"><div class="box-title">Kafka KRaft</div><div class="box-sub">:9092–9094</div></div>
+      <div class="box muted"><div class="box-title">Filebeat</div><div class="box-sub">log ship</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- PROCESS FLOW -->
+<div id="flow" class="panel">
+  <div style="color:#4a6080;font-size:9px;letter-spacing:3px;margin-bottom:14px">PROCESS FLOW — AGENT RUN LIFECYCLE</div>
+  <div class="steps" id="steps"></div>
+  <div class="detail" id="detail"></div>
+  <div class="dots" id="dots"></div>
+</div>
+
+<div class="stats">
+  Tools: <span>31</span> &nbsp;
+  Tests: <span>38</span> &nbsp;
+  Agents: <span>3 + Router</span> &nbsp;
+  Safety Gates: <span>5</span> &nbsp;
+  Memory: <span>ACT-R Hebbian</span> &nbsp;
+  Model: <span>Qwen3-Coder-30B</span> &nbsp;
+  Escalation: <span>Claude API</span>
+</div>
+
+<script>
+const STEPS = [
+  {icon:"👤",label:"User submits task",color:"#00d4ff",
+   desc:"Task typed in Commands panel. POST /api/agent/run triggered via Run Agent button. Button turns amber immediately."},
+  {icon:"🔀",label:"Router classifies",color:"#ffb800",
+   desc:"Keyword classifier routes the task. 'list/check/show' → Status Agent. 'upgrade/drain/restart' → Action Agent. 'how/recommend/options' → Research Agent."},
+  {icon:"🤖",label:"Agent selected",color:"#a855f7",
+   desc:"Selected agent gets its filtered tool list. Status: read-only tools only. Action: all tools + plan gate enforced. Research: read + version history tools."},
+  {icon:"🧠",label:"Memory injected",color:"#00ff88",
+   desc:"MuninnDB activates top 5 relevant engrams via ACT-R activation scoring. Past outcomes, vendor docs, and failure patterns injected into the model prompt."},
+  {icon:"⚙️",label:"LM Studio runs",color:"#ffb800",
+   desc:"Qwen3-Coder-30B generates tool calls step by step (max 8–20 steps per agent type). Each step broadcast via WebSocket to Output panel in real time."},
+  {icon:"✅",label:"Plan confirmed",color:"#00d4ff",
+   desc:"Destructive actions require plan_action() first. Plan Confirm modal shown with steps, risk level, and 5-minute countdown. User approves or cancels."},
+  {icon:"🔧",label:"Tools execute",color:"#ff4444",
+   desc:"Tools run in sequence. Safety guards block: vendor image switches, calling node_drain on already-drained nodes, and any destructive call without prior plan."},
+  {icon:"📡",label:"Results streamed",color:"#00ff88",
+   desc:"Each tool result broadcast to all WS clients. Output panel renders human-readable feed. audit_log calls hidden. Choices extracted for ChoiceBar if present."},
+  {icon:"💾",label:"Outcome stored",color:"#a855f7",
+   desc:"Outcome engram written to MuninnDB with Hebbian associative links. Confirm=positive signal, cancel=negative. Patterns improve context for future runs."},
+];
+
+let active = 0;
+
+function render() {
+  const stepsEl = document.getElementById('steps');
+  const detailEl = document.getElementById('detail');
+  const dotsEl = document.getElementById('dots');
+
+  stepsEl.innerHTML = STEPS.map((s,i) => `
+    <div class="step ${i===active?'active':''}" onclick="setActive(${i})"
+      style="border-color:${i===active?s.color:'#1e2d4a'};background:${i===active?s.color+'22':'#0f1628'}">
+      <div class="step-icon">${s.icon}</div>
+      <div class="step-label" style="color:${i===active?s.color:'#4a6080'};font-weight:${i===active?'bold':'normal'}">${s.label}</div>
+    </div>
+    ${i<STEPS.length-1?`<div class="connector" style="background:${i<active?'#00ff88':'#1e2d4a'}"></div>`:''}
+  `).join('');
+
+  const s = STEPS[active];
+  detailEl.style.border = `1px solid ${s.color}55`;
+  detailEl.style.background = s.color + '0d';
+  detailEl.innerHTML = `<span class="step-num" style="color:${s.color}">Step ${active+1} —</span>${s.desc}`;
+
+  dotsEl.innerHTML = STEPS.map((s,i) => `
+    <div class="dot" onclick="setActive(${i})"
+      style="background:${i===active?s.color:'#1e2d4a'}"></div>
+  `).join('');
+}
+
+function setActive(i) { active = i; render(); }
+
+function show(id, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'flow') render();
+}
+
+render();
+setInterval(() => { active = (active+1) % STEPS.length; render(); }, 4800);
+</script>
+</body>
+</html>
