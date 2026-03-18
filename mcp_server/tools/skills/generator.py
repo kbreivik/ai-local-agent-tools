@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import httpx
 
 from mcp_server.tools.skills import prompt_builder, registry, validator
+from mcp_server.tools.skills.doc_retrieval import fetch_relevant_docs, format_docs_for_prompt
 
 
 log = logging.getLogger(__name__)
@@ -70,45 +71,18 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def _fetch_relevant_docs(description: str) -> list[str]:
-    """Extract keywords from description, query MuninnDB for context."""
-    stop_words = frozenset({
-        "the", "and", "for", "that", "this", "with", "from", "into",
-        "will", "should", "could", "would", "have", "been", "being",
-        "their", "there", "then", "than", "when", "what", "which",
-        "about", "some", "other", "more", "also", "very", "just",
-    })
-    words = description.split()
-    keywords = [w for w in words if len(w) > 4 and w.lower() not in stop_words]
-    if not keywords:
-        return []
-
-    query_str = " ".join(keywords[:8])
-    api_port = os.environ.get("API_PORT", "8000")
-
+def _fetch_relevant_docs(description: str, category: str = "general", api_base: str = "") -> str:
+    """
+    Fetch documentation context for skill generation using multi-strategy MuninnDB retrieval.
+    Returns a formatted string ready for injection into the generation prompt.
+    Falls back gracefully if MuninnDB is unavailable.
+    """
     try:
-        r = httpx.post(
-            f"http://localhost:{api_port}/api/memory/activate",
-            json={"query": query_str},
-            timeout=3.0,
-        )
-        if r.status_code == 200:
-            activations = r.json().get("activations", [])
-            docs = []
-            total = 0
-            for a in activations:
-                content = a.get("content", "")
-                if total + len(content) > 2000:
-                    remaining = 2000 - total
-                    if remaining > 100:
-                        docs.append(content[:remaining])
-                    break
-                docs.append(content)
-                total += len(content)
-            return docs
-    except Exception:
-        pass
-    return []
+        result = fetch_relevant_docs(description, category=category, api_base=api_base, token_budget=3000)
+        return format_docs_for_prompt(result)
+    except Exception as e:
+        log.debug("doc_retrieval failed: %s", e)
+        return ""
 
 
 def _generate_local(prompt: str) -> str:
@@ -228,9 +202,9 @@ def generate_skill(
     # Load existing skill names for collision avoidance
     existing_names = [s["name"] for s in registry.list_skills(enabled_only=False)]
 
-    # Fetch context docs from MuninnDB
+    # Fetch context docs from MuninnDB using multi-strategy retrieval
     if context_docs is None:
-        context_docs = _fetch_relevant_docs(description)
+        context_docs = _fetch_relevant_docs(description, category=category, api_base=api_base)
 
     # Export path — build export document instead of generation prompt
     if backend == "export":

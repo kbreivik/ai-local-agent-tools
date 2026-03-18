@@ -709,3 +709,86 @@ to extract any breaking changes from the document.
         "doc_url": doc_url,
         "affected_skills": len(affected_skills),
     }
+
+
+def recommend_skill_updates(service_id: str = "") -> dict:
+    """
+    Based on breaking_changes and compat log, return a prioritized list of
+    skills needing regeneration. For each skill includes: why, built-for vs
+    detected version, relevant doc snippets from MuninnDB, and whether
+    auto-regeneration is feasible.
+    """
+    if service_id:
+        bc_list = registry.get_breaking_changes(service_id)
+    else:
+        bc_list = registry.get_unresolved_breaking_changes()
+
+    recommendations = []
+    seen_skills: set = set()
+
+    for bc in bc_list:
+        for skill_name in bc.get("affected_skills", []):
+            if skill_name in seen_skills:
+                continue
+            seen_skills.add(skill_name)
+
+            skill = registry.get_skill(skill_name)
+            if not skill:
+                continue
+
+            # Fetch relevant doc snippets from MuninnDB for context
+            doc_snippets = []
+            try:
+                from mcp_server.tools.skills.doc_retrieval import fetch_relevant_docs
+                result = fetch_relevant_docs(
+                    skill.get("description", skill_name),
+                    token_budget=500,
+                )
+                for doc in result.get("data", {}).get("context_docs", [])[:2]:
+                    doc_snippets.append({
+                        "concept": doc.get("concept", ""),
+                        "excerpt": doc.get("content", "")[:300],
+                    })
+            except Exception:
+                pass
+
+            # Get built-for version from compat history
+            history = registry.get_compat_history(skill_name, limit=1)
+            built_for = history[0].get("built_for_version", "") if history else ""
+            detected = history[0].get("detected_version", "") if history else ""
+
+            recommendations.append({
+                "skill": skill_name,
+                "action": "NEEDS UPDATE" if bc["severity"] == "breaking" else "REVIEW",
+                "reason": bc["description"],
+                "breaking_change_id": bc["id"],
+                "severity": bc["severity"],
+                "remediation": bc.get("remediation", "Consider regenerating with current docs"),
+                "built_for_version": built_for,
+                "detected_version": detected,
+                "can_auto_regenerate": bc["severity"] != "breaking" or bool(doc_snippets),
+                "doc_snippets": doc_snippets,
+            })
+
+    # Also include skills with recent compat check failures
+    skills = registry.list_skills(enabled_only=True)
+    for skill in skills:
+        if skill["name"] in seen_skills:
+            continue
+        history = registry.get_compat_history(skill["name"], limit=1)
+        if history and history[0].get("compatible") == 0:
+            seen_skills.add(skill["name"])
+            recommendations.append({
+                "skill": skill["name"],
+                "action": "INCOMPATIBLE",
+                "reason": history[0].get("details", "Compat check failed"),
+                "breaking_change_id": None,
+                "severity": "breaking",
+                "remediation": f"Regenerate: skill_regenerate('{skill['name']}')",
+                "built_for_version": history[0].get("built_for_version", ""),
+                "detected_version": history[0].get("detected_version", ""),
+                "can_auto_regenerate": True,
+                "doc_snippets": [],
+            })
+
+    return {"recommendations": recommendations, "count": len(recommendations)}
