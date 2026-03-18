@@ -1,0 +1,121 @@
+# agent-swarm.yml — HP1-AI-Agent Docker Swarm HA deployment
+# Usage: docker stack deploy -c docker/agent-swarm.yml hp1
+#
+# SQLite note: SQLite doesn't support concurrent writes from multiple processes.
+# With replicas=2 on a single manager (common homelab), both replicas write the
+# SAME volume file — potential corruption under write load.
+# Recommended: use replicas=1 with a strong restart_policy (high uptime, safe writes)
+# or switch to Postgres via DATABASE_URL for true HA.
+
+version: "3.9"
+
+services:
+  agent:
+    image: ${HP1_IMAGE:-hp1-ai-agent:latest}
+    networks:
+      - agent-net
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+        mode: ingress      # Swarm routing mesh load-balances across replicas
+
+    volumes:
+      # Shared volumes — must be accessible from all nodes hosting replicas
+      # Single-manager Swarm: local volumes are fine (replicas on same node)
+      # Multi-node Swarm: use NFS or shared storage (see driver_opts below)
+      - agent-data:/app/data
+      - agent-logs:/app/logs
+      - agent-checkpoints:/app/checkpoints
+      - agent-skills:/app/mcp_server/tools/skills/modules
+
+      # Docker socket — each node mounts its own local socket
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in environment}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      - LM_STUDIO_API_KEY=${LM_STUDIO_API_KEY:-}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka1:9092,kafka2:9092,kafka3:9092}
+      - ELASTIC_URL=${ELASTIC_URL:-}
+      - SKILL_GEN_BACKEND=${SKILL_GEN_BACKEND:-local}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DOCKER_ENGINE_HOST=${DOCKER_ENGINE_HOST:-}
+      - DOCKER_ENGINE_USER=${DOCKER_ENGINE_USER:-root}
+      - DOCKER_ENGINE_SSH_KEY=${DOCKER_ENGINE_SSH_KEY:-/home/agent/.ssh/id_rsa}
+      - PROXMOX_HOST=${PROXMOX_HOST:-}
+      - PROXMOX_USER=${PROXMOX_USER:-root@pam}
+      - PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-}
+      - PROXMOX_TOKEN_SECRET=${PROXMOX_TOKEN_SECRET:-}
+      - FORTIGATE_HOST=${FORTIGATE_HOST:-}
+      - FORTIGATE_API_KEY=${FORTIGATE_API_KEY:-}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    deploy:
+      # See SQLite note above — set replicas=1 unless using Postgres
+      replicas: ${HP1_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        monitor: 60s
+        order: start-first     # New replica healthy before old stops = zero downtime
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+      placement:
+        constraints:
+          # Requires manager role — agent needs Docker socket for Swarm management tools
+          - node.role == manager
+        preferences:
+          - spread: node.id    # Spread replicas across available nodes
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  agent-net:
+    driver: overlay
+    attachable: true
+    # Reuse existing agent-net shared with Kafka/observability stacks
+    external: true
+
+volumes:
+  agent-data:
+    name: hp1-agent-data
+    # Uncomment for multi-node NFS shared storage:
+    # driver: local
+    # driver_opts:
+    #   type: nfs
+    #   o: addr=${NFS_SERVER},rw,nfsvers=4
+    #   device: ":/exports/hp1/data"
+  agent-logs:
+    name: hp1-agent-logs
+  agent-checkpoints:
+    name: hp1-agent-checkpoints
+  agent-skills:
+    name: hp1-agent-skills

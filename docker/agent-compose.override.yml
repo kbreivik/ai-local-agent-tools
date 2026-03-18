@@ -1,0 +1,17 @@
+# agent-compose.override.yml — development overrides
+# Adds live code bind-mounts and debug settings.
+# To use: docker compose -f docker/agent-compose.yml -f docker/agent-compose.override.yml up -d
+# Rename/delete this file to disable dev overrides.
+
+services:
+  agent:
+    volumes:
+      # Live code — changes reflected without rebuild (read-only to prevent writes)
+      - ../mcp_server:/app/mcp_server:ro
+      - ../api:/app/api:ro
+      - ../agent:/app/agent:ro
+    environment:
+      - LOG_LEVEL=debug
+      - API_WORKERS=1
+    # Enable uvicorn --reload for auto-restart on code changes
+    command: ["--reload"]
