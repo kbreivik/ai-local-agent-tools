@@ -151,3 +151,184 @@ def skill_generation_config() -> dict:
     if cfg.get("lm_studio_api_key") and cfg["lm_studio_api_key"] != "lm-studio":
         cfg["lm_studio_api_key"] = cfg["lm_studio_api_key"][:8] + "..."
     return _ok(cfg, "Skill generation config")
+
+
+# ── v2: Service catalog, compat, knowledge tools ──────────────────────────────
+
+def service_catalog_list() -> dict:
+    """List all known infrastructure services."""
+    services = registry.list_services()
+    return _ok({"services": services, "count": len(services)},
+               f"{len(services)} service(s) in catalog")
+
+
+def service_catalog_update(
+    service_id: str,
+    detected_version: str = "",
+    known_latest: str = "",
+    notes: str = "",
+) -> dict:
+    """Update a service's version info in the catalog."""
+    kwargs = {}
+    if detected_version:
+        kwargs["detected_version"] = detected_version
+        kwargs["version_source"] = "manual"
+    if known_latest:
+        kwargs["known_latest"] = known_latest
+    if notes:
+        kwargs["notes"] = notes
+
+    existing = registry.get_service(service_id)
+    if existing:
+        result = registry.upsert_service(service_id, existing.get("display_name", service_id), **kwargs)
+    else:
+        result = registry.upsert_service(
+            service_id,
+            service_id.replace("_", " ").title(),
+            **kwargs
+        )
+
+    orchestration.audit_log("service_catalog_update", {"service_id": service_id, **kwargs})
+    return _ok(result, f"Service '{service_id}' updated")
+
+
+def skill_compat_check(name: str) -> dict:
+    """Check compatibility of a single skill with detected service version."""
+    from mcp_server.tools.skills import knowledge_base
+    result = knowledge_base.check_skill_compatibility(name)
+    return _ok(result, f"Compat check complete for '{name}'")
+
+
+def skill_compat_check_all() -> dict:
+    """Compat check all enabled skills."""
+    from mcp_server.tools.skills import knowledge_base
+    result = knowledge_base.check_all_skills_compatibility()
+    s = result["summary"]
+    msg = (f"Compat check complete: {s['compatible']} compatible, "
+           f"{s['incompatible']} incompatible, {s['warning']} warnings, "
+           f"{s['unknown']} unknown")
+    orchestration.audit_log("skill_compat_check_all", result["summary"])
+    return _ok(result, msg)
+
+
+def skill_health_summary() -> dict:
+    """Full skill system health dashboard."""
+    from mcp_server.tools.skills import knowledge_base
+    result = knowledge_base.get_skill_health_summary()
+    return _ok(result, f"Health summary: {result['enabled']}/{result['total_skills']} skills enabled")
+
+
+def knowledge_ingest_changelog(
+    service_id: str,
+    content: str = "",
+    from_version: str = "",
+    to_version: str = "",
+) -> dict:
+    """Parse ingested changelog/release notes to extract breaking changes."""
+    from mcp_server.tools.skills import knowledge_base
+    result = knowledge_base.parse_changelog_for_breaking_changes(
+        service_id=service_id,
+        content=content,
+        from_version=from_version,
+        to_version=to_version,
+    )
+    if result.get("status") == "ok":
+        n = result.get("changes_found", 0)
+        orchestration.audit_log("knowledge_ingest_changelog",
+                                {"service_id": service_id, "changes_found": n})
+        return _ok(result, f"Extracted {n} breaking change(s) for '{service_id}'")
+    return _err(result.get("message", "Changelog analysis failed"), data=result)
+
+
+def knowledge_export_request(service_id: str, request_type: str = "changelog") -> dict:
+    """Export a structured request for documentation gathering (airgapped workflow)."""
+    from mcp_server.tools.skills import knowledge_base
+    result = knowledge_base.build_knowledge_export_request(service_id, request_type)
+    if result.get("status") == "ok":
+        return _ok(result,
+                   f"Knowledge request saved to {result['filename']}. "
+                   f"Take this file to a machine with internet access and follow the instructions.")
+    return _err("Failed to create knowledge export request")
+
+
+def skill_recommend_updates(service_id: str = "") -> dict:
+    """List skills that need updating based on breaking changes and version drift."""
+    from mcp_server.tools.skills import knowledge_base
+
+    if service_id:
+        bc_list = registry.get_breaking_changes(service_id)
+    else:
+        bc_list = registry.get_unresolved_breaking_changes()
+
+    recommendations = []
+    seen_skills = set()
+
+    for bc in bc_list:
+        for skill_name in bc.get("affected_skills", []):
+            if skill_name in seen_skills:
+                continue
+            seen_skills.add(skill_name)
+            skill = registry.get_skill(skill_name)
+            if skill:
+                recommendations.append({
+                    "skill": skill_name,
+                    "action": "NEEDS UPDATE" if bc["severity"] == "breaking" else "REVIEW",
+                    "reason": bc["description"],
+                    "breaking_change_id": bc["id"],
+                    "remediation": bc.get("remediation", "Consider regenerating skill with current docs"),
+                })
+
+    # Also check for version drift via compat history
+    skills = registry.list_skills(enabled_only=True)
+    for skill in skills:
+        if skill["name"] in seen_skills:
+            continue
+        history = registry.get_compat_history(skill["name"], limit=1)
+        if history and history[0].get("compatible") == 0:
+            recommendations.append({
+                "skill": skill["name"],
+                "action": "INCOMPATIBLE",
+                "reason": history[0].get("details", "Compat check failed"),
+                "breaking_change_id": None,
+                "remediation": "Regenerate skill: skill_regenerate('" + skill["name"] + "')",
+            })
+
+    return _ok(
+        {"recommendations": recommendations, "count": len(recommendations)},
+        f"{len(recommendations)} skill(s) need attention"
+    )
+
+
+def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
+    """Regenerate a skill, backing up the old version first."""
+    skill = registry.get_skill(name)
+    if not skill:
+        return _err(f"Skill '{name}' not found")
+
+    # Back up old file
+    import shutil
+    skill_dir = os.path.join(os.path.dirname(loader.__file__), "modules")
+    old_path = os.path.join(skill_dir, f"{name}.py")
+    bak_path = os.path.join(skill_dir, f"{name}.py.bak")
+
+    if os.path.exists(old_path):
+        shutil.copy2(old_path, bak_path)
+
+    # Get description from skill registry
+    description = skill.get("description", name)
+    category = skill.get("category", "general")
+    auth_type = skill.get("auth_type", "none")
+
+    result = skill_create(mcp_server, description, category, "", auth_type, backend)
+
+    if result.get("status") == "ok":
+        orchestration.audit_log("skill_regenerate", {"name": name, "backed_up_to": bak_path})
+        result_data = result.get("data", {})
+        result_data["backed_up_old_version"] = bak_path
+        return _ok(result_data, f"Skill '{name}' regenerated. Old version backed up.")
+
+    # Restore backup on failure
+    if os.path.exists(bak_path) and not os.path.exists(old_path):
+        shutil.copy2(bak_path, old_path)
+
+    return result

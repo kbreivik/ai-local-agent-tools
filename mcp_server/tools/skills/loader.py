@@ -23,9 +23,30 @@ def _make_tool_handler(module, skill_name: str):
     def handler(**kwargs) -> dict:
         try:
             registry.increment_call(skill_name)
-            return module.execute(**kwargs)
+            result = module.execute(**kwargs)
+
+            # Passive version tracking and error-based compat detection
+            try:
+                from mcp_server.tools.skills import knowledge_base
+                if isinstance(result, dict):
+                    if result.get("data"):
+                        knowledge_base.detect_version_from_skill_result(skill_name, result)
+                    if result.get("status") == "error" and result.get("message"):
+                        knowledge_base.analyze_skill_errors_for_compat(skill_name, result["message"])
+            except Exception:
+                pass
+
+            return result
         except Exception as e:
-            registry.record_error(skill_name, str(e))
+            error_str = str(e)
+            registry.record_error(skill_name, error_str)
+
+            try:
+                from mcp_server.tools.skills import knowledge_base
+                knowledge_base.analyze_skill_errors_for_compat(skill_name, error_str)
+            except Exception:
+                pass
+
             return {
                 "status": "error", "data": None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),

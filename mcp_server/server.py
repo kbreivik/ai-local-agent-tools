@@ -343,5 +343,62 @@ def skill_generation_config() -> dict:
     return skill_tools.skill_generation_config()
 
 
+# ── Skill v2: Service catalog, compat, knowledge tools ──────────────────────
+
+@mcp.tool()
+def service_catalog_list() -> dict:
+    """List all known infrastructure services with detected versions and doc coverage."""
+    return skill_tools.service_catalog_list()
+
+
+@mcp.tool()
+def service_catalog_update(service_id: str, detected_version: str = "", known_latest: str = "", notes: str = "") -> dict:
+    """Update a service's version info. Use after firmware upgrades or discoveries."""
+    return skill_tools.service_catalog_update(service_id, detected_version, known_latest, notes)
+
+
+@mcp.tool()
+def skill_compat_check(name: str) -> dict:
+    """Check if a skill is compatible with the current service version."""
+    return skill_tools.skill_compat_check(name)
+
+
+@mcp.tool()
+def skill_compat_check_all() -> dict:
+    """Compat check all enabled skills. Run after any infrastructure upgrade."""
+    return skill_tools.skill_compat_check_all()
+
+
+@mcp.tool()
+def skill_health_summary() -> dict:
+    """Full skill system health: compat status, error rates, stale checks, actions needed."""
+    return skill_tools.skill_health_summary()
+
+
+@mcp.tool()
+def knowledge_ingest_changelog(service_id: str, content: str = "", from_version: str = "", to_version: str = "") -> dict:
+    """Parse ingested changelog/release notes to find breaking changes affecting skills."""
+    return skill_tools.knowledge_ingest_changelog(service_id, content, from_version, to_version)
+
+
+@mcp.tool()
+def knowledge_export_request(service_id: str, request_type: str = "changelog") -> dict:
+    """Export a structured documentation request for airgapped environments.
+    Tells the operator exactly which docs to get and where to find them."""
+    return skill_tools.knowledge_export_request(service_id, request_type)
+
+
+@mcp.tool()
+def skill_recommend_updates(service_id: str = "") -> dict:
+    """List skills that need updating based on breaking changes and version drift."""
+    return skill_tools.skill_recommend_updates(service_id)
+
+
+@mcp.tool()
+def skill_regenerate(name: str, backend: str = "") -> dict:
+    """Regenerate a skill with current docs and version info. Backs up the old version."""
+    return skill_tools.skill_regenerate(mcp, name, backend)
+
+
 if __name__ == "__main__":
     mcp.run()
