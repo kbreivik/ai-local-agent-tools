@@ -4,62 +4,215 @@
 
 ```mermaid
 graph TB
-    subgraph HOST["Windows Host"]
+    subgraph HOST["Operator Machine"]
         subgraph LMS["LM Studio"]
-            MODEL["Qwen3-Coder-30B-A3B\nlmstudio-community/\nQwen3-Coder-30B-A3B-Instruct-GGUF\nQ4_K_M.gguf"]
+            MODEL["Qwen3-Coder-30B-A3B\nGGUF Q4_K_M"]
             API["OpenAI-compatible API\nlocalhost:1234/v1"]
         end
 
-        subgraph PYTHON["Python Runtime (3.13)"]
-            AGENT["agent/agent_loop.py\nOpenAI SDK client\nTool dispatch loop\nHalt-on-degraded logic"]
-            MCP["mcp_server/server.py\nFastMCP 3.1.0\n16 tools over stdio"]
-            SWARM_T["tools/swarm.py\n7 tools\ndocker SDK"]
-            KAFKA_T["tools/kafka.py\n5 tools\nkafka-python"]
-            ORCH_T["tools/orchestration.py\n4 tools\ncheckpoints + audit"]
-        end
-
-        subgraph FILES["Filesystem"]
-            LOG["logs/audit.log\nJSONL, one entry/action"]
-            CP["checkpoints/\nlabel_timestamp.json"]
-            IDX[".code-index/\njcodemunch symbols"]
+        subgraph GUI["React GUI :5173"]
+            LOGIN["LoginScreen"]
+            OUTPUT["OutputPanel (WS)"]
+            LOGS["LogTable"]
+            INGEST_UI["IngestPanel"]
+            LOCK_UI["LockBadge"]
         end
     end
 
-    subgraph DOCKER["Docker Desktop (WSL2)"]
-        subgraph SWARM["Docker Swarm"]
-            MGR["Manager Node\ndocker-desktop"]
-
-            subgraph WL["workload-stack"]
-                W1["workload replica 1\nnginx:1.25-alpine"]
-                W2["workload replica 2\nnginx:1.25-alpine"]
-            end
-
-            subgraph KS["kafka-stack"]
-                K1["kafka1\napache/kafka:3.7.1\nnode_id=1\nboth broker+controller"]
-                K2["kafka2\napache/kafka:3.7.1\nnode_id=2"]
-                K3["kafka3\napache/kafka:3.7.1\nnode_id=3"]
-            end
-
-            NET["agent-net\noverlay network"]
+    subgraph AGENT["HP1-AI-Agent Container / bare-metal :8000"]
+        subgraph FASTAPI["FastAPI Backend"]
+            AUTH_R["POST /api/auth/login\nJWT HS256 24h"]
+            AGENT_R["POST /api/agent/run\nSSE stream"]
+            MEM_R["GET/POST /api/memory/*\nMuninnDB"]
+            INGEST_R["POST /api/ingest/*\napproval flow"]
+            WS["WS /ws/output\nbroadcast"]
+            LOCK_R["GET /api/lock/status"]
         end
+
+        subgraph LOOP["Agent Loop"]
+            ROUTER["agents/router.py\n3-agent routing\nOPERATIONS / RESEARCH / SKILL_GEN"]
+            PLAN["plan_action intercept\nglobal lock"]
+            CLARIFY["clarifying_question intercept"]
+        end
+
+        subgraph MCP["MCP Server (FastMCP)"]
+            SWARM_T["swarm.py\n9 tools"]
+            KAFKA_T["kafka.py\n5 tools"]
+            ORCH_T["orchestration.py\n6 tools"]
+            ELASTIC_T["elastic.py\n7 tools"]
+            DE_T["docker_engine.py\n3 tools (SSH)"]
+            INGEST_T["ingest.py\n3 tools"]
+            SKILL_T["skills/meta_tools.py\n18+ tools"]
+        end
+
+        subgraph STORAGE["Storage Layer"]
+            AUTO["auto_detect.py\nPG probe → SQLite fallback"]
+            SQLITE["SqliteBackend\ndata/skills.db WAL"]
+            PG["PostgresBackend\npsycopg2 pool\nJSONB + FTS"]
+            REDIS["RedisCache\noptional\n300s TTL"]
+        end
+    end
+
+    subgraph INFRA["Infrastructure"]
+        SWARM["Docker Swarm\nSwarm SDK"]
+        KAFKA["Kafka Cluster\nKRaft 3 brokers"]
+        ES["Elasticsearch\nhp1-logs-* index"]
+        REMOTE["Remote Debian 12\nDocker Engine SSH"]
     end
 
     MODEL <--> API
-    API <-->|"HTTP/JSON\nBearer token"| AGENT
-    AGENT <-->|"tool calls"| MCP
-    MCP --> SWARM_T
-    MCP --> KAFKA_T
-    MCP --> ORCH_T
-    SWARM_T <-->|"npipe://\ndocker SDK"| MGR
-    KAFKA_T <-->|"localhost:9092-9094\nkafka-python"| K1
-    ORCH_T --> LOG
-    ORCH_T --> CP
-    K1 <-->|"INTERNAL\nkafka1:9092\noverlay"| K2
-    K2 <-->|"INTERNAL\nkafka2:9092\noverlay"| K3
-    K1 <-->|"CONTROLLER\n:9093"| K2
-    K2 <-->|"CONTROLLER\n:9093"| K3
-    K1 & K2 & K3 <--> NET
-    W1 & W2 <--> NET
+    API <-->|"OpenAI SDK"| LOOP
+    GUI <-->|"JWT + WS"| FASTAPI
+    FASTAPI --> LOOP
+    LOOP --> MCP
+    SWARM_T --> SWARM
+    KAFKA_T --> KAFKA
+    ELASTIC_T --> ES
+    DE_T -->|"paramiko SSH"| REMOTE
+    ORCH_T --> STORAGE
+    SKILL_T --> STORAGE
+    AUTO --> SQLITE
+    AUTO -.->|"if available"| PG
+    AUTO -.->|"if available"| REDIS
+```
+
+---
+
+## 3-Agent Routing
+
+Tasks are classified into one of three agent profiles, each with a filtered tool set:
+
+```mermaid
+graph LR
+    TASK["User Task"] --> CLASSIFY["classify_task()\nLLM intent detection"]
+
+    CLASSIFY -->|"upgrade / rollback\nrestart / drain"| OPS["OPERATIONS agent\nSwarm + Kafka + Elastic\n+ Orchestration tools"]
+    CLASSIFY -->|"search / explain\nwhat / why / show"| RES["RESEARCH agent\nElastic + Memory\n+ Ingest tools\n(read-only subset)"]
+    CLASSIFY -->|"create skill\ndiscover / generate"| SKILL["SKILL_GEN agent\nSkill system tools\n+ Service catalog"]
+
+    OPS --> PLAN_GUARD["plan_action() guard\nrequired before destructive ops"]
+    OPS --> LOCK["PlanLockManager\nglobal lock across sessions"]
+```
+
+---
+
+## Storage Layer
+
+```mermaid
+graph TB
+    REG["registry.py\nthin delegation layer\nall callers unchanged"] --> INIT["get_backend()\nsingleton"]
+
+    INIT --> DETECT["auto_detect.py\ndetect_backend()"]
+
+    DETECT -->|"STORAGE_BACKEND=sqlite"| SQLITE["SqliteBackend\ndata/skills.db\nWAL + busy_timeout=5000"]
+    DETECT -->|"STORAGE_BACKEND=postgres\nor PG port reachable"| PG["PostgresBackend\npsycopg2 SimpleConnectionPool\n1-5 conns\nJSONB, TIMESTAMPTZ, GIN FTS"]
+    DETECT -->|"fallback"| SQLITE
+
+    INIT2["get_cache()\nsingleton, may be None"] --> DETECT2["detect_cache()"]
+    DETECT2 -->|"REDIS_URL or port 6379 reachable"| REDIS["RedisCache\nskill TTL=300s\nservice TTL=60s"]
+    DETECT2 -->|"not found"| NONE["None\ncache disabled\nnon-fatal"]
+
+    subgraph TABLES["skills.db tables"]
+        T1["skills"]
+        T2["service_catalog"]
+        T3["breaking_changes"]
+        T4["skill_compat_log"]
+        T5["audit_log"]
+        T6["checkpoints"]
+        T7["settings"]
+    end
+
+    SQLITE --> TABLES
+```
+
+**Auto-detection probe order:**
+1. `STORAGE_BACKEND` env var override (`sqlite` | `postgres`)
+2. `DATABASE_URL` env var (full DSN)
+3. `POSTGRES_HOST` env var (individual vars)
+4. Network probe: `postgres`, `postgresql`, `db`, `database`, `host.docker.internal`, `172.17.0.1` on port 5432
+5. SQLite fallback — always available, zero config
+
+---
+
+## Docker Deployment
+
+```mermaid
+graph TB
+    subgraph BUILD["docker/Dockerfile (multi-stage)"]
+        BUILDER["builder: python:3.13-slim\ngcc, build-essential\ncompile wheels"]
+        RUNTIME["runtime: python:3.13-slim\nno compiler\ninstall from /wheels\nARG DOCKER_GID=998\nnon-root agent user"]
+        BUILDER -->|"COPY --from=builder /wheels"| RUNTIME
+    end
+
+    subgraph COMPOSE["agent-compose.yml"]
+        SVC["agent service\nhp1-ai-agent:latest\n:8000"]
+        OPT_PG["postgres:16-alpine\nprofile: postgres"]
+        OPT_REDIS["redis:7-alpine\nprofile: redis"]
+        SVC -.->|"depends_on required:false"| OPT_PG
+        SVC -.->|"depends_on required:false"| OPT_REDIS
+    end
+
+    subgraph VOLUMES["Named Volumes"]
+        V1["hp1-agent-data\n/app/data"]
+        V2["hp1-agent-logs\n/app/logs"]
+        V3["hp1-agent-checkpoints\n/app/checkpoints"]
+        V4["hp1-agent-skills\n/app/mcp_server/tools/skills/modules"]
+    end
+
+    subgraph MOUNTS["Bind Mounts"]
+        M1["/var/run/docker.sock :ro"]
+        M2["~/.ssh :ro"]
+    end
+```
+
+**Deploy commands:**
+```bash
+# Standalone
+docker compose -f docker/agent-compose.yml up -d
+
+# With PostgreSQL
+docker compose --profile postgres -f docker/agent-compose.yml up -d
+
+# With PostgreSQL + Redis
+docker compose --profile postgres --profile redis -f docker/agent-compose.yml up -d
+
+# Swarm HA (requires external overlay network)
+docker stack deploy -c docker/agent-swarm.yml hp1-agent
+```
+
+---
+
+## Skill System
+
+```mermaid
+graph LR
+    subgraph DISCOVERY["Discovery"]
+        DISC["discover_environment(hosts)\n4-phase: ENUMERATE → IDENTIFY\n→ CATALOG → RECOMMEND\nno LLM, pure HTTP probing"]
+    end
+
+    subgraph GENERATION["Generation"]
+        SEARCH["skill_search(query)\nfull-text search"]
+        CREATE["skill_create(description)\nspec-first generation\nbackend: local|cloud|export"]
+        VALIDATE["validate_skill_live(name)\nLayer 1: AST checks\nLayer 2: live endpoint probe\nLayer 3: LLM critic review"]
+    end
+
+    subgraph EXECUTION["Execution"]
+        EXECUTE["skill_execute(name, **kwargs)\nsingle dispatcher\nno direct fn calls"]
+        HEALTH["skill_health_summary()\ncompat + error rates\n+ stale checks"]
+    end
+
+    subgraph COMPAT["Compatibility"]
+        COMPAT_CHK["skill_compat_check(name)\nversion drift detection"]
+        CHANGELOG["knowledge_ingest_changelog()\nbreak change analysis"]
+        REGEN["skill_regenerate(name)\nbackup + regenerate\nwith current docs"]
+    end
+
+    DISC --> CREATE
+    SEARCH -->|"not found"| CREATE
+    CREATE --> VALIDATE
+    VALIDATE --> EXECUTE
+    HEALTH --> COMPAT_CHK
+    CHANGELOG --> REGEN
 ```
 
 ---
@@ -68,216 +221,109 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph SERVER["mcp_server/server.py (FastMCP)"]
-        subgraph SWARM_TOOLS["Swarm Tools"]
+    subgraph SERVER["mcp_server/server.py (FastMCP) — 50+ tools"]
+        subgraph SWARM_TOOLS["Swarm (9)"]
             SS[swarm_status]
             SL[service_list]
             SH[service_health]
+            SCV[service_current_version]
+            SRI[service_resolve_image]
+            SVH[service_version_history]
             SU[service_upgrade]
             SR[service_rollback]
             ND[node_drain]
-            PU[pre_upgrade_check]
         end
-        subgraph KAFKA_TOOLS["Kafka Tools"]
+        subgraph KAFKA_TOOLS["Kafka (5)"]
             KB[kafka_broker_status]
             KL[kafka_consumer_lag]
             KT[kafka_topic_health]
             KR[kafka_rolling_restart_safe]
             PK[pre_kafka_check]
         end
-        subgraph ORCH_TOOLS["Orchestration Tools"]
+        subgraph ORCH_TOOLS["Orchestration (6)"]
             CS[checkpoint_save]
             CR[checkpoint_restore]
             AL[audit_log]
             ES[escalate]
+            PUF[pre_upgrade_check_full]
+            PUV[post_upgrade_verify]
+        end
+        subgraph ELASTIC_TOOLS["Elastic (7)"]
+            ECH[elastic_cluster_health]
+            ESL[elastic_search_logs]
+            EEL[elastic_error_logs]
+            EKL[elastic_kafka_logs]
+            ELP[elastic_log_pattern]
+            EIS[elastic_index_stats]
+            ECO[elastic_correlate_operation]
         end
     end
 
-    SS & SL & SH & SU & SR & ND & PU -->|docker SDK| DOCKER[(Docker API)]
-    KB & KL & KT & KR & PK -->|kafka-python| KAFKA[(Kafka Brokers)]
-    CS & CR -->|JSON files| FS[(checkpoints/)]
-    AL -->|JSONL append| LOG[(logs/audit.log)]
-    ES --> AL
-    ES -->|stdout| CONSOLE[Console Alert]
-
-    PU --> SS
-    PU --> SL
-    PK --> KB
-    PK --> KT
-    CS --> SS
-    CS --> SL
-    CS --> KB
-    SU --> PU
+    SS & SL & SH & SU & SR & ND -->|docker SDK| DOCKER[(Docker API)]
+    KB & KL & KT & KR & PK -->|kafka-python| KAFKA[(Kafka)]
+    CS & CR -->|"DB + file"| STORE[(Storage)]
+    AL -->|"DB + JSONL"| LOG[(logs/audit.log)]
+    ECH & ESL & EEL & EKL & ELP -->|HTTP| ES[(Elasticsearch)]
 ```
 
 ---
 
-## Kafka Cluster — KRaft Mode
+## Audit + Checkpoint Dual-Write
 
-```mermaid
-graph TB
-    subgraph OVERLAY["Docker Overlay Network: agent-net"]
-        subgraph K1BOX["kafka1 container"]
-            K1I["INTERNAL listener\nkafka1:9092\ninter-broker"]
-            K1C["CONTROLLER listener\nkafka1:9093\nKRaft quorum"]
-            K1E["EXTERNAL listener\n:19092 → host:9092"]
-        end
-        subgraph K2BOX["kafka2 container"]
-            K2I["INTERNAL listener\nkafka2:9092"]
-            K2C["CONTROLLER listener\nkafka2:9093"]
-            K2E["EXTERNAL listener\n:19092 → host:9093"]
-        end
-        subgraph K3BOX["kafka3 container"]
-            K3I["INTERNAL listener\nkafka3:9092"]
-            K3C["CONTROLLER listener\nkafka3:9093"]
-            K3E["EXTERNAL listener\n:19092 → host:9094"]
-        end
+Both audit entries and checkpoints are written to two places simultaneously:
 
-        K1C <-->|"KRaft quorum\nleader election\nmetadata log"| K2C
-        K2C <-->|"KRaft quorum"| K3C
-        K1I <-->|"partition replication\nfetch requests"| K2I
-        K2I <-->|"partition replication"| K3I
-    end
-
-    HOST["Host machine\nPython tools / Agent"] -->|"localhost:9092"| K1E
-    HOST -->|"localhost:9093"| K2E
-    HOST -->|"localhost:9094"| K3E
-
-    style K1BOX fill:#1a252f,color:#ecf0f1
-    style K2BOX fill:#1a252f,color:#ecf0f1
-    style K3BOX fill:#1a252f,color:#ecf0f1
+```
+checkpoint_save(label) / audit_log(action, result)
+        │
+        ├── PRIMARY: StorageBackend.save_checkpoint() / .append_audit()
+        │   └── SQLite: data/skills.db  (or PostgreSQL)
+        │       Survives container restarts, queryable, concurrent-safe
+        │
+        └── SECONDARY: filesystem
+            ├── checkpoints/label_timestamp.json  (portable, tail-f)
+            └── logs/audit.log  (JSONL, append-only)
 ```
 
 ---
 
-## Data Flow: Service Upgrade
+## Data Flow: Service Upgrade (v1.9)
 
 ```mermaid
 sequenceDiagram
+    participant U as User (GUI)
+    participant F as FastAPI
     participant A as Agent Loop
-    participant L as LM Studio (Qwen3)
+    participant L as LM Studio
     participant M as MCP Server
     participant D as Docker API
-    participant K as Kafka Cluster
-    participant F as Filesystem
 
-    A->>L: System prompt + task
-    L-->>A: tool_calls: [swarm_status, service_list, pre_upgrade_check, pre_kafka_check]
+    U->>F: POST /api/agent/run {task, session_id}
+    F->>A: run_agent(task, stream_callback)
+    A->>L: system_prompt + task + tools
+    L-->>A: tool_calls: [pre_upgrade_check_full]
 
-    A->>M: swarm_status()
-    M->>D: nodes.list()
-    D-->>M: [{id, hostname, role, state}]
-    M-->>A: {status:ok, data:{nodes:[...]}}
+    A->>M: pre_upgrade_check_full("workload")
+    Note over M: 6 steps: swarm, kafka, elastic errors,<br/>error rate, memory context, checkpoint
+    M-->>A: {status:ok, steps:[...]}
 
-    A->>M: pre_kafka_check()
-    M->>K: describe_cluster() + list_topics()
-    K-->>M: brokers=3, topics=[]
-    M-->>A: {status:ok, data:{brokers:3}}
-
-    A->>M: pre_upgrade_check()
-    M->>D: nodes.list() + services.list()
-    D-->>M: all nodes ready, all services healthy
-    M-->>A: {status:ok}
-
-    A->>M: audit_log("Initial state", ...)
-    M->>F: append JSONL to logs/audit.log
-    F-->>M: written
-
-    A->>M: checkpoint_save("before_upgrade")
-    M->>D: swarm_status + service_list
-    M->>K: kafka_broker_status
-    M->>F: write checkpoints/before_upgrade_<ts>.json
-    F-->>M: {status:ok, file:"..."}
-    M-->>A: {status:ok, data:{file:"..."}}
-
-    A->>L: tool results → next inference
-    L-->>A: tool_calls: [service_upgrade("workload", "nginx:1.26-alpine")]
+    L-->>A: tool_calls: [plan_action(summary, steps, risk=HIGH)]
+    A->>F: plan_action intercepted → SSE event "plan_pending"
+    F-->>U: SSE: {type:"plan", plan:{...}}
+    U->>F: POST /api/agent/approve {session_id}
+    F->>A: resume (approved=True)
 
     A->>M: service_upgrade("workload-stack_workload", "nginx:1.26-alpine")
-    M->>D: pre_upgrade_check() [internal gate]
-    D-->>M: ok
-    M->>D: service.update(image="nginx:1.26-alpine")
-    D-->>M: rolling update started
-
-    loop Poll every 2s up to 60s
-        M->>D: service_health("workload-stack_workload")
-        D-->>M: {running: 2, desired: 2}
+    M->>D: service.update(image=...)
+    loop poll 2s/60s
+        M->>D: service_health()
+        D-->>M: 2/2 running
     end
-
-    M-->>A: {status:ok, message:"upgraded to nginx:1.26-alpine"}
-
-    A->>M: service_health (post-verify)
-    M->>D: tasks(desired-state=running)
-    D-->>M: 2/2 running
     M-->>A: {status:ok}
 
-    A->>M: checkpoint_save("after_upgrade")
-    M->>F: write checkpoints/after_upgrade_<ts>.json
+    A->>M: post_upgrade_verify("workload", operation_id)
+    Note over M: replicas + elastic errors + correlation + memory engram
+    M-->>A: {status:ok, verdict:success}
 
-    A->>M: audit_log("Upgrade completed", ...)
-    M->>F: append JSONL
-
-    A->>L: final tool results
-    L-->>A: finish_reason=stop, content="Upgrade complete..."
-    A->>F: audit_log("agent_complete", {steps:5})
-```
-
----
-
-## Checkpoint Structure
-
-Each checkpoint is a JSON snapshot of the entire infrastructure state at a point in time:
-
-```
-checkpoints/
-├── before_upgrade_1741204069.json
-├── after_upgrade_1741204115.json
-└── e2e_pre_upgrade_1741204032.json
-```
-
-```json
-{
-  "label": "before_upgrade",
-  "timestamp": "2026-03-05T19:07:49Z",
-  "swarm": {
-    "status": "ok",
-    "data": {
-      "nodes": [
-        { "id": "0sj1zr8f1pcm", "hostname": "docker-desktop",
-          "role": "manager", "state": "ready", "availability": "active" }
-      ]
-    }
-  },
-  "services": {
-    "status": "ok",
-    "data": {
-      "services": [
-        { "name": "workload-stack_workload",
-          "image": "nginx:1.25-alpine",
-          "desired_replicas": 2, "running_replicas": 2 }
-      ]
-    }
-  },
-  "kafka": {
-    "status": "ok",
-    "data": { "brokers": [...], "count": 3, "controller_id": 1 }
-  }
-}
-```
-
----
-
-## Audit Log Format
-
-`logs/audit.log` — JSONL, one entry per line, append-only:
-
-```jsonl
-{"timestamp":"2026-03-05T19:07:49Z","action":"agent_start","result":{"task":"rolling_upgrade","model":"lmstudio-community/..."}}
-{"timestamp":"2026-03-05T19:07:51Z","action":"tool:swarm_status","result":{"args":{},"result_status":"ok"}}
-{"timestamp":"2026-03-05T19:07:52Z","action":"tool:pre_kafka_check","result":{"args":{},"result_status":"ok"}}
-{"timestamp":"2026-03-05T19:07:53Z","action":"Initial system check","result":"All gates passed"}
-{"timestamp":"2026-03-05T19:07:55Z","action":"checkpoint_save","result":{"label":"before_upgrade","file":"..."}}
-{"timestamp":"2026-03-05T19:08:02Z","action":"tool:service_upgrade","result":{"args":{"name":"workload-stack_workload","image":"nginx:1.26-alpine"},"result_status":"ok"}}
-{"timestamp":"2026-03-05T19:08:12Z","action":"Upgrade completed successfully","result":"nginx:1.26-alpine healthy 2/2"}
-{"timestamp":"2026-03-05T19:08:14Z","action":"agent_complete","result":{"steps":5}}
+    A-->>F: stream final message
+    F-->>U: SSE: {type:"done"}
 ```
