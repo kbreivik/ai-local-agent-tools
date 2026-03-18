@@ -29,10 +29,21 @@ def _make_tool_handler(module, skill_name: str):
             try:
                 from mcp_server.tools.skills import knowledge_base
                 if isinstance(result, dict):
-                    if result.get("data"):
+                    if result.get("status") == "ok" and result.get("data"):
                         knowledge_base.detect_version_from_skill_result(skill_name, result)
-                    if result.get("status") == "error" and result.get("message"):
-                        knowledge_base.analyze_skill_errors_for_compat(skill_name, result["message"])
+                    elif result.get("status") == "error" and result.get("message"):
+                        registry.record_error(skill_name, result["message"])
+                        compat_issue = knowledge_base.analyze_skill_errors_for_compat(
+                            skill_name, result["message"])
+                        if compat_issue:
+                            result["data"] = result.get("data") or {}
+                            result["data"]["compat_warning"] = compat_issue
+                            result["message"] = (
+                                result["message"]
+                                + f" [COMPAT WARNING: This may be caused by a version change in "
+                                f"{compat_issue.get('service_id', 'the service')}. "
+                                f"Run skill_compat_check('{skill_name}') for details.]"
+                            )
             except Exception:
                 pass
 

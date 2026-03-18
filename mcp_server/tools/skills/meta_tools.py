@@ -254,49 +254,8 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
 def skill_recommend_updates(service_id: str = "") -> dict:
     """List skills that need updating based on breaking changes and version drift."""
     from mcp_server.tools.skills import knowledge_base
-
-    if service_id:
-        bc_list = registry.get_breaking_changes(service_id)
-    else:
-        bc_list = registry.get_unresolved_breaking_changes()
-
-    recommendations = []
-    seen_skills = set()
-
-    for bc in bc_list:
-        for skill_name in bc.get("affected_skills", []):
-            if skill_name in seen_skills:
-                continue
-            seen_skills.add(skill_name)
-            skill = registry.get_skill(skill_name)
-            if skill:
-                recommendations.append({
-                    "skill": skill_name,
-                    "action": "NEEDS UPDATE" if bc["severity"] == "breaking" else "REVIEW",
-                    "reason": bc["description"],
-                    "breaking_change_id": bc["id"],
-                    "remediation": bc.get("remediation", "Consider regenerating skill with current docs"),
-                })
-
-    # Also check for version drift via compat history
-    skills = registry.list_skills(enabled_only=True)
-    for skill in skills:
-        if skill["name"] in seen_skills:
-            continue
-        history = registry.get_compat_history(skill["name"], limit=1)
-        if history and history[0].get("compatible") == 0:
-            recommendations.append({
-                "skill": skill["name"],
-                "action": "INCOMPATIBLE",
-                "reason": history[0].get("details", "Compat check failed"),
-                "breaking_change_id": None,
-                "remediation": "Regenerate skill: skill_regenerate('" + skill["name"] + "')",
-            })
-
-    return _ok(
-        {"recommendations": recommendations, "count": len(recommendations)},
-        f"{len(recommendations)} skill(s) need attention"
-    )
+    result = knowledge_base.recommend_skill_updates(service_id)
+    return _ok(result, f"{result['count']} skill(s) need attention")
 
 
 def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
