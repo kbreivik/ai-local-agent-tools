@@ -258,6 +258,41 @@ def skill_recommend_updates(service_id: str = "") -> dict:
     return _ok(result, f"{result['count']} skill(s) need attention")
 
 
+# ── v3: Environment discovery, skill dispatcher, live validation ──────────────
+
+def discover_environment(hosts: list) -> dict:
+    """Run 4-phase environment discovery pipeline on a list of hosts.
+
+    Each host: {"address": "192.168.1.1"} or {"address": "...", "port": 443}
+    """
+    from mcp_server.tools.skills import discovery
+    result = discovery.discover_environment(hosts)
+    if result.get("status") == "ok":
+        data = result["data"]
+        orchestration.audit_log("discover_environment", {
+            "hosts_probed": data["summary"]["hosts_probed"],
+            "identified": data["summary"]["identified"],
+            "recommendations": len(data.get("skill_recommendations", [])),
+        })
+    return result
+
+
+def skill_execute(name: str, **kwargs) -> dict:
+    """Execute a dynamic skill by name. Call skill_search() first to find skills."""
+    return loader.dispatch_skill(name, **kwargs)
+
+
+def validate_skill_live(name: str) -> dict:
+    """Run 3-layer validation on a loaded skill (deterministic + live probe + LLM critic)."""
+    from mcp_server.tools.skills import live_validator
+    result = live_validator.validate_skill_live(name)
+    orchestration.audit_log("validate_skill_live", {
+        "name": name,
+        "overall_valid": result.get("data", {}).get("overall_valid"),
+    })
+    return result
+
+
 def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
     """Regenerate a skill, backing up the old version first."""
     skill = registry.get_skill(name)

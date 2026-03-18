@@ -1,4 +1,8 @@
-"""Dynamic skill loading via importlib.util — no eval/exec."""
+"""Dynamic skill loading via importlib.util — no eval/exec.
+
+Skills are loaded into _SKILL_HANDLERS dict and dispatched via skill_execute().
+Individual skills are NOT registered as separate MCP tools — one dispatcher handles all.
+"""
 import importlib.util
 import logging
 import os
@@ -9,6 +13,9 @@ from mcp_server.tools.skills import registry, validator
 
 
 log = logging.getLogger(__name__)
+
+# Single dispatcher registry: skill name → callable handler
+_SKILL_HANDLERS: dict = {}
 
 _MODULES_DIR = os.path.join(os.path.dirname(__file__), "modules")
 _IMPORTS_DIR = os.path.join(
@@ -79,7 +86,12 @@ def _load_module_from_file(filepath: str, module_name: str):
 
 
 def load_single_skill(mcp_server, name: str) -> dict:
-    """Load one skill by name from the modules directory."""
+    """Load one skill by name from the modules directory.
+
+    Stores handler in _SKILL_HANDLERS for dispatch via skill_execute().
+    Does NOT register individual MCP tools — the single dispatcher handles all skills.
+    mcp_server parameter is kept for API compatibility but no longer used for per-skill registration.
+    """
     filepath = os.path.join(_MODULES_DIR, f"{name}.py")
     if not os.path.exists(filepath):
         return {"loaded": False, "name": name, "error": f"File not found: {filepath}"}
@@ -94,7 +106,9 @@ def load_single_skill(mcp_server, name: str) -> dict:
 
         module = _load_module_from_file(filepath, f"skill_{name}")
         handler = _make_tool_handler(module, name)
-        mcp_server.tool(name=name)(handler)
+
+        # Store in dispatcher registry (not registered as individual MCP tool)
+        _SKILL_HANDLERS[name] = handler
 
         meta = module.SKILL_META
         registry.register_skill(meta, filepath)
@@ -105,6 +119,35 @@ def load_single_skill(mcp_server, name: str) -> dict:
     except Exception as e:
         log.error("Failed to load skill %s: %s", name, e)
         return {"loaded": False, "name": name, "error": str(e)}
+
+
+def dispatch_skill(name: str, **kwargs) -> dict:
+    """Execute a loaded skill by name. Called by the skill_execute MCP tool."""
+    handler = _SKILL_HANDLERS.get(name)
+    if not handler:
+        # Check if skill exists but wasn't loaded
+        skill = registry.get_skill(name)
+        if skill and not skill.get("enabled", True):
+            return {
+                "status": "error", "data": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": f"Skill '{name}' is disabled. Use skill_enable('{name}') to re-enable.",
+            }
+        return {
+            "status": "error", "data": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": (
+                f"Skill '{name}' not found. "
+                "Use skill_search() to discover available skills, "
+                "or skill_create() to generate a new one."
+            ),
+        }
+    return handler(**kwargs)
+
+
+def list_loaded_skills() -> list:
+    """Return names of all currently loaded skills."""
+    return list(_SKILL_HANDLERS.keys())
 
 
 def load_all_skills(mcp_server) -> dict:
