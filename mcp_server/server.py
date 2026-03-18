@@ -266,7 +266,7 @@ from mcp_server.tools.skills import meta_tools as skill_tools
 from mcp_server.tools.skills import loader as skill_loader
 from mcp_server.tools.skills import registry as skill_registry
 
-skill_registry.init_db()
+skill_registry.init_db()  # triggers auto-detect: PostgreSQL → SQLite fallback
 _skill_load_result = skill_loader.load_all_skills(mcp)
 _skill_import_result = skill_loader.scan_imports(mcp)
 
@@ -426,6 +426,35 @@ def validate_skill_live(name: str) -> dict:
     live endpoint probing (Layer 2, if api_base available), and LLM critic review
     (Layer 3, if LM Studio available). Use after skill_create or after service upgrades."""
     return skill_tools.validate_skill_live(name)
+
+
+# ── Storage health ────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def storage_health() -> dict:
+    """Show current storage configuration: which backend is active, connection status,
+    and Redis cache status. Use to verify PostgreSQL auto-detection worked."""
+    from mcp_server.tools.skills.storage import get_backend, get_cache
+    from datetime import datetime, timezone
+
+    db = get_backend()
+    db_health = db.health_check()
+
+    cache = get_cache()
+    cache_health = (
+        cache.health_check() if cache
+        else {"ok": False, "backend": "none", "details": "not configured"}
+    )
+
+    return {
+        "status": "ok",
+        "data": {"database": db_health, "cache": cache_health},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": (
+            f"DB: {db_health['backend']} ({'ok' if db_health['ok'] else 'ERROR'}) | "
+            f"Cache: {cache_health['backend']} ({'ok' if cache_health['ok'] else 'none'})"
+        ),
+    }
 
 
 if __name__ == "__main__":
