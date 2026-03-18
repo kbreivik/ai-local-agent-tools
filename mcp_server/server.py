@@ -260,5 +260,88 @@ def check_internet_connectivity() -> dict:
     return ingest_tools.check_internet_connectivity()
 
 
+# ── Skill system ──────────────────────────────────────────────────────────────
+
+from mcp_server.tools.skills import meta_tools as skill_tools
+from mcp_server.tools.skills import loader as skill_loader
+from mcp_server.tools.skills import registry as skill_registry
+
+skill_registry.init_db()
+_skill_load_result = skill_loader.load_all_skills(mcp)
+_skill_import_result = skill_loader.scan_imports(mcp)
+
+
+@mcp.tool()
+def skill_search(query: str, category: str = "") -> dict:
+    """Search for dynamic skills by keyword. Call this when you need a capability
+    not in the built-in tools (swarm, kafka, elastic, docker_engine, etc.)."""
+    return skill_tools.skill_search(query, category)
+
+
+@mcp.tool()
+def skill_list(category: str = "", enabled_only: bool = True) -> dict:
+    """List all dynamic skills. Categories: monitoring, networking, storage, compute, general."""
+    return skill_tools.skill_list(category, enabled_only)
+
+
+@mcp.tool()
+def skill_info(name: str) -> dict:
+    """Get details about a dynamic skill: parameters, call count, errors, generation mode."""
+    return skill_tools.skill_info(name)
+
+
+@mcp.tool()
+def skill_create(
+    description: str,
+    category: str = "general",
+    api_base: str = "",
+    auth_type: str = "none",
+    backend: str = "",
+) -> dict:
+    """Generate a new tool when no existing skill fits. Call skill_search FIRST.
+    backend='local' (default) uses LM Studio. backend='cloud' uses Anthropic API.
+    backend='export' saves a prompt file for offline generation (airgapped workflow).
+    The description should name the service, API, and what data to return."""
+    return skill_tools.skill_create(mcp, description, category, api_base, auth_type, backend)
+
+
+@mcp.tool()
+def skill_import() -> dict:
+    """Scan data/skill_imports/ for .py skill files (sneakernet/offline workflow).
+    Validates and loads any valid skills found. Call after operator drops files there."""
+    return skill_tools.skill_import(mcp)
+
+
+@mcp.tool()
+def skill_export_prompt(
+    description: str,
+    category: str = "general",
+    api_base: str = "",
+    auth_type: str = "none",
+) -> dict:
+    """Save a self-contained skill generation prompt to data/skill_exports/.
+    Use for airgapped environments. The export file contains full instructions
+    for the operator to generate the skill on another machine."""
+    return skill_tools.skill_export_prompt(description, category, api_base, auth_type)
+
+
+@mcp.tool()
+def skill_disable(name: str) -> dict:
+    """Disable a broken dynamic skill."""
+    return skill_tools.skill_disable(name)
+
+
+@mcp.tool()
+def skill_enable(name: str) -> dict:
+    """Re-enable a disabled dynamic skill."""
+    return skill_tools.skill_enable(name)
+
+
+@mcp.tool()
+def skill_generation_config() -> dict:
+    """Show current skill generation config: backend, model, LM Studio URL."""
+    return skill_tools.skill_generation_config()
+
+
 if __name__ == "__main__":
     mcp.run()
