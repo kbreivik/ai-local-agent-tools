@@ -24,6 +24,14 @@ SKILL_META = {
     },
     "auth_type": "token",
     "config_keys": ["PROXMOX_HOST", "PROXMOX_USER", "PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET"],
+    "compat": {
+        "service": "proxmox",
+        "api_version_built_for": "8.2",
+        "min_version": "7.0",
+        "max_version": "",
+        "version_endpoint": "/api2/json/version",
+        "version_field": "data.version",
+    },
 }
 
 
@@ -95,6 +103,15 @@ try:
                 token_value=cfg["token_secret"],
                 verify_ssl=False,
             )
+
+            # Detect Proxmox version
+            detected_version = ""
+            try:
+                ver_data = prox.version.get()
+                detected_version = ver_data.get("version", "")
+            except Exception:
+                pass
+
             vms_raw = prox.nodes(node).qemu.get()
 
             vms = []
@@ -112,7 +129,10 @@ try:
                     "uptime": vm.get("uptime", 0),
                 })
 
-            result = {"node": node, "vms": vms, "total": len(vms), "stopped": stopped_count}
+            result = {
+                "node": node, "vms": vms, "total": len(vms),
+                "stopped": stopped_count, "detected_version": detected_version,
+            }
 
             if stopped_count > 0:
                 return _degraded(result,
@@ -125,3 +145,24 @@ try:
 except ImportError:
     def execute(**kwargs) -> dict:
         return _err("proxmoxer not installed — run: pip install proxmoxer")
+
+
+def check_compat(**kwargs) -> dict:
+    """Probe Proxmox API version."""
+    cfg = _proxmox_config()
+    if not cfg["host"]:
+        return _err("PROXMOX_HOST not configured")
+    try:
+        from proxmoxer import ProxmoxAPI
+        prox = ProxmoxAPI(cfg["host"], user=cfg["user"],
+                         token_name=cfg["token_id"], token_value=cfg["token_secret"],
+                         verify_ssl=False)
+        ver_data = prox.version.get()
+        version = ver_data.get("version", "")
+        compatible = True
+        reason = f"Detected Proxmox {version}"
+        return _ok({"compatible": compatible, "detected_version": version, "reason": reason})
+    except ImportError:
+        return _ok({"compatible": None, "detected_version": None, "reason": "proxmoxer not installed"})
+    except Exception as e:
+        return _ok({"compatible": None, "detected_version": None, "reason": str(e)})

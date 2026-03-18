@@ -24,6 +24,14 @@ SKILL_META = {
     },
     "auth_type": "none",
     "config_keys": [],
+    "compat": {
+        "service": "generic",
+        "api_version_built_for": "",
+        "min_version": "",
+        "max_version": "",
+        "version_endpoint": "",
+        "version_field": "",
+    },
 }
 
 

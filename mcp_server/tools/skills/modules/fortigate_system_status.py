@@ -24,6 +24,14 @@ SKILL_META = {
     },
     "auth_type": "api_key",
     "config_keys": ["FORTIGATE_HOST", "FORTIGATE_API_KEY"],
+    "compat": {
+        "service": "fortigate",
+        "api_version_built_for": "7.4",
+        "min_version": "6.4",
+        "max_version": "",
+        "version_endpoint": "/api/v2/monitor/system/status",
+        "version_field": "results.version",
+    },
 }
 
 
@@ -97,6 +105,7 @@ def execute(**kwargs) -> dict:
             "version": data.get("version", "unknown"),
             "build": data.get("build", "unknown"),
             "uptime": data.get("uptime", 0),
+            "detected_version": data.get("version", ""),
         }
 
         # Check HA state
@@ -119,3 +128,22 @@ def execute(**kwargs) -> dict:
         return _err(f"FortiGate API error: HTTP {e.response.status_code}")
     except Exception as e:
         return _err(f"fortigate_system_status error: {e}")
+
+
+def check_compat(**kwargs) -> dict:
+    """Probe FortiGate firmware version."""
+    cfg = _fortigate_config()
+    if not cfg["host"] or not cfg["api_key"]:
+        return _ok({"compatible": None, "detected_version": None, "reason": "Not configured"})
+    try:
+        r = httpx.get(
+            f"https://{cfg['host']}/api/v2/monitor/system/status",
+            params={"access_token": cfg["api_key"]},
+            verify=False, timeout=10.0,
+        )
+        data = r.json().get("results", r.json())
+        version = data.get("version", "")
+        return _ok({"compatible": True, "detected_version": version,
+                    "reason": f"FortiGate firmware: {version}"})
+    except Exception as e:
+        return _ok({"compatible": None, "detected_version": None, "reason": str(e)})
