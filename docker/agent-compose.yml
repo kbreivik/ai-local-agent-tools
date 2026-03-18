@@ -1,0 +1,110 @@
+# agent-compose.yml — HP1-AI-Agent single-node deployment
+# Works on Docker Desktop (Win/Mac) and any Linux with Docker Engine.
+#
+# Usage:
+#   cp docker/.env.example docker/.env  # first time only — edit ADMIN_PASSWORD
+#   docker compose -f docker/agent-compose.yml up -d
+#   docker compose -f docker/agent-compose.yml logs -f
+#   docker compose -f docker/agent-compose.yml down
+
+name: hp1-agent
+
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # Match host docker group GID: stat -c '%g' /var/run/docker.sock
+        DOCKER_GID: ${DOCKER_GID:-998}
+    image: hp1-ai-agent:latest
+    container_name: hp1-agent
+    restart: unless-stopped
+
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+    volumes:
+      # Persistent state — survives container recreation
+      - agent-data:/app/data
+      - agent-logs:/app/logs
+      - agent-checkpoints:/app/checkpoints
+      # Dynamic skill modules — persist across restarts
+      - agent-skills:/app/mcp_server/tools/skills/modules
+
+      # Docker socket — required for Swarm/Docker management tools
+      # ro: agent can read state; write-access not needed for MCP queries
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # SSH keys — needed for docker_engine SSH tools and generated skills
+      - ${SSH_KEY_DIR:-~/.ssh}:/home/agent/.ssh:ro
+
+    environment:
+      # ── Authentication ──
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - JWT_SECRET=${JWT_SECRET:-}
+
+      # ── Local LLM (LM Studio / Ollama / vLLM) ──
+      # Docker Desktop:   http://host.docker.internal:1234/v1
+      # Docker on Linux:  http://172.17.0.1:1234/v1
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-}
+      - LM_STUDIO_API_KEY=${LM_STUDIO_API_KEY:-}
+
+      # ── Skill generation ──
+      - SKILL_GEN_BACKEND=${SKILL_GEN_BACKEND:-local}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # ── Infrastructure connections ──
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-}
+      - ELASTIC_URL=${ELASTIC_URL:-}
+
+      # ── Docker Engine SSH ──
+      - DOCKER_ENGINE_HOST=${DOCKER_ENGINE_HOST:-}
+      - DOCKER_ENGINE_USER=${DOCKER_ENGINE_USER:-root}
+      - DOCKER_ENGINE_SSH_KEY=${DOCKER_ENGINE_SSH_KEY:-/home/agent/.ssh/id_rsa}
+      - DOCKER_ENGINE_SSH_PORT=${DOCKER_ENGINE_SSH_PORT:-22}
+
+      # ── Target services (for dynamic skills) ──
+      - PROXMOX_HOST=${PROXMOX_HOST:-}
+      - PROXMOX_USER=${PROXMOX_USER:-root@pam}
+      - PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-}
+      - PROXMOX_TOKEN_SECRET=${PROXMOX_TOKEN_SECRET:-}
+      - FORTIGATE_HOST=${FORTIGATE_HOST:-}
+      - FORTIGATE_API_KEY=${FORTIGATE_API_KEY:-}
+
+      # ── Optional ──
+      - DATABASE_URL=${DATABASE_URL:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - API_WORKERS=${API_WORKERS:-1}
+
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  agent-data:
+    name: hp1-agent-data
+  agent-logs:
+    name: hp1-agent-logs
+  agent-checkpoints:
+    name: hp1-agent-checkpoints
+  agent-skills:
+    name: hp1-agent-skills

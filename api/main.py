@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HP1 AI Agent API",
     description="Local AI infrastructure orchestration — Docker Swarm + Kafka",
-    version="1.8.0",
+    version="1.9.0",
     lifespan=lifespan,
 )
 
@@ -135,7 +135,8 @@ async def health():
     return {
         "status": "ok",
         "service": "HP1-AI-Agent",
-        "version": "1.8.0",
+        "version": "1.9.0",
+        "deploy_mode": os.environ.get("HP1_DEPLOY_MODE", "bare-metal"),
         "ws_clients": manager.active_count,
         "network": _get_host_ips(),
     }
