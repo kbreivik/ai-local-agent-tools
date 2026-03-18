@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, resolveEscalation, fetchStats } from '../api'
+import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, resolveEscalation, fetchStats, authHeaders } from '../api'
 
 const FEEDBACK_ICON = { thumbs_up: '👍', thumbs_down: '👎' }
 
@@ -12,7 +12,8 @@ const fmtTs = (ts) => {
 }
 
 async function fetchCorrelation(opId) {
-  const r = await fetch(`${BASE}/api/elastic/correlate/${opId}`)
+  const r = await fetch(`${BASE}/api/elastic/correlate/${opId}`, { headers: authHeaders() })
+  if (!r.ok) return { error: `HTTP ${r.status}` }
   return r.json()
 }
 
@@ -117,37 +118,69 @@ function CorrelationView({ operationId }) {
       {loading && <p className="text-xs text-slate-500 animate-pulse">Loading…</p>}
       {corr?.error && <p className="text-xs text-red-400">{corr.error}</p>}
       {corr && !corr.error && (
-        <div className="text-xs space-y-1">
-          <div className="flex gap-4 text-slate-500">
-            <span>Logs: {corr.total_log_count}</span>
+        <div className="text-xs space-y-2">
+          {/* Summary counters */}
+          <div className="flex gap-4 flex-wrap text-slate-500">
+            <span>Total logs: <span className="text-slate-300">{corr.total_log_count ?? 0}</span></span>
             <span className={corr.error_count > 0 ? 'text-red-400' : ''}>
-              Errors: {corr.error_count}
+              Errors: <span className="font-semibold">{corr.error_count ?? 0}</span>
             </span>
+            {corr.warn_count > 0 && (
+              <span className="text-yellow-400">Warnings: <span className="font-semibold">{corr.warn_count}</span></span>
+            )}
+            {corr.window_seconds && (
+              <span className="text-slate-600">Window: {corr.window_seconds}s</span>
+            )}
           </div>
+
+          {/* Anomalies */}
           {corr.anomalies?.length > 0 && (
-            <div className="bg-red-950 rounded px-2 py-1">
+            <div className="bg-red-950 border border-red-800 rounded px-2 py-1.5 space-y-0.5">
+              <p className="text-red-400 font-semibold uppercase tracking-wider text-xs mb-1">Anomalies</p>
               {corr.anomalies.map((a, i) => (
-                <p key={i} className="text-red-300">{a}</p>
+                <p key={i} className="text-red-300">⚠ {a}</p>
               ))}
             </div>
           )}
+
+          {/* Error summary */}
           {corr.error_summary && (
-            <p className="text-red-400 italic">{corr.error_summary}</p>
+            <div className="bg-slate-800 rounded px-2 py-1.5">
+              <span className="text-slate-500 font-semibold">Summary: </span>
+              <span className="text-red-300">{corr.error_summary}</span>
+            </div>
           )}
-          <div className="max-h-40 overflow-y-auto space-y-0.5 mt-1 font-mono">
-            {corr.all_logs?.slice(0, 30).map((lg, i) => (
-              <div key={i} className="flex gap-2">
-                <span className="text-slate-600 shrink-0">
-                  {fmtTs(lg.timestamp)}
-                </span>
-                <span className={`shrink-0 uppercase w-10 ${
-                  lg.level?.toLowerCase() === 'error' ? 'text-red-400' :
-                  lg.level?.toLowerCase() === 'warn' ? 'text-yellow-400' : 'text-slate-500'
-                }`}>{lg.level?.slice(0, 4)}</span>
-                <span className="text-slate-300 break-all">{lg.message?.slice(0, 120)}</span>
-              </div>
-            ))}
-          </div>
+
+          {/* Elasticsearch unavailable fallback */}
+          {corr.total_log_count === 0 && !corr.anomalies?.length && (
+            <p className="text-slate-600 italic">
+              No correlated logs found — Elasticsearch may be unavailable or no logs were indexed during this operation.
+            </p>
+          )}
+
+          {/* Log entries grouped by level */}
+          {corr.all_logs?.length > 0 && (
+            <div className="max-h-64 overflow-y-auto space-y-0.5 mt-1 font-mono border border-slate-700 rounded p-1">
+              {corr.all_logs.slice(0, 50).map((lg, i) => {
+                const lvl = lg.level?.toLowerCase() ?? 'info'
+                const lvlColor = lvl === 'error' ? 'text-red-400' : lvl === 'warn' ? 'text-yellow-400' : lvl === 'debug' ? 'text-slate-600' : 'text-slate-400'
+                const service = lg.container_name || lg.service_name || lg['container.name'] || ''
+                return (
+                  <div key={i} className="py-0.5 border-b border-slate-800 last:border-0">
+                    <div className="flex gap-2 items-start">
+                      <span className="text-slate-600 shrink-0 w-16">{fmtTs(lg.timestamp ?? lg['@timestamp'])}</span>
+                      <span className={`shrink-0 uppercase w-9 font-bold ${lvlColor}`}>{lg.level?.slice(0, 4) ?? 'INFO'}</span>
+                      {service && <span className="text-blue-500 shrink-0 truncate max-w-[80px]" title={service}>{service}</span>}
+                      <span className="text-slate-300 break-words leading-relaxed">{(lg.message ?? lg['log.message'] ?? '').slice(0, 320)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+              {corr.all_logs.length > 50 && (
+                <p className="text-slate-600 text-center py-1">… {corr.all_logs.length - 50} more entries</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -264,7 +297,9 @@ export function OpsView({ refreshTick }) {
                     <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
                       {fmtTs(op.started_at)}
                     </td>
-                    <td className="px-2 py-1.5 text-slate-300 truncate max-w-[160px]">{op.label ?? '—'}</td>
+                    <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>
+                      <span className="line-clamp-2 leading-snug">{op.label ?? '—'}</span>
+                    </td>
                     <td className="px-2 py-1.5"><Badge status={op.status} /></td>
                     <td className="px-2 py-1.5 text-slate-500">
                       {op.total_duration_ms != null ? `${op.total_duration_ms}ms` : '—'}
@@ -279,16 +314,42 @@ export function OpsView({ refreshTick }) {
                   </tr>
                   {detail?.operation?.id === op.id && (
                     <tr key={`${op.id}-detail`} className="bg-slate-900">
-                      <td colSpan={7} className="px-3 py-2">
-                        <div className="text-xs text-slate-400 mb-1 font-semibold">Tool calls ({detail.tool_calls?.length ?? 0})</div>
-                        {detail.tool_calls?.map(tc => (
-                          <div key={tc.id} className="flex gap-3 py-0.5 border-b border-slate-800">
-                            <span className="text-slate-500 w-20 shrink-0">{fmtTs(tc.timestamp)}</span>
-                            <span className="text-blue-300 font-mono w-36 shrink-0 truncate">{tc.tool_name}</span>
-                            <Badge status={tc.status} />
-                            <span className="text-slate-500">{tc.duration_ms}ms</span>
+                      <td colSpan={7} className="px-3 py-3 space-y-3">
+                        {/* Full task text */}
+                        <div>
+                          <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Task</p>
+                          <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-800 rounded px-2 py-1.5">
+                            {detail.operation.label ?? '—'}
+                          </p>
+                        </div>
+
+                        {/* Final answer */}
+                        {detail.operation.final_answer && (
+                          <div>
+                            <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Final Answer</p>
+                            <p className="text-xs text-green-300 leading-relaxed whitespace-pre-wrap bg-slate-800 rounded px-2 py-1.5 max-h-40 overflow-y-auto">
+                              {detail.operation.final_answer}
+                            </p>
                           </div>
-                        ))}
+                        )}
+
+                        {/* Tool calls */}
+                        {detail.tool_calls?.length > 0 && (
+                          <div>
+                            <p className="text-xs text-slate-500 uppercase font-semibold mb-1">
+                              Tool calls ({detail.tool_calls.length})
+                            </p>
+                            {detail.tool_calls.map(tc => (
+                              <div key={tc.id} className="flex gap-3 py-0.5 border-b border-slate-800 text-xs">
+                                <span className="text-slate-500 w-20 shrink-0">{fmtTs(tc.timestamp)}</span>
+                                <span className="text-blue-300 font-mono w-36 shrink-0 truncate">{tc.tool_name}</span>
+                                <Badge status={tc.status} />
+                                <span className="text-slate-500">{tc.duration_ms != null ? `${tc.duration_ms}ms` : '—'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         <CorrelationView operationId={op.id} />
                       </td>
                     </tr>
