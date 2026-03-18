@@ -48,8 +48,18 @@ def checkpoint_save(label: str) -> dict:
             "services": service_list(),
             "kafka": kafka_broker_status(),
         }
+
+        # Primary: store in DB (survives container restarts, accessible cross-replica)
+        try:
+            from mcp_server.tools.skills.storage import get_backend
+            get_backend().save_checkpoint(label, checkpoint)
+        except Exception:
+            pass
+
+        # Secondary: write to file for portability and tail-f debugging
         checkpoint_file = _checkpoint_dir() / f"{label}_{int(time.time())}.json"
         checkpoint_file.write_text(json.dumps(checkpoint, indent=2))
+
         audit_log("checkpoint_save", {"label": label, "file": str(checkpoint_file)})
         return _ok({"label": label, "file": str(checkpoint_file)},
                    f"Checkpoint '{label}' saved")
@@ -60,6 +70,19 @@ def checkpoint_save(label: str) -> dict:
 def checkpoint_restore(label: str) -> dict:
     """Restore to a saved checkpoint state — returns the snapshot for agent use."""
     try:
+        # Try DB first (more reliable in containerized environments)
+        try:
+            from mcp_server.tools.skills.storage import get_backend
+            row = get_backend().load_checkpoint(label)
+            if row:
+                checkpoint = row.get("data", row)
+                audit_log("checkpoint_restore", {"label": label, "source": "db"})
+                return _ok({"label": label, "source": "db", "snapshot": checkpoint},
+                           f"Checkpoint '{label}' loaded — agent must apply rollbacks manually")
+        except Exception:
+            pass
+
+        # Fallback: file system
         cp_dir = _checkpoint_dir()
         matches = sorted(cp_dir.glob(f"{label}_*.json"), reverse=True)
         if not matches:
@@ -76,14 +99,22 @@ def checkpoint_restore(label: str) -> dict:
 def audit_log(action: str, result: Any) -> dict:
     """Structured log of every agent decision."""
     try:
-        entry = {
-            "timestamp": _ts(),
-            "action": action,
-            "result": result,
-        }
-        audit_path = _audit_path()
-        with open(audit_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        # Primary: write to DB (queryable, concurrent-safe with PostgreSQL)
+        try:
+            from mcp_server.tools.skills.storage import get_backend
+            get_backend().append_audit(action, result)
+        except Exception:
+            pass
+
+        # Secondary: append to JSONL file (for tail -f and portability)
+        entry = {"timestamp": _ts(), "action": action, "result": result}
+        try:
+            audit_path = _audit_path()
+            with open(audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception:
+            pass
+
         return _ok({"action": action}, f"Audit entry logged: {action}")
     except Exception as e:
         return _err(f"audit_log error: {e}")
