@@ -400,5 +400,33 @@ def skill_regenerate(name: str, backend: str = "") -> dict:
     return skill_tools.skill_regenerate(mcp, name, backend)
 
 
+# ── Skill v3: Discovery, dispatcher, live validation ─────────────────────────
+
+@mcp.tool()
+def discover_environment(hosts: list) -> dict:
+    """Scan hosts and auto-identify services via deterministic fingerprinting.
+    Each host: {"address": "192.168.1.1"} or {"address": "...", "port": 8006}.
+    Runs 4-phase pipeline: ENUMERATE → IDENTIFY → CATALOG → RECOMMEND.
+    Returns identified services, existing skill coverage, and skill_create recommendations.
+    No LLM calls — pure HTTP probing against known service fingerprints."""
+    return skill_tools.discover_environment(hosts)
+
+
+@mcp.tool()
+def skill_execute(name: str, **kwargs) -> dict:
+    """Execute a dynamic skill by name. Call skill_search() first to discover available skills.
+    Pass skill parameters as keyword arguments matching the skill's parameter schema.
+    Example: skill_execute(name='proxmox_vm_status', node='pve1')"""
+    return skill_tools.skill_execute(name, **kwargs)
+
+
+@mcp.tool()
+def validate_skill_live(name: str) -> dict:
+    """Run 3-layer validation on a skill: deterministic AST checks (Layer 1),
+    live endpoint probing (Layer 2, if api_base available), and LLM critic review
+    (Layer 3, if LM Studio available). Use after skill_create or after service upgrades."""
+    return skill_tools.validate_skill_live(name)
+
+
 if __name__ == "__main__":
     mcp.run()

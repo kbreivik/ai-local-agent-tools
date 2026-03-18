@@ -18,8 +18,10 @@ def build_generation_prompt(
     auth_type: str = "none",
     context_docs: list = None,
     existing_skills: list = None,
+    spec: dict = None,
 ) -> str:
     """Build the full prompt for LLM-based skill generation."""
+    import json as _json
     template = _read_template()
 
     sections = []
@@ -37,6 +39,18 @@ def build_generation_prompt(
     if api_base:
         sections.append(f"- **API Base URL**: {api_base}")
     sections.append(f"- **Auth type**: {auth_type}\n")
+
+    # Section 2b: Validated spec (if provided — replaces guessing endpoints)
+    if spec:
+        sections.append("## Validated SKILL_SPEC (implement this exactly)\n")
+        sections.append(
+            "The following spec was generated AND validated against the live service. "
+            "All endpoints, auth patterns, and response fields are confirmed correct. "
+            "Implement this spec faithfully — do not invent different endpoints or fields.\n"
+        )
+        sections.append("```json")
+        sections.append(_json.dumps(spec, indent=2))
+        sections.append("```\n")
 
     # Section 3: Reference Documentation (optional)
     if context_docs:
@@ -73,6 +87,7 @@ def build_export_document(
     auth_type: str = "none",
     context_docs: list = None,
     existing_skills: list = None,
+    spec: dict = None,
 ) -> str:
     """Build a self-contained export document with instructions and prompt."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -84,6 +99,7 @@ def build_export_document(
         auth_type=auth_type,
         context_docs=context_docs,
         existing_skills=existing_skills,
+        spec=spec,
     )
 
     header = f"# Skill Generation Export — {now}\n"

@@ -192,8 +192,20 @@ def generate_skill(
     auth_type: str = "none",
     context_docs: list = None,
     backend: str = "",
+    skip_spec: bool = False,
 ) -> dict:
-    """Generate a new skill. Dispatches to local, cloud, or export backend."""
+    """Generate a new skill using spec-first flow.
+
+    Flow when api_base is provided:
+      1. LLM generates SKILL_SPEC (structured, no code)
+      2. SKILL_SPEC validated against live service (HTTP probes)
+      3. Code generated from validated spec (near-deterministic)
+
+    Flow when api_base is absent (or skip_spec=True):
+      1. Code generated directly from description + docs
+    """
+    from mcp_server.tools.skills import spec_generator as sg
+
     # Resolve backend
     if not backend:
         cfg = _get_backend_config()
@@ -202,11 +214,47 @@ def generate_skill(
     # Load existing skill names for collision avoidance
     existing_names = [s["name"] for s in registry.list_skills(enabled_only=False)]
 
-    # Fetch context docs from MuninnDB using multi-strategy retrieval
+    # Fetch context docs
     if context_docs is None:
         context_docs = _fetch_relevant_docs(description, category=category, api_base=api_base)
 
-    # Export path — build export document instead of generation prompt
+    validated_spec = None
+    spec_warnings: list = []
+
+    # ── Spec-first flow (when api_base provided and backend is not export) ─────
+    if api_base and not skip_spec and backend != "export":
+        spec_result = sg.generate_spec(
+            description=description,
+            category=category,
+            api_base=api_base,
+            auth_type=auth_type,
+            backend=backend,
+        )
+        if spec_result.get("status") != "ok":
+            log.warning("Spec generation failed (%s) — falling back to direct generation",
+                        spec_result.get("message"))
+        else:
+            spec = spec_result["data"]["spec"]
+            # Validate spec against live service
+            probe_result = sg.validate_spec_live(spec, api_base)
+            probe_data = probe_result.get("data", {})
+            if not probe_data.get("valid"):
+                # Hard stop — don't generate code from a bad spec
+                return _err(
+                    f"Spec validation failed: endpoints not reachable or returned unexpected responses. "
+                    f"Errors: {probe_data.get('errors', [])}. "
+                    f"Fix the api_base, check service connectivity, then retry.",
+                    data={
+                        "spec": spec,
+                        "probe_results": probe_data.get("probe_results", []),
+                        "warnings": probe_data.get("warnings", []),
+                    },
+                )
+            validated_spec = spec
+            spec_warnings = probe_data.get("warnings", [])
+            log.info("Spec validated for '%s' (%d warning(s))", spec.get("name"), len(spec_warnings))
+
+    # ── Export path ───────────────────────────────────────────────────────────
     if backend == "export":
         doc = prompt_builder.build_export_document(
             description=description,
@@ -215,10 +263,11 @@ def generate_skill(
             auth_type=auth_type,
             context_docs=context_docs,
             existing_skills=existing_names,
+            spec=validated_spec,
         )
         return _generate_export(doc, description)
 
-    # Build generation prompt for local/cloud
+    # ── Build generation prompt (with spec if available) ──────────────────────
     prompt = prompt_builder.build_generation_prompt(
         description=description,
         category=category,
@@ -226,6 +275,7 @@ def generate_skill(
         auth_type=auth_type,
         context_docs=context_docs,
         existing_skills=existing_names,
+        spec=validated_spec,
     )
 
     try:
@@ -238,7 +288,7 @@ def generate_skill(
     except Exception as e:
         return _err(f"Generation failed ({backend}): {e}")
 
-    # Validate
+    # Validate generated code
     result = validator.validate_skill_code(code)
     if not result["valid"]:
         return _err(f"Generated code failed validation: {result['error']}", data={"code": code})
@@ -248,4 +298,7 @@ def generate_skill(
         "name": result["name"],
         "meta": result["meta"],
         "backend_used": backend_used,
-    }, f"Skill '{result['name']}' generated via {backend_used}")
+        "spec_used": validated_spec is not None,
+        "spec_warnings": spec_warnings,
+    }, f"Skill '{result['name']}' generated via {backend_used}"
+       + (" (spec-validated)" if validated_spec else ""))
