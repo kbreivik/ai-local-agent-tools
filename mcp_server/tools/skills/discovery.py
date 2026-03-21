@@ -230,11 +230,21 @@ def discover_environment(hosts: list) -> dict:
     unreachable = [r for r in probe_results if not r["reachable"]]
 
     if not reachable:
-        return _err(
-            f"No reachable hosts found out of {len(hosts)} probed. "
-            "Check addresses, firewall rules, or specify explicit ports.",
-            data={"probe_results": probe_results},
-        )
+        return _ok({
+            "summary": {
+                "hosts_probed": len(hosts),
+                "reachable": 0,
+                "unreachable": len(hosts),
+                "identified": 0,
+                "unknown": 0,
+                "with_skills": 0,
+                "without_skills": 0,
+            },
+            "services": [],
+            "unreachable_hosts": [r["address"] for r in probe_results],
+            "unknown_hosts": [],
+            "skill_recommendations": [],
+        }, f"0 services identified — {len(hosts)} host(s) unreachable. Check addresses and firewall rules.")
 
     # Phase 2: IDENTIFY
     log.info("Discovery Phase 2: IDENTIFY — fingerprinting %d host(s)", len(reachable))

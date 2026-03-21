@@ -17,6 +17,27 @@ log = logging.getLogger(__name__)
 # Single dispatcher registry: skill name → callable handler
 _SKILL_HANDLERS: dict = {}
 
+# Known services for auto-seeding the service catalog when starter skills load
+_KNOWN_SERVICES: dict = {
+    "proxmox":       {"display_name": "Proxmox VE",        "service_type": "hypervisor"},
+    "fortigate":     {"display_name": "FortiGate Firewall", "service_type": "firewall"},
+    "fortiswitch":   {"display_name": "FortiSwitch",        "service_type": "switch"},
+    "truenas":       {"display_name": "TrueNAS SCALE",      "service_type": "storage"},
+    "docker":        {"display_name": "Docker Engine",      "service_type": "container_runtime"},
+    "elasticsearch": {"display_name": "Elasticsearch",      "service_type": "search"},
+}
+
+
+def _seed_service(service_id: str) -> None:
+    """Upsert a service into the catalog with known display name / type (no-op if already present)."""
+    known = _KNOWN_SERVICES.get(service_id, {})
+    display_name = known.get("display_name", service_id.replace("_", " ").title())
+    service_type = known.get("service_type", "")
+    try:
+        registry.upsert_service(service_id, display_name, service_type=service_type)
+    except Exception as e:
+        log.debug("Service catalog seed failed for %s: %s", service_id, e)
+
 _MODULES_DIR = os.path.join(os.path.dirname(__file__), "modules")
 _IMPORTS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
@@ -112,6 +133,11 @@ def load_single_skill(mcp_server, name: str) -> dict:
 
         meta = module.SKILL_META
         registry.register_skill(meta, filepath)
+
+        # Seed service catalog from SKILL_META.compat.service
+        service_id = meta.get("compat", {}).get("service", "")
+        if service_id:
+            _seed_service(service_id)
 
         log.info("Loaded skill: %s", name)
         return {"loaded": True, "name": name}

@@ -376,6 +376,13 @@ class PostgresBackend(StorageBackend):
         )
         return {"id": change_id, "resolved": True}
 
+    def update_breaking_change_skills(self, change_id: int, affected_skills: list) -> None:
+        import json as _json
+        self._execute(
+            "UPDATE breaking_changes SET affected_skills = %s WHERE id = %s",
+            (_json.dumps(affected_skills), change_id),
+        )
+
     # ── Compat Log ───────────────────────────────────────────────────────────
 
     def log_compat_check(self, skill_name: str, service_id: str, **kwargs) -> None:

@@ -173,7 +173,7 @@ def check_skill_compatibility(skill_name: str) -> dict:
             try:
                 compat_result = check_compat_fn()
                 if isinstance(compat_result, dict):
-                    compat_data = compat_result.get("data", {})
+                    compat_data = compat_result.get("data") or {}
                     if compat_data.get("compatible") is False:
                         compatible = False
                         warnings.append(compat_result.get("message", "check_compat returned incompatible"))
@@ -576,11 +576,7 @@ def _cross_reference_skills(service_id: str, change_id: int, endpoints: list) ->
                         affected.append(skill_name)
                     break
         if affected:
-            with registry._conn() as conn:
-                conn.execute(
-                    "UPDATE breaking_changes SET affected_skills = ? WHERE id = ?",
-                    (json.dumps(affected), change_id)
-                )
+            registry.update_breaking_change_skills(change_id, affected)
     except Exception as e:
         log.debug("_cross_reference_skills error: %s", e)
 

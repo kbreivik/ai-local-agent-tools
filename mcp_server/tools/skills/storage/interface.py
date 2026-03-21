@@ -71,6 +71,9 @@ class StorageBackend(ABC):
     @abstractmethod
     def resolve_breaking_change(self, change_id: int) -> dict: ...
 
+    @abstractmethod
+    def update_breaking_change_skills(self, change_id: int, affected_skills: list) -> None: ...
+
     # ── Compat Log ───────────────────────────────────────────────────────────
 
     @abstractmethod

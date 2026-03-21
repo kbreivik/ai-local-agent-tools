@@ -315,6 +315,201 @@ def _call_cloud(user_msg: str) -> str:
     return msg.content[0].text
 
 
+def generate_code_from_spec(spec: dict) -> str:
+    """Near-deterministic code generation from a validated SKILL_SPEC.
+
+    Injects spec values into the _template.py structure.
+    Each endpoint → httpx call with correct auth/path/field checks.
+    health_rules → if/elif logic for _ok/_degraded/_err.
+    """
+    import json as _json
+
+    name = spec.get("name", "generated_skill")
+    service = spec.get("service", "")
+    description = spec.get("description", "Generated skill").replace('"', "'")
+    endpoints = spec.get("endpoints", [])
+    parameters = spec.get("parameters", {"type": "object", "properties": {}, "required": []})
+    config_keys = spec.get("config_keys", [])
+    health_rules = spec.get("health_rules", {})
+
+    # Derive primary config key names
+    host_key = next((k for k in config_keys if "HOST" in k or "URL" in k or "BASE" in k), config_keys[0] if config_keys else "SERVICE_HOST")
+    key_key = next((k for k in config_keys if "KEY" in k or "TOKEN" in k or "SECRET" in k or "PASS" in k), "")
+
+    L = []  # output lines
+
+    # ── Module docstring + imports ─────────────────────────────────────────────
+    L += [
+        f'"""{description}"""',
+        "import os",
+        "from datetime import datetime, timezone",
+        "",
+        "import httpx",
+        "",
+        "",
+    ]
+
+    # ── SKILL_META ─────────────────────────────────────────────────────────────
+    L += [
+        "SKILL_META = {",
+        f'    "name": "{name}",',
+        f'    "description": "{description}",',
+        '    "category": "general",',
+        '    "version": "1.0.0",',
+        '    "annotations": {',
+        '        "readOnlyHint": True,',
+        '        "destructiveHint": False,',
+        '        "idempotentHint": True,',
+        '        "openWorldHint": False,',
+        "    },",
+    ]
+
+    # Parameters — indent each line by 4 spaces so it sits inside SKILL_META
+    params_raw = _json.dumps(parameters, indent=4)
+    params_lines = params_raw.splitlines()
+    L.append(f'    "parameters": {params_lines[0]}')
+    for pl in params_lines[1:]:
+        L.append("    " + pl)
+    L[-1] = L[-1].rstrip("}") + "},"  # close with comma
+
+    L += [
+        '    "auth_type": "api_key",',
+        f'    "config_keys": {config_keys!r},',
+    ]
+    if service:
+        L += [
+            '    "compat": {',
+            f'        "service": "{service}",',
+            '        "api_version_built_for": "1.0",',
+            '        "min_version": "",',
+            '        "max_version": "",',
+            '        "version_endpoint": "",',
+            '        "version_field": "",',
+            "    },",
+        ]
+    L.append("}")
+    L.append("")
+    L.append("")
+
+    # ── Response helpers ───────────────────────────────────────────────────────
+    L += [
+        "def _ts() -> str:",
+        "    return datetime.now(timezone.utc).isoformat()",
+        "",
+        "def _ok(data, message='OK') -> dict:",
+        '    return {"status": "ok", "data": data, "timestamp": _ts(), "message": message}',
+        "",
+        "def _err(message, data=None) -> dict:",
+        '    return {"status": "error", "data": data, "timestamp": _ts(), "message": message}',
+        "",
+        "def _degraded(data, message) -> dict:",
+        '    return {"status": "degraded", "data": data, "timestamp": _ts(), "message": message}',
+        "",
+        "",
+    ]
+
+    # ── execute() ─────────────────────────────────────────────────────────────
+    L.append("def execute(**kwargs) -> dict:")
+    L.append(f'    """{description}"""')
+
+    # Param extraction
+    param_props = parameters.get("properties", {})
+    param_required = parameters.get("required", [])
+    for pname, pdef in param_props.items():
+        default = '""' if pdef.get("type") == "string" else "None"
+        L.append(f'    {pname} = kwargs.get("{pname}", {default})')
+    for pname in param_required:
+        L.append(f'    if not {pname}:')
+        L.append(f'        return _err("{pname} is required")')
+
+    # Config retrieval
+    L.append(f'    base_url = os.environ.get("{host_key}", "")')
+    if key_key:
+        L.append(f'    api_key = os.environ.get("{key_key}", "")')
+    else:
+        L.append('    api_key = ""')
+    L.append(f'    if not base_url:')
+    L.append(f'        return _err("{host_key} not set. Configure via Settings or env var.")')
+
+    L.append("    try:")
+
+    # Endpoint blocks
+    for i, ep in enumerate(endpoints):
+        method = ep.get("method", "GET").lower()
+        path = ep.get("path", "/")
+        auth = ep.get("auth", "none")
+        expected_status = ep.get("expected_status", 200)
+        response_fields = ep.get("response_fields", [])
+        rvar = f"r{i}" if i > 0 else "r"
+
+        # Auth setup
+        if auth.startswith("query_param:"):
+            pname = auth.split(":", 1)[1]
+            L.append(f'        params = {{"{pname}": api_key}}')
+            auth_arg = "params=params"
+        elif auth == "bearer":
+            L.append('        headers = {"Authorization": f"Bearer {api_key}"}')
+            auth_arg = "headers=headers"
+        elif auth.startswith("api_key_header:"):
+            hname = auth.split(":", 1)[1]
+            L.append(f'        headers = {{"{hname}": api_key}}')
+            auth_arg = "headers=headers"
+        elif auth == "basic":
+            L.append("        import base64")
+            L.append('        creds = base64.b64encode(api_key.encode()).decode()')
+            L.append('        headers = {"Authorization": f"Basic {creds}"}')
+            auth_arg = "headers=headers"
+        else:
+            L.append("        headers = {}")
+            auth_arg = "headers=headers"
+
+        L.append(f'        {rvar} = httpx.{method}(')
+        L.append(f'            f"{{base_url}}{path}", {auth_arg},')
+        L.append(f'            timeout=10.0, verify=False,')
+        L.append(f'        )')
+        L.append(f'        if {rvar}.status_code != {expected_status}:')
+        L.append(f'            return _err(f"HTTP {{{rvar}.status_code}} from {path}")')
+        L.append(f'        data = {rvar}.json()')
+
+        if response_fields:
+            L.append(f'        missing = [f for f in {response_fields!r} if f not in data]')
+            L.append('        if missing:')
+            L.append("            return _err(f\"Response missing expected fields: {missing}\")")
+        L.append("")
+
+    # Return with health evaluation
+    ok_rule = health_rules.get("ok", "Request succeeded").replace("'", "\\'")
+    degraded_rule = health_rules.get("degraded", "")
+    if degraded_rule:
+        L.append(f"        # ok: {ok_rule}")
+        L.append(f"        # degraded: {degraded_rule}")
+    L.append(f'        return _ok({{"detected_version": ""}}, "{ok_rule}")')
+
+    L.append("    except Exception as e:")
+    L.append(f'        return _err(f"{name} error: {{e}}")')
+    L.append("")
+
+    return "\n".join(L)
+
+
+def export_spec(spec: dict, filepath: str) -> dict:
+    """Save a SKILL_SPEC as a JSON file for review before code generation.
+
+    Returns: {"status": "ok", "data": {"filepath": ..., "name": ...}}
+    """
+    import os
+    os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(spec, f, indent=2)
+        return _ok(
+            {"filepath": filepath, "name": spec.get("name", ""), "spec": spec},
+            f"Spec saved to {filepath}",
+        )
+    except Exception as e:
+        return _err(f"Failed to save spec: {e}")
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Extract a JSON object from LLM output, handling markdown fences."""
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)

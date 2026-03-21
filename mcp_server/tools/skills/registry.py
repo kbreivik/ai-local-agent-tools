@@ -139,6 +139,10 @@ def resolve_breaking_change(change_id: int) -> dict:
     return _db().resolve_breaking_change(change_id)
 
 
+def update_breaking_change_skills(change_id: int, affected_skills: list) -> None:
+    _db().update_breaking_change_skills(change_id, affected_skills)
+
+
 # ── Compat Log ────────────────────────────────────────────────────────────────
 
 def log_compat_check(
