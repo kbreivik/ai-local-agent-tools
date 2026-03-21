@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {}
