@@ -18,9 +18,9 @@ else
 fi
 
 # ── Deploy mode detection ────────────────────────────────────────────────────
-if [ -n "${DOCKER_SWARM_SERVICE_NAME:-}" ]; then
+if [ -n "${DOCKER_SWARM_SERVICE_NAME:-}" ] || docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q "active"; then
     export HP1_DEPLOY_MODE="${HP1_DEPLOY_MODE:-swarm}"
-    echo "[init] Deploy mode: Docker Swarm (service: ${DOCKER_SWARM_SERVICE_NAME})"
+    echo "[init] Deploy mode: Docker Swarm (service: ${DOCKER_SWARM_SERVICE_NAME:-standalone-swarm-node})"
 else
     export HP1_DEPLOY_MODE="${HP1_DEPLOY_MODE:-standalone}"
     echo "[init] Deploy mode: Standalone"
