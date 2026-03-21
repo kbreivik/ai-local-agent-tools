@@ -26,9 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Non-root user with Docker group access.
 # GID 998 is common for docker group on Linux — override with --build-arg DOCKER_GID
 ARG DOCKER_GID=998
-RUN groupadd -g ${DOCKER_GID} dockersock 2>/dev/null || true && \
-    useradd -m -s /bin/bash agent && \
-    usermod -aG dockersock agent 2>/dev/null || true
+RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true && \
+    useradd -m -s /bin/bash -G docker agent
 
 # Install Python wheels from builder (all deps, no pip at runtime)
 COPY --from=builder /wheels /wheels
@@ -53,10 +52,10 @@ COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/healthcheck.sh /healthcheck.sh
 RUN chmod +x /entrypoint.sh /healthcheck.sh
 
-# API port (MCP stdio is internal — no separate port needed)
-EXPOSE 8000
+# Ports: API (8000), GUI (5173), MCP stdio is internal
+EXPOSE 8000 5173
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD /healthcheck.sh
 
 USER agent
