@@ -45,9 +45,8 @@ docker/.env
 tests/
 *.test.py
 
-# Node (GUI is pre-built, node_modules not needed in image)
+# Node (built in gui-builder stage, node_modules not needed in final image)
 gui/node_modules
-gui/src
 gui/.git
 
 # Docs
