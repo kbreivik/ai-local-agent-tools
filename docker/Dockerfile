@@ -1,4 +1,12 @@
-# ── Stage 1: Build ──────────────────────────────────────────────────────────
+# ── Stage 1: Build GUI ──────────────────────────────────────────────────────
+FROM node:20-slim AS gui-builder
+WORKDIR /gui
+COPY gui/package.json gui/package-lock.json ./
+RUN npm ci
+COPY gui/ ./
+RUN npm run build
+
+# ── Stage 2: Build Python wheels ────────────────────────────────────────────
 FROM python:3.13-slim AS builder
 
 WORKDIR /build
@@ -36,6 +44,9 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 # Copy application code
 WORKDIR /app
 COPY . .
+
+# Copy pre-built GUI from gui-builder stage
+COPY --from=gui-builder /gui/dist /app/gui/dist
 
 # Data directories — overlaid by volume mounts at runtime
 RUN mkdir -p \
