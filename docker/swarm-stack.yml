@@ -1,30 +1,109 @@
-version: "3.8"
+# swarm-stack.yml — HP1-AI-Agent Swarm deployment
+# Usage: docker stack deploy -c docker/swarm-stack.yml hp1
+
+version: "3.9"
+
+services:
+  agent:
+    image: ${HP1_IMAGE:-hp1-ai-agent:latest}
+    networks:
+      - agent-net
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+        mode: ingress        # Swarm load-balances across replicas
+      - target: 5173
+        published: 5173
+        protocol: tcp
+        mode: ingress
+
+    volumes:
+      # Shared data volume — must be accessible from all nodes
+      # For multi-node: use NFS, GlusterFS, or a shared mount
+      - agent-data:/app/data
+      - agent-logs:/app/logs
+      - agent-checkpoints:/app/checkpoints
+      - agent-skills:/app/mcp_server/tools/skills/modules
+
+      # Docker socket — each node mounts its own
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    environment:
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      - LM_STUDIO_API_KEY=${LM_STUDIO_API_KEY:-}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-kafka1:9092,kafka2:9092,kafka3:9092}
+      - ELASTIC_URL=${ELASTIC_URL:-}
+      - SKILL_GEN_BACKEND=${SKILL_GEN_BACKEND:-local}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DOCKER_ENGINE_HOST=${DOCKER_ENGINE_HOST:-}
+      - DOCKER_ENGINE_USER=${DOCKER_ENGINE_USER:-root}
+      - DOCKER_ENGINE_SSH_KEY=${DOCKER_ENGINE_SSH_KEY:-/home/agent/.ssh/id_rsa}
+      - PROXMOX_HOST=${PROXMOX_HOST:-}
+      - PROXMOX_USER=${PROXMOX_USER:-root@pam}
+      - PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-}
+      - PROXMOX_TOKEN_SECRET=${PROXMOX_TOKEN_SECRET:-}
+      - FORTIGATE_HOST=${FORTIGATE_HOST:-}
+      - FORTIGATE_API_KEY=${FORTIGATE_API_KEY:-}
+
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: rollback
+        monitor: 60s
+        order: start-first       # New replica starts before old one stops
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+      placement:
+        constraints:
+          - node.role == manager  # Needs Docker socket access for swarm tools
+        preferences:
+          - spread: node.id       # Spread replicas across nodes
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 networks:
   agent-net:
     driver: overlay
     attachable: true
+    # Reuse existing agent-net (Kafka/workload stacks are on it)
+    external: true
 
-services:
-  workload:
-    image: nginx:1.25-alpine
-    networks:
-      - agent-net
-    deploy:
-      replicas: 2
-      restart_policy:
-        condition: on-failure
-      update_config:
-        parallelism: 1
-        delay: 5s
-        failure_action: rollback
-        monitor: 10s
-      rollback_config:
-        parallelism: 1
-        delay: 5s
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+volumes:
+  # For single-manager Swarm: local volumes are fine
+  # For multi-node Swarm: use NFS driver or a shared storage plugin
+  agent-data:
+    name: hp1-agent-data
+  agent-logs:
+    name: hp1-agent-logs
+  agent-checkpoints:
+    name: hp1-agent-checkpoints
+  agent-skills:
+    name: hp1-agent-skills

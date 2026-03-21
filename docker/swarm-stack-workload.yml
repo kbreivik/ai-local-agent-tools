@@ -1,0 +1,30 @@
+version: "3.8"
+
+networks:
+  agent-net:
+    driver: overlay
+    attachable: true
+
+services:
+  workload:
+    image: nginx:1.25-alpine
+    networks:
+      - agent-net
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 5s
+        failure_action: rollback
+        monitor: 10s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
