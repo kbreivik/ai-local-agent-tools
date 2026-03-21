@@ -1,0 +1,59 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist
+build
+.eggs
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+
+# Development
+.env
+.env.*
+!.env.example
+*.log
+logs/
+checkpoints/
+
+# Data (mounted as volumes at runtime)
+data/
+
+# Editor
+.idea
+.vscode
+*.swp
+*.swo
+
+# Docker
+docker/docker-compose*.yml
+docker/*.override.yml
+docker/.env
+
+# Tests
+tests/
+*.test.py
+
+# Node (GUI is pre-built, node_modules not needed in image)
+gui/node_modules
+gui/src
+gui/.git
+
+# Docs
+docs/
+*.md
+!README.md
+
+# Deploy
+deploy/

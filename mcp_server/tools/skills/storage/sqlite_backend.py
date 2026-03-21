@@ -361,6 +361,14 @@ class SqliteBackend(StorageBackend):
         conn.commit()
         return {"id": change_id, "resolved": True}
 
+    def update_breaking_change_skills(self, change_id: int, affected_skills: list) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE breaking_changes SET affected_skills = ? WHERE id = ?",
+            (json.dumps(affected_skills), change_id),
+        )
+        conn.commit()
+
     def _bc_row(self, row: sqlite3.Row) -> dict:
         d = dict(row)
         for k in ("affected_endpoints", "affected_skills"):
