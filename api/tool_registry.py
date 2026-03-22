@@ -6,6 +6,7 @@ makes it appear in the GUI automatically — no changes needed here.
 import ast
 import importlib
 import inspect
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,35 @@ TOOLS_DIR = Path(__file__).parent.parent / "mcp_server" / "tools"
 # Functions that are internal helpers, not public tools
 _SKIP = {"_client", "_ts", "_ok", "_err", "_degraded", "_bootstrap", "_checkpoint_dir",
          "_audit_path", "_assert_not_failed", "_gate"}
+
+
+def _parse_args_section(doc: str) -> dict[str, str]:
+    """Parse Google-style Args: section from a docstring into {param: description}."""
+    result: dict[str, str] = {}
+    in_args = False
+    current_param: str | None = None
+    for line in doc.split("\n"):
+        stripped = line.strip()
+        if stripped == "Args:":
+            in_args = True
+            continue
+        if not in_args:
+            continue
+        # A non-indented non-empty line ending in ':' signals a new section
+        if stripped and not line.startswith("    ") and not line.startswith("\t"):
+            in_args = False
+            continue
+        if not stripped:
+            continue
+        # "param_name: Description text"
+        m = re.match(r"^(\w+):\s*(.+)", stripped)
+        if m:
+            current_param = m.group(1)
+            result[current_param] = m.group(2)
+        elif current_param:
+            # Continuation line — append to current param's description
+            result[current_param] += " " + stripped
+    return result
 
 
 def _ast_param_info(filepath: Path, func_name: str) -> list[dict]:
@@ -80,13 +110,14 @@ def load_registry() -> list[dict]:
                 continue  # skip re-exports
 
             doc = (inspect.getdoc(obj) or "").strip()
+            arg_docs = _parse_args_section(doc)
             raw_params = _ast_param_info(py_file, name)
             params_schema = {
                 "type": "object",
                 "properties": {
                     p["name"]: {
                         "type": _python_type_to_json(p["type"]),
-                        "description": p["name"],
+                        "description": arg_docs.get(p["name"], p["name"]),
                         **({"default": p["default"]} if p["default"] is not None else {}),
                     }
                     for p in raw_params
