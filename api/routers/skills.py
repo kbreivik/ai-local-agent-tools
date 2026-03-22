@@ -12,32 +12,45 @@ def list_skills(
     include_disabled: bool = Query(False),
 ):
     """Return all registered skills, optionally filtered by category."""
-    result = invoke_tool("skill_list", {
-        "category": category,
-        "enabled_only": not include_disabled,
-    })
-    skills = result.get("data", {}).get("skills", [])
-    return {"skills": skills, "count": len(skills)}
+    try:
+        result = invoke_tool("skill_list", {
+            "category": category,
+            "enabled_only": not include_disabled,
+        })
+        skills = result.get("data", {}).get("skills", [])
+        return {"skills": skills, "count": len(skills)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @router.post("/{skill_name}/execute")
 def execute_skill(skill_name: str, params: dict = {}):
     """Execute a skill by name. Params are passed as keyword arguments."""
-    listed = invoke_tool("skill_list", {"category": "", "enabled_only": False})
-    names = {s["name"] for s in listed.get("data", {}).get("skills", [])}
-    if skill_name not in names:
-        raise HTTPException(404, f"Skill '{skill_name}' not found")
+    try:
+        check = invoke_tool("skill_info", {"name": skill_name})
+        if check.get("status") != "ok":
+            raise HTTPException(404, f"Skill '{skill_name}' not found")
 
-    kwargs_json = json.dumps(params) if params else ""
-    result = invoke_tool("skill_execute", {"name": skill_name, "kwargs_json": kwargs_json})
-    return result
+        kwargs_json = json.dumps(params) if params else ""
+        result = invoke_tool("skill_execute", {"name": skill_name, "kwargs_json": kwargs_json})
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @router.get("/{skill_name}")
 def get_skill(skill_name: str):
     """Return metadata for a single skill."""
-    listed = invoke_tool("skill_list", {"category": "", "enabled_only": False})
-    skills = {s["name"]: s for s in listed.get("data", {}).get("skills", [])}
-    if skill_name not in skills:
-        raise HTTPException(404, f"Skill '{skill_name}' not found")
-    return skills[skill_name]
+    try:
+        result = invoke_tool("skill_info", {"name": skill_name})
+        if result.get("status") != "ok":
+            raise HTTPException(404, f"Skill '{skill_name}' not found")
+        return result.get("data", {})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
