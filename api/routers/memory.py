@@ -25,16 +25,13 @@ class StoreRequest(BaseModel):
 async def memory_health():
     """Check if MuninnDB is reachable."""
     client = get_client()
-    ok = await client.health()
-    total_engrams = 0
-    if ok:
-        engrams = await client.recent(limit=9999)
-        total_engrams = len(engrams)
+    total = await client.count()
+    ok = total is not None
     return {
         "status": "ok" if ok else "unconfigured",
         "reachable": ok,
         "url": client._base,
-        "total_engrams": total_engrams,
+        "total_engrams": total or 0,
     }
 
 
