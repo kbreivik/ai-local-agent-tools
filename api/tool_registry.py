@@ -17,6 +17,12 @@ TOOLS_DIR = Path(__file__).parent.parent / "mcp_server" / "tools"
 _SKIP = {"_client", "_ts", "_ok", "_err", "_degraded", "_bootstrap", "_checkpoint_dir",
          "_audit_path", "_assert_not_failed", "_gate"}
 
+# Map module filename → display category name
+_CATEGORY_MAP = {
+    "skill_meta_tools": "skills",
+    "docker_engine":    "docker",
+}
+
 
 def _parse_args_section(doc: str) -> dict[str, str]:
     """Parse Google-style Args: section from a docstring into {param: description}."""
@@ -130,7 +136,7 @@ def load_registry() -> list[dict]:
                 "description": doc,
                 "params": raw_params,
                 "schema": params_schema,
-                "category": py_file.stem,
+                "category": _CATEGORY_MAP.get(py_file.stem, py_file.stem),
             })
 
     return registry
