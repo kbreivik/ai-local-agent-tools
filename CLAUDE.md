@@ -67,7 +67,7 @@ ai-local-agent-tools/
 - **Return format**: `{"status": "ok"|"error"|"degraded", "data": ..., "timestamp": ..., "message": ...}`
 - **Helpers**: every module uses `_ts()`, `_ok()`, `_err()`, `_degraded()`
 - **Config**: env vars with `agent_settings.json` fallback
-- **Never** run `git push` — human does this
+- **Always** run `git push` after every commit
 - **Never** hardcode IPs, passwords, or API keys
 - **Never** add `async` to tool functions or skill execute()
 - **Never** import dangerous modules in skills (subprocess, os.system, eval, exec)
@@ -223,7 +223,7 @@ curl -s http://localhost:8000/api/health | python3 -m json.tool
 git add -A
 git diff --cached --stat
 git commit -m "<type>(<scope>): <message>"
-# DO NOT run git push — human does this
+# Always run git push after every commit
 ```
 
 ## Known Issues
