@@ -64,15 +64,20 @@ def validate_skill_live(name: str) -> dict:
 
 def skill_create(
     description: str,
-    category: str = "general",
-    api_base: str = "",
-    auth_type: str = "none",
-    backend: str = "",
+    service: str = "",
+    backend: str = "local",
 ) -> dict:
-    """Generate a new skill. Call skill_search FIRST to avoid duplicates.
-    backend: 'local' (LM Studio), 'cloud' (Anthropic API), 'export' (airgapped prompt file).
-    Describe the service, API endpoint, and what data to return."""
-    return _mt.skill_create(None, description, category, api_base, auth_type, backend)
+    """Generate and load a new skill from a description. Call skill_search FIRST to avoid duplicates.
+
+    Args:
+        description: What the skill should do. Include the service name, API/protocol type,
+            authentication method, and what data to return.
+            Example: 'Check Proxmox VM status via REST API using token auth'.
+        service: Skill category hint. One of: monitoring, networking, storage, compute, general.
+        backend: Generation backend. 'local' uses LM Studio, 'cloud' uses Anthropic API,
+            'export' writes a prompt file for airgapped environments.
+    """
+    return _mt.skill_create(None, description, category=service or "general", backend=backend)
 
 
 def skill_disable(name: str) -> dict:
