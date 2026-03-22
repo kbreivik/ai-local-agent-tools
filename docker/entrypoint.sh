@@ -5,16 +5,18 @@ echo "╔═══════════════════════�
 echo "║  HP1-AI-Agent — Starting                                ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 
-# ── Docker socket detection ──────────────────────────────────────────────────
-if [ -S /var/run/docker.sock ]; then
+# ── Docker connectivity ───────────────────────────────────────────────────────
+if echo "${DOCKER_HOST:-}" | grep -q "^tcp://"; then
+    echo "[init] Docker: TCP remote → ${DOCKER_HOST}"
+elif [ -S /var/run/docker.sock ]; then
     export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
     echo "[init] Docker socket: /var/run/docker.sock"
 elif [ -e /var/run/docker.sock.raw ]; then
     export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock.raw}"
     echo "[init] Docker socket: raw socket (Docker Desktop)"
 else
-    echo "[init] WARNING: No Docker socket found — Swarm/Docker tools will be unavailable"
-    echo "[init]   Mount with: -v /var/run/docker.sock:/var/run/docker.sock"
+    echo "[init] WARNING: DOCKER_HOST not set and no socket found — Swarm/Docker tools unavailable"
+    echo "[init]   Set DOCKER_HOST=tcp://<manager>:2375 or mount the Docker socket"
 fi
 
 # ── Deploy mode detection ────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ print('[init] Skills database initialized')
 echo ""
 echo "[init] Configuration:"
 echo "  API:       http://${API_HOST}:${API_PORT}"
+echo "  Docker:    ${DOCKER_HOST:-not configured}"
 echo "  LLM:       ${LM_STUDIO_BASE_URL}"
 echo "  Kafka:     ${KAFKA_BOOTSTRAP_SERVERS}"
 echo "  Elastic:   ${ELASTIC_URL:-not configured}"

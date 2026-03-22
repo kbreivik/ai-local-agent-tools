@@ -97,8 +97,14 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # agent-01 is not in the Swarm — manage manager-01 via Docker TCP API.
+      # Override here so it applies even if not set in .env.
+      # Port 2375 = plain TCP (ensure dockerd on manager-01 has -H tcp://0.0.0.0:2375).
+      - DOCKER_HOST=${DOCKER_HOST:-tcp://192.168.199.21:2375}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Socket mount removed — agent uses DOCKER_HOST TCP to reach manager-01.
+      # Re-add '- /var/run/docker.sock:/var/run/docker.sock:ro' if reverting to local mode.
       - agent-data:/app/data
       - agent-logs:/app/logs
     depends_on:
