@@ -1,5 +1,3 @@
-version: "3.8"
-
 # HP1 AI Agent — local services
 # Start with: docker compose -f docker/docker-compose.yml up -d
 
