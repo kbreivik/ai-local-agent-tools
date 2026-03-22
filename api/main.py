@@ -106,12 +106,18 @@ def _get_host_ips() -> dict:
             and not ip.startswith('172.')
             and not ip.startswith('169.')
         ]
+        # Fallback: inside Docker the container only has a 172.x bridge IP.
+        # AGENT_HOST lets the operator advertise the real host LAN address.
+        if not lan_ips:
+            agent_host = os.environ.get("AGENT_HOST", "")
+            if agent_host:
+                lan_ips = [agent_host]
         return {
             "hostname": hostname,
             "lan_ips":  lan_ips,
             "all_ips":  all_ips,
             "api_url":  f"http://{lan_ips[0]}:8000" if lan_ips else None,
-            "gui_url":  f"http://{lan_ips[0]}:5173" if lan_ips else None,
+            "gui_url":  f"http://{lan_ips[0]}:8000" if lan_ips else None,
         }
     except Exception:
         return {"hostname": "unknown", "lan_ips": [], "all_ips": []}

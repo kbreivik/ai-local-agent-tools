@@ -11,7 +11,8 @@ from openai import OpenAI
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from mcp_server.tools import swarm, kafka, orchestration
+from mcp_server.tools import orchestration
+from api.tool_registry import get_registry, invoke_tool
 
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "lmstudio-community/qwen3-coder-30b-a3b-instruct")
@@ -48,54 +49,25 @@ EFFICIENCY RULES:
 Your task: Perform a rolling upgrade of the 'workload' service from nginx:1.25-alpine to
 nginx:1.26-alpine while Kafka is under load, with health gates at every step.
 
-Available tools: swarm_status, service_list, service_health, service_upgrade,
-service_rollback, service_current_version, node_drain, pre_upgrade_check,
-kafka_broker_status, kafka_consumer_lag, kafka_topic_health, kafka_rolling_restart_safe,
-pre_kafka_check, checkpoint_save, checkpoint_restore, audit_log, escalate.
-
 Think step by step. Log reasoning. Never skip verifications."""
 
-TOOLS = [
-    {"type": "function", "function": {"name": "swarm_status", "description": "Node health, manager/worker state", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "service_list", "description": "All services, replicas, image versions", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "service_health", "description": "Specific service ready/degraded/failed state", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
-    {"type": "function", "function": {"name": "service_upgrade", "description": "Rolling upgrade with health gate", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "image": {"type": "string"}}, "required": ["name", "image"]}}},
-    {"type": "function", "function": {"name": "service_rollback", "description": "Revert service to previous image", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
-    {"type": "function", "function": {"name": "service_current_version", "description": "Currently running image tag for a service — call before deciding to upgrade", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
-    {"type": "function", "function": {"name": "service_resolve_image", "description": "Resolve latest stable semver tag for an image from Docker Hub — use before upgrade to avoid intermediate versions", "parameters": {"type": "object", "properties": {"image": {"type": "string"}}, "required": ["image"]}}},
-    {"type": "function", "function": {"name": "node_drain", "description": "Safe drain before maintenance", "parameters": {"type": "object", "properties": {"node_id": {"type": "string"}}, "required": ["node_id"]}}},
-    {"type": "function", "function": {"name": "pre_upgrade_check", "description": "Full swarm readiness gate", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "kafka_broker_status", "description": "Broker health, leader election state", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "kafka_consumer_lag", "description": "Lag per topic/partition", "parameters": {"type": "object", "properties": {"group": {"type": "string"}}, "required": ["group"]}}},
-    {"type": "function", "function": {"name": "kafka_topic_health", "description": "Partition count, replication, under-replicated", "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}}},
-    {"type": "function", "function": {"name": "kafka_rolling_restart_safe", "description": "Checks ISR before each broker restart", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "pre_kafka_check", "description": "Full Kafka readiness gate", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "checkpoint_save", "description": "Snapshot state before risky ops", "parameters": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}}},
-    {"type": "function", "function": {"name": "checkpoint_restore", "description": "Rollback to saved state", "parameters": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}}},
-    {"type": "function", "function": {"name": "audit_log", "description": "Structured log of every decision", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "result": {"type": "string"}}, "required": ["action", "result"]}}},
-    {"type": "function", "function": {"name": "escalate", "description": "Flag decision as high-risk, log and pause", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}},
-]
 
-TOOL_MAP = {
-    "swarm_status": lambda args: swarm.swarm_status(),
-    "service_list": lambda args: swarm.service_list(),
-    "service_health": lambda args: swarm.service_health(args["name"]),
-    "service_upgrade": lambda args: swarm.service_upgrade(args["name"], args["image"]),
-    "service_rollback": lambda args: swarm.service_rollback(args["name"]),
-    "service_current_version": lambda args: swarm.service_current_version(args["name"]),
-    "service_resolve_image": lambda args: swarm.service_resolve_image(args["image"]),
-    "node_drain": lambda args: swarm.node_drain(args["node_id"]),
-    "pre_upgrade_check": lambda args: swarm.pre_upgrade_check(),
-    "kafka_broker_status": lambda args: kafka.kafka_broker_status(),
-    "kafka_consumer_lag": lambda args: kafka.kafka_consumer_lag(args["group"]),
-    "kafka_topic_health": lambda args: kafka.kafka_topic_health(args["topic"]),
-    "kafka_rolling_restart_safe": lambda args: kafka.kafka_rolling_restart_safe(),
-    "pre_kafka_check": lambda args: kafka.pre_kafka_check(),
-    "checkpoint_save": lambda args: orchestration.checkpoint_save(args["label"]),
-    "checkpoint_restore": lambda args: orchestration.checkpoint_restore(args["label"]),
-    "audit_log": lambda args: orchestration.audit_log(args["action"], args["result"]),
-    "escalate": lambda args: orchestration.escalate(args["reason"]),
-}
+def _build_tools_spec() -> list:
+    """Build LLM tool manifest from the registry — includes all tools automatically."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["schema"],
+            },
+        }
+        for t in get_registry()
+    ]
+
+
+TOOLS = _build_tools_spec()
 
 
 def _ts() -> str:
@@ -103,14 +75,12 @@ def _ts() -> str:
 
 
 def dispatch_tool(name: str, args: dict) -> str:
-    fn = TOOL_MAP.get(name)
-    if not fn:
+    try:
+        result = invoke_tool(name, args)
+    except ValueError:
         result = {"status": "error", "message": f"Unknown tool: {name}", "timestamp": _ts()}
-    else:
-        try:
-            result = fn(args)
-        except Exception as e:
-            result = {"status": "error", "message": str(e), "timestamp": _ts()}
+    except Exception as e:
+        result = {"status": "error", "message": str(e), "timestamp": _ts()}
     # Auto audit-log every tool call (except audit_log itself to avoid recursion)
     if name != "audit_log":
         orchestration.audit_log(f"tool:{name}", {"args": args, "result_status": result.get("status")})
