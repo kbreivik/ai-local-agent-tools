@@ -21,12 +21,13 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
+import SkillsPanel from './components/SkillsPanel'
 // Dev-only layout test harness — renders as overlay at ?test=layout
 const _showLayoutTest = import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('test') === 'layout'
 const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
-const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Logs', 'Memory', 'Ingest', 'Output', 'Tests']
+const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Skills', 'Logs', 'Memory', 'Ingest', 'Output', 'Tests']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
@@ -370,6 +371,12 @@ function AppShell() {
             // Single CommandPanel instance at full width — mode="tab"
             <div className="flex flex-col flex-1 overflow-hidden min-h-0">
               <CommandPanel mode="tab" />
+            </div>
+          )}
+
+          {activeTab === 'Skills' && (
+            <div className="flex-1 overflow-hidden">
+              <SkillsPanel />
             </div>
           )}
 
