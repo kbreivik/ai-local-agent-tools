@@ -206,6 +206,10 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     client = OpenAI(base_url=base_url, api_key=api_key)
     all_tools_spec = _build_tools_spec()
     tools_spec = filter_tools(all_tools_spec, agent_type)
+    log.info(
+        "Agent=%s filtered manifest: %d tools — %s",
+        agent_type, len(tools_spec), [t["function"]["name"] for t in tools_spec],
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
