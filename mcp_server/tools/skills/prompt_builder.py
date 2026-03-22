@@ -40,6 +40,26 @@ def build_generation_prompt(
         sections.append(f"- **API Base URL**: {api_base}")
     sections.append(f"- **Auth type**: {auth_type}\n")
 
+    # Section 2a: Service-specific auth patterns
+    _desc_lower = description.lower()
+    _svc_lower = (category or "").lower()
+    if "proxmox" in _desc_lower or "proxmox" in _svc_lower:
+        sections.append("## Proxmox Auth Pattern (mandatory)\n")
+        sections.append(
+            "PROXMOX_TOKEN_ID env var has format 'user@realm!tokenname' — you MUST split on '!' "
+            "to separate user from token_name before calling ProxmoxAPI().\n"
+        )
+        sections.append("```python")
+        sections.append("token_id = os.environ.get(\"PROXMOX_TOKEN_ID\", \"\")")
+        sections.append("if \"!\" in token_id:")
+        sections.append("    user, token_name = token_id.split(\"!\", 1)")
+        sections.append("else:")
+        sections.append("    user = os.environ.get(\"PROXMOX_USER\", \"root@pam\")")
+        sections.append("    token_name = token_id")
+        sections.append("prox = ProxmoxAPI(host, user=user, token_name=token_name,")
+        sections.append("                  token_value=secret, verify_ssl=False)")
+        sections.append("```\n")
+
     # Section 2b: Validated spec (if provided — replaces guessing endpoints)
     if spec:
         sections.append("## Validated SKILL_SPEC (implement this exactly)\n")

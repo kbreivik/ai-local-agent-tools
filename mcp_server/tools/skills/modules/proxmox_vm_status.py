@@ -96,10 +96,17 @@ try:
             return _err("PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET not set. Configure via Settings or env var.")
 
         try:
+            # PROXMOX_TOKEN_ID format is 'user@realm!tokenname' — split on '!'
+            token_id = cfg["token_id"]
+            if "!" in token_id:
+                user, token_name = token_id.split("!", 1)
+            else:
+                user = cfg["user"]
+                token_name = token_id
             prox = ProxmoxAPI(
                 cfg["host"],
-                user=cfg["user"],
-                token_name=cfg["token_id"],
+                user=user,
+                token_name=token_name,
                 token_value=cfg["token_secret"],
                 verify_ssl=False,
             )
@@ -154,8 +161,14 @@ def check_compat(**kwargs) -> dict:
         return _err("PROXMOX_HOST not configured")
     try:
         from proxmoxer import ProxmoxAPI
-        prox = ProxmoxAPI(cfg["host"], user=cfg["user"],
-                         token_name=cfg["token_id"], token_value=cfg["token_secret"],
+        token_id = cfg["token_id"]
+        if "!" in token_id:
+            user, token_name = token_id.split("!", 1)
+        else:
+            user = cfg["user"]
+            token_name = token_id
+        prox = ProxmoxAPI(cfg["host"], user=user,
+                         token_name=token_name, token_value=cfg["token_secret"],
                          verify_ssl=False)
         ver_data = prox.version.get()
         version = ver_data.get("version", "")
