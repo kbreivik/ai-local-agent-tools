@@ -46,6 +46,24 @@ export async function invokeTool(toolName, params = {}) {
   return r.json()
 }
 
+// ── Skills ────────────────────────────────────────────────────────────────────
+
+export async function fetchSkills(category = '') {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : ''
+  const r = await fetch(`${BASE}/api/skills${qs}`, { headers: { ...authHeaders() } })
+  const d = await r.json()
+  return d.skills ?? []
+}
+
+export async function executeSkill(skillName, params = {}) {
+  const r = await fetch(`${BASE}/api/skills/${encodeURIComponent(skillName)}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(params),
+  })
+  return r.json()
+}
+
 export async function runAgent(task, sessionId = '') {
   const r = await fetch(`${BASE}/api/agent/run`, {
     method: 'POST',
