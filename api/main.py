@@ -24,6 +24,7 @@ from api.routers.auth import router as auth_router
 from api.routers.lock import router as lock_router
 from api.routers.ansible import router as ansible_router
 from api.routers.ingest import router as ingest_router
+from api.routers.skills import router as skills_router
 from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
@@ -105,6 +106,7 @@ app.include_router(feedback_router.router)
 app.include_router(lock_router)
 app.include_router(ansible_router)
 app.include_router(ingest_router)
+app.include_router(skills_router)
 
 
 def _get_host_ips() -> dict:
