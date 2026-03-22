@@ -43,6 +43,9 @@ STATUS_AGENT_TOOLS = frozenset({
     "get_host_network",
     "docker_engine_version", "docker_engine_check_update",
     "check_internet_connectivity",
+    # Skill system — read-only
+    "skill_search", "skill_list", "skill_info", "skill_health_summary",
+    "skill_generation_config", "storage_health",
 })
 
 # Research agent — read-only + elastic search + correlation + ingestion
@@ -56,6 +59,10 @@ RESEARCH_AGENT_TOOLS = frozenset({
     "get_host_network",
     "docker_engine_version", "docker_engine_check_update",
     "ingest_url", "ingest_pdf", "check_internet_connectivity",
+    # Skill system — read-only + compat research
+    "skill_search", "skill_list", "skill_info", "skill_health_summary",
+    "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
+    "skill_recommend_updates", "service_catalog_list", "storage_health",
 })
 
 # Action agent — all tools including destructive ones
