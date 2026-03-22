@@ -151,23 +151,30 @@ def dispatch_skill(name: str, **kwargs) -> dict:
     """Execute a loaded skill by name. Called by the skill_execute MCP tool."""
     handler = _SKILL_HANDLERS.get(name)
     if not handler:
-        # Check if skill exists but wasn't loaded
+        # Skill not in memory — check DB for state and try lazy load from disk
         skill = registry.get_skill(name)
-        if skill and not skill.get("enabled", True):
+        if skill:
+            if not skill.get("enabled", True):
+                return {
+                    "status": "error", "data": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": f"Skill '{name}' is disabled. Use skill_enable('{name}') to re-enable.",
+                }
+            # Skill is enabled in DB but not in memory — try lazy load from modules/
+            load_result = load_single_skill(None, name)
+            if load_result.get("loaded"):
+                log.info("Lazy-loaded skill '%s' on first execute", name)
+                handler = _SKILL_HANDLERS.get(name)
+        if not handler:
             return {
                 "status": "error", "data": None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "message": f"Skill '{name}' is disabled. Use skill_enable('{name}') to re-enable.",
+                "message": (
+                    f"Skill '{name}' not found. "
+                    "Use skill_search() to discover available skills, "
+                    "or skill_create() to generate a new one."
+                ),
             }
-        return {
-            "status": "error", "data": None,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "message": (
-                f"Skill '{name}' not found. "
-                "Use skill_search() to discover available skills, "
-                "or skill_create() to generate a new one."
-            ),
-        }
     return handler(**kwargs)
 
 
