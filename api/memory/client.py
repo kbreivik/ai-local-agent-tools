@@ -115,14 +115,20 @@ class MuninnClient:
             log.debug("MuninnDB delete failed: %s", e)
             return False
 
-    async def health(self) -> bool:
-        """Return True if MuninnDB REST API is reachable."""
+    async def count(self) -> int | None:
+        """Return total engram count, or None if unreachable."""
         try:
             http = await self._get_http()
             resp = await http.get("/api/engrams", params={"limit": 1})
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                return resp.json().get("total", 0)
+            return None
         except Exception:
-            return False
+            return None
+
+    async def health(self) -> bool:
+        """Return True if MuninnDB REST API is reachable."""
+        return await self.count() is not None
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────────
