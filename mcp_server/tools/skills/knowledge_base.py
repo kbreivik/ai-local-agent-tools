@@ -388,7 +388,7 @@ def parse_changelog_for_breaking_changes(
                 ],
             },
             headers={"Authorization": f"Bearer {cfg.get('api_key', 'lm-studio')}"},
-            timeout=120.0,
+            timeout=240.0,
         )
         resp.raise_for_status()
         raw = resp.json()["choices"][0]["message"]["content"].strip()
