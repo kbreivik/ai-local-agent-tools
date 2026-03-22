@@ -10,6 +10,8 @@ networks:
 volumes:
   hp1_pgdata:
   hp1_pgadmin:
+  muninndb-data:
+    external: true
 
 services:
   postgres:
@@ -54,3 +56,32 @@ services:
         condition: service_healthy
     profiles:
       - pgadmin
+
+  muninndb:
+    image: ghcr.io/scrypster/muninndb:latest
+    container_name: muninndb
+    restart: unless-stopped
+    networks:
+      - agent-net
+    volumes:
+      - muninndb-data:/data
+    environment:
+      MUNINNDB_DATA: /data
+    entrypoint: ["sh", "-c"]
+    command: ["muninndb-server --daemon --data /data && tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf 'http://127.0.0.1:8475/api/engrams?q=ping' > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  muninndb-proxy:
+    image: alpine/socat:latest
+    container_name: muninndb-proxy
+    network_mode: "service:muninndb"
+    command: TCP-LISTEN:9475,bind=0.0.0.0,reuseaddr,fork TCP:127.0.0.1:8475
+    depends_on:
+      muninndb:
+        condition: service_healthy
+    restart: unless-stopped
