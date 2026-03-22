@@ -32,8 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Non-root user with Docker group access.
-# GID 998 is common for docker group on Linux — override with --build-arg DOCKER_GID
-ARG DOCKER_GID=998
+# GID 994 matches the docker group on agent-01 — override with --build-arg DOCKER_GID
+ARG DOCKER_GID=994
 RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true && \
     useradd -m -s /bin/bash -G docker agent
 
