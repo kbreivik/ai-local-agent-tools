@@ -111,12 +111,13 @@ def _generate_local(prompt: str) -> str:
         json={
             "model": model,
             "temperature": 0.2,
+            "max_tokens": 2000,
             "messages": [
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": "Generate the skill now. Output only Python code."},
             ],
         },
-        timeout=120.0,
+        timeout=300.0,
     )
     r.raise_for_status()
     text = r.json()["choices"][0]["message"]["content"]
