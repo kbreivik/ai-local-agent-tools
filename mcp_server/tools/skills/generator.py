@@ -71,18 +71,19 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def _fetch_relevant_docs(description: str, category: str = "general", api_base: str = "") -> str:
+def _fetch_relevant_docs(description: str, category: str = "general", api_base: str = "") -> list:
     """
     Fetch documentation context for skill generation using multi-strategy MuninnDB retrieval.
-    Returns a formatted string ready for injection into the generation prompt.
+    Returns a list with a single formatted string, ready for build_generation_prompt(context_docs=).
     Falls back gracefully if MuninnDB is unavailable.
     """
     try:
         result = fetch_relevant_docs(description, category=category, api_base=api_base, token_budget=3000)
-        return format_docs_for_prompt(result)
+        formatted = format_docs_for_prompt(result)
+        return [formatted] if formatted else []
     except Exception as e:
         log.debug("doc_retrieval failed: %s", e)
-        return ""
+        return []
 
 
 def _generate_local(prompt: str) -> str:
@@ -215,9 +216,11 @@ def generate_skill(
     # Load existing skill names for collision avoidance
     existing_names = [s["name"] for s in registry.list_skills(enabled_only=False)]
 
-    # Fetch context docs
+    # Fetch context docs — must be a list for build_generation_prompt
     if context_docs is None:
         context_docs = _fetch_relevant_docs(description, category=category, api_base=api_base)
+    elif isinstance(context_docs, str):
+        context_docs = [context_docs] if context_docs else []
 
     validated_spec = None
     spec_warnings: list = []
