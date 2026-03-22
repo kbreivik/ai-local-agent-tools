@@ -50,6 +50,8 @@ DESTRUCTIVE_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "checkpoint_restore", "kafka_rolling_restart_safe",
     "docker_engine_update",
+    # Skill write-tools — modify persistent state (modules on disk + DB)
+    "skill_create", "skill_regenerate", "skill_disable", "skill_enable", "skill_import",
 })
 
 # Per-session cancellation flags — set by POST /api/agent/stop
