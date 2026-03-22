@@ -1,12 +1,14 @@
 """Agent loop: connects to LM Studio and drives tool calls with checks/balances."""
 import json
+import logging
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from openai import OpenAI
+
+log = logging.getLogger(__name__)
 
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -53,8 +55,11 @@ Think step by step. Log reasoning. Never skip verifications."""
 
 
 def _build_tools_spec() -> list:
-    """Build LLM tool manifest from the registry — includes all tools automatically."""
-    return [
+    """Build LLM tool manifest from the registry — includes all tools automatically.
+
+    Called per-run (not at module level) so the registry is always fully populated.
+    """
+    spec = [
         {
             "type": "function",
             "function": {
@@ -63,11 +68,10 @@ def _build_tools_spec() -> list:
                 "parameters": t["schema"],
             },
         }
-        for t in get_registry()
+        for t in get_registry(refresh=True)
     ]
-
-
-TOOLS = _build_tools_spec()
+    log.info("Tool manifest: %d tools — %s", len(spec), [t["function"]["name"] for t in spec])
+    return spec
 
 
 def _ts() -> str:
@@ -98,10 +102,13 @@ def run_agent(user_task: str | None = None):
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_task or "Begin the rolling upgrade task now."},
     ]
+    # Build tools per-run so the registry is fully populated (not at module import time)
+    tools = _build_tools_spec()
     orchestration.audit_log("agent_start", {"task": user_task or "rolling_upgrade", "model": LM_STUDIO_MODEL})
     print(f"\n=== Agent Loop Started @ {_ts()} ===")
     print(f"Model: {LM_STUDIO_MODEL}")
-    print(f"LM Studio: {LM_STUDIO_BASE_URL}\n")
+    print(f"LM Studio: {LM_STUDIO_BASE_URL}")
+    print(f"Tools: {len(tools)}\n")
 
     step = 0
     max_steps = 40
@@ -111,7 +118,7 @@ def run_agent(user_task: str | None = None):
         response = client.chat.completions.create(
             model=LM_STUDIO_MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=tools,
             tool_choice="auto",
             temperature=0.1,
             max_tokens=2048,
