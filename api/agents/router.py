@@ -219,7 +219,7 @@ Example: task = "upgrade workload service to nginx:1.27-alpine"
 Example: task = "create a skill to check Proxmox VM status"
   → call skill_search(query="proxmox vm status") to check for existing skills
   → call plan_action(summary="Generate proxmox_vm_status skill", steps=["generate skill code", "validate", "load"], risk_level="low", reversible=True)
-  → wait for approval before calling skill_create(description="Check Proxmox VM status", category="monitoring")
+  → wait for approval before calling skill_create(skill_description="Check Proxmox VM status via API", service="monitoring")
 
 NEVER call a destructive tool without plan_action returning approved=True first. No exceptions.
 

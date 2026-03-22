@@ -63,21 +63,21 @@ def validate_skill_live(name: str) -> dict:
 # ── Mutating skill tools ──────────────────────────────────────────────────────
 
 def skill_create(
-    description: str,
+    skill_description: str,
     service: str = "",
     backend: str = "local",
 ) -> dict:
     """Generate and load a new skill from a description. Call skill_search FIRST to avoid duplicates.
 
     Args:
-        description: What the skill should do. Include the service name, API/protocol type,
+        skill_description: What the skill should do. Include the service name, API/protocol type,
             authentication method, and what data to return.
             Example: 'Check Proxmox VM status via REST API using token auth'.
         service: Skill category hint. One of: monitoring, networking, storage, compute, general.
         backend: Generation backend. 'local' uses LM Studio, 'cloud' uses Anthropic API,
             'export' writes a prompt file for airgapped environments.
     """
-    return _mt.skill_create(None, description, category=service or "general", backend=backend)
+    return _mt.skill_create(None, skill_description, category=service or "general", backend=backend)
 
 
 def skill_disable(name: str) -> dict:
@@ -96,13 +96,16 @@ def skill_import() -> dict:
 
 
 def skill_export_prompt(
-    description: str,
+    skill_description: str,
     category: str = "general",
-    api_base: str = "",
-    auth_type: str = "none",
 ) -> dict:
-    """Save a self-contained skill generation prompt to data/skill_exports/ for airgapped use."""
-    return _mt.skill_export_prompt(description, category, api_base, auth_type)
+    """Save a self-contained skill generation prompt to data/skill_exports/ for airgapped use.
+
+    Args:
+        skill_description: What the skill should do (same format as skill_create).
+        category: Skill category. One of: monitoring, networking, storage, compute, general.
+    """
+    return _mt.skill_export_prompt(skill_description, category)
 
 
 def skill_regenerate(name: str, backend: str = "") -> dict:
@@ -144,10 +147,20 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
 
 # ── Discovery + execution ─────────────────────────────────────────────────────
 
-def discover_environment(hosts: list) -> dict:
+def discover_environment(hosts_json: str) -> dict:
     """Scan hosts and auto-identify services via deterministic fingerprinting.
-    Each host: {"address": "192.168.1.1"} or {"address": "...", "port": 8006}.
-    Returns identified services, skill coverage gaps, and skill_create recommendations."""
+    Returns identified services, skill coverage gaps, and skill_create recommendations.
+
+    Args:
+        hosts_json: JSON array of host objects. Each entry needs an 'address' key and
+            optional 'port'. Example: '[{"address": "192.168.1.10"}, {"address": "192.168.1.20", "port": 8006}]'
+    """
+    hosts = []
+    if hosts_json:
+        try:
+            hosts = json.loads(hosts_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return _mt.discover_environment(hosts)
 
 
