@@ -89,42 +89,6 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  # ── MuninnDB — cognitive memory sidecar ──────────────────────────────────────
-  # TODO: verify image name/tag — ghcr.io/kbreivik/muninndb:latest is a placeholder
-  muninndb:
-    image: ${MUNINNDB_IMAGE:-ghcr.io/kbreivik/muninndb:latest}
-    networks:
-      - agent-net
-    volumes:
-      - agent-data:/data
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-        delay: 10s
-        max_attempts: 5
-      placement:
-        constraints:
-          - node.hostname == hp1-prod-agent-01
-      resources:
-        limits:
-          memory: 512M
-          cpus: "1.0"
-        reservations:
-          memory: 128M
-    healthcheck:
-      # TODO: verify MuninnDB health endpoint path
-      test: ["CMD", "curl", "-sf", "http://localhost:9475/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "3"
-
 networks:
   agent-net:
     driver: overlay
