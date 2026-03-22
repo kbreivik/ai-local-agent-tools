@@ -286,7 +286,7 @@ def _call_local(user_msg: str) -> str:
                 {"role": "user", "content": user_msg},
             ],
         },
-        timeout=60.0,
+        timeout=300.0,
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
