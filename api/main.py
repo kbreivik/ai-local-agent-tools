@@ -28,6 +28,8 @@ from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
+from mcp_server.tools.skills import loader as _skill_loader
+from mcp_server.tools.skills import registry as _skill_registry
 
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", "8000"))
@@ -49,6 +51,18 @@ async def lifespan(app: FastAPI):
     await _start_logger()
     await _start_session_store()
     collector_manager.start_all()
+    # Load dynamic skills from modules/ into memory so skill_execute works after restart
+    try:
+        _skill_registry.init_db()
+        result = _skill_loader.load_all_skills(None)
+        _skill_loader.scan_imports(None)
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "Skills loaded: %d ok, %d failed", len(result["loaded"]), len(result["failed"])
+        )
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Skill load skipped: %s", e)
     # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
     try:
         await ingest_runbooks()
