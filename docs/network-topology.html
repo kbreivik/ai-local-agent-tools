@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HP1-AI-Agent — Network Topology</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+
+  /* ── Tabs ── */
+  .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #30363d; padding: 0 24px; background: #010409; }
+  .tab-btn { padding: 12px 18px; font-size: 12px; font-weight: 600; color: #7d8590; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; letter-spacing: .03em; transition: color .15s; }
+  .tab-btn:hover { color: #e6edf3; }
+  .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+  .tab-panel { display: none; padding: 24px; }
+  .tab-panel.active { display: block; }
+
+  /* ── Typography ── */
+  h1 { font-size: 18px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
+  h2 { font-size: 13px; font-weight: 700; color: #f0f6fc; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .subtitle { color: #7d8590; font-size: 12px; margin-bottom: 20px; }
+
+  /* ── Cards ── */
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+  .card-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #7d8590; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ── Badges ── */
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .badge-port  { background: #1c2d3e; color: #79c0ff; border: 1px solid #1d4ed8; font-family: monospace; }
+  .badge-proto { background: #1c2d1c; color: #7ee787; border: 1px solid #2ea043; }
+  .badge-warn  { background: #2d1e00; color: #f8b64c; border: 1px solid #9e5c00; }
+  .badge-ext   { background: #3d1212; color: #f87171; border: 1px solid #7f1d1d; }
+  .badge-int   { background: #1c1c3d; color: #a5b4fc; border: 1px solid #4c1d95; }
+  .badge-opt   { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+
+  /* ── Network Map ── */
+  .net-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .zone { border-radius: 8px; padding: 14px; }
+  .zone-ext { background: #1a0d0d; border: 1px solid #7f1d1d; }
+  .zone-int { background: #0d0d1a; border: 1px solid #4c1d95; }
+  .zone-infra { background: #0d1a0d; border: 1px solid #1a4731; }
+  .zone-docker { background: #0d1319; border: 1px solid #164e63; }
+  .zone-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+  .zone-title-ext   { color: #f87171; }
+  .zone-title-int   { color: #a5b4fc; }
+  .zone-title-infra { color: #6ee7b7; }
+  .zone-title-docker{ color: #67e8f9; }
+
+  .node-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.05); gap: 8px; }
+  .node-row:last-child { border-bottom: none; }
+  .node-name { font-family: monospace; font-size: 11px; color: #e6edf3; }
+  .node-host { font-size: 10px; color: #7d8590; font-family: monospace; }
+  .node-ports { display: flex; gap: 4px; flex-wrap: wrap; }
+
+  .arrow-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .arrow { color: #30363d; font-size: 16px; }
+  .arrow-label { font-size: 10px; color: #7d8590; font-family: monospace; }
+
+  /* ── Endpoints Table ── */
+  .ep-section { margin-bottom: 24px; }
+  .ep-table { width: 100%; border-collapse: collapse; }
+  .ep-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #7d8590; padding: 6px 10px; border-bottom: 1px solid #30363d; }
+  .ep-table td { padding: 7px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+  .ep-table tr:last-child td { border-bottom: none; }
+  .ep-table tr:hover td { background: #161b22; }
+  .fw-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+  .fw-allow  { background: #0d2818; color: #56d364; border: 1px solid #2ea043; padding: 1px 6px; border-radius: 4px; font-size: 10px; }
+  .fw-deny   { background: #2d0f0f; color: #f85149; border: 1px solid #6e1a1a; padding: 1px 6px; border-radius: 4px; font-size: 10px; }
+  .fw-cond   { background: #2d1e00; color: #f8b64c; border: 1px solid #9e5c00; padding: 1px 6px; border-radius: 4px; font-size: 10px; }
+  .ep-name   { font-family: monospace; font-size: 11px; font-weight: 600; color: #79c0ff; }
+  .ep-desc   { font-size: 11px; color: #8b949e; }
+  .ep-method { font-family: monospace; font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+  .ep-get    { background: #0d2818; color: #56d364; }
+  .ep-post   { background: #1c2d3e; color: #79c0ff; }
+  .ep-del    { background: #2d0f0f; color: #f85149; }
+  .ep-ws     { background: #2d1e00; color: #f8b64c; }
+
+  /* ── Traffic Flow ── */
+  .flow-container { display: flex; flex-direction: column; gap: 0; max-width: 780px; margin: 0 auto; }
+  .flow-step { display: flex; gap: 16px; align-items: flex-start; }
+  .flow-spine { display: flex; flex-direction: column; align-items: center; width: 32px; flex-shrink: 0; }
+  .flow-circle { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .flow-line { width: 2px; background: #30363d; flex: 1; min-height: 20px; }
+  .flow-body { flex: 1; padding-bottom: 20px; }
+  .flow-title { font-size: 13px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
+  .flow-desc { font-size: 11px; color: #8b949e; line-height: 1.5; margin-bottom: 6px; }
+  .flow-detail { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 10px; color: #8b949e; line-height: 1.6; }
+  .flow-detail .hl { color: #79c0ff; }
+  .flow-detail .ok { color: #56d364; }
+  .flow-detail .warn { color: #f8b64c; }
+
+  .fc-browser  { background: #1c2d3e; color: #79c0ff; }
+  .fc-api      { background: #1c1c3d; color: #a5b4fc; }
+  .fc-auth     { background: #2d1e00; color: #f8b64c; }
+  .fc-agent    { background: #0d2818; color: #56d364; }
+  .fc-llm      { background: #2d1c2d; color: #e879f9; }
+  .fc-tool     { background: #1c2d1c; color: #6ee7b7; }
+  .fc-ws       { background: #3d1212; color: #f87171; }
+
+  /* ── Misc ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #8b949e; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .divider { height: 1px; background: #21262d; margin: 16px 0; }
+  .note { font-size: 10px; color: #7d8590; padding: 6px 10px; background: #161b22; border-left: 3px solid #30363d; border-radius: 0 4px 4px 0; margin-top: 8px; }
+  .full-width { grid-column: 1 / -1; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<div style="padding: 20px 24px 0; background: #010409; border-bottom: 1px solid #21262d; display: flex; align-items: center; gap: 12px;">
+  <div>
+    <h1>HP1-AI-Agent — Network Topology</h1>
+    <div class="subtitle">Endpoints · Ports · Firewall Rules · Traffic Flow</div>
+  </div>
+</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="showTab('network')">Network Map</button>
+  <button class="tab-btn" onclick="showTab('endpoints')">Endpoints &amp; Firewall</button>
+  <button class="tab-btn" onclick="showTab('flow')">Traffic Flow</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ TAB 1 ═══ -->
+<div id="tab-network" class="tab-panel active">
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> External / Internet</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#a5b4fc"></div> Internal Agent Host</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#6ee7b7"></div> Homelab Infrastructure</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#67e8f9"></div> Docker Network</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f8b64c"></div> Optional / Disabled by default</div>
+  </div>
+
+  <div class="net-grid">
+
+    <!-- EXTERNAL / BROWSER -->
+    <div class="zone zone-ext">
+      <div class="zone-title zone-title-ext">⬡ External — Browser / LAN</div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Browser Client</div>
+          <div class="node-host">any host on LAN</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">→ :8000</span>
+          <span class="badge badge-proto">HTTP + WS</span>
+        </div>
+      </div>
+      <div class="note">CORS: all origins allowed (CORS_ALLOW_ALL=true default). JWT in Authorization header or ?token= for WS.</div>
+    </div>
+
+    <!-- AGENT HOST -->
+    <div class="zone zone-int">
+      <div class="zone-title zone-title-int">⬡ Agent Host — 192.168.199.10</div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">FastAPI (uvicorn)</div>
+          <div class="node-host">0.0.0.0:8000</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:8000</span>
+          <span class="badge badge-proto">HTTP</span>
+          <span class="badge badge-proto">WS</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">MuninnDB (sidecar)</div>
+          <div class="node-host">socat :9475 → :8475</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:9475</span>
+          <span class="badge badge-int">internal</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">SQLite / PostgreSQL</div>
+          <div class="node-host">data/hp1_agent.db or :5432</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:5432</span>
+          <span class="badge badge-opt">optional</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Redis Cache</div>
+          <div class="node-host">REDIS_URL</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:6379</span>
+          <span class="badge badge-opt">optional</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOMELAB INFRA -->
+    <div class="zone zone-infra">
+      <div class="zone-title zone-title-infra">⬡ Homelab Infrastructure</div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">LM Studio (LLM)</div>
+          <div class="node-host">192.168.199.51</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:1234</span>
+          <span class="badge badge-proto">HTTP/OpenAI</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Kafka Brokers (×3)</div>
+          <div class="node-host">kafka1/2/3 · KRaft mode</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:9092</span>
+          <span class="badge badge-proto">PLAINTEXT</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Elasticsearch</div>
+          <div class="node-host">ELASTIC_URL</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:9200</span>
+          <span class="badge badge-proto">HTTP</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Kibana</div>
+          <div class="node-host">KIBANA_URL</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:5601</span>
+          <span class="badge badge-proto">HTTP</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Proxmox VE</div>
+          <div class="node-host">PROXMOX_HOST</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:443</span>
+          <span class="badge badge-proto">HTTPS/API</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">FortiGate</div>
+          <div class="node-host">FORTIGATE_HOST</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:443</span>
+          <span class="badge badge-proto">HTTPS/API</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- DOCKER / SWARM -->
+    <div class="zone zone-docker">
+      <div class="zone-title zone-title-docker">⬡ Docker / Swarm Internals</div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Docker Daemon</div>
+          <div class="node-host">/var/run/docker.sock</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-int">unix socket</span>
+          <span class="badge badge-opt">ro-mount</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Docker TCP (remote)</div>
+          <div class="node-host">192.168.199.21</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:2375</span>
+          <span class="badge badge-opt">DOCKER_HOST</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Docker Engine SSH</div>
+          <div class="node-host">DOCKER_ENGINE_HOST</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-port">:22</span>
+          <span class="badge badge-proto">SSH/paramiko</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Swarm Overlay Net</div>
+          <div class="node-host">agent-net</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-int">overlay</span>
+        </div>
+      </div>
+      <div class="node-row">
+        <div>
+          <div class="node-name">Elastic Bridge Net</div>
+          <div class="node-host">hp1_elastic</div>
+        </div>
+        <div class="node-ports">
+          <span class="badge badge-int">bridge/isolated</span>
+        </div>
+      </div>
+      <div class="note">Docker socket mounted read-only. DOCKER_HOST=tcp://... overrides socket when set.</div>
+    </div>
+
+  </div><!-- /net-grid -->
+
+  <!-- Connection summary -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-title"><div class="dot" style="background:#58a6ff"></div> Outbound Connections from Agent</div>
+    <table style="width:100%; border-collapse:collapse;">
+      <tr style="border-bottom:1px solid #30363d;">
+        <th style="text-align:left; padding:6px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#7d8590; width:24%">Destination</th>
+        <th style="text-align:left; padding:6px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#7d8590; width:12%">Port</th>
+        <th style="text-align:left; padding:6px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#7d8590; width:14%">Protocol</th>
+        <th style="text-align:left; padding:6px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#7d8590;">Purpose</th>
+        <th style="text-align:left; padding:6px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#7d8590; width:14%">Config Key</th>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">LM Studio</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">1234</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">HTTP/REST</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">LLM inference (OpenAI-compat API)</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">LM_STUDIO_BASE_URL</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">Kafka ×3</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">9092</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">Kafka</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Consumer / producer, topic management</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">KAFKA_BOOTSTRAP_SERVERS</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">Elasticsearch</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">9200</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">HTTP/REST</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Log search, index management, correlation</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">ELASTIC_URL</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">MuninnDB</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">9475</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">HTTP/REST</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Cognitive memory store — retrieve, activate, store</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">MUNINN_URL</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">Proxmox VE</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">443</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">HTTPS</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">VM status, snapshot, migrate, node info</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">PROXMOX_HOST</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">FortiGate</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">443</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">HTTPS</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Firewall policy, system status, routes</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">FORTIGATE_HOST</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">Docker Engine</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">22</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-proto">SSH</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Engine version check, image pull, update</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">DOCKER_ENGINE_HOST</td>
+      </tr>
+      <tr style="border-bottom:1px solid #21262d;">
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">PostgreSQL</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">5432</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-opt">optional</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Skills DB, settings, audit log (prod backend)</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">DATABASE_URL</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 8px; font-family:monospace; font-size:11px;">Redis</td>
+        <td style="padding:6px 8px;"><span class="badge badge-port">6379</span></td>
+        <td style="padding:6px 8px;"><span class="badge badge-opt">optional</span></td>
+        <td style="padding:6px 8px; font-size:11px; color:#8b949e;">Skill registry cache layer</td>
+        <td style="padding:6px 8px; font-family:monospace; font-size:10px; color:#7d8590;">REDIS_URL</td>
+      </tr>
+    </table>
+  </div>
+
+</div><!-- /tab-network -->
+
+
+<!-- ═══════════════════════════════════════════════════════════ TAB 2 ═══ -->
+<div id="tab-endpoints" class="tab-panel">
+
+  <!-- INBOUND -->
+  <div class="ep-section">
+    <h2>Inbound — Agent API ( :8000 )</h2>
+    <div class="card">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th style="width:28%">Endpoint</th>
+            <th style="width:8%">Method</th>
+            <th style="width:26%">Description</th>
+            <th>Firewall / Auth Rules</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <!-- Auth -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Authentication</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/auth/login</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Issue JWT (24 h). Body: username + password</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">ALLOW all</span>
+                <span class="fw-allow">no token required</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/auth/me</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Current user info from JWT</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/health</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Liveness + readiness probe</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">ALLOW all</span>
+                <span class="fw-allow">no token required</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Agent -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Agent</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/agent/run</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Submit task to agent loop. Returns session_id</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+                <span class="fw-cond">Global lock check</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/agent/confirm</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Approve or reject pending plan_action</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+                <span class="fw-cond">session owner only</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/agent/clarify</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Send clarification answer to agent</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/agent/models</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">List available LLM models from LM Studio</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/ws/output</span></td>
+            <td><span class="ep-method ep-ws">WS</span></td>
+            <td class="ep-desc">Real-time agent output stream. Replays on reconnect</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">?token=JWT</span>
+                <span class="fw-allow">keepalive ping 20 s</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Tools -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Tools</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/tools</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">List all MCP tools with schema. ?refresh=true forces rescan</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/tools/{name}/invoke</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Invoke any registered MCP tool by name</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">JWT required</span>
+                <span class="fw-cond">plan_action → Global lock</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Skills -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Skills</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">List skills. ?category= filter, ?include_disabled=true</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Skill metadata</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}/execute</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Execute a skill. Body: params JSON</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}/promote</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Promote skill to @mcp.tool() for an agent domain</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-deny">starter skills blocked</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}/demote</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Remove from promoted state</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}</span></td>
+            <td><span class="ep-method ep-del">DELETE</span></td>
+            <td class="ep-desc">Scrap skill (move to holding area)</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-deny">starter skills blocked</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}/restore</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Restore a scrapped skill</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/skills/{name}/regenerate</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">LLM-rewrite from description; backs up old file</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+
+          <!-- Settings -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Settings</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/settings</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">All 16 settings from DB. Sensitive values masked (***)</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-allow">masked secrets</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/settings</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Persist settings to DB. Ignores masked values</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-deny">masked values rejected</span></div></td>
+          </tr>
+
+          <!-- Status / Logs / Alerts -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Status · Logs · Alerts</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/status</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Live component health snapshot</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/status/history/{component}</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Historical snapshots. ?hours=N</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/logs</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Tool invocation log. ?status= ?limit= ?tool=</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/logs/stats</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Aggregated log statistics</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/logs/operations</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Agent operation history. ?status= ?limit=</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/logs/escalations</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Pending escalations requiring human review</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/alerts/recent</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Recent system alerts. ?limit=N</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/alerts/{id}/dismiss</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Dismiss a single alert</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/alerts/dismiss-all</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Dismiss all current alerts</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+
+          <!-- Memory -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Memory (MuninnDB)</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/health</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">MuninnDB sidecar connectivity check</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/recent</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Most recent memory engrams. ?limit=N</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/search</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Full-text search across engrams. ?q= ?limit=</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/activate</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Semantic context retrieval for agent prompt injection</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/{id}</span></td>
+            <td><span class="ep-method ep-del">DELETE</span></td>
+            <td class="ep-desc">Delete a specific engram</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/patterns</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Usage patterns learned from memory</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/memory/fetch-docs</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Trigger doc ingestion from upstream source</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+
+          <!-- Misc -->
+          <tr>
+            <td colspan="4" style="padding:8px 10px 4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#7d8590; background:#0d1117;">Misc</td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/feedback</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Submit session rating (1–5)</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/lock/status</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Global destructive-lock state</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/api/lock/force-release</span></td>
+            <td><span class="ep-method ep-post">POST</span></td>
+            <td class="ep-desc">Admin override: release stuck lock</td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-warn">admin only</span></div></td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">/ (static)</span></td>
+            <td><span class="ep-method ep-get">GET</span></td>
+            <td class="ep-desc">Serves Vue SPA from gui/dist</td>
+            <td><div class="fw-row"><span class="fw-allow">ALLOW all</span></div></td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- OUTBOUND ENDPOINTS -->
+  <div class="ep-section">
+    <h2>Outbound — External Service Endpoints</h2>
+    <div class="card">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th style="width:20%">Service</th>
+            <th style="width:12%">Port / Proto</th>
+            <th style="width:28%">Endpoint Pattern</th>
+            <th>Firewall / Auth Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="ep-name">LM Studio</span><div class="node-host">192.168.199.51</div></td>
+            <td><span class="badge badge-port">1234</span> HTTP</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/v1/chat/completions<br>/v1/models</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">LAN only</span>
+                <span class="fw-cond">Bearer LM_STUDIO_API_KEY</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">OpenAI-compatible API. Key optional if LM Studio has no auth.</div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">Kafka</span><div class="node-host">kafka1/2/3:9092</div></td>
+            <td><span class="badge badge-port">9092</span> TCP</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">Bootstrap brokers<br>Topic: hp1.alerts etc.</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">LAN only</span>
+                <span class="fw-allow">PLAINTEXT (no TLS)</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">KRaft mode — no ZooKeeper. kafka-python client.</div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">Elasticsearch</span><div class="node-host">ELASTIC_URL</div></td>
+            <td><span class="badge badge-port">9200</span> HTTP</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/_cat/indices<br>/_search<br>/_bulk</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">LAN only</span>
+                <span class="fw-cond">Basic auth if secured</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">MuninnDB</span><div class="node-host">localhost:9475</div></td>
+            <td><span class="badge badge-port">9475</span> HTTP</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/api/engrams<br>/api/search<br>/api/activate</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">loopback only</span>
+                <span class="fw-allow">socat proxy → :8475</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">Sidecar container on same Swarm service.</div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">Proxmox VE</span><div class="node-host">PROXMOX_HOST</div></td>
+            <td><span class="badge badge-port">443</span> HTTPS</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/api2/json/nodes<br>/api2/json/version<br>/api2/json/cluster</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">API token in header</span>
+                <span class="fw-warn">verify_ssl=False</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">proxmoxer library. Self-signed cert → TLS verification disabled.</div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">FortiGate</span><div class="node-host">FORTIGATE_HOST</div></td>
+            <td><span class="badge badge-port">443</span> HTTPS</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/api/v2/cmdb/system/status<br>/api/v2/cmdb/firewall/policy</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">FORTIGATE_API_KEY header</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">Docker Engine</span><div class="node-host">DOCKER_ENGINE_HOST</div></td>
+            <td><span class="badge badge-port">22</span> SSH</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">docker version<br>docker pull<br>systemctl restart docker</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-cond">SSH key auth (paramiko)</span>
+                <span class="fw-warn">DESTRUCTIVE ops → plan_action lock</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">DOCKER_ENGINE_SSH_KEY, DOCKER_ENGINE_SSH_PORT</div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">Docker Socket</span><div class="node-host">/var/run/docker.sock</div></td>
+            <td><span class="badge badge-int">unix</span></td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">/v1.x/services<br>/v1.x/nodes<br>/v1.x/tasks</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-allow">ro mount</span>
+                <span class="fw-allow">Swarm read operations</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="ep-name">PostgreSQL</span><div class="node-host">DATABASE_URL</div></td>
+            <td><span class="badge badge-port">5432</span> TCP</td>
+            <td style="font-family:monospace; font-size:10px; color:#8b949e;">psycopg2 / SQLAlchemy</td>
+            <td>
+              <div class="fw-row">
+                <span class="fw-opt" style="background:#21262d;color:#8b949e;border:1px solid #30363d;padding:1px 6px;border-radius:4px;font-size:10px;">optional</span>
+                <span class="fw-cond">credentials in DATABASE_URL</span>
+              </div>
+              <div style="font-size:10px; color:#7d8590; margin-top:4px;">Falls back to SQLite if DATABASE_URL unset.</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /tab-endpoints -->
+
+
+<!-- ═══════════════════════════════════════════════════════════ TAB 3 ═══ -->
+<div id="tab-flow" class="tab-panel">
+  <div style="max-width: 800px;">
+    <p style="color:#7d8590; font-size:12px; margin-bottom:24px;">End-to-end traffic flow from browser to infrastructure and back. Each step is a distinct processing stage.</p>
+
+  <div class="flow-container">
+
+    <!-- 1 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-browser">1</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">Browser → Login Request</div>
+        <div class="flow-desc">User submits credentials in the Vue SPA (served from FastAPI :8000 as static files).</div>
+        <div class="flow-detail">
+          <span class="hl">POST /api/auth/login</span> {username, password}<br>
+          No token required — this is the public endpoint.<br>
+          CORS allowed from all origins (CORS_ALLOW_ALL=true).
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-auth">2</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">FastAPI — JWT Issuance</div>
+        <div class="flow-desc">api/auth.py verifies bcrypt hash (ADMIN_PASSWORD env). On success issues a 24-hour JWT signed with JWT_SECRET.</div>
+        <div class="flow-detail">
+          bcrypt.verify(password, stored_hash)<br>
+          jwt.encode({sub: username, exp: now+24h}, JWT_SECRET, HS256)<br>
+          <span class="ok">← 200 {token: "eyJ..."}</span><br>
+          Browser stores token in localStorage → used in all subsequent requests.
+        </div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-browser">3</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">Browser → Task Submission</div>
+        <div class="flow-desc">User types a task in the GUI and clicks Run. The GUI sends the task text and a session_id.</div>
+        <div class="flow-detail">
+          <span class="hl">POST /api/agent/run</span><br>
+          Headers: <span class="ok">Authorization: Bearer &lt;jwt&gt;</span><br>
+          Body: {task: "check kafka consumer lag", session_id: "..."}<br>
+          <br>
+          Simultaneously browser opens WebSocket for live output:<br>
+          <span class="hl">WS /ws/output?token=&lt;jwt&gt;</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-auth">4</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">FastAPI — Auth + Lock Guard</div>
+        <div class="flow-desc">Every protected route verifies the JWT. Destructive operations additionally check the PlanLockManager — only one pending plan_action is allowed across all sessions at once.</div>
+        <div class="flow-detail">
+          get_current_user() → jwt.decode(token, JWT_SECRET)<br>
+          PlanLockManager.is_locked() → <span class="warn">if locked, return {status:"locked"}</span><br>
+          Agent loop starts in background thread.
+        </div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-agent">5</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">Agent Loop — Task Routing</div>
+        <div class="flow-desc">classify_task() assigns the task to one of three agents: ORCHESTRATOR (planning, multi-step), RESEARCH (read-only, info gathering), or EXECUTION (single destructive action). Each agent has a filtered tool allowlist.</div>
+        <div class="flow-detail">
+          classify_task(task) → "orchestrator" | "research" | "execution"<br>
+          filter_tools(agent_type) → allowed tool names list<br>
+          get_prompt(agent_type, memory_context) → system prompt<br>
+          <br>
+          Memory activation: <span class="hl">POST /api/memory/activate</span> → MuninnDB :9475<br>
+          Returns relevant past engrams → injected into system prompt.
+        </div>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-llm">6</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">LLM Inference — Tool Selection</div>
+        <div class="flow-desc">OpenAI SDK sends the system prompt, task, and tool schemas to LM Studio. The LLM responds with a tool_call JSON or a plain text answer.</div>
+        <div class="flow-detail">
+          <span class="hl">POST http://192.168.199.51:1234/v1/chat/completions</span><br>
+          model: lmstudio-community/qwen3-coder-30b-a3b-instruct<br>
+          tools: [...allowed MCP tool schemas...]<br>
+          <br>
+          Response: {choices: [{finish_reason: "tool_calls", message: {tool_calls: [...]}}]}<br>
+          — or —<br>
+          Response: {choices: [{finish_reason: "stop", message: {content: "..."}}]}
+        </div>
+      </div>
+    </div>
+
+    <!-- 7 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-agent">7</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">Agent Loop — Plan Guard Check</div>
+        <div class="flow-desc">If the tool is plan_action (destructive operation), the agent pauses and broadcasts a confirmation request to the WebSocket. Execution blocks until the user approves or cancels via POST /api/agent/confirm.</div>
+        <div class="flow-detail">
+          tool_call.name == "plan_action"?<br>
+          → PlanLockManager.acquire(session_id)<br>
+          → WS broadcast: {type:"confirm_request", plan: {...}}<br>
+          → <span class="warn">WAIT for /api/agent/confirm {approved: true/false}</span><br>
+          <br>
+          Non-destructive tools: execute immediately, no confirmation.
+        </div>
+      </div>
+    </div>
+
+    <!-- 8 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-tool">8</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">Tool Execution — External Services</div>
+        <div class="flow-desc">tool_registry.invoke_tool() calls the appropriate MCP tool function. Tools reach out to external services as needed.</div>
+        <div class="flow-detail">
+          Examples:<br>
+          kafka_consumer_lag()   → <span class="hl">kafka1:9092</span> (kafka-python)<br>
+          elastic_search_logs()  → <span class="hl">ELASTIC_URL:9200</span> (requests)<br>
+          proxmox_vm_status()    → <span class="hl">PROXMOX_HOST:443</span> (proxmoxer)<br>
+          docker_swarm_state()   → <span class="hl">/var/run/docker.sock</span> (docker SDK)<br>
+          skill_execute(name)    → runs skill module execute(**kwargs)<br>
+          muninn_store(engram)   → <span class="hl">localhost:9475</span> (requests)<br>
+          <br>
+          All tools return: {status:"ok"|"error"|"degraded", data:..., timestamp:..., message:...}
+        </div>
+      </div>
+    </div>
+
+    <!-- 9 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-llm">9</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">LLM — Result Synthesis</div>
+        <div class="flow-desc">Tool result appended to messages as a tool_result. LLM called again to synthesise a human-readable response. Loop continues until finish_reason="stop" or max iterations reached.</div>
+        <div class="flow-detail">
+          messages.append({role:"tool", tool_call_id: id, content: json(result)})<br>
+          <span class="hl">POST /v1/chat/completions</span>  ← second (or Nth) LLM call<br>
+          finish_reason == "stop"? → final text answer ready<br>
+          finish_reason == "tool_calls"? → loop back to step 6
+        </div>
+      </div>
+    </div>
+
+    <!-- 10 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-ws">10</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body">
+        <div class="flow-title">WebSocket Broadcast → Browser</div>
+        <div class="flow-desc">Each agent step (tool call, tool result, final answer) is broadcast in real time over the WebSocket. Lines are also persisted to operation_log for replay on reconnect.</div>
+        <div class="flow-detail">
+          WS message types:<br>
+          <span class="hl">tool_call</span>     {name, args}  — LLM chose a tool<br>
+          <span class="hl">tool_result</span>   {name, result} — tool returned data<br>
+          <span class="hl">confirm_request</span> {plan}       — awaiting human approval<br>
+          <span class="hl">agent_response</span> {text}        — final answer text<br>
+          <span class="hl">error</span>          {message}     — runtime error<br>
+          <br>
+          <span class="ok">All lines → operation_log table (async 200ms flush)</span><br>
+          On WS reconnect: replay lines from DB for session continuity.
+        </div>
+      </div>
+    </div>
+
+    <!-- 11 -->
+    <div class="flow-step">
+      <div class="flow-spine">
+        <div class="flow-circle fc-agent">11</div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-body" style="padding-bottom:0">
+        <div class="flow-title">Memory Storage — Post-Session</div>
+        <div class="flow-desc">After session completes, significant outcomes stored as engrams in MuninnDB for future context retrieval.</div>
+        <div class="flow-detail">
+          <span class="hl">POST localhost:9475/api/engrams</span><br>
+          {content: summary, tags: [service, operation, outcome]}<br>
+          <br>
+          Next session: activate_memory(new_task) fetches relevant engrams<br>
+          → injected into LLM system prompt at step 5.
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /flow-container -->
+  </div>
+</div><!-- /tab-flow -->
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'))
+  document.getElementById('tab-' + id).classList.add('active')
+  event.target.classList.add('active')
+}
+</script>
+</body>
+</html>
