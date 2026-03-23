@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchTools, invokeTool, runAgent } from '../api'
+import { fetchTools, invokeTool, runAgent, fetchSkills, executeSkill } from '../api'
 import { useAgent } from '../context/AgentContext'
 import { useTask } from '../context/TaskContext'
 import ChoiceBar from './ChoiceBar'
@@ -22,11 +22,44 @@ function humanizeCategory(cat) {
 // ── Category badge colors ─────────────────────────────────────────────────────
 
 const CATEGORY_COLOR = {
+  // built-in tool categories
   swarm:         'bg-blue-900 text-blue-300',
   kafka:         'bg-purple-900 text-purple-300',
   orchestration: 'bg-amber-900 text-amber-300',
   elastic:       'bg-teal-900 text-teal-300',
   network:       'bg-green-900 text-green-300',
+  docker:        'bg-blue-900 text-blue-300',
+  // skill categories
+  compute:       'bg-sky-900 text-sky-300',
+  monitoring:    'bg-cyan-900 text-cyan-300',
+  storage:       'bg-violet-900 text-violet-300',
+  general:       'bg-slate-700 text-slate-300',
+  // common service names from generated skills
+  proxmox:       'bg-orange-900 text-orange-300',
+  fortigate:     'bg-red-900 text-red-300',
+  truenas:       'bg-indigo-900 text-indigo-300',
+}
+
+// ── Skill normalisation ───────────────────────────────────────────────────────
+
+function normaliseSkillParams(parameters) {
+  const props    = parameters?.properties ?? {}
+  const required = parameters?.required   ?? []
+  return Object.entries(props).map(([name, schema]) => ({
+    name,
+    type:        schema.type        ?? 'string',
+    description: schema.description ?? '',
+    required:    required.includes(name),
+    default:     schema.default     ?? '',
+  }))
+}
+
+function deriveTags(item) {
+  if (item.source === 'skill') {
+    const parts = [item._compat?.service, item.category].filter(Boolean)
+    return parts.length ? [...new Set(parts)] : ['general']
+  }
+  return [item.category || 'general']
 }
 
 // ── Traffic light run button ──────────────────────────────────────────────────
