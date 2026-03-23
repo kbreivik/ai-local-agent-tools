@@ -7,7 +7,7 @@ is released (plan approved, cancelled, or session errored out).
 """
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import logging
 
@@ -28,11 +28,15 @@ class PlanLockManager:
         self._lock = asyncio.Lock()
         self._held_by: Optional[LockInfo] = None
 
+    # Locks older than this are considered orphaned (session crashed without releasing)
+    STALE_AFTER = timedelta(minutes=10)
+
     async def acquire(self, session_id: str, owner_user: str) -> bool:
         """
         Try to acquire the global destructive lock.
         Returns True if acquired (or already held by this session).
-        Returns False if held by a different session.
+        Returns False if held by a different active session.
+        Stale locks (held > STALE_AFTER with no release) are auto-cleared.
         """
         async with self._lock:
             if self._held_by is None:
@@ -41,6 +45,15 @@ class PlanLockManager:
                 return True
             if self._held_by.session_id == session_id:
                 return True  # Re-entrant for same session
+            # Auto-release if the lock has been held longer than STALE_AFTER
+            age = datetime.now(timezone.utc) - self._held_by.acquired_at
+            if age > self.STALE_AFTER:
+                log.warning(
+                    "Plan lock stale (held %.0fs by session=%s) — auto-releasing for session=%s",
+                    age.total_seconds(), self._held_by.session_id, session_id,
+                )
+                self._held_by = LockInfo(session_id=session_id, owner_user=owner_user)
+                return True
             return False
 
     async def release(self, session_id: str) -> bool:
@@ -66,11 +79,14 @@ class PlanLockManager:
         h = self._held_by
         if h is None:
             return None
+        age_s = int((datetime.now(timezone.utc) - h.acquired_at).total_seconds())
         return {
             "locked": True,
             "session_id": h.session_id,
             "owner_user": h.owner_user,
             "since": h.acquired_at.isoformat(),
+            "age_seconds": age_s,
+            "stale": age_s > int(self.STALE_AFTER.total_seconds()),
         }
 
     def is_locked_by_other(self, session_id: str) -> bool:

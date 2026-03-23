@@ -792,29 +792,31 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
-    # ── Record outcome for feedback loop ─────────────────────────────────────
+    # ── Cleanup: always runs regardless of how the agent loop exited ─────────
     try:
-        from api.memory.feedback import record_outcome
-        await record_outcome(
-            session_id=session_id,
-            task=task,
-            agent_type=first_intent,
-            tools_used=all_tools_used,
-            status=final_status,
-            steps=agg_steps,
-            positive_signals=agg_positive,
-            negative_signals=agg_negative,
-        )
-    except Exception as _oe:
-        log.debug("record_outcome error: %s", _oe)
+        # Record outcome for feedback loop
+        try:
+            from api.memory.feedback import record_outcome
+            await record_outcome(
+                session_id=session_id,
+                task=task,
+                agent_type=first_intent,
+                tools_used=all_tools_used,
+                status=final_status,
+                steps=agg_steps,
+                positive_signals=agg_positive,
+                negative_signals=agg_negative,
+            )
+        except Exception as _oe:
+            log.debug("record_outcome error: %s", _oe)
 
-    # Release plan lock if this session holds it
-    await plan_lock.release(session_id)
-
-    last_reasoning = prior_verdict["summary"] if prior_verdict else ""
-    if last_reasoning:
-        await logger_mod.set_operation_final_answer(session_id, last_reasoning)
-    await logger_mod.complete_operation(operation_id, final_status)
+        last_reasoning = prior_verdict["summary"] if prior_verdict else ""
+        if last_reasoning:
+            await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+        await logger_mod.complete_operation(operation_id, final_status)
+    finally:
+        # Release plan lock — guaranteed even if record_outcome or logger calls throw
+        await plan_lock.release(session_id)
 
 
 @router.post("/run", response_model=RunResponse)
