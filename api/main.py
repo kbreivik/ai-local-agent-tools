@@ -25,6 +25,7 @@ from api.routers.lock import router as lock_router
 from api.routers.ansible import router as ansible_router
 from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
+from api.routers.settings import seed_defaults as _seed_settings
 from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
@@ -64,6 +65,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         import logging as _logging
         _logging.getLogger(__name__).warning("Skill load skipped: %s", e)
+    # Seed settings from env vars on first run (no-op if already seeded)
+    try:
+        _seed_settings()
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Settings seed skipped: %s", e)
     # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
     try:
         await ingest_runbooks()
