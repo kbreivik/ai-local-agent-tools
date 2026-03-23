@@ -24,8 +24,7 @@ class DockerAgent01Collector(BaseCollector):
         self.interval = int(os.environ.get("DOCKER_POLL_INTERVAL", "30"))
 
     async def poll(self) -> dict:
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._collect_sync)
+        return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
         import docker
@@ -85,9 +84,12 @@ class DockerAgent01Collector(BaseCollector):
                     "problem": problem,
                 })
 
-            overall = "healthy" if all(c["dot"] == "green" for c in cards) else \
-                      "degraded" if any(c["dot"] == "amber" for c in cards) else \
-                      "critical"
+            if not cards or all(c["dot"] == "green" for c in cards):
+                overall = "healthy"
+            elif all(c["dot"] == "red" for c in cards):
+                overall = "critical"
+            else:
+                overall = "degraded"
             return {"health": overall, "containers": cards, "agent01_ip": VM_IP}
 
         except DockerException as e:
@@ -139,7 +141,7 @@ def _load_last_digests() -> dict:
             rows = conn.execute(
                 text("SELECT component, state, timestamp FROM status_snapshots "
                      "WHERE component LIKE 'image_digest:%' "
-                     "ORDER BY timestamp DESC")
+                     "ORDER BY timestamp DESC LIMIT 500")
             ).fetchall()
         result = {}
         for row in rows:
@@ -173,8 +175,8 @@ def _check_digest(container_id: str, image: str, image_id: str | None, last_dige
                          "VALUES (:comp, :state, true, :ts)"),
                     {"comp": key, "state": json.dumps({"digest": image_id, "image": image}), "ts": now}
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to write image digest snapshot for %s: %s", key, e)
         return now
     return stored.get("_ts")  # timestamp from DB row
 

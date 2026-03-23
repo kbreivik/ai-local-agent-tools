@@ -1,4 +1,5 @@
 # tests/test_collectors_docker_agent01.py
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -28,9 +29,41 @@ def test_poll_returns_containers_key():
          patch("api.collectors.docker_agent01._load_last_digests", return_value={}), \
          patch("api.collectors.docker_agent01._check_digest", return_value="2026-01-01T00:00:00+00:00"):
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(collector.poll())
+        result = asyncio.run(collector.poll())
 
     assert "containers" in result
-    assert result["health"] in ("healthy", "degraded", "error", "critical")
+    assert result["health"] == "healthy"
     assert result["containers"][0]["name"] == "hp1_agent"
     assert result["containers"][0]["last_pull_at"] is not None
+
+
+def test_exited_container_returns_red_dot():
+    from api.collectors.docker_agent01 import DockerAgent01Collector
+    collector = DockerAgent01Collector()
+
+    mock_container = MagicMock()
+    mock_container.id = "dead1234"
+    mock_container.short_id = "dead12"
+    mock_container.attrs = {
+        "Name": "/crashed_service",
+        "Config": {"Image": "some-image:latest"},
+        "State": {"Status": "exited", "Health": {}},
+        "HostConfig": {},
+        "Mounts": [],
+        "NetworkSettings": {"Ports": {}},
+        "Status": "Exited (1) 5 minutes ago",
+    }
+    mock_container.image.id = "sha256:def"
+
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = [mock_container]
+    mock_client.df.return_value = {"Volumes": []}
+
+    with patch("docker.DockerClient", return_value=mock_client), \
+         patch("api.collectors.docker_agent01._load_last_digests", return_value={}), \
+         patch("api.collectors.docker_agent01._check_digest", return_value=None):
+        result = asyncio.run(collector.poll())
+
+    assert result["containers"][0]["dot"] == "red"
+    assert result["containers"][0]["problem"] == "exited"
+    assert result["health"] == "critical"
