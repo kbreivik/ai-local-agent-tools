@@ -396,12 +396,14 @@ function DisplayTab({ draft, update }) {
 // ── Root modal ─────────────────────────────────────────────────────────────────
 
 export default function OptionsModal() {
-  const options = useOptions()
+  const options  = useOptions()
+  const { serverLoaded } = options
   const [open,     setOpen]    = useState(false)
   const [tab,      setTab]     = useState('General')
   const [draft,    setDraft]   = useState(null)
   const [snapshot, setSnapshot] = useState(null)
-  const [saving,   setSaving]  = useState(false)
+  const [saving,    setSaving]   = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   const LIVE_KEYS = ['cardMinHeight', 'cardMaxHeight', 'cardMinWidth', 'cardMaxWidth']
 
@@ -433,25 +435,18 @@ export default function OptionsModal() {
 
   const save = async () => {
     setSaving(true)
-    options.saveOptions(draft)
-
-    // Non-critical POST to backend — ignore errors
+    setSaveError(null)
     try {
-      const infraKeys = ['dockerHost', 'kafkaBootstrapServers', 'elasticsearchUrl',
-                         'kibanaUrl', 'muninndbUrl', 'swarmManagerIPs', 'swarmWorkerIPs']
-      const infraSettings = Object.fromEntries(infraKeys.map(k => [k, draft[k]]))
-      await fetch(`${BASE}/api/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(infraSettings),
-      })
-    } catch { /* ignore */ }
-
-    setSaving(false)
-    // Close directly — do NOT call closeModal() because it would revert LIVE_KEYS back to snapshot
-    setOpen(false)
-    setDraft(null)
-    setSnapshot(null)
+      await options.saveOptions(draft)
+      // Close directly — do NOT call closeModal() which reverts LIVE_KEYS to snapshot
+      setOpen(false)
+      setDraft(null)
+      setSnapshot(null)
+    } catch (e) {
+      setSaveError(e.message || 'Failed to save settings')
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (!open) {
@@ -507,6 +502,9 @@ export default function OptionsModal() {
 
           {/* Tab content */}
           <div className="flex-1 overflow-y-auto px-5 py-4">
+            {!serverLoaded && (tab === 'Infrastructure' || tab === 'AI Services') && (
+              <p className="text-xs text-slate-500 animate-pulse mb-3">Loading from server…</p>
+            )}
             {draft && (
               <>
                 {tab === 'General'        && <GeneralTab        draft={draft} update={update} />}
@@ -519,6 +517,9 @@ export default function OptionsModal() {
 
           {/* Footer */}
           <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-slate-700 shrink-0">
+            {saveError && (
+              <span className="text-xs text-red-400 mr-auto">{saveError}</span>
+            )}
             <button
               onClick={closeModal}
               className="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
