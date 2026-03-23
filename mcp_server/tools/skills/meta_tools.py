@@ -334,6 +334,6 @@ def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
 
     # Restore backup on failure
     if os.path.exists(bak_path) and not os.path.exists(old_path):
-        shutil.copy2(bak_path, old_path)
+        _shutil.copy2(bak_path, old_path)
 
     return result
