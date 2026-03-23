@@ -1,5 +1,8 @@
+# tests/test_collectors_proxmox_vms.py
 import asyncio
+import os
 from unittest.mock import patch, MagicMock
+
 
 def test_poll_returns_vms_key():
     from api.collectors.proxmox_vms import ProxmoxVMsCollector
@@ -13,7 +16,8 @@ def test_poll_returns_vms_key():
                   "cpus": 2, "netin": 0, "netout": 0}]
     }
 
-    with patch("httpx.get", return_value=mock_resp), \
+    with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
+         patch("httpx.get", return_value=mock_resp), \
          patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 
@@ -23,13 +27,14 @@ def test_poll_returns_vms_key():
     assert result["vms"][0]["dot"] == "green"
     assert result["vms"][0]["node"] == "Pmox1"
 
+
 def test_unconfigured_when_no_host():
     from api.collectors.proxmox_vms import ProxmoxVMsCollector
-    import os
     collector = ProxmoxVMsCollector()
     with patch.dict(os.environ, {"PROXMOX_HOST": ""}, clear=False):
         result = asyncio.run(collector.poll())
     assert result["health"] == "unconfigured"
+
 
 def test_stopped_vm_returns_red_dot():
     from api.collectors.proxmox_vms import ProxmoxVMsCollector
@@ -42,7 +47,8 @@ def test_stopped_vm_returns_red_dot():
                   "cpu": 0, "mem": 0, "maxmem": 4294967296, "cpus": 2}]
     }
 
-    with patch("httpx.get", return_value=mock_resp), \
+    with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
+         patch("httpx.get", return_value=mock_resp), \
          patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 

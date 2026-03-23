@@ -44,14 +44,12 @@ class ProxmoxVMsCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
-        # Return unconfigured only when PROXMOX_HOST is explicitly set to empty string.
-        # When the key is absent entirely, fall back to the default Proxmox host.
-        host_raw = os.environ.get("PROXMOX_HOST")
-        if host_raw is not None and not host_raw:
-            return {"health": "unconfigured", "vms": [], "message": "PROXMOX_HOST not set"}
-        host = host_raw or "192.168.1.5"
+        host = os.environ.get("PROXMOX_HOST", "")
         token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
         token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+
+        if not host:
+            return {"health": "unconfigured", "vms": [], "message": "PROXMOX_HOST not set"}
 
         import httpx
         headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
