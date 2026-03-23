@@ -46,6 +46,25 @@ export async function invokeTool(toolName, params = {}) {
   return r.json()
 }
 
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+export async function fetchSettings() {
+  const r = await fetch(`${BASE}/api/settings`, { headers: { ...authHeaders() } })
+  if (!r.ok) throw new Error(`Settings fetch failed: HTTP ${r.status}`)
+  const d = await r.json()
+  return d.data?.settings ?? {}
+}
+
+export async function saveSettings(payload) {
+  const r = await fetch(`${BASE}/api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  })
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
+  return r.json()
+}
+
 // ── Skills ────────────────────────────────────────────────────────────────────
 
 export async function fetchSkills(category = '') {
