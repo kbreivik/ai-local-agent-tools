@@ -2,7 +2,7 @@
  * SkillsPanel — browse and execute registered dynamic skills.
  */
 import { useEffect, useState, useCallback } from 'react'
-import { fetchSkills, executeSkill } from '../api'
+import { fetchSkills, executeSkill, promoteSkill, demoteSkill, scrapSkill, restoreSkill } from '../api'
 
 const CATEGORY_COLOR = {
   compute:    'bg-blue-900 text-blue-300',
@@ -87,20 +87,32 @@ function ResultBox({ result }) {
 
 // ── Skill card ────────────────────────────────────────────────────────────────
 
-function SkillCard({ skill }) {
-  const [open,    setOpen]    = useState(false)
-  const [running, setRunning] = useState(false)
-  const [result,  setResult]  = useState(null)
+const DOMAINS = ['proxmox', 'swarm', 'kafka', 'general']
 
+function LifecycleBadge({ state }) {
+  if (state === 'promoted')
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-900 text-green-300">promoted</span>
+  if (state === 'scrapped')
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-300">scrapped</span>
+  return null
+}
+
+function SkillCard({ skill, onReload }) {
+  const [open,        setOpen]        = useState(false)
+  const [running,     setRunning]     = useState(false)
+  const [result,      setResult]      = useState(null)
+  const [promoting,   setPromoting]   = useState(false)
+  const [working,     setWorking]     = useState(false)
+
+  const state     = skill.lifecycle_state ?? 'auto_generated'
   const hasParams = Object.keys(skill.parameters?.properties ?? {}).length > 0
+  const tested    = result !== null
+  const isEnabled = skill.enabled !== false && state !== 'scrapped'
 
   const handleExecute = () => {
     setResult(null)
-    if (hasParams) {
-      setOpen(true)
-    } else {
-      run({})
-    }
+    if (hasParams) setOpen(true)
+    else run({})
   }
 
   const run = async (params) => {
@@ -110,8 +122,7 @@ function SkillCard({ skill }) {
       const props = skill.parameters?.properties ?? {}
       const cast = Object.fromEntries(
         Object.entries(params).map(([k, v]) => [
-          k,
-          props[k]?.type === 'integer' ? (parseInt(v, 10) || 0) : v,
+          k, props[k]?.type === 'integer' ? (parseInt(v, 10) || 0) : v,
         ])
       )
       const r = await executeSkill(skill.name, cast)
@@ -123,35 +134,118 @@ function SkillCard({ skill }) {
     }
   }
 
+  const handlePromote = async (domain) => {
+    setWorking(true)
+    setPromoting(false)
+    try {
+      await promoteSkill(skill.name, domain)
+      onReload()
+    } catch (e) {
+      setResult({ status: 'error', message: `Promote failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const handleDemote = async () => {
+    setWorking(true)
+    try {
+      await demoteSkill(skill.name)
+      onReload()
+    } catch (e) {
+      setResult({ status: 'error', message: `Demote failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const handleScrap = async () => {
+    setWorking(true)
+    try {
+      await scrapSkill(skill.name)
+      onReload()
+    } catch (e) {
+      setResult({ status: 'error', message: `Scrap failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const handleRestore = async () => {
+    setWorking(true)
+    try {
+      await restoreSkill(skill.name)
+      onReload()
+    } catch (e) {
+      setResult({ status: 'error', message: `Restore failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+    }
+  }
+
   return (
-    <div className="border border-slate-700 rounded p-2 mb-2 bg-slate-900">
+    <div className={`border rounded p-2 mb-2 bg-slate-900 ${
+      state === 'promoted' ? 'border-green-800' :
+      state === 'scrapped' ? 'border-red-900 opacity-60' :
+      'border-slate-700'
+    }`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-mono text-slate-200 text-xs">{skill.name}</span>
+            <span className={`font-mono text-xs ${state === 'scrapped' ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+              {skill.name}
+            </span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryBadge(skill.category)}`}>
               {skill.category}
             </span>
-            {skill.auto_generated && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900 text-amber-300">
-                generated
-              </span>
+            {skill.auto_generated && state !== 'promoted' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900 text-amber-300">generated</span>
             )}
-            {!skill.enabled && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900 text-red-300">
-                disabled
+            <LifecycleBadge state={state} />
+            {state === 'promoted' && skill.agent_domain && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">
+                {skill.agent_domain}
               </span>
             )}
           </div>
           <p className="text-slate-400 text-xs mt-0.5 leading-snug">{skill.description}</p>
         </div>
-        <button
-          onClick={handleExecute}
-          disabled={running || !skill.enabled}
-          className="shrink-0 px-2 py-1 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white disabled:bg-slate-700 disabled:text-slate-500"
-        >
-          {running ? '…' : 'Execute'}
-        </button>
+
+        {/* Action buttons */}
+        <div className="flex gap-1 shrink-0">
+          {state === 'scrapped' ? (
+            <button onClick={handleRestore} disabled={working}
+              className="px-2 py-1 text-xs rounded bg-slate-600 hover:bg-slate-500 text-white disabled:opacity-40">
+              {working ? '…' : '↺'}
+            </button>
+          ) : (
+            <>
+              <button onClick={handleExecute} disabled={running || !isEnabled}
+                className="px-2 py-1 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white disabled:bg-slate-700 disabled:text-slate-500">
+                {running ? '…' : '▶'}
+              </button>
+              {state === 'promoted' ? (
+                <button onClick={handleDemote} disabled={working}
+                  className="px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 disabled:opacity-40">
+                  {working ? '…' : '↓'}
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => setPromoting(p => !p)} disabled={!tested || working}
+                    title={tested ? 'Promote to @mcp.tool()' : 'Run test first'}
+                    className="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-300 disabled:bg-slate-700 disabled:text-slate-500">
+                    {working ? '…' : '↑'}
+                  </button>
+                  <button onClick={handleScrap} disabled={!tested || working}
+                    title={tested ? 'Scrap this skill' : 'Run test first'}
+                    className="px-2 py-1 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 disabled:bg-slate-700 disabled:text-slate-500">
+                    {working ? '…' : '✕'}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {skill.call_count > 0 && (
@@ -162,12 +256,23 @@ function SkillCard({ skill }) {
       )}
 
       {open && (
-        <ParamForm
-          skill={skill}
-          onSubmit={run}
-          onCancel={() => setOpen(false)}
-          running={running}
-        />
+        <ParamForm skill={skill} onSubmit={run} onCancel={() => setOpen(false)} running={running} />
+      )}
+
+      {/* Domain picker for promote */}
+      {promoting && (
+        <div className="mt-2 border border-green-800 rounded p-2 bg-slate-800 text-xs">
+          <p className="text-slate-400 mb-2">Add to which agent? (takes effect on restart)</p>
+          <div className="flex gap-2 flex-wrap">
+            {DOMAINS.map(d => (
+              <button key={d} onClick={() => handlePromote(d)}
+                className="px-3 py-1 rounded bg-slate-700 hover:bg-green-800 hover:text-green-300 text-slate-300">
+                {d}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setPromoting(false)} className="mt-2 text-slate-500 text-[10px]">cancel</button>
+        </div>
       )}
 
       {result && <ResultBox result={result} />}
@@ -250,7 +355,7 @@ export default function SkillsPanel() {
           </p>
         )}
         {visible.map(skill => (
-          <SkillCard key={skill.name} skill={skill} />
+          <SkillCard key={skill.name} skill={skill} onReload={load} />
         ))}
       </div>
     </div>
