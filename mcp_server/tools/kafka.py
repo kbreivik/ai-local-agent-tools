@@ -8,7 +8,7 @@ from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 from kafka.admin import NewTopic
 from kafka.errors import KafkaError, NoBrokersAvailable
 
-from api.constants import DEFAULT_KAFKA_BOOTSTRAP
+from api.constants import DEFAULT_KAFKA_BOOTSTRAP, DEFAULT_KAFKA_LAG_THRESHOLD
 
 
 def _bootstrap() -> list[str]:
@@ -89,7 +89,8 @@ def kafka_consumer_lag(group: str) -> dict:
                 "lag": lag,
             })
         consumer.close()
-        if total_lag > 10000:
+        lag_threshold = int(os.environ.get("KAFKA_LAG_THRESHOLD", DEFAULT_KAFKA_LAG_THRESHOLD))
+        if total_lag > lag_threshold:
             return _degraded({"group": group, "partitions": lag_data, "total_lag": total_lag},
                              f"High consumer lag: {total_lag}")
         return _ok({"group": group, "partitions": lag_data, "total_lag": total_lag},

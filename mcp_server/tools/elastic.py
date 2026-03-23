@@ -442,7 +442,7 @@ def elastic_correlate_operation(operation_id: str) -> dict:
         import httpx
 
         # Fetch operation record from API
-        api_base = f"http://localhost:{os.environ.get('API_PORT', '8000')}"
+        api_base = f"http://127.0.0.1:{os.environ.get('API_PORT', '8000')}"
         try:
             r = httpx.get(f"{api_base}/api/logs/operations/{operation_id}", timeout=5.0)
             r.raise_for_status()

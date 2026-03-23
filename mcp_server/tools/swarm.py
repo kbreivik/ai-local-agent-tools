@@ -69,7 +69,11 @@ def _stable_tags_sorted(image: str, page_size: int = 100) -> list:
 
 
 def _client() -> docker.DockerClient:
-    host = os.environ.get("DOCKER_HOST", "npipe:////./pipe/docker_engine")
+    default = (
+        "npipe:////./pipe/docker_engine" if os.name == "nt"
+        else "unix:///var/run/docker.sock"
+    )
+    host = os.environ.get("DOCKER_HOST", default)
     return docker.DockerClient(base_url=host)
 
 
@@ -414,7 +418,7 @@ def service_rollback(name: str) -> dict:
                 return _ok({"name": name, "rollback": True}, f"Rollback triggered for '{name}'")
             client2.close()
         except Exception as inner:
-            pass
+            return _err(f"service_rollback fallback also failed: {inner} (original: {e})")
         return _err(f"service_rollback error: {e}")
     except Exception as e:
         return _err(f"service_rollback error: {e}")
