@@ -149,7 +149,9 @@ function ToolCard({ tool, onResult }) {
     setBusy(true)
     setResult(null)
     try {
-      const r = await invokeTool(tool.name, params)
+      const r = tool.source === 'skill'
+        ? await executeSkill(tool.name, params)
+        : await invokeTool(tool.name, params)
       setResult(r)
       onResult?.()
     } catch (e) {
@@ -176,6 +178,11 @@ function ToolCard({ tool, onResult }) {
         <span className={`text-xs px-1.5 py-0.5 rounded font-mono shrink-0 ${badge}`}>
           {humanizeCategory(tool.category)}
         </span>
+        {tool.source === 'skill' && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-900 text-amber-300 shrink-0">
+            generated
+          </span>
+        )}
         <span className="text-sm text-slate-200 flex-1">{humanizeTool(tool.name)}</span>
         <span className="text-slate-600 text-xs">{open ? '▲' : '▼'}</span>
       </button>
