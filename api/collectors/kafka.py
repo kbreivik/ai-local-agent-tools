@@ -15,6 +15,7 @@ import logging
 import os
 
 from api.collectors.base import BaseCollector
+from api.constants import DEFAULT_KAFKA_BOOTSTRAP, DEFAULT_KAFKA_LAG_THRESHOLD
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class KafkaCollector(BaseCollector):
     def __init__(self):
         super().__init__()
         self.interval = int(os.environ.get("KAFKA_POLL_INTERVAL", "30"))
-        self.lag_threshold = int(os.environ.get("KAFKA_LAG_THRESHOLD", "1000"))
+        self.lag_threshold = int(os.environ.get("KAFKA_LAG_THRESHOLD", str(DEFAULT_KAFKA_LAG_THRESHOLD)))
 
     async def poll(self) -> dict:
         loop = asyncio.get_event_loop()
@@ -37,9 +38,7 @@ class KafkaCollector(BaseCollector):
 
         bootstrap = [
             s.strip()
-            for s in os.environ.get(
-                "KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"
-            ).split(",")
+            for s in os.environ.get("KAFKA_BOOTSTRAP_SERVERS", DEFAULT_KAFKA_BOOTSTRAP).split(",")
             if s.strip()
         ]
         expected = len(bootstrap)

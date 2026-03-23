@@ -15,12 +15,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp_server.tools import orchestration
 from api.tool_registry import get_registry, invoke_tool
+from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_MODEL, DEFAULT_LM_STUDIO_KEY
 
-LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
-LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "lmstudio-community/qwen3-coder-30b-a3b-instruct")
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", DEFAULT_LM_STUDIO_URL)
+LM_STUDIO_MODEL    = os.environ.get("LM_STUDIO_MODEL",    DEFAULT_LM_STUDIO_MODEL)
 # LM Studio authentication token — set LM_STUDIO_API_KEY in your environment
 # or in .env file. Find it in LM Studio → Developer → API Key.
-LM_STUDIO_API_KEY = os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
+LM_STUDIO_API_KEY  = os.environ.get("LM_STUDIO_API_KEY",  DEFAULT_LM_STUDIO_KEY)
 
 SYSTEM_PROMPT = """You are an infrastructure orchestration agent for a Docker Swarm + Kafka cluster.
 
