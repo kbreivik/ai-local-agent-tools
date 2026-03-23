@@ -2,7 +2,7 @@
  * SkillsPanel — browse and execute registered dynamic skills.
  */
 import { useEffect, useState, useCallback } from 'react'
-import { fetchSkills, executeSkill, promoteSkill, demoteSkill, scrapSkill, restoreSkill, regenerateSkill } from '../api'
+import { fetchSkills, executeSkill, promoteSkill, demoteSkill, scrapSkill, purgeSkill, restoreSkill, regenerateSkill } from '../api'
 
 const CATEGORY_COLOR = {
   compute:    'bg-blue-900 text-blue-300',
@@ -108,7 +108,9 @@ function SkillCard({ skill, onReload }) {
   const hasParams = Object.keys(skill.parameters?.properties ?? {}).length > 0
   const tested    = result !== null
   const isEnabled = skill.enabled !== false && state !== 'scrapped'
-  const isStarter = skill.auto_generated === false
+  const isStarter = skill.file_path && (skill.file_path.includes('/modules/') || skill.file_path.includes('\\modules\\'))
+  // Phantom: auto_generated=false but NOT a real starter skill (no module file) — show delete button
+  const isPhantom = skill.auto_generated === false && !isStarter
 
   const handleExecute = () => {
     setResult(null)
@@ -154,6 +156,19 @@ function SkillCard({ skill, onReload }) {
       await demoteSkill(skill.name)
     } catch (e) {
       setResult({ status: 'error', message: `Demote failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+      onReload()
+    }
+  }
+
+  const handlePurge = async () => {
+    if (!window.confirm(`Permanently delete "${skill.name}"? This cannot be undone.`)) return
+    setWorking(true)
+    try {
+      await purgeSkill(skill.name)
+    } catch (e) {
+      setResult({ status: 'error', message: `Delete failed: ${e.message}` })
     } finally {
       setWorking(false)
       onReload()
@@ -251,19 +266,25 @@ function SkillCard({ skill, onReload }) {
                   className="px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 disabled:opacity-40">
                   {working ? '…' : '↓'}
                 </button>
-              ) : !isStarter ? (
+              ) : !isStarter && !isPhantom ? (
                 <>
                   <button onClick={() => setPromoting(p => !p)} disabled={!tested || working}
                     title={tested ? 'Promote to @mcp.tool()' : 'Run test first'}
                     className="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-300 disabled:bg-slate-700 disabled:text-slate-500">
                     {working ? '…' : '↑'}
                   </button>
-                  <button onClick={handleScrap} disabled={!tested || working}
-                    title={tested ? 'Scrap this skill' : 'Run test first'}
+                  <button onClick={handleScrap} disabled={working}
+                    title="Scrap this skill"
                     className="px-2 py-1 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 disabled:bg-slate-700 disabled:text-slate-500">
                     {working ? '…' : '✕'}
                   </button>
                 </>
+              ) : isPhantom ? (
+                <button onClick={handlePurge} disabled={working}
+                  title="Permanently delete this broken skill"
+                  className="px-2 py-1 text-xs rounded bg-red-900 hover:bg-red-800 text-red-300 disabled:opacity-40">
+                  {working ? '…' : '🗑'}
+                </button>
               ) : null}
             </>
           )}
@@ -278,6 +299,9 @@ function SkillCard({ skill, onReload }) {
       )}
       {isStarter && (
         <p className="text-slate-600 text-[10px] mt-1">built-in starter skill — cannot be scrapped or promoted</p>
+      )}
+      {isPhantom && (
+        <p className="text-red-900 text-[10px] mt-1">broken skill — no module file found · use 🗑 to delete</p>
       )}
 
       {open && (

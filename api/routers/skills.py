@@ -9,6 +9,7 @@ from mcp_server.tools.skills.promoter import (
     demote_skill as _demote_skill,
     scrap_skill as _scrap_skill,
     restore_skill as _restore_skill,
+    purge_skill as _purge_skill,
 )
 from mcp_server.tools.skills.meta_tools import skill_regenerate as _skill_regenerate
 
@@ -112,6 +113,16 @@ def scrap_skill(skill_name: str, _: str = Depends(get_current_user)):
 def regenerate_skill(skill_name: str, _: str = Depends(get_current_user)):
     """Regenerate a skill from its description using the LLM, backing up the old version."""
     result = _skill_regenerate(None, skill_name)
+    if result["status"] == "error":
+        msg = result.get("message", "")
+        raise HTTPException(404 if "not found" in msg.lower() else 400, msg)
+    return result
+
+
+@router.delete("/{skill_name}/purge")
+def purge_skill(skill_name: str, _: str = Depends(get_current_user)):
+    """Permanently delete a skill from the registry, bypassing starter-skill protection."""
+    result = _purge_skill(skill_name)
     if result["status"] == "error":
         msg = result.get("message", "")
         raise HTTPException(404 if "not found" in msg.lower() else 400, msg)
