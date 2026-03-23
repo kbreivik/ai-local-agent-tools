@@ -38,6 +38,11 @@ BUILD_KEYWORDS = frozenset({
     "new tool", "build tool", "write tool", "discover environment",
 })
 
+QUESTION_STARTERS = frozenset({
+    "what", "where", "how", "which", "is", "are", "show", "list",
+    "who", "when", "why", "can", "could", "does", "do",
+})
+
 # ── Domain keyword map ────────────────────────────────────────────────────────
 
 _DOMAIN_KEYWORDS: dict = {
@@ -111,7 +116,8 @@ EXECUTE_SWARM_TOOLS = frozenset({
 }) | _EXECUTE_BASE
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
-    # Promoted proxmox skills injected at startup via _load_promoted_into_allowlists()
+    # Populated at startup by _load_promoted_into_allowlists().
+    # Only plan_action / escalate / audit_log in base until proxmox skills are promoted.
 }) | _EXECUTE_BASE
 
 EXECUTE_GENERAL_TOOLS = frozenset({
@@ -152,8 +158,9 @@ def _load_promoted_into_allowlists() -> None:
                 EXECUTE_PROXMOX_TOOLS = EXECUTE_PROXMOX_TOOLS | {name}
             else:
                 EXECUTE_GENERAL_TOOLS = EXECUTE_GENERAL_TOOLS | {name}
-    except Exception:
-        pass  # DB unavailable during tests
+    except Exception as _e:
+        import sys as _sys
+        print(f"[router] _load_promoted_into_allowlists skipped: {_e}", file=_sys.stderr)
 
 
 _load_promoted_into_allowlists()
@@ -380,13 +387,16 @@ INVESTIGATE_PROMPT = RESEARCH_PROMPT
 
 def classify_task(task: str) -> str:
     """
-    Return 'observe', 'investigate', 'execute', 'build', or 'ambiguous'.
-    Backward-compat: may also return 'status', 'research', 'action'.
+    Return 'status', 'research', 'action', 'build', or 'ambiguous'.
+
+    Backward-compat names used: 'status' (observe), 'research' (investigate), 'action' (execute).
+    New name: 'build' (skill management tasks).
+    Use filter_tools() and get_prompt() which accept both old and new names via aliases.
 
     Scoring: count keyword hits per category, return winner.
     Build intent checked first — any skill management keyword routes to build.
     Action always beats status when tied (safer to confirm).
-    'ambiguous' returned when top two categories are tied and both > 0.
+    'ambiguous' returned only when all scores are 0.
     """
     words = re.findall(r'\b\w+\b', task.lower())
     bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words) - 1)]
@@ -409,12 +419,8 @@ def classify_task(task: str) -> str:
     # UNLESS the task is a question (starts with what/where/how/which/is/are/show/list).
     # Questions are observational — route to status/research even if action words appear
     # incidentally (e.g. "what IP addresses can we use", "where is the service running").
-    _QUESTION_STARTERS = frozenset({
-        "what", "where", "how", "which", "is", "are", "show", "list",
-        "who", "when", "why", "can", "could", "does", "do",
-    })
     first_word = words[0] if words else ""
-    _is_question = first_word in _QUESTION_STARTERS
+    _is_question = first_word in QUESTION_STARTERS
 
     if action_score > 0 and not _is_question:
         return 'action'
