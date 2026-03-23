@@ -188,5 +188,5 @@ def _classify_container(state: str, health: str) -> tuple[str, str | None]:
         if health in ("starting",):
             return "amber", "starting"
         if health == "unhealthy":
-            return "amber", "health check failing"
+            return "red", "health check failing"
     return "red", "exited"

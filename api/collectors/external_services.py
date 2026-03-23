@@ -112,7 +112,7 @@ class ExternalServicesCollector(BaseCollector):
                 t0 = time.monotonic()
                 r = httpx.get(url, headers=headers, verify=False, timeout=8, follow_redirects=True)
                 latency_ms = round((time.monotonic() - t0) * 1000)
-                reachable = r.status_code < 500
+                reachable = r.status_code < 400
             except Exception as e:
                 log.warning("External probe failed for %s: %s", cfg["slug"], e)
                 latency_ms = None
