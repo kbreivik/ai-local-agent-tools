@@ -7,13 +7,14 @@ Registered via after_status_snapshot hook in collectors.
 import logging
 
 from api.memory.client import get_client
+from api.constants import DEFAULT_KAFKA_LAG_THRESHOLD
 
 log = logging.getLogger(__name__)
 
 # ── Trigger definitions ───────────────────────────────────────────────────────
 # Each trigger: (component, condition_fn, concept, content_fn, tags)
 
-_KAFKA_LAG_THRESHOLD = 1000
+_KAFKA_LAG_THRESHOLD = DEFAULT_KAFKA_LAG_THRESHOLD
 
 
 def _kafka_triggers(state: dict) -> list[tuple[str, str, list[str]]]:

@@ -5,6 +5,8 @@ import os
 import re
 from datetime import datetime, timezone
 
+from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_KEY
+
 import httpx
 
 from mcp_server.tools.skills import prompt_builder, registry, validator
@@ -50,11 +52,11 @@ def _get_backend_config() -> dict:
         "backend": os.environ.get("SKILL_GEN_BACKEND", file_cfg.get("backend", "local")),
         "lm_studio_base_url": os.environ.get(
             "LM_STUDIO_BASE_URL",
-            file_cfg.get("lm_studio_base_url", "http://localhost:1234/v1"),
+            file_cfg.get("lm_studio_base_url", DEFAULT_LM_STUDIO_URL),
         ),
         "lm_studio_api_key": os.environ.get(
             "LM_STUDIO_API_KEY",
-            file_cfg.get("lm_studio_api_key", "lm-studio"),
+            file_cfg.get("lm_studio_api_key", DEFAULT_LM_STUDIO_KEY),
         ),
         "lm_studio_model": file_cfg.get("lm_studio_model", ""),
         "anthropic_api_key": os.environ.get(

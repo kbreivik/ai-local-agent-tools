@@ -198,9 +198,10 @@ async def detect_breaking_changes_llm(diff_snippet: str, source: str) -> str:
     import os
     try:
         from openai import OpenAI
+        from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_KEY
         client = OpenAI(
-            base_url=os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1"),
-            api_key=os.environ.get("LM_STUDIO_API_KEY", "lm-studio"),
+            base_url=os.environ.get("LM_STUDIO_BASE_URL", DEFAULT_LM_STUDIO_URL),
+            api_key=os.environ.get("LM_STUDIO_API_KEY", DEFAULT_LM_STUDIO_KEY),
         )
         prompt = f"""Analyze this documentation diff for {source} and identify:
 1. Breaking API changes (removed/renamed endpoints, changed parameters, incompatible behavior)
