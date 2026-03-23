@@ -145,7 +145,7 @@ function InfrastructureTab({ draft, update }) {
         <TextInput value={draft.kibanaUrl} onChange={v => update('kibanaUrl', v)} placeholder="http://localhost:5601" />
       </Field>
       <Field label="MuninnDB URL">
-        <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://localhost:8475" />
+        <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://localhost:9475" />
       </Field>
     </div>
   )

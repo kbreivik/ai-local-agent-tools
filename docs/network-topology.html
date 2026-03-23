@@ -278,8 +278,8 @@
       </div>
       <div class="node-row">
         <div>
-          <div class="node-name">Docker TCP (remote)</div>
-          <div class="node-host">192.168.199.21</div>
+          <div class="node-name">Docker TCP (manager-01)</div>
+          <div class="node-host">192.168.199.21 (site-specific)</div>
         </div>
         <div class="node-ports">
           <span class="badge badge-port">:2375</span>
@@ -734,7 +734,7 @@
             <td><span class="ep-name">/api/lock/force-release</span></td>
             <td><span class="ep-method ep-post">POST</span></td>
             <td class="ep-desc">Admin override: release stuck lock</td>
-            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-warn">admin only</span></div></td>
+            <td><div class="fw-row"><span class="fw-cond">JWT required</span><span class="fw-warn">any authenticated user</span></div></td>
           </tr>
           <tr>
             <td><span class="ep-name">/ (static)</span></td>
