@@ -105,9 +105,9 @@ export function OptionsProvider({ children }) {
     setOptions(merged)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
 
-    // Persist server-owned keys to API
+    // Persist server-owned keys to API — exclude masked values to avoid overwriting real secrets
     const serverPayload = Object.fromEntries(
-      Object.entries(merged).filter(([k]) => SERVER_KEYS.has(k))
+      Object.entries(merged).filter(([k, v]) => SERVER_KEYS.has(k) && !isMasked(v))
     )
     await saveSettings(serverPayload)  // throws on failure — let caller handle
   }
