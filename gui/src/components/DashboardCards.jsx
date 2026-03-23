@@ -166,20 +166,30 @@ function SwarmNodesCard({ data, loading, lastUpdated, onRefresh, minHeight, maxH
             </span>
           </div>
           <div>
-            {nodes.map(n => (
-              <div key={n.id} style={S.row}>
-                <div style={S.rowInner}>
-                  <RowDot ok={n.state === 'ready'} />
-                  <span style={{ ...S.rowMono, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.hostname}>
-                    {n.hostname}
+            {nodes.map(n => {
+              const avail = n.availability ?? 'active'
+              const nodeOk = n.state === 'ready' && avail === 'active'
+              const nodeDegraded = n.state === 'ready' && avail !== 'active'
+              return (
+                <div key={n.id} style={S.row}>
+                  <div style={S.rowInner}>
+                    <RowDot ok={nodeOk} degraded={nodeDegraded} />
+                    <span style={{ ...S.rowMono, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.hostname}>
+                      {n.hostname}
+                    </span>
+                    {n.leader && <span style={{ color: '#d97706', fontSize: '0.7rem' }} title="Swarm leader">★</span>}
+                    {avail !== 'active' && (
+                      <span style={{ fontSize: '0.66rem', background: '#7c2d12', color: '#fca5a5', padding: '0 4px', borderRadius: 3 }}>
+                        {avail}
+                      </span>
+                    )}
+                  </div>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', flexShrink: 0, color: n.role === 'manager' ? '#2563eb' : '#9ca3af' }}>
+                    {n.role === 'manager' ? 'MGR' : 'WRK'}
                   </span>
-                  {n.leader && <span style={{ color: '#d97706', fontSize: '0.7rem' }} title="Swarm leader">★</span>}
                 </div>
-                <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', flexShrink: 0, color: n.role === 'manager' ? '#2563eb' : '#9ca3af' }}>
-                  {n.role === 'manager' ? 'MGR' : 'WRK'}
-                </span>
-              </div>
-            ))}
+              )
+            })}
           </div>
           {data.message && <p style={S.summary}>{data.message}</p>}
         </>
