@@ -123,25 +123,29 @@ function SwarmSection({ data }) {
               </tr>
             </thead>
             <tbody>
-              {nodes.map(n => (
-                <tr
-                  key={n.id}
-                  className={`border-t border-slate-800 ${n.state !== 'ready' ? 'text-red-400' : 'text-slate-300'}`}
-                >
-                  <td className="py-0.5 truncate max-w-[80px]" title={n.hostname}>
-                    {n.hostname}
-                    {n.leader && <span className="text-yellow-400 ml-1" title="Leader">★</span>}
-                  </td>
-                  <td className="py-0.5">
-                    <span className={`text-xs px-1 rounded ${n.role === 'manager' ? 'bg-blue-900 text-blue-300' : 'bg-slate-800 text-slate-400'}`}>
-                      {n.role === 'manager' ? 'M' : 'W'}
-                    </span>
-                  </td>
-                  <td className={`py-0.5 ${n.state === 'ready' ? 'text-green-400' : 'text-red-400'}`}>
-                    {n.state}
-                  </td>
-                </tr>
-              ))}
+              {nodes.map(n => {
+                const avail = n.availability ?? 'active'
+                const nodeOk = n.state === 'ready' && avail === 'active'
+                return (
+                  <tr
+                    key={n.id}
+                    className={`border-t border-slate-800 ${nodeOk ? 'text-slate-300' : 'text-red-400'}`}
+                  >
+                    <td className="py-0.5 truncate max-w-[80px]" title={n.hostname}>
+                      {n.hostname}
+                      {n.leader && <span className="text-yellow-400 ml-1" title="Leader">★</span>}
+                    </td>
+                    <td className="py-0.5">
+                      <span className={`text-xs px-1 rounded ${n.role === 'manager' ? 'bg-blue-900 text-blue-300' : 'bg-slate-800 text-slate-400'}`}>
+                        {n.role === 'manager' ? 'M' : 'W'}
+                      </span>
+                    </td>
+                    <td className={`py-0.5 ${nodeOk ? 'text-green-400' : 'text-yellow-400'}`}>
+                      {avail !== 'active' ? avail : n.state}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
