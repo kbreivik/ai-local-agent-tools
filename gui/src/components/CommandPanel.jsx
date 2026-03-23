@@ -256,7 +256,7 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       const normTools = tools.map(t => ({
         ...t,
         source: 'tool',
-        tags: [t.category || 'general'],
+        tags: [(t.category || 'general').toLowerCase()],
       }))
       const normSkills = skills.map(s => ({
         name:        s.name,
