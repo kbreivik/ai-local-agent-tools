@@ -5,19 +5,31 @@ and use a real JWT obtained via the login endpoint.
 """
 import json
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from api.main import app
+from api.auth import get_current_user
 
-client = TestClient(app)
+_tc = TestClient(app)
+
+
+# ── Auth-bypassing fixture for POST action tests ────────────────────────────────
+
+@pytest.fixture
+def client():
+    """TestClient with get_current_user overridden to bypass auth."""
+    app.dependency_overrides[get_current_user] = lambda: "admin"
+    c = TestClient(app)
+    yield c
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 # ── Auth helper ────────────────────────────────────────────────────────────────
 
 def auth_headers():
     """Obtain a valid JWT for test requests."""
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "superduperadmin"})
+    r = _tc.post("/api/auth/login", json={"username": "admin", "password": "superduperadmin"})
     if r.status_code != 200:
         pytest.skip("Auth not available in test env")
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -162,7 +174,7 @@ def _image_digest_snap():
 
 def test_containers_agent01_requires_auth():
     """GET /api/dashboard/containers/agent01 without token returns 401."""
-    r = client.get("/api/dashboard/containers/agent01")
+    r = _tc.get("/api/dashboard/containers/agent01")
     assert r.status_code == 401
 
 
@@ -176,7 +188,7 @@ def test_containers_agent01_returns_containers_and_health():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/agent01", headers=h)
+        r = _tc.get("/api/dashboard/containers/agent01", headers=h)
 
     assert r.status_code == 200, r.text
     body = r.json()
@@ -197,7 +209,7 @@ def test_containers_agent01_no_snapshot_returns_unknown():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/agent01", headers=h)
+        r = _tc.get("/api/dashboard/containers/agent01", headers=h)
 
     assert r.status_code == 200
     body = r.json()
@@ -209,7 +221,7 @@ def test_containers_agent01_no_snapshot_returns_unknown():
 
 def test_containers_swarm_requires_auth():
     """GET /api/dashboard/containers/swarm without token returns 401."""
-    r = client.get("/api/dashboard/containers/swarm")
+    r = _tc.get("/api/dashboard/containers/swarm")
     assert r.status_code == 401
 
 
@@ -225,7 +237,7 @@ def test_containers_swarm_returns_services_and_nodes():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/swarm", headers=h)
+        r = _tc.get("/api/dashboard/containers/swarm", headers=h)
 
     assert r.status_code == 200, r.text
     body = r.json()
@@ -249,7 +261,7 @@ def test_containers_swarm_services_have_dot_and_problem():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/swarm", headers=h)
+        r = _tc.get("/api/dashboard/containers/swarm", headers=h)
 
     assert r.status_code == 200
     services = r.json()["services"]
@@ -274,7 +286,7 @@ def test_containers_swarm_managers_and_workers_split_correctly():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/swarm", headers=h)
+        r = _tc.get("/api/dashboard/containers/swarm", headers=h)
 
     assert r.status_code == 200
     body = r.json()
@@ -290,7 +302,7 @@ def test_containers_swarm_no_snapshot_returns_unknown():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/containers/swarm", headers=h)
+        r = _tc.get("/api/dashboard/containers/swarm", headers=h)
 
     assert r.status_code == 200
     body = r.json()
@@ -304,7 +316,7 @@ def test_containers_swarm_no_snapshot_returns_unknown():
 
 def test_vms_requires_auth():
     """GET /api/dashboard/vms without token returns 401."""
-    r = client.get("/api/dashboard/vms")
+    r = _tc.get("/api/dashboard/vms")
     assert r.status_code == 401
 
 
@@ -318,7 +330,7 @@ def test_vms_returns_vms_and_health():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/vms", headers=h)
+        r = _tc.get("/api/dashboard/vms", headers=h)
 
     assert r.status_code == 200, r.text
     body = r.json()
@@ -337,7 +349,7 @@ def test_vms_no_snapshot_returns_unknown():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/vms", headers=h)
+        r = _tc.get("/api/dashboard/vms", headers=h)
 
     assert r.status_code == 200
     body = r.json()
@@ -349,7 +361,7 @@ def test_vms_no_snapshot_returns_unknown():
 
 def test_external_requires_auth():
     """GET /api/dashboard/external without token returns 401."""
-    r = client.get("/api/dashboard/external")
+    r = _tc.get("/api/dashboard/external")
     assert r.status_code == 401
 
 
@@ -363,7 +375,7 @@ def test_external_returns_services_and_health():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/external", headers=h)
+        r = _tc.get("/api/dashboard/external", headers=h)
 
     assert r.status_code == 200, r.text
     body = r.json()
@@ -382,7 +394,7 @@ def test_external_no_snapshot_returns_unknown():
         return {}
 
     with patch("api.routers.dashboard.q.get_latest_snapshot", side_effect=fake_snapshot):
-        r = client.get("/api/dashboard/external", headers=h)
+        r = _tc.get("/api/dashboard/external", headers=h)
 
     assert r.status_code == 200
     body = r.json()
@@ -428,3 +440,50 @@ def test_swarm_problem_message_when_zero():
     from api.routers.dashboard import _swarm_problem
     svc = {"running_replicas": 0, "desired_replicas": 2}
     assert _swarm_problem(svc) == "no replicas running"
+
+
+# ── POST action tests ──────────────────────────────────────────────────────────
+
+def test_restart_container(client):
+    with patch("docker.DockerClient") as mock_dc:
+        mock_container = MagicMock()
+        mock_dc.return_value.containers.get.return_value = mock_container
+        r = client.post("/api/dashboard/containers/abc123/restart")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+def test_stop_container(client):
+    with patch("docker.DockerClient") as mock_dc:
+        mock_container = MagicMock()
+        mock_dc.return_value.containers.get.return_value = mock_container
+        r = client.post("/api/dashboard/containers/abc123/stop")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+def test_scale_service(client):
+    with patch("docker.DockerClient") as mock_dc:
+        mock_service = MagicMock()
+        mock_dc.return_value.services.get.return_value = mock_service
+        r = client.post("/api/dashboard/services/myservice/scale", json={"replicas": 3})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+def test_probe_external_lm_studio(client):
+    import os
+    with patch.dict(os.environ, {"LM_STUDIO_URL": "http://192.168.1.100:1234"}):
+        with patch("httpx.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_get.return_value = mock_resp
+            r = client.post("/api/dashboard/external/lm_studio/probe")
+    assert r.status_code == 200
+    data = r.json()
+    assert "reachable" in data
+    assert "latency_ms" in data
+
+def test_probe_external_unknown_slug(client):
+    r = client.post("/api/dashboard/external/nonexistent_slug/probe")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["reachable"] is False
+    assert data["latency_ms"] is None
