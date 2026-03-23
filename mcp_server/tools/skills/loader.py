@@ -121,7 +121,9 @@ def load_single_skill(mcp_server, name: str) -> dict:
     """
     filepath = os.path.join(_MODULES_DIR, f"{name}.py")
     if not os.path.exists(filepath):
-        return {"loaded": False, "name": name, "error": f"File not found: {filepath}"}
+        filepath = os.path.join(GENERATED_DIR, f"{name}.py")
+    if not os.path.exists(filepath):
+        return {"loaded": False, "name": name, "error": f"File not found in modules/ or GENERATED_DIR"}
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:

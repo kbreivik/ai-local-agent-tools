@@ -1,7 +1,5 @@
 """Test skill persistence to data/skill_modules/ volume."""
-import os
 import sys
-import tempfile
 import textwrap
 from pathlib import Path
 
