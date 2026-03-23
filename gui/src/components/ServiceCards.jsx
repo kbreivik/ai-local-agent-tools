@@ -123,20 +123,10 @@ function ActionBtn({ label, onClick, variant = 'default', loading, disabled }) {
 // ── Confirm dialog ─────────────────────────────────────────────────────────────
 
 function useConfirm() {
-  const [pending, setPending] = useState(null)
-  const confirm = (msg, onConfirm) => setPending({ msg, onConfirm })
-  const Dialog = pending ? (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[#1a1a2e] border border-[#333] rounded-lg p-5 max-w-sm w-full mx-4">
-        <p className="text-sm text-gray-300 mb-4">{pending.msg}</p>
-        <div className="flex gap-2 justify-end">
-          <button onClick={() => setPending(null)} className="text-xs px-3 py-1.5 rounded border border-[#333] text-gray-500 hover:text-gray-300">Cancel</button>
-          <button onClick={() => { pending.onConfirm(); setPending(null) }} className="text-xs px-3 py-1.5 rounded bg-red-800/60 text-red-300 border border-red-700/40 hover:bg-red-800/80">Confirm</button>
-        </div>
-      </div>
-    </div>
-  ) : null
-  return { confirm, Dialog }
+  const [pending, setPending] = React.useState(null)
+  const confirm = React.useCallback((msg) => new Promise(res => setPending({ msg, res })), [])
+  const resolve = React.useCallback((val) => setPending(p => { p?.res(val); return null }), [])
+  return { pending, confirm, resolve }
 }
 
 // ── Generic card shell ──────────────────────────────────────────────────────────
@@ -210,17 +200,21 @@ function Actions({ buttons }) {
 function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
-  const [scaleVal, setScaleVal] = useState(c.replicas_desired ?? 1)
+  const [scaleVal, setScaleVal] = React.useState(1)
+  const mounted = React.useRef(true)
+  React.useEffect(() => () => { mounted.current = false }, [])
 
   const act = async (key, path, body, msg) => {
-    const run = async () => {
-      setLoading(l => ({ ...l, [key]: true }))
-      const r = await dashboardAction(path, body)
-      setLoading(l => ({ ...l, [key]: false }))
-      if (!r.ok) showToast(r.error || 'Action failed', 'error')
-      else { showToast('Done'); onAction() }
+    if (msg) {
+      const ok = await confirm(msg)
+      if (!ok) return
     }
-    msg ? confirm(msg, run) : run()
+    setLoading(l => ({ ...l, [key]: true }))
+    const r = await dashboardAction(path, body)
+    if (!mounted.current) return
+    setLoading(l => ({ ...l, [key]: false }))
+    if (!r.ok) showToast(r.error || 'Action failed', 'error')
+    else { showToast('Done'); onAction() }
   }
 
   const pullPath = isSwarm ? `services/${c.name}/pull` : `containers/${c.id}/pull`
@@ -283,16 +277,20 @@ function ContainerCardCollapsed({ c }) {
 
 function VMCardExpanded({ vm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
+  const mounted = React.useRef(true)
+  React.useEffect(() => () => { mounted.current = false }, [])
 
   const act = async (key, action, msg) => {
-    const run = async () => {
-      setLoading(l => ({ ...l, [key]: true }))
-      const r = await dashboardAction(`vms/${vm.node.toLowerCase().replace('pmox', 'pve')}/${vm.vmid}/${action}`)
-      setLoading(l => ({ ...l, [key]: false }))
-      if (!r.ok) showToast(r.error || 'Action failed', 'error')
-      else { showToast('Done'); onAction() }
+    if (msg) {
+      const ok = await confirm(msg)
+      if (!ok) return
     }
-    msg ? confirm(msg, run) : run()
+    setLoading(l => ({ ...l, [key]: true }))
+    const r = await dashboardAction(`vms/${vm.node.toLowerCase().replace('pmox', 'pve')}/${vm.vmid}/${action}`)
+    if (!mounted.current) return
+    setLoading(l => ({ ...l, [key]: false }))
+    if (!r.ok) showToast(r.error || 'Action failed', 'error')
+    else { showToast('Done'); onAction() }
   }
 
   return (
@@ -336,10 +334,13 @@ function VMCardCollapsed({ vm }) {
 function ExternalCardExpanded({ svc, onAction }) {
   const [probeLoading, setProbeLoading] = useState(false)
   const [liveLatency, setLiveLatency] = useState(null)
+  const mounted = React.useRef(true)
+  React.useEffect(() => () => { mounted.current = false }, [])
 
   const probe = async () => {
     setProbeLoading(true)
     const r = await dashboardAction(`external/${svc.slug}/probe`)
+    if (!mounted.current) return
     setProbeLoading(false)
     if (r.latency_ms != null) setLiveLatency(r.latency_ms)
   }
@@ -421,7 +422,7 @@ export default function ServiceCards({ showAlertBar = false }) {
   const [external, setExternal]     = useState(null)
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
-  const { confirm, Dialog }         = useConfirm()
+  const { pending, confirm, resolve } = useConfirm()
   const { toasts, show: showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -448,7 +449,17 @@ export default function ServiceCards({ showAlertBar = false }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {Dialog}
+      {pending && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg p-6 max-w-sm w-full mx-4">
+            <p className="text-white mb-4">{pending.msg}</p>
+            <div className="flex gap-3 justify-end">
+              <button className="px-4 py-2 text-sm text-[#888] hover:text-white" onClick={() => resolve(false)}>Cancel</button>
+              <button className="px-4 py-2 text-sm bg-[#7c6af7] text-white rounded hover:bg-[#6b5af0]" onClick={() => resolve(true)}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
       {showAlertBar && <AlertBar containers={containers} swarm={swarm} vms={vms} external={external} />}
 
       {isInitialLoad && (
