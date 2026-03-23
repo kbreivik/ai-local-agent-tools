@@ -13,6 +13,30 @@ import {
 
 const POLL_MS = 30_000
 
+// ── Toast system ───────────────────────────────────────────────────────────────
+
+function Toast({ toasts }) {
+  return (
+    <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50">
+      {toasts.map(t => (
+        <div key={t.id} className={`px-4 py-2 rounded text-sm text-white shadow-lg ${t.type === 'error' ? 'bg-red-700' : 'bg-green-700'}`}>
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function useToast() {
+  const [toasts, setToasts] = useState([])
+  const show = useCallback((msg, type = 'success') => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, msg, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+  }, [])
+  return { toasts, show }
+}
+
 // ── Visual helpers ─────────────────────────────────────────────────────────────
 
 const DOT_CLS = {
@@ -130,7 +154,7 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapse
         <span className={`text-[12px] font-semibold truncate ${cs.nameCls}`}>{name}</span>
       </div>
       {sub && <div className="text-[10px] text-[#3a3a5a] font-mono truncate mb-0.5">{sub}</div>}
-      {net && <div className="text-[10px] text-[#4a5a7a] font-mono mb-1">{net}</div>}
+      <div className="text-[10px] text-[#4a5a7a] font-mono mb-1">{net || '—'}</div>
       {isOpen ? (
         <div onClick={e => e.stopPropagation()}>
           {expanded}
@@ -183,16 +207,18 @@ function Actions({ buttons }) {
 
 // ── Container card ─────────────────────────────────────────────────────────────
 
-function ContainerCardExpanded({ c, isSwarm, onAction, confirm }) {
+function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
+  const [scaleOpen, setScaleOpen] = useState(false)
+  const [scaleVal, setScaleVal] = useState(c.replicas_desired ?? 1)
 
   const act = async (key, path, body, msg) => {
     const run = async () => {
       setLoading(l => ({ ...l, [key]: true }))
       const r = await dashboardAction(path, body)
       setLoading(l => ({ ...l, [key]: false }))
-      if (!r.ok) alert(r.error)
-      else onAction()
+      if (!r.ok) showToast(r.error || 'Action failed', 'error')
+      else { showToast('Done'); onAction() }
     }
     msg ? confirm(msg, run) : run()
   }
@@ -219,8 +245,25 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm }) {
         <ActionBtn key="logs" label="View Logs" loading={loading.logs} onClick={() => { window.location.hash = '#logs' }} />,
         !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
         !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
-        isSwarm  && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { const n = parseInt(prompt('Replicas:', c.replicas_desired)); if (n > 0) act('scale', `services/${c.name}/scale`, { replicas: n }, null) }} />,
+        isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.replicas_desired ?? 1); setScaleOpen(true) }} />,
       ].filter(Boolean)} />
+      {scaleOpen && (
+        <div className="mt-3 flex items-center gap-2">
+          <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => Math.max(0, v - 1))}>−</button>
+          <input
+            type="number" min="0"
+            value={scaleVal}
+            onChange={e => setScaleVal(parseInt(e.target.value) || 0)}
+            className="w-16 text-center bg-[#0d0d1a] border border-[#2a2a4a] text-white rounded text-sm py-1"
+          />
+          <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => v + 1)}>+</button>
+          <button
+            className="px-3 py-1 bg-[#7c6af7] text-white rounded text-sm"
+            onClick={() => { act('scale', `services/${c.name}/scale`, { replicas: scaleVal }, null); setScaleOpen(false) }}
+          >Confirm</button>
+          <button className="px-2 py-1 text-[#888] text-sm" onClick={() => setScaleOpen(false)}>✕</button>
+        </div>
+      )}
     </>
   )
 }
@@ -238,7 +281,7 @@ function ContainerCardCollapsed({ c }) {
 
 // ── VM card ───────────────────────────────────────────────────────────────────
 
-function VMCardExpanded({ vm, onAction, confirm }) {
+function VMCardExpanded({ vm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
 
   const act = async (key, action, msg) => {
@@ -246,8 +289,8 @@ function VMCardExpanded({ vm, onAction, confirm }) {
       setLoading(l => ({ ...l, [key]: true }))
       const r = await dashboardAction(`vms/${vm.node.toLowerCase().replace('pmox', 'pve')}/${vm.vmid}/${action}`)
       setLoading(l => ({ ...l, [key]: false }))
-      if (!r.ok) alert(r.error)
-      else onAction()
+      if (!r.ok) showToast(r.error || 'Action failed', 'error')
+      else { showToast('Done'); onAction() }
     }
     msg ? confirm(msg, run) : run()
   }
@@ -333,12 +376,19 @@ function ExternalCardCollapsed({ svc }) {
 
 function AlertBar({ containers, swarm, vms, external }) {
   const issues = []
-  for (const c of containers?.containers || []) if (c.problem) issues.push({ sev: c.dot, text: `${c.name} ${c.problem}` })
-  for (const s of swarm?.services || []) if (s.problem) issues.push({ sev: s.dot, text: `${s.name} ${s.problem}` })
-  for (const v of vms?.vms || []) if (v.problem) issues.push({ sev: v.dot, text: `${v.name} ${v.problem}` })
-  for (const e of external?.services || []) if (e.problem) issues.push({ sev: e.dot, text: `${e.name} ${e.problem}` })
+  let idx = 0
+  for (const c of containers?.containers || []) if (c.problem) issues.push({ sev: c.dot, text: `${c.name} ${c.problem}`, idx: idx++ })
+  for (const s of swarm?.services || []) if (s.problem) issues.push({ sev: s.dot, text: `${s.name} ${s.problem}`, idx: idx++ })
+  for (const v of vms?.vms || []) if (v.problem) issues.push({ sev: v.dot, text: `${v.name} ${v.problem}`, idx: idx++ })
+  for (const e of external?.services || []) if (e.problem) issues.push({ sev: e.dot, text: `${e.name} ${e.problem}`, idx: idx++ })
   if (!issues.length) return null
-  issues.sort((a, b) => (a.sev === 'red' ? -1 : b.sev === 'red' ? 1 : 0))
+  const SEV_ORDER = { red: 0, amber: 1, grey: 2, green: 3 }
+  issues.sort((a, b) => {
+    const sa = SEV_ORDER[a.sev] ?? 2
+    const sb = SEV_ORDER[b.sev] ?? 2
+    if (sa !== sb) return sa - sb
+    return a.idx - b.idx
+  })
   const shown = issues.slice(0, 3)
   const extra = issues.length - 3
   return (
@@ -370,7 +420,9 @@ export default function ServiceCards({ showAlertBar = false }) {
   const [vms, setVMs]               = useState(null)
   const [external, setExternal]     = useState(null)
   const [openKey, setOpenKey]       = useState(null)
+  const [isInitialLoad, setIsInitialLoad] = useState(true)
   const { confirm, Dialog }         = useConfirm()
+  const { toasts, show: showToast } = useToast()
 
   const load = useCallback(async () => {
     const [c, s, v, e] = await Promise.allSettled([
@@ -383,6 +435,7 @@ export default function ServiceCards({ showAlertBar = false }) {
     if (s.status === 'fulfilled') setSwarm(s.value)
     if (v.status === 'fulfilled') setVMs(v.value)
     if (e.status === 'fulfilled') setExternal(e.value)
+    setIsInitialLoad(false)
   }, [])
 
   useEffect(() => {
@@ -398,67 +451,77 @@ export default function ServiceCards({ showAlertBar = false }) {
       {Dialog}
       {showAlertBar && <AlertBar containers={containers} swarm={swarm} vms={vms} external={external} />}
 
-      {/* Containers · agent-01 */}
-      <Section
-        label="Containers · agent-01"
-        meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
-        errorCount={errorCount(containers?.containers)}
-      >
-        {(containers?.containers || []).map(c => (
-          <InfraCard
-            key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-            dot={c.dot} name={c.name} sub={c.image} net={c.ip_port}
-            collapsed={<ContainerCardCollapsed c={c} />}
-            expanded={<ContainerCardExpanded c={c} isSwarm={false} onAction={load} confirm={confirm} />}
-          />
-        ))}
-      </Section>
+      {isInitialLoad && (
+        <div className="flex justify-center py-12">
+          <div className="w-6 h-6 border-2 border-[#7c6af7] border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
 
-      {/* Containers · Swarm */}
-      <Section
-        label="Containers · Swarm"
-        meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
-        errorCount={errorCount(swarm?.services)}
-        cols={4}
-      >
-        {(swarm?.services || []).map(s => (
-          <InfraCard
-            key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
-            dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
-            collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas`, last_pull_at: s.last_pull_at }} />}
-            expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} />}
-          />
-        ))}
-      </Section>
+      {!isInitialLoad && <>
+        {/* Containers · agent-01 */}
+        <Section
+          label="Containers · agent-01"
+          meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
+          errorCount={errorCount(containers?.containers)}
+        >
+          {(containers?.containers || []).map(c => (
+            <InfraCard
+              key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
+              dot={c.dot} name={c.name} sub={c.image} net={c.ip_port}
+              collapsed={<ContainerCardCollapsed c={c} />}
+              expanded={<ContainerCardExpanded c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast} />}
+            />
+          ))}
+        </Section>
 
-      {/* VMs · Proxmox */}
-      <Section label="VMs · Proxmox Cluster" meta="Pmox1 · Pmox2 · Pmox3" errorCount={errorCount(vms?.vms)} cols={4}>
-        {(vms?.vms || []).map(vm => (
-          <InfraCard
-            key={vm.vmid} cardKey={`v-${vm.vmid}`} openKey={openKey} setOpenKey={setOpenKey}
-            dot={vm.dot} name={vm.name} sub={`VM ${vm.vmid} · ${vm.node}`} net={vm.ip}
-            collapsed={<VMCardCollapsed vm={vm} />}
-            expanded={<VMCardExpanded vm={vm} onAction={load} confirm={confirm} />}
-          />
-        ))}
-      </Section>
+        {/* Containers · Swarm */}
+        <Section
+          label="Containers · Swarm"
+          meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
+          errorCount={errorCount(swarm?.services)}
+          cols={4}
+        >
+          {(swarm?.services || []).map(s => (
+            <InfraCard
+              key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
+              dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
+              collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas · since ${_relativeTime(s.created_at)}`, last_pull_at: s.last_pull_at }} />}
+              expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} />}
+            />
+          ))}
+        </Section>
 
-      {/* External Services */}
-      <Section
-        label="External Services"
-        meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
-        errorCount={errorCount(external?.services)}
-        cols={4}
-      >
-        {(external?.services || []).map(svc => (
-          <InfraCard
-            key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
-            dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
-            collapsed={<ExternalCardCollapsed svc={svc} />}
-            expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
-          />
-        ))}
-      </Section>
+        {/* VMs · Proxmox */}
+        <Section label="VMs · Proxmox Cluster" meta="Pmox1 · Pmox2 · Pmox3" errorCount={errorCount(vms?.vms)} cols={4}>
+          {(vms?.vms || []).map(vm => (
+            <InfraCard
+              key={vm.vmid} cardKey={`v-${vm.vmid}`} openKey={openKey} setOpenKey={setOpenKey}
+              dot={vm.dot} name={vm.name} sub={`VM ${vm.vmid} · ${vm.node}`} net={vm.ip}
+              collapsed={<VMCardCollapsed vm={vm} />}
+              expanded={<VMCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
+            />
+          ))}
+        </Section>
+
+        {/* External Services */}
+        <Section
+          label="External Services"
+          meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
+          errorCount={errorCount(external?.services)}
+          cols={4}
+        >
+          {(external?.services || []).map(svc => (
+            <InfraCard
+              key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
+              dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
+              collapsed={<ExternalCardCollapsed svc={svc} />}
+              expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
+            />
+          ))}
+        </Section>
+      </>}
+
+      <Toast toasts={toasts} />
     </div>
   )
 }
