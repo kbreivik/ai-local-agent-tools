@@ -17,7 +17,7 @@ def test_poll_returns_vms_key():
     }
 
     with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
-         patch("httpx.get", return_value=mock_resp), \
+         patch("api.collectors.proxmox_vms.httpx.get", return_value=mock_resp), \
          patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 
@@ -48,9 +48,25 @@ def test_stopped_vm_returns_red_dot():
     }
 
     with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
-         patch("httpx.get", return_value=mock_resp), \
+         patch("api.collectors.proxmox_vms.httpx.get", return_value=mock_resp), \
          patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 
     assert result["vms"][0]["dot"] == "red"
     assert result["vms"][0]["problem"] == "stopped"
+    assert result["health"] == "critical"
+
+
+def test_all_nodes_unreachable_returns_error():
+    from api.collectors.proxmox_vms import ProxmoxVMsCollector
+    collector = ProxmoxVMsCollector()
+
+    with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
+         patch("api.collectors.proxmox_vms.httpx.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_get.return_value = mock_resp
+        result = asyncio.run(collector.poll())
+
+    assert result["health"] == "error"
+    assert result["vms"] == []

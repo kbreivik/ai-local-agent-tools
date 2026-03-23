@@ -9,6 +9,8 @@ import asyncio
 import logging
 import os
 
+import httpx
+
 from api.collectors.base import BaseCollector
 
 log = logging.getLogger(__name__)
@@ -51,19 +53,21 @@ class ProxmoxVMsCollector(BaseCollector):
         if not host:
             return {"health": "unconfigured", "vms": [], "message": "PROXMOX_HOST not set"}
 
-        import httpx
         headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
         base = f"https://{host}:8006/api2/json"
-        nodes = os.environ.get("PROXMOX_NODES", ",".join(NODES)).split(",")
+        nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", ",".join(NODES)).split(",") if n.strip()]
 
         vms = []
+        nodes_ok = 0
         try:
             for node in nodes:
                 try:
                     r = httpx.get(f"{base}/nodes/{node}/qemu",
                                   headers=headers, verify=False, timeout=8)
                     if r.status_code != 200:
+                        log.warning("Proxmox node %s returned HTTP %s", node, r.status_code)
                         continue
+                    nodes_ok += 1
                     for vm in r.json().get("data", []):
                         vmid = vm["vmid"]
                         status = vm.get("status", "unknown")
@@ -93,6 +97,8 @@ class ProxmoxVMsCollector(BaseCollector):
                 except Exception as e:
                     log.warning("Proxmox node %s error: %s", node, e)
 
+            if nodes_ok == 0 and not vms:
+                return {"health": "error", "vms": [], "error": "No Proxmox nodes responded"}
             if not vms or all(v["dot"] == "green" for v in vms):
                 overall = "healthy"
             elif all(v["dot"] == "red" for v in vms):
@@ -106,7 +112,6 @@ class ProxmoxVMsCollector(BaseCollector):
 
 
 def _get_disk_usage(base: str, headers: dict, node: str, vmid: int) -> list:
-    import httpx
     try:
         r = httpx.get(f"{base}/nodes/{node}/qemu/{vmid}/agent/get-fsinfo",
                       headers=headers, verify=False, timeout=5)
