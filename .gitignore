@@ -46,3 +46,4 @@ data/docs/*.pdf
 # OS
 Thumbs.db
 .DS_Store
+.worktrees/
