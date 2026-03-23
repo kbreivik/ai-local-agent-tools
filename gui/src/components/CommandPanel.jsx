@@ -344,25 +344,49 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
       <ClarificationWidget dark />
 
-      {/* Tag filter — placeholder; replaced by Task 4 */}
-      <div className={`flex gap-1 border-b border-slate-700 flex-wrap shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
-        {allTags.map(t => (
+      {/* Tag filter bar */}
+      <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
+        {allTags.map(tag => (
           <button
-            key={t}
+            key={tag}
             onClick={() => setSelectedTags(prev => {
               const next = new Set(prev)
-              next.has(t) ? next.delete(t) : next.add(t)
+              next.has(tag) ? next.delete(tag) : next.add(tag)
               return next
             })}
             className={`text-xs px-2 py-0.5 rounded transition-colors ${
-              selectedTags.has(t)
+              selectedTags.has(tag)
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
             }`}
           >
-            {humanizeCategory(t)}
+            {humanizeCategory(tag)}
           </button>
         ))}
+        {selectedTags.size > 0 && (
+          <button
+            onClick={() => setSelectedTags(new Set())}
+            className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 hover:text-slate-300 ml-1"
+          >
+            ✕ clear
+          </button>
+        )}
+        {allTags.length > 0 && (
+          <div className="ml-auto flex items-center gap-0 border border-slate-600 rounded overflow-hidden text-xs shrink-0">
+            <button
+              onClick={() => setAndMode(false)}
+              className={`px-2 py-0.5 transition-colors ${!andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              OR
+            </button>
+            <button
+              onClick={() => setAndMode(true)}
+              className={`px-2 py-0.5 transition-colors ${andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              AND
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tool list — 2-column grid in tab mode, single column in panel mode */}
