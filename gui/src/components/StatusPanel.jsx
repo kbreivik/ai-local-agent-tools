@@ -40,6 +40,16 @@ const HEALTH_TEXT = {
   unknown:      'text-slate-600',
 }
 
+// Severity order — higher index = worse
+const SEV = ['healthy', 'ok', 'green', 'active', 'degraded', 'yellow', 'error', 'critical', 'red']
+const sev = (h) => {
+  const i = SEV.indexOf(h)
+  return i === -1 ? 4 : i   // unknown lands between degraded and error
+}
+function worstHealth(...healths) {
+  return healths.flat().reduce((worst, h) => sev(h) > sev(worst) ? h : worst, 'healthy')
+}
+
 function Dot({ health }) {
   return (
     <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${HEALTH_DOT[health] ?? 'bg-slate-600'}`} />
@@ -254,9 +264,11 @@ function KafkaSection({ data }) {
 function ElasticSection({ data }) {
   if (!data) return null
   const shards = data.shards ?? {}
+  const filebeatHealth = data.filebeat?.status === 'active' ? 'healthy' : data.filebeat?.status === 'stale' ? 'degraded' : 'unknown'
+  const sectionHealth = worstHealth(data.health, filebeatHealth)
 
   return (
-    <Section title="Elasticsearch" health={data.health} sparkComponent="elasticsearch" defaultOpen={false}>
+    <Section title="Elasticsearch" health={sectionHealth} sparkComponent="elasticsearch" defaultOpen={false}>
       {data.message && (
         <p className="text-xs text-slate-400 mb-2 leading-tight">{data.message}</p>
       )}
@@ -299,9 +311,10 @@ function ElasticSection({ data }) {
 
 function CollectorsSection({ collectors }) {
   if (!collectors || Object.keys(collectors).length === 0) return null
+  const sectionHealth = worstHealth(Object.values(collectors).map(c => c.last_health ?? 'unknown'))
 
   return (
-    <Section title="Collectors" health="healthy" defaultOpen={false}>
+    <Section title="Collectors" health={sectionHealth} defaultOpen={false}>
       <div className="text-xs space-y-1">
         {Object.entries(collectors).map(([name, c]) => (
           <div key={name} className="flex items-center justify-between">
