@@ -70,6 +70,7 @@ export async function promoteSkill(skillName, domain) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ domain }),
   })
+  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
   return r.json()
 }
 
@@ -78,6 +79,7 @@ export async function demoteSkill(skillName) {
     method: 'POST',
     headers: { ...authHeaders() },
   })
+  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
   return r.json()
 }
 
@@ -86,7 +88,8 @@ export async function scrapSkill(skillName) {
     method: 'DELETE',
     headers: { ...authHeaders() },
   })
-  return r.json()
+  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
+  return r.status === 204 ? {} : r.json()
 }
 
 export async function restoreSkill(skillName) {
@@ -94,6 +97,7 @@ export async function restoreSkill(skillName) {
     method: 'POST',
     headers: { ...authHeaders() },
   })
+  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
   return r.json()
 }
 
