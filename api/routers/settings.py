@@ -27,14 +27,23 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Escalation
     "autoEscalate":          {"env": None,                      "sens": False, "default": "both"},
     "requireConfirmation":   {"env": None,                      "sens": False, "default": True},
-    # Infrastructure
+    # Infrastructure — Docker / Messaging
+    "dockerHost":            {"env": "DOCKER_HOST",             "sens": False, "default": ""},
     "kafkaBootstrapServers": {"env": "KAFKA_BOOTSTRAP_SERVERS", "sens": False, "default": ""},
     "elasticsearchUrl":      {"env": "ELASTIC_URL",             "sens": False, "default": ""},
     "kibanaUrl":             {"env": "KIBANA_URL",              "sens": False, "default": ""},
     "muninndbUrl":           {"env": "MUNINN_URL",              "sens": False, "default": ""},
-    "dockerHost":            {"env": "DOCKER_HOST",             "sens": False, "default": ""},
-    "swarmManagerIPs":       {"env": None,                      "sens": False, "default": ""},
-    "swarmWorkerIPs":        {"env": None,                      "sens": False, "default": ""},
+    # Infrastructure — Proxmox
+    "proxmoxHost":           {"env": "PROXMOX_HOST",            "sens": False, "default": ""},
+    "proxmoxUser":           {"env": "PROXMOX_USER",            "sens": False, "default": "root@pam"},
+    "proxmoxTokenId":        {"env": "PROXMOX_TOKEN_ID",        "sens": False, "default": ""},
+    "proxmoxTokenSecret":    {"env": "PROXMOX_TOKEN_SECRET",    "sens": True,  "default": ""},
+    # Infrastructure — FortiGate
+    "fortigateHost":         {"env": "FORTIGATE_HOST",          "sens": False, "default": ""},
+    "fortigateApiKey":       {"env": "FORTIGATE_API_KEY",       "sens": True,  "default": ""},
+    # Infrastructure — TrueNAS
+    "truenasHost":           {"env": "TRUENAS_HOST",            "sens": False, "default": ""},
+    "truenasApiKey":         {"env": "TRUENAS_API_KEY",         "sens": True,  "default": ""},
     # UI (stored server-side so they survive browser clears)
     "dashboardRefreshInterval": {"env": None,                   "sens": False, "default": 15000},
 }

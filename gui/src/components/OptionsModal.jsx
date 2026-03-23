@@ -123,30 +123,75 @@ function GeneralTab({ draft, update }) {
 
 // ── Tab: Infrastructure ───────────────────────────────────────────────────────
 
+function SectionHeader({ label }) {
+  return (
+    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+      {label}
+    </h3>
+  )
+}
+
 function InfrastructureTab({ draft, update }) {
   return (
     <div>
-      <Field label="Docker Swarm Manager IPs" hint="One IP address per line">
-        <Textarea value={draft.swarmManagerIPs} onChange={v => update('swarmManagerIPs', v)} placeholder="192.168.1.10" />
-      </Field>
-      <Field label="Docker Swarm Worker IPs" hint="One IP address per line">
-        <Textarea value={draft.swarmWorkerIPs} onChange={v => update('swarmWorkerIPs', v)} placeholder="192.168.1.20" />
-      </Field>
-      <Field label="Docker Host">
-        <TextInput value={draft.dockerHost} onChange={v => update('dockerHost', v)} placeholder="npipe:////./pipe/docker_engine" />
-      </Field>
-      <Field label="Kafka Bootstrap Servers" hint="Comma-separated host:port pairs">
-        <TextInput value={draft.kafkaBootstrapServers} onChange={v => update('kafkaBootstrapServers', v)} placeholder="localhost:9092,localhost:9093" />
-      </Field>
-      <Field label="Elasticsearch URL">
-        <TextInput value={draft.elasticsearchUrl} onChange={v => update('elasticsearchUrl', v)} placeholder="http://localhost:9200" />
-      </Field>
-      <Field label="Kibana URL">
-        <TextInput value={draft.kibanaUrl} onChange={v => update('kibanaUrl', v)} placeholder="http://localhost:5601" />
-      </Field>
-      <Field label="MuninnDB URL">
-        <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://localhost:9475" />
-      </Field>
+      {/* Docker / Swarm */}
+      <div className="mb-5">
+        <SectionHeader label="Docker / Swarm" />
+        <Field label="Docker Host" hint="TCP endpoint of the swarm manager — gives full swarm API access">
+          <TextInput value={draft.dockerHost} onChange={v => update('dockerHost', v)} placeholder="tcp://192.168.199.21:2375" />
+        </Field>
+        <Field label="Kafka Bootstrap Servers" hint="Comma-separated host:port pairs">
+          <TextInput value={draft.kafkaBootstrapServers} onChange={v => update('kafkaBootstrapServers', v)} placeholder="192.168.199.31:9092,192.168.199.32:9093" />
+        </Field>
+        <Field label="Elasticsearch URL">
+          <TextInput value={draft.elasticsearchUrl} onChange={v => update('elasticsearchUrl', v)} placeholder="http://192.168.199.40:9200" />
+        </Field>
+        <Field label="Kibana URL">
+          <TextInput value={draft.kibanaUrl} onChange={v => update('kibanaUrl', v)} placeholder="http://192.168.199.40:5601" />
+        </Field>
+        <Field label="MuninnDB URL">
+          <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://muninndb:9475" />
+        </Field>
+      </div>
+
+      {/* Proxmox */}
+      <div className="mb-5">
+        <SectionHeader label="Proxmox" />
+        <Field label="Host">
+          <TextInput value={draft.proxmoxHost} onChange={v => update('proxmoxHost', v)} placeholder="192.168.1.5" />
+        </Field>
+        <Field label="User">
+          <TextInput value={draft.proxmoxUser} onChange={v => update('proxmoxUser', v)} placeholder="root@pam" />
+        </Field>
+        <Field label="Token ID" hint="user@realm!tokenname">
+          <TextInput value={draft.proxmoxTokenId} onChange={v => update('proxmoxTokenId', v)} placeholder="terraform@pve!terraform-token" />
+        </Field>
+        <Field label="Token Secret">
+          <TextInput type="password" value={draft.proxmoxTokenSecret} onChange={v => update('proxmoxTokenSecret', v)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+        </Field>
+      </div>
+
+      {/* FortiGate */}
+      <div className="mb-5">
+        <SectionHeader label="FortiGate" />
+        <Field label="Host">
+          <TextInput value={draft.fortigateHost} onChange={v => update('fortigateHost', v)} placeholder="192.168.1.1" />
+        </Field>
+        <Field label="API Key">
+          <TextInput type="password" value={draft.fortigateApiKey} onChange={v => update('fortigateApiKey', v)} placeholder="API key…" />
+        </Field>
+      </div>
+
+      {/* TrueNAS */}
+      <div className="mb-5">
+        <SectionHeader label="TrueNAS" />
+        <Field label="Host">
+          <TextInput value={draft.truenasHost} onChange={v => update('truenasHost', v)} placeholder="192.168.1.10" />
+        </Field>
+        <Field label="API Key">
+          <TextInput type="password" value={draft.truenasApiKey} onChange={v => update('truenasApiKey', v)} placeholder="API key…" />
+        </Field>
+      </div>
     </div>
   )
 }
