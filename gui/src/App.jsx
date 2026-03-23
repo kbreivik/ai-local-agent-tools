@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
@@ -22,12 +22,35 @@ import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
 import SkillsPanel from './components/SkillsPanel'
+import ServiceCards from './components/ServiceCards'
+
+class ServiceCardsErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="px-5 py-8 text-center text-[#888] text-sm">
+          Dashboard sections unavailable — check browser console for details.
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // Dev-only layout test harness — renders as overlay at ?test=layout
 const _showLayoutTest = import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('test') === 'layout'
 const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
-const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Skills', 'Logs', 'Memory', 'Ingest', 'Output', 'Tests']
+const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Skills', 'Logs', 'Memory', 'Output']
+const TOOLS_TABS = ['Tests', 'Ingest']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
@@ -37,6 +60,8 @@ function Header({ activeTab, onTab }) {
   const [lastRunToolCount, setLastRunToolCount] = useState(0)
   const [lastRunHadError,  setLastRunHadError]  = useState(false)
   const [outputBadge,      setOutputBadge]      = useState(false)
+  const [toolsOpen,        setToolsOpen]        = useState(false)
+  const toolsRef = useRef(null)
   const prevIsRunning = useRef(false)
 
   const unread = outputLines.length - lastSeenCount
@@ -61,11 +86,23 @@ function Header({ activeTab, onTab }) {
     return () => window.removeEventListener('agent-done', handler)
   }, [activeTab])
 
+  // Close Tools dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (toolsRef.current && !toolsRef.current.contains(e.target)) {
+        setToolsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
   const handleTab = (tab) => {
     if (tab === 'Output') {
       setLastSeenCount(outputLines.length)
       setOutputBadge(false)
     }
+    setToolsOpen(false)
     onTab(tab)
   }
 
@@ -119,6 +156,38 @@ function Header({ activeTab, onTab }) {
               ) : tab}
             </button>
           ))}
+
+          {/* Tools dropdown */}
+          <div className="relative" ref={toolsRef}>
+            <button
+              onClick={() => setToolsOpen(o => !o)}
+              className={`text-xs px-3 py-3 border-b-2 transition-colors flex items-center gap-1 ${
+                toolsOpen || TOOLS_TABS.includes(activeTab)
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Tools
+              <span className="text-[9px] leading-none">▾</span>
+            </button>
+            {toolsOpen && (
+              <div className="absolute top-full left-0 mt-0 bg-white border border-gray-200 shadow-md rounded-b z-50 min-w-[100px]">
+                {TOOLS_TABS.map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => handleTab(tab)}
+                    className={`w-full text-left text-xs px-3 py-2 transition-colors ${
+                      activeTab === tab
+                        ? 'text-blue-600 bg-blue-50'
+                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -277,8 +346,13 @@ function CommandSidePanel() {
 
 function DashboardView() {
   return (
-    <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+    <div className="flex flex-col flex-1 overflow-auto min-h-0">
       <DashboardCards />
+      <div className="px-5 py-4">
+        <ServiceCardsErrorBoundary>
+          <ServiceCards showAlertBar={true} />
+        </ServiceCardsErrorBoundary>
+      </div>
     </div>
   )
 }
