@@ -21,14 +21,21 @@ def auth_headers():
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+def test_get_settings_requires_auth():
+    """GET /api/settings without token returns 401 or 403."""
+    r = client.get("/api/settings")
+    assert r.status_code in (401, 403)
+
+
 def test_get_settings_returns_all_server_keys():
     """GET /api/settings returns every key in SERVER_KEYS."""
     r = client.get("/api/settings", headers=auth_headers())
     assert r.status_code == 200
     body = r.json()
-    assert "settings" in body
+    assert body["status"] == "ok"
+    settings = body["data"]["settings"]
     for key in SERVER_KEYS:
-        assert key in body["settings"], f"Missing key: {key}"
+        assert key in settings, f"Missing key: {key}"
 
 
 def test_get_settings_masks_sensitive_fields():
@@ -38,7 +45,7 @@ def test_get_settings_masks_sensitive_fields():
         headers=auth_headers())
     r = client.get("/api/settings", headers=auth_headers())
     assert r.status_code == 200
-    val = r.json()["settings"]["lmStudioApiKey"]
+    val = r.json()["data"]["settings"]["lmStudioApiKey"]
     assert "super-secret-key" not in val
     assert "***" in val
 
@@ -50,8 +57,8 @@ def test_post_settings_saves_to_db_and_returns_updated():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["updated"]["lmStudioUrl"] == "http://test-host:1234/v1"
-    assert body["updated"]["modelName"] == "test-model"
+    assert body["data"]["updated"]["lmStudioUrl"] == "http://test-host:1234/v1"
+    assert body["data"]["updated"]["modelName"] == "test-model"
 
 
 def test_post_settings_persists_across_get():
@@ -60,7 +67,7 @@ def test_post_settings_persists_across_get():
         json={"muninndbUrl": "http://muninn-test:7700"},
         headers=auth_headers())
     r = client.get("/api/settings", headers=auth_headers())
-    assert r.json()["settings"]["muninndbUrl"] == "http://muninn-test:7700"
+    assert r.json()["data"]["settings"]["muninndbUrl"] == "http://muninn-test:7700"
 
 
 def test_post_settings_ignores_unknown_keys():
@@ -69,7 +76,7 @@ def test_post_settings_ignores_unknown_keys():
         json={"unknownKey": "bad-value"},
         headers=auth_headers())
     assert r.status_code == 200
-    assert "unknownKey" not in r.json().get("updated", {})
+    assert "unknownKey" not in r.json().get("data", {}).get("updated", {})
 
 
 def test_post_settings_requires_auth():
