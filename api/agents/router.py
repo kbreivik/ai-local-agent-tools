@@ -1,4 +1,4 @@
-"""Task classifier and agent routing for 3-agent architecture."""
+"""Task classifier and agent routing for 4-agent architecture."""
 import re
 
 # ── Keyword sets ──────────────────────────────────────────────────────────────
@@ -32,10 +32,38 @@ RESEARCH_KEYWORDS = frozenset({
     "can we use", "how do i access", "where is",
 })
 
+BUILD_KEYWORDS = frozenset({
+    "skill", "create skill", "generate skill", "skill_create", "skill_list",
+    "skill_import", "skill_regenerate", "skill_disable", "skill_enable",
+    "new tool", "build tool", "write tool", "discover environment",
+})
+
+# ── Domain keyword map ────────────────────────────────────────────────────────
+
+_DOMAIN_KEYWORDS: dict = {
+    "kafka":   frozenset({"kafka", "broker", "topic", "consumer", "producer",
+                          "lag", "partition", "zookeeper", "kraft", "offset"}),
+    "swarm":   frozenset({"swarm", "service", "stack", "node", "replica",
+                          "manager", "worker", "container", "docker", "deploy"}),
+    "proxmox": frozenset({"proxmox", "vm", "lxc", "pve", "hypervisor",
+                          "snapshot", "qemu", "kvm", "ha", "cluster"}),
+    "elastic": frozenset({"elastic", "elasticsearch", "kibana", "index",
+                          "shard", "mapping", "filebeat"}),
+}
+
+
+def detect_domain(task: str) -> str:
+    """Detect which service domain a task is about. Returns domain name or 'general'."""
+    words = set(re.findall(r'\b\w+\b', task.lower()))
+    scores = {d: len(words & kw) for d, kw in _DOMAIN_KEYWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "general"
+
+
 # ── Tool allowlists ───────────────────────────────────────────────────────────
 
-# Status agent — read-only snapshot tools only
-STATUS_AGENT_TOOLS = frozenset({
+# Observe agent — read-only snapshot tools only
+OBSERVE_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_index_stats",
@@ -48,8 +76,8 @@ STATUS_AGENT_TOOLS = frozenset({
     "skill_generation_config", "storage_health",
 })
 
-# Research agent — read-only + elastic search + correlation + ingestion
-RESEARCH_AGENT_TOOLS = frozenset({
+# Investigate agent — read-only + elastic search + correlation + ingestion
+INVESTIGATE_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_error_logs",
@@ -65,8 +93,70 @@ RESEARCH_AGENT_TOOLS = frozenset({
     "skill_recommend_updates", "service_catalog_list", "storage_health",
 })
 
-# Action agent — all tools including destructive ones
-# (no allowlist — all tools available)
+# Execute agent — destructive tools, filtered by domain
+_EXECUTE_BASE = frozenset({
+    "plan_action", "escalate", "audit_log", "clarifying_question",
+    "checkpoint_save", "checkpoint_restore",
+})
+
+EXECUTE_KAFKA_TOOLS = frozenset({
+    "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
+    "kafka_consumer_lag", "kafka_rolling_restart_safe",
+}) | _EXECUTE_BASE
+
+EXECUTE_SWARM_TOOLS = frozenset({
+    "swarm_status", "service_list", "service_health", "service_upgrade",
+    "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
+    "service_current_version", "service_resolve_image",
+}) | _EXECUTE_BASE
+
+EXECUTE_PROXMOX_TOOLS = frozenset({
+    # Promoted proxmox skills injected at startup via _load_promoted_into_allowlists()
+}) | _EXECUTE_BASE
+
+EXECUTE_GENERAL_TOOLS = frozenset({
+    "service_upgrade", "service_rollback", "node_drain",
+    "docker_engine_update",
+}) | _EXECUTE_BASE
+
+# Build agent — skill management tools only (no destructive infra tools)
+BUILD_AGENT_TOOLS = frozenset({
+    "skill_create", "skill_regenerate", "skill_disable", "skill_enable",
+    "skill_import", "skill_search", "skill_list", "skill_info",
+    "skill_health_summary", "skill_generation_config", "validate_skill_live",
+    "discover_environment", "service_catalog_list", "storage_health",
+    "skill_compat_check", "skill_compat_check_all", "skill_export_prompt",
+    "plan_action", "audit_log", "escalate",
+})
+
+# Backward-compat aliases
+STATUS_AGENT_TOOLS   = OBSERVE_AGENT_TOOLS
+RESEARCH_AGENT_TOOLS = INVESTIGATE_AGENT_TOOLS
+
+
+def _load_promoted_into_allowlists() -> None:
+    """Inject promoted skills from DB into domain execute allowlists at startup."""
+    global EXECUTE_KAFKA_TOOLS, EXECUTE_SWARM_TOOLS, EXECUTE_PROXMOX_TOOLS, EXECUTE_GENERAL_TOOLS
+    try:
+        from mcp_server.tools.skills.registry import list_skills
+        for skill in list_skills(enabled_only=True):
+            if skill.get("lifecycle_state") != "promoted":
+                continue
+            name   = skill["name"]
+            domain = skill.get("agent_domain") or "general"
+            if domain == "kafka":
+                EXECUTE_KAFKA_TOOLS   = EXECUTE_KAFKA_TOOLS   | {name}
+            elif domain == "swarm":
+                EXECUTE_SWARM_TOOLS   = EXECUTE_SWARM_TOOLS   | {name}
+            elif domain == "proxmox":
+                EXECUTE_PROXMOX_TOOLS = EXECUTE_PROXMOX_TOOLS | {name}
+            else:
+                EXECUTE_GENERAL_TOOLS = EXECUTE_GENERAL_TOOLS | {name}
+    except Exception:
+        pass  # DB unavailable during tests
+
+
+_load_promoted_into_allowlists()
 
 # ── System prompts ────────────────────────────────────────────────────────────
 
@@ -263,20 +353,49 @@ RESPONSE STYLE — Professional IT Support:
 
 Think step by step. Log reasoning. Never skip verifications."""
 
+BUILD_PROMPT = """You are a skill-building agent for an AI infrastructure system.
+
+Your role: create, test, and manage dynamic skills (Python modules that interact with services).
+
+RULES:
+1. Use skill_search() before creating — avoid duplicates.
+2. Use skill_create() for new skills. Describe the service, API endpoint, and what data to return.
+3. Use discover_environment() to detect available services before building.
+4. Use validate_skill_live() to test generated skills against real endpoints.
+5. Use skill_compat_check() to verify skills match current service versions.
+6. Call plan_action() before skill_create, skill_regenerate, skill_disable, skill_import.
+7. Call audit_log() ONCE at the end. Then stop.
+
+STOPPING RULES:
+- After completing the build task, call audit_log() once, then output nothing more.
+- Never call audit_log() more than once.
+"""
+
+# New name aliases for prompts
+OBSERVE_PROMPT     = STATUS_PROMPT
+INVESTIGATE_PROMPT = RESEARCH_PROMPT
+
 
 # ── Classifier ────────────────────────────────────────────────────────────────
 
 def classify_task(task: str) -> str:
     """
-    Return 'status', 'action', 'research', or 'ambiguous'.
+    Return 'observe', 'investigate', 'execute', 'build', or 'ambiguous'.
+    Backward-compat: may also return 'status', 'research', 'action'.
 
     Scoring: count keyword hits per category, return winner.
+    Build intent checked first — any skill management keyword routes to build.
     Action always beats status when tied (safer to confirm).
     'ambiguous' returned when top two categories are tied and both > 0.
     """
     words = re.findall(r'\b\w+\b', task.lower())
     bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words) - 1)]
     tokens = set(words) | set(bigrams)
+
+    # Build intent: any task mentioning skill management words → route to build
+    build_score = len(tokens & BUILD_KEYWORDS)
+    if build_score > 0:
+        return 'build'
 
     status_score   = len(tokens & STATUS_KEYWORDS)
     action_score   = len(tokens & ACTION_KEYWORDS)
@@ -319,19 +438,38 @@ def classify_task(task: str) -> str:
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
 
-def filter_tools(tools_spec: list, agent_type: str) -> list:
-    """Return a filtered copy of tools_spec for the given agent type."""
-    if agent_type == 'action':
-        return tools_spec  # all tools available
+def filter_tools(tools_spec: list, agent_type: str, domain: str = "general") -> list:
+    """Return filtered copy of tools_spec for the given agent type and optional domain."""
+    if agent_type in ('action', 'execute'):
+        domain_map = {
+            "kafka":   EXECUTE_KAFKA_TOOLS,
+            "swarm":   EXECUTE_SWARM_TOOLS,
+            "proxmox": EXECUTE_PROXMOX_TOOLS,
+        }
+        allowlist = domain_map.get(domain, EXECUTE_GENERAL_TOOLS)
+        return [t for t in tools_spec if t.get("function", {}).get("name") in allowlist]
 
-    allowlist = STATUS_AGENT_TOOLS if agent_type == 'status' else RESEARCH_AGENT_TOOLS
+    allowlist_map = {
+        'observe':     OBSERVE_AGENT_TOOLS,
+        'status':      OBSERVE_AGENT_TOOLS,      # alias
+        'investigate': INVESTIGATE_AGENT_TOOLS,
+        'research':    INVESTIGATE_AGENT_TOOLS,  # alias
+        'build':       BUILD_AGENT_TOOLS,
+    }
+    allowlist = allowlist_map.get(agent_type)
+    if allowlist is None:
+        return tools_spec  # unknown type — pass all through
     return [t for t in tools_spec if t.get("function", {}).get("name") in allowlist]
 
 
 def get_prompt(agent_type: str) -> str:
     """Return the system prompt for the given agent type."""
     return {
-        'status':   STATUS_PROMPT,
-        'research': RESEARCH_PROMPT,
-        'action':   ACTION_PROMPT,
+        'observe':     OBSERVE_PROMPT,
+        'status':      STATUS_PROMPT,
+        'investigate': INVESTIGATE_PROMPT,
+        'research':    RESEARCH_PROMPT,
+        'execute':     ACTION_PROMPT,
+        'action':      ACTION_PROMPT,
+        'build':       BUILD_PROMPT,
     }.get(agent_type, ACTION_PROMPT)
