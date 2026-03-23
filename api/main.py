@@ -26,7 +26,7 @@ from api.routers.ansible import router as ansible_router
 from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
-from api.routers.settings import seed_defaults as _seed_settings
+from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
@@ -54,6 +54,14 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _start_logger()
     await _start_session_store()
+    # Seed settings from env vars on first run (no-op if already seeded), then
+    # mirror DB → os.environ so collectors pick up user-saved values on restart.
+    try:
+        _seed_settings()
+        _sync_env()
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Settings seed/sync skipped: %s", e)
     collector_manager.start_all()
     # Load dynamic skills from modules/ into memory so skill_execute works after restart
     try:
@@ -67,12 +75,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         import logging as _logging
         _logging.getLogger(__name__).warning("Skill load skipped: %s", e)
-    # Seed settings from env vars on first run (no-op if already seeded)
-    try:
-        _seed_settings()
-    except Exception as e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("Settings seed skipped: %s", e)
     # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
     try:
         await ingest_runbooks()
