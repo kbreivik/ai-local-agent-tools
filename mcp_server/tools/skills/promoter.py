@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from mcp_server.tools.skills import registry
 from mcp_server.tools.skills.loader import GENERATED_DIR, _MODULES_DIR
 from mcp_server.tools import orchestration
+import shutil as _shutil
 
 
 def _ts() -> str:
@@ -104,6 +105,34 @@ def scrap_skill(name: str) -> dict:
 
     orchestration.audit_log("skill_scrap", {"name": name})
     return _ok({"name": name}, f"Skill '{name}' scrapped. Use restore to recover.")
+
+
+def purge_skill(name: str) -> dict:
+    """Hard-delete a skill from the DB regardless of auto_generated status.
+
+    Used to remove phantom/broken skills that cannot be scrapped via the normal flow.
+    If a generated file exists it is also deleted; starter module files are left untouched.
+
+    Args:
+        name: Skill name.
+    """
+    skill = registry.get_skill(name)
+    if not skill:
+        return _err(f"Skill '{name}' not found")
+
+    file_path = skill.get("file_path", "")
+
+    # Never delete files inside the image-baked modules/ dir
+    if file_path and os.path.exists(file_path):
+        try:
+            if os.path.commonpath([os.path.abspath(file_path), _MODULES_DIR]) != _MODULES_DIR:
+                os.remove(file_path)
+        except Exception:
+            pass  # best-effort; DB delete proceeds regardless
+
+    registry.delete_skill(name)
+    orchestration.audit_log("skill_purge", {"name": name})
+    return _ok({"name": name}, f"Skill '{name}' permanently deleted.")
 
 
 def restore_skill(name: str) -> dict:

@@ -111,6 +111,15 @@ export async function scrapSkill(skillName) {
   return r.status === 204 ? {} : r.json()
 }
 
+export async function purgeSkill(skillName) {
+  const r = await fetch(`${BASE}/api/skills/${encodeURIComponent(skillName)}/purge`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
+  return r.status === 204 ? {} : r.json()
+}
+
 export async function restoreSkill(skillName) {
   const r = await fetch(`${BASE}/api/skills/${encodeURIComponent(skillName)}/restore`, {
     method: 'POST',
