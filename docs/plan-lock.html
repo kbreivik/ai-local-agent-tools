@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HP1-AI-Agent — Plan Lock &amp; Destructive Operation Safety</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; padding: 24px; max-width: 960px; margin: 0 auto; }
+
+  h1 { font-size: 18px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
+  h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #7d8590; margin-bottom: 12px; }
+  .subtitle { color: #7d8590; font-size: 12px; margin-bottom: 28px; }
+
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  .card-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #7d8590; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* badges */
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .b-red    { background: #2d0f0f; color: #f85149; border: 1px solid #6e1a1a; }
+  .b-green  { background: #0d2818; color: #56d364; border: 1px solid #2ea043; }
+  .b-amber  { background: #2d1e00; color: #f8b64c; border: 1px solid #9e5c00; }
+  .b-blue   { background: #1c2d3e; color: #79c0ff; border: 1px solid #1d4ed8; }
+  .b-slate  { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .b-purple { background: #2d1c2d; color: #e879f9; border: 1px solid #6b21a8; }
+
+  /* ── Flow diagram ── */
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .frow { display: flex; align-items: flex-start; gap: 12px; }
+  .fspine { display: flex; flex-direction: column; align-items: center; width: 36px; flex-shrink: 0; }
+  .fcircle { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .fline { width: 2px; flex: 1; min-height: 16px; }
+  .fbody { flex: 1; padding-bottom: 18px; }
+  .ftitle { font-size: 13px; font-weight: 700; color: #f0f6fc; margin-bottom: 3px; }
+  .fdesc  { font-size: 11px; color: #8b949e; line-height: 1.5; margin-bottom: 6px; }
+  .fcode  { background: #0d1117; border: 1px solid #30363d; border-radius: 5px; padding: 7px 10px; font-family: monospace; font-size: 10px; color: #8b949e; line-height: 1.7; }
+  .fcode .hl  { color: #79c0ff; }
+  .fcode .ok  { color: #56d364; }
+  .fcode .err { color: #f85149; }
+  .fcode .wrn { color: #f8b64c; }
+
+  .c-llm    { background: #2d1c2d; color: #e879f9; }
+  .c-guard  { background: #2d1e00; color: #f8b64c; }
+  .c-lock   { background: #3d1212; color: #f87171; }
+  .c-human  { background: #1c2d3e; color: #79c0ff; }
+  .c-exec   { background: #0d2818; color: #56d364; }
+  .c-end    { background: #21262d; color: #8b949e; }
+
+  .l-llm    { background: #6b21a8; }
+  .l-guard  { background: #9e5c00; }
+  .l-lock   { background: #6e1a1a; }
+  .l-human  { background: #1d4ed8; }
+  .l-exec   { background: #2ea043; }
+  .l-end    { background: #30363d; }
+
+  /* ── Branch boxes ── */
+  .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 6px; }
+  .branch-box { border-radius: 6px; padding: 10px 12px; }
+  .branch-ok  { background: #0d1a10; border: 1px solid #2ea043; }
+  .branch-no  { background: #1a0d0d; border: 1px solid #6e1a1a; }
+  .branch-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 5px; }
+  .branch-ok .branch-title  { color: #56d364; }
+  .branch-no .branch-title  { color: #f85149; }
+  .branch-body { font-size: 10px; color: #8b949e; line-height: 1.5; }
+
+  /* ── Tool table ── */
+  .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool-item { background: #0d1117; border: 1px solid #30363d; border-radius: 5px; padding: 7px 10px; }
+  .tool-name { font-family: monospace; font-size: 11px; color: #f85149; margin-bottom: 2px; }
+  .tool-desc { font-size: 10px; color: #7d8590; }
+
+  .safe-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .safe-item { background: #0d1117; border: 1px solid #1a4731; border-radius: 5px; padding: 7px 10px; }
+  .safe-name { font-family: monospace; font-size: 11px; color: #56d364; margin-bottom: 2px; }
+  .safe-desc { font-size: 10px; color: #7d8590; }
+
+  /* ── Session race scenario ── */
+  .race { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .session-col { border-radius: 8px; padding: 12px; }
+  .session-a { background: #0d0d1a; border: 1px solid #4c1d95; }
+  .session-b { background: #1a0d0d; border: 1px solid #7f1d1d; }
+  .session-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 10px; }
+  .session-a .session-title { color: #a5b4fc; }
+  .session-b .session-title { color: #f87171; }
+  .srow { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.05); font-size: 11px; }
+  .srow:last-child { border-bottom: none; }
+  .stime { font-size: 10px; color: #7d8590; font-family: monospace; width: 38px; flex-shrink: 0; }
+  .smsg  { color: #e6edf3; line-height: 1.4; }
+  .smsg .ok  { color: #56d364; }
+  .smsg .err { color: #f85149; }
+  .smsg .wrn { color: #f8b64c; }
+  .smsg code { font-family: monospace; font-size: 10px; background: #21262d; padding: 1px 4px; border-radius: 3px; }
+
+  /* ── Rules table ── */
+  .rules-table { width: 100%; border-collapse: collapse; }
+  .rules-table th { text-align: left; padding: 6px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #7d8590; border-bottom: 1px solid #30363d; }
+  .rules-table td { padding: 7px 10px; border-bottom: 1px solid #21262d; font-size: 11px; vertical-align: top; }
+  .rules-table tr:last-child td { border-bottom: none; }
+  .rules-table tr:hover td { background: #0d1117; }
+
+  .divider { height: 1px; background: #21262d; margin: 24px 0; }
+  .note { font-size: 10px; color: #7d8590; padding: 6px 10px; background: #161b22; border-left: 3px solid #30363d; border-radius: 0 4px 4px 0; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Plan Lock &amp; Destructive Operation Safety</h1>
+<div class="subtitle">How HP1-AI-Agent prevents conflicting changes across concurrent sessions</div>
+
+<!-- ══════════════════════════════════════════════════════ OVERVIEW ══ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#f8b64c"></div>Overview</div>
+  <p style="font-size:12px; color:#8b949e; line-height:1.7; margin-bottom:10px;">
+    A global <strong style="color:#e6edf3;">PlanLockManager</strong> singleton enforces that only one destructive operation can be pending approval at a time — across all sessions and all users. Read-only operations are never affected. The lock is acquired when the LLM calls <code style="font-family:monospace;background:#21262d;padding:1px 5px;border-radius:3px;font-size:11px;">plan_action()</code>, held until the human approves or cancels in the GUI, then released automatically.
+  </p>
+  <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <span class="badge b-green">Read-only ops: always pass through</span>
+    <span class="badge b-amber">plan_action(): acquires lock → confirmation required</span>
+    <span class="badge b-red">Destructive tools without plan_action: blocked by pre-flight guard</span>
+    <span class="badge b-slate">Lock held by another session: destructive ops blocked</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ FLOW ══════ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#58a6ff"></div>Execution Flow — Single Session</div>
+
+  <div class="flow">
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-llm">1</div><div class="fline l-llm"></div></div>
+      <div class="fbody">
+        <div class="ftitle">LLM decides an action is needed</div>
+        <div class="fdesc">Agent loop receives a task. LLM determines a destructive operation is required (e.g. restart a Kafka broker, upgrade a Swarm service, create a skill).</div>
+        <div class="fcode">
+          Task: "restart kafka broker 2 — consumer lag is critical"<br>
+          LLM: finish_reason = <span class="hl">"tool_calls"</span> → wants to call <span class="wrn">kafka_rolling_restart_safe</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-guard">2</div><div class="fline l-guard"></div></div>
+      <div class="fbody">
+        <div class="ftitle">Pre-flight guard — plan_action must come first</div>
+        <div class="fdesc">Before any destructive tool executes, the agent loop checks whether <code style="font-size:10px;background:#21262d;padding:1px 4px;border-radius:3px;">plan_action()</code> has already been called in this turn. If not, every destructive tool call in the batch is blocked and a mandatory reminder is injected into the LLM conversation.</div>
+        <div class="fcode">
+          <span class="err">BLOCKED</span> kafka_rolling_restart_safe — plan_action() not yet called<br>
+          Synthetic tool result: <span class="err">"plan_action() must be called before this tool."</span><br>
+          Injected user message: <span class="wrn">"MANDATORY: call plan_action() as a TOOL first."</span><br>
+          → LLM re-prompted; loop continues
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-lock">3</div><div class="fline l-lock"></div></div>
+      <div class="fbody">
+        <div class="ftitle">LLM calls plan_action() — global lock acquired</div>
+        <div class="fdesc">LLM calls <code style="font-size:10px;background:#21262d;padding:1px 4px;border-radius:3px;">plan_action()</code> with a structured plan. The agent tries to acquire the PlanLockManager singleton. Two outcomes:</div>
+        <div class="branch">
+          <div class="branch-box branch-ok">
+            <div class="branch-title">✓ Lock free → acquired</div>
+            <div class="branch-body">
+              Lock granted to this session_id + owner_user.<br>
+              GUI receives <code>confirm_request</code> WS message.<br>
+              Agent loop <strong>suspends</strong> — waiting for human.
+            </div>
+          </div>
+          <div class="branch-box branch-no">
+            <div class="branch-title">✗ Lock held by other session</div>
+            <div class="branch-body">
+              Returns <code>{status:"locked", approved:false}</code>.<br>
+              LLM is told to wait — operation cannot proceed.<br>
+              No confirmation modal shown.
+            </div>
+          </div>
+        </div>
+        <div class="fcode" style="margin-top:8px;">
+          plan_action({<br>
+          &nbsp; summary: "Rolling restart kafka broker 2",<br>
+          &nbsp; steps: ["drain consumer group", "restart broker", "verify ISR"],<br>
+          &nbsp; risk_level: <span class="wrn">"high"</span>,<br>
+          &nbsp; reversible: <span class="err">false</span><br>
+          })<br>
+          → PlanLockManager.acquire(session_id, owner_user) → <span class="ok">True</span><br>
+          → WS broadcast: {type: <span class="hl">"confirm_request"</span>, plan: {...}}
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-human">4</div><div class="fline l-human"></div></div>
+      <div class="fbody">
+        <div class="ftitle">Human reviews &amp; decides in GUI</div>
+        <div class="fdesc">The confirmation modal appears in the browser. The plan summary, steps, risk level, and reversibility are shown. No timeout — lock is held until explicitly resolved.</div>
+        <div class="branch">
+          <div class="branch-box branch-ok">
+            <div class="branch-title">✓ User clicks Approve</div>
+            <div class="branch-body">
+              POST /api/agent/confirm {approved: true}<br>
+              Agent loop resumes → destructive tool executes.
+            </div>
+          </div>
+          <div class="branch-box branch-no">
+            <div class="branch-title">✗ User clicks Cancel</div>
+            <div class="branch-body">
+              POST /api/agent/confirm {approved: false}<br>
+              Agent loop logs cancellation → stops.<br>
+              Lock released immediately.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-exec">5</div><div class="fline l-exec"></div></div>
+      <div class="fbody">
+        <div class="ftitle">Destructive tool executes</div>
+        <div class="fdesc">With approval confirmed, the agent loop calls the actual destructive tool. Output streamed over WebSocket in real time.</div>
+        <div class="fcode">
+          invoke_tool(<span class="wrn">"kafka_rolling_restart_safe"</span>, {broker_id: "2"})<br>
+          → SSH to broker host, drain, restart, wait for ISR sync<br>
+          → WS: {type:"tool_result", name:"kafka_rolling_restart_safe", result:{status:"ok",...}}<br>
+          <span class="ok">Lock still held during execution</span> — prevents concurrent destructive ops
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="fspine"><div class="fcircle c-end">6</div><div class="fline l-end" style="min-height:0"></div></div>
+      <div class="fbody" style="padding-bottom:0">
+        <div class="ftitle">Lock released — session ends</div>
+        <div class="fdesc">Lock is released when: tool completes, session errors out, or user force-releases via <code style="font-size:10px;background:#21262d;padding:1px 4px;border-radius:3px;">POST /api/lock/force-release</code>. Any queued session can now acquire the lock.</div>
+        <div class="fcode">
+          plan_lock.release(session_id)<br>
+          <span class="ok">Lock free</span> — other sessions unblocked
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ RACE SCENARIO ══ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#f87171"></div>Concurrent Session Scenario — Two Users, One Lock</div>
+  <p style="font-size:11px; color:#8b949e; margin-bottom:14px;">Session A wins the lock. Session B's destructive request is blocked at the guard until A releases.</p>
+
+  <div class="race">
+    <div class="session-col session-a">
+      <div class="session-title">Session A — User: admin</div>
+      <div class="srow"><span class="stime">t=0</span><span class="smsg">Task: <em>"upgrade hp1_agent service to latest"</em></span></div>
+      <div class="srow"><span class="stime">t=1</span><span class="smsg">LLM calls <code>plan_action()</code></span></div>
+      <div class="srow"><span class="stime">t=1</span><span class="smsg"><span class="ok">✓ Lock acquired</span> by session A</span></div>
+      <div class="srow"><span class="stime">t=1</span><span class="smsg">GUI shows confirmation modal</span></div>
+      <div class="srow"><span class="stime">t=8</span><span class="smsg"><span class="ok">✓ User approves</span></span></div>
+      <div class="srow"><span class="stime">t=8</span><span class="smsg"><code>service_upgrade</code> executes</span></div>
+      <div class="srow"><span class="stime">t=23</span><span class="smsg"><span class="ok">✓ Upgrade complete</span></span></div>
+      <div class="srow"><span class="stime">t=23</span><span class="smsg"><span class="ok">Lock released</span></span></div>
+    </div>
+    <div class="session-col session-b">
+      <div class="session-title">Session B — User: admin</div>
+      <div class="srow"><span class="stime">t=3</span><span class="smsg">Task: <em>"rolling restart kafka broker 1"</em></span></div>
+      <div class="srow"><span class="stime">t=4</span><span class="smsg">LLM calls <code>plan_action()</code></span></div>
+      <div class="srow"><span class="stime">t=4</span><span class="smsg"><span class="err">✗ Lock held by session A</span></span></div>
+      <div class="srow"><span class="stime">t=4</span><span class="smsg"><span class="wrn">Returns {status:"locked"}</span> — LLM told to wait</span></div>
+      <div class="srow"><span class="stime">—</span><span class="smsg" style="color:#7d8590;">Blocked while A holds lock…</span></div>
+      <div class="srow"><span class="stime">t=23</span><span class="smsg">User re-submits task</span></div>
+      <div class="srow"><span class="stime">t=24</span><span class="smsg">LLM calls <code>plan_action()</code></span></div>
+      <div class="srow"><span class="stime">t=24</span><span class="smsg"><span class="ok">✓ Lock acquired</span> — proceeds normally</span></div>
+    </div>
+  </div>
+  <div class="note">Read-only tasks (status checks, log queries, skill listing, kafka consumer lag) run in both sessions simultaneously throughout — never blocked by the lock.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ TOOL LISTS ══ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#f85149"></div>Destructive Tools — Require plan_action() First</div>
+  <div class="tool-grid">
+    <div class="tool-item">
+      <div class="tool-name">service_upgrade</div>
+      <div class="tool-desc">Pull new image and update Swarm service — causes rolling restart</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">service_rollback</div>
+      <div class="tool-desc">Roll back Swarm service to previous spec</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">node_drain</div>
+      <div class="tool-desc">Evacuate all tasks from a Swarm node</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">checkpoint_restore</div>
+      <div class="tool-desc">Restore agent state from a saved checkpoint</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">kafka_rolling_restart_safe</div>
+      <div class="tool-desc">Ordered broker restart with ISR sync verification</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">docker_engine_update</div>
+      <div class="tool-desc">SSH to host and update Docker Engine binary</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">skill_create / skill_import</div>
+      <div class="tool-desc">Write new Python skill module to disk + register in DB</div>
+    </div>
+    <div class="tool-item">
+      <div class="tool-name">skill_regenerate / skill_disable / skill_enable</div>
+      <div class="tool-desc">Modify existing skill state on disk and in DB</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#56d364"></div>Read-Only Tools — Always Allowed, Never Locked</div>
+  <p style="font-size:11px; color:#7d8590; margin-bottom:10px;">These pass through regardless of lock state. Multiple sessions can run them concurrently.</p>
+  <div class="safe-grid">
+    <div class="safe-item"><div class="safe-name">swarm_state / service_status</div><div class="safe-desc">Swarm health and service list</div></div>
+    <div class="safe-item"><div class="safe-name">kafka_consumer_lag</div><div class="safe-desc">Consumer group lag per topic</div></div>
+    <div class="safe-item"><div class="safe-name">kafka_cluster_health</div><div class="safe-desc">Broker ISR, under-replicated partitions</div></div>
+    <div class="safe-item"><div class="safe-name">elastic_cluster_health</div><div class="safe-desc">Elasticsearch cluster / index status</div></div>
+    <div class="safe-item"><div class="safe-name">elastic_search_logs</div><div class="safe-desc">Query log records by time / severity</div></div>
+    <div class="safe-item"><div class="safe-name">proxmox_vm_status</div><div class="safe-desc">VM list and resource usage</div></div>
+    <div class="safe-item"><div class="safe-name">fortigate_system_status</div><div class="safe-desc">Firewall uptime and interface state</div></div>
+    <div class="safe-item"><div class="safe-name">skill_list / skill_info</div><div class="safe-desc">Skill registry reads</div></div>
+    <div class="safe-item"><div class="safe-name">muninn_search / muninn_recall</div><div class="safe-desc">Memory retrieval from MuninnDB</div></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ RULES ══════ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#79c0ff"></div>Lock Behaviour Rules</div>
+  <table class="rules-table">
+    <thead>
+      <tr>
+        <th style="width:36%">Scenario</th>
+        <th>Behaviour</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Destructive tool called without <code style="font-family:monospace;font-size:10px;">plan_action()</code> first</td>
+        <td><span class="badge b-red">Blocked</span> — synthetic error result injected, LLM re-prompted with mandatory instruction to call <code style="font-family:monospace;font-size:10px;">plan_action()</code> first. Loop continues.</td>
+      </tr>
+      <tr>
+        <td>Text response to a destructive task (LLM forgets to call tools)</td>
+        <td><span class="badge b-amber">Intercepted</span> — if task contains destructive keywords and no <code style="font-family:monospace;font-size:10px;">plan_action()</code> was called, a forced reminder is injected and the loop continues (up to max_steps − 2).</td>
+      </tr>
+      <tr>
+        <td>Lock free — first session calls <code style="font-family:monospace;font-size:10px;">plan_action()</code></td>
+        <td><span class="badge b-green">Lock acquired</span> — GUI confirmation modal shown. Agent suspends.</td>
+      </tr>
+      <tr>
+        <td>Lock held — second session calls <code style="font-family:monospace;font-size:10px;">plan_action()</code></td>
+        <td><span class="badge b-red">Lock denied</span> — returns <code style="font-family:monospace;font-size:10px;">{status:"locked", approved:false}</code>. LLM told to wait. No modal shown.</td>
+      </tr>
+      <tr>
+        <td>Same session calls <code style="font-family:monospace;font-size:10px;">plan_action()</code> again (re-entrant)</td>
+        <td><span class="badge b-green">Re-granted</span> — same session_id already holds the lock; acquires without blocking.</td>
+      </tr>
+      <tr>
+        <td>User approves in GUI</td>
+        <td><span class="badge b-green">Execution proceeds</span> — lock remains held during tool execution, released on completion.</td>
+      </tr>
+      <tr>
+        <td>User cancels in GUI</td>
+        <td><span class="badge b-slate">Cancelled</span> — lock released immediately. Session logs cancellation and stops.</td>
+      </tr>
+      <tr>
+        <td>Session errors or crashes</td>
+        <td><span class="badge b-amber">Auto-release</span> — session cleanup calls <code style="font-family:monospace;font-size:10px;">plan_lock.release(session_id)</code> in the finally block. Lock freed even on exception.</td>
+      </tr>
+      <tr>
+        <td>Lock stuck (session crashed without cleanup)</td>
+        <td><span class="badge b-blue">Force-release</span> via <code style="font-family:monospace;font-size:10px;">POST /api/lock/force-release</code>. Requires authentication. Available to any logged-in user.</td>
+      </tr>
+      <tr>
+        <td>Read-only tool — any session, any time</td>
+        <td><span class="badge b-green">Always allowed</span> — lock is never consulted for non-destructive tools.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ IMPL ═══════ -->
+<div class="card">
+  <div class="card-title"><div class="dot" style="background:#8b949e"></div>Implementation — Key Files</div>
+  <table class="rules-table">
+    <thead>
+      <tr>
+        <th style="width:40%">File</th>
+        <th>Responsibility</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code style="font-family:monospace;font-size:11px;">api/lock.py</code></td>
+        <td>PlanLockManager singleton — acquire, release, force_release, is_locked_by_other. asyncio.Lock for thread safety.</td>
+      </tr>
+      <tr>
+        <td><code style="font-family:monospace;font-size:11px;">api/routers/agent.py</code> — DESTRUCTIVE_TOOLS</td>
+        <td>frozenset of tool names that require plan_action(). Checked in pre-flight guard and inter-session block.</td>
+      </tr>
+      <tr>
+        <td><code style="font-family:monospace;font-size:11px;">api/routers/agent.py</code> — _stream_agent()</td>
+        <td>Pre-flight guard (blocks destructive without plan_action), inter-session lock check, plan_action intercept logic, confirmation wait loop, finally block auto-release.</td>
+      </tr>
+      <tr>
+        <td><code style="font-family:monospace;font-size:11px;">api/routers/lock.py</code></td>
+        <td>GET /api/lock/status — current lock state. POST /api/lock/force-release — admin override.</td>
+      </tr>
+      <tr>
+        <td><code style="font-family:monospace;font-size:11px;">gui/src/components/LockBadge.jsx</code></td>
+        <td>Orange 🔒 badge shown in GUI header when global lock is held. Polls /api/lock/status.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note">The lock is in-memory only — it does not survive a server restart. If the agent container restarts while a lock is held, the lock is automatically gone. For the same reason, force-release is only needed when a session crashes without triggering the finally block (rare).</div>
+</div>
+
+</body>
+</html>
