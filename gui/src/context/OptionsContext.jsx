@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { fetchSettings, saveSettings } from '../api'
 
 const STORAGE_KEY = 'hp1_options'
 
@@ -10,35 +11,49 @@ const DEFAULTS = {
   // Infrastructure
   swarmManagerIPs:        '',
   swarmWorkerIPs:         '',
-  dockerHost:             'npipe:////./pipe/docker_engine',
-  kafkaBootstrapServers:  'localhost:9092,localhost:9093,localhost:9094',
+  dockerHost:             '',
+  kafkaBootstrapServers:  '',
   elasticsearchUrl:       '',
   kibanaUrl:              '',
   muninndbUrl:            '',
 
   // AI Services — Local
-  lmStudioUrl:   'http://localhost:1234/v1',
+  lmStudioUrl:    '',
   lmStudioApiKey: '',
-  modelName:     '',
+  modelName:      '',
 
   // AI Services — External
-  externalProvider:      'claude',
-  externalApiKey:        '',
-  externalModel:         '',
+  externalProvider:    'claude',
+  externalApiKey:      '',
+  externalModel:       'claude-sonnet-4-6',
 
   // Escalation policy
-  autoEscalate:          'both',
-  requireConfirmation:   true,
+  autoEscalate:        'both',
+  requireConfirmation: true,
 
-  // Display
-  cardMinHeight:           70,
-  cardMaxHeight:           200,
-  cardMinWidth:            300,
-  cardMaxWidth:            null,
-  nodeCardSize:            'medium',
-  showVersionBadges:       true,
-  showMemoryEngrams:       true,
-  commandsPanelDefault:    'hidden',
+  // Display (localStorage only)
+  cardMinHeight:        70,
+  cardMaxHeight:        200,
+  cardMinWidth:         300,
+  cardMaxWidth:         null,
+  nodeCardSize:         'medium',
+  showVersionBadges:    true,
+  showMemoryEngrams:    true,
+  commandsPanelDefault: 'hidden',
+}
+
+// Keys managed by the server. Only these are sent to / fetched from the API.
+const SERVER_KEYS = new Set([
+  'lmStudioUrl', 'lmStudioApiKey', 'modelName',
+  'externalProvider', 'externalApiKey', 'externalModel',
+  'autoEscalate', 'requireConfirmation',
+  'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
+  'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs',
+  'dashboardRefreshInterval',
+])
+
+function isMasked(v) {
+  return typeof v === 'string' && v.includes('***')
 }
 
 const OptionsContext = createContext(null)
@@ -46,28 +61,55 @@ const OptionsContext = createContext(null)
 export function OptionsProvider({ children }) {
   const [options, setOptions] = useState(() => {
     try {
-      const saved   = localStorage.getItem(STORAGE_KEY)
-      const parsed  = saved ? JSON.parse(saved) : {}
-      console.log('[Options] Loaded from storage:', parsed)
+      const saved  = localStorage.getItem(STORAGE_KEY)
+      const parsed = saved ? JSON.parse(saved) : {}
       return { ...DEFAULTS, ...parsed }
     } catch {
       return { ...DEFAULTS }
     }
   })
+  const [serverLoaded, setServerLoaded] = useState(false)
+
+  // Load server settings once on mount (after auth token is available)
+  const loadFromServer = useCallback(() => {
+    fetchSettings()
+      .then(serverData => {
+        setOptions(prev => {
+          const merged = { ...prev }
+          for (const [key, val] of Object.entries(serverData)) {
+            // Don't overwrite a real local value with a masked server value
+            if (isMasked(val) && prev[key]) continue
+            merged[key] = val
+          }
+          return merged
+        })
+        setServerLoaded(true)
+      })
+      .catch(() => {
+        // Server unreachable — continue with localStorage values
+        setServerLoaded(true)
+      })
+  }, [])
+
+  useEffect(() => { loadFromServer() }, [loadFromServer])
 
   const setOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }))
   }
 
-  const saveOptions = (newOptions) => {
-    // Strip any function keys that may have leaked in from the context object
+  const saveOptions = async (newOptions) => {
     const dataOnly = Object.fromEntries(
       Object.entries(newOptions).filter(([, v]) => typeof v !== 'function')
     )
     const merged = { ...DEFAULTS, ...options, ...dataOnly }
     setOptions(merged)
-    console.log('[Options] Saved to storage:', merged)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
+
+    // Persist server-owned keys to API
+    const serverPayload = Object.fromEntries(
+      Object.entries(merged).filter(([k]) => SERVER_KEYS.has(k))
+    )
+    await saveSettings(serverPayload)  // throws on failure — let caller handle
   }
 
   const resetOptions = () => {
@@ -76,7 +118,14 @@ export function OptionsProvider({ children }) {
   }
 
   return (
-    <OptionsContext.Provider value={{ ...options, setOption, saveOptions, resetOptions }}>
+    <OptionsContext.Provider value={{
+      ...options,
+      serverLoaded,
+      setOption,
+      saveOptions,
+      resetOptions,
+      reloadFromServer: loadFromServer,
+    }}>
       {children}
     </OptionsContext.Provider>
   )
