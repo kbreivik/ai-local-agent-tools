@@ -90,3 +90,45 @@ def test_settings_seeded_on_startup():
     r = client.get("/api/settings", headers=auth_headers())
     assert r.status_code == 200
     assert "lmStudioUrl" in r.json()["data"]["settings"]
+
+
+def test_settings_round_trip_all_server_keys():
+    """POST a value for every server key, then GET and confirm all are returned."""
+    h = auth_headers()
+    payload = {
+        "lmStudioUrl":           "http://lm-test:1234/v1",
+        "lmStudioApiKey":        "test-api-key",
+        "modelName":             "test-model",
+        "externalProvider":      "openai",
+        "externalApiKey":        "sk-testkey",
+        "externalModel":         "gpt-4o",
+        "autoEscalate":          "failure",
+        "requireConfirmation":   False,
+        "kafkaBootstrapServers": "kafka1:9092",
+        "elasticsearchUrl":      "http://es:9200",
+        "kibanaUrl":             "http://kibana:5601",
+        "muninndbUrl":           "http://muninn:7700",
+        "dockerHost":            "unix:///var/run/docker.sock",
+        "swarmManagerIPs":       "192.168.1.10",
+        "swarmWorkerIPs":        "192.168.1.11,192.168.1.12",
+        "dashboardRefreshInterval": 30000,
+    }
+    r = client.post("/api/settings", json=payload, headers=h)
+    assert r.status_code == 200, r.text
+
+    r2 = client.get("/api/settings", headers=h)
+    data = r2.json()["data"]["settings"]
+
+    # Non-sensitive keys must come back unchanged
+    assert data["lmStudioUrl"]            == "http://lm-test:1234/v1"
+    assert data["modelName"]              == "test-model"
+    assert data["externalProvider"]       == "openai"
+    assert data["externalModel"]          == "gpt-4o"
+    assert data["autoEscalate"]           == "failure"
+    assert data["kafkaBootstrapServers"]  == "kafka1:9092"
+    assert data["elasticsearchUrl"]       == "http://es:9200"
+    assert data["dashboardRefreshInterval"] == 30000
+
+    # Sensitive keys must be masked
+    assert "***" in data["lmStudioApiKey"]
+    assert "***" in data["externalApiKey"]
