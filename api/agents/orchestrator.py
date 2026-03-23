@@ -72,15 +72,34 @@ def verdict_from_text(text: str) -> dict:
     Used to pass minimal context from one step to the next.
     """
     lower = text.lower()
+    words = set(re.findall(r'\b\w+\b', lower))
 
-    # Explicit failure / degraded keywords → HALT
-    halt_signals = {"degraded", "critical", "offline", "failed", "unhealthy", "halt", "error"}
-    if halt_signals & set(re.findall(r'\b\w+\b', lower)):
-        return {"verdict": "HALT", "summary": text[:300]}
+    # Check for negation patterns that would make halt signals false positives
+    # e.g. "no errors", "zero failed", "not degraded", "previously failed"
+    _negation_re = re.compile(
+        r'\b(no|zero|0|not|never|previously|resolved|fixed|cleared|recovered)\s+'
+        r'(error|errors|failed|failure|offline|degraded|unhealthy|critical)',
+        re.IGNORECASE,
+    )
+
+    # Explicit failure / degraded keywords → HALT (unless negated)
+    halt_signals = {"degraded", "critical", "offline", "failed", "unhealthy", "halt"}
+    if halt_signals & words:
+        # Check if all matches are negated
+        matches_in_text = halt_signals & words
+        negated = {m for m in matches_in_text if _negation_re.search(lower)}
+        if matches_in_text - negated:  # At least one non-negated halt signal
+            return {"verdict": "HALT", "summary": text[:300]}
+
+    # "error" is checked separately with stricter context to avoid "no errors" false positives
+    if re.search(r'\b(error|errors)\b', lower) and not _negation_re.search(lower):
+        # Only flag HALT if "error" appears in a clearly negative context
+        if re.search(r'\b(tool error|status.*error|error.*status|failed with error|error occurred)\b', lower):
+            return {"verdict": "HALT", "summary": text[:300]}
 
     # Ambiguous / warning keywords → ASK
     ask_signals = {"warning", "caution", "unknown", "uncertain", "partial"}
-    if ask_signals & set(re.findall(r'\b\w+\b', lower)):
+    if ask_signals & words:
         return {"verdict": "ASK", "summary": text[:300]}
 
     return {"verdict": "GO", "summary": text[:300]}
