@@ -25,6 +25,7 @@ from api.routers.lock import router as lock_router
 from api.routers.ansible import router as ansible_router
 from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
+from api.routers.dashboard import router as dashboard_router
 from api.routers.settings import seed_defaults as _seed_settings
 from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
@@ -114,6 +115,7 @@ app.include_router(lock_router)
 app.include_router(ansible_router)
 app.include_router(ingest_router)
 app.include_router(skills_router)
+app.include_router(dashboard_router)
 
 
 def _get_host_ips() -> dict:
