@@ -116,6 +116,10 @@ def update_settings(
                 continue
             backend.set_setting(key, value)
             meta = SETTINGS_KEYS[key]
+            # Mirror to os.environ so collectors and probes see the new value
+            # immediately without requiring a process restart.
+            if meta["env"] and value is not None:
+                os.environ[meta["env"]] = str(value)
             updated[key] = _mask(value) if (meta["sens"] and value) else value
         return {"status": "ok", "data": {"updated": updated}, "timestamp": _ts(), "message": f"Updated {len(updated)} setting(s)"}
     except HTTPException:
