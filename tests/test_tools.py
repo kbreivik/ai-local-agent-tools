@@ -27,6 +27,20 @@ def assert_valid_response(result: dict):
         f"Invalid status: {result['status']}"
 
 
+def _docker_available() -> bool:
+    """Return True if the local Docker daemon is reachable."""
+    try:
+        import docker
+        docker.from_env().ping()
+        return True
+    except Exception:
+        return False
+
+
+_DOCKER_UP = _docker_available()
+_skip_no_docker = pytest.mark.skipif(not _DOCKER_UP, reason="Docker daemon not available")
+
+
 # ── Swarm tests ───────────────────────────────────────────────────────────────
 
 class TestSwarmTools:
@@ -57,6 +71,7 @@ class TestSwarmTools:
         else:
             pytest.skip("No services available to test service_health")
 
+    @_skip_no_docker
     def test_service_health_nonexistent(self):
         result = swarm.service_health("nonexistent-service-xyz")
         assert result["status"] == "error"
