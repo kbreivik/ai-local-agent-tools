@@ -88,7 +88,9 @@ class PostgresBackend(StorageBackend):
                 updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 call_count      INTEGER DEFAULT 0,
                 last_error      TEXT,
-                last_called_at  TIMESTAMPTZ
+                last_called_at  TIMESTAMPTZ,
+                lifecycle_state TEXT DEFAULT 'auto_generated',
+                agent_domain    TEXT DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS service_catalog (
@@ -161,6 +163,18 @@ class PostgresBackend(StorageBackend):
             CREATE INDEX IF NOT EXISTS idx_skills_fts
             ON skills USING gin(to_tsvector('english', description));
         """)
+
+        # Migration: add lifecycle columns (idempotent — safe to run on existing DBs)
+        for _col, _default in [
+            ("lifecycle_state", "auto_generated"),
+            ("agent_domain",    ""),
+        ]:
+            try:
+                self._execute(
+                    f"ALTER TABLE skills ADD COLUMN {_col} TEXT DEFAULT '{_default}'"
+                )
+            except Exception:
+                pass  # Column already exists — safe to ignore
 
     def close(self) -> None:
         if self._pool:
