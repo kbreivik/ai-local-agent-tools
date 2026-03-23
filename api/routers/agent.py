@@ -157,6 +157,7 @@ async def _run_single_agent_step(
     tools_spec: list,
     agent_type: str,
     client,
+    is_final_step: bool = True,
 ) -> dict:
     """Run one agent loop iteration. Returns dict with output and feedback stats.
 
@@ -258,17 +259,18 @@ async def _run_single_agent_step(
                     continue  # Next iteration will call plan_action
 
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
-                payload = {
-                    "type":       "done",
-                    "session_id": session_id,
-                    "agent_type": agent_type,
-                    "content":    f"Agent finished after {step} steps.",
-                    "status":     "ok",
-                    "choices":    choices or [],
-                    "timestamp":  datetime.now(timezone.utc).isoformat(),
-                }
-                print(f"[DEBUG broadcast] agent done choices={choices}")
-                await manager.broadcast(payload)
+                if is_final_step:
+                    payload = {
+                        "type":       "done",
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "content":    f"Agent finished after {step} steps.",
+                        "status":     "ok",
+                        "choices":    choices or [],
+                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                    }
+                    log.debug("agent done choices=%s", choices)
+                    await manager.broadcast(payload)
                 break
 
             # Build assistant message for history
@@ -582,21 +584,23 @@ async def _run_single_agent_step(
             if (_step_names and all(n == "audit_log" for n in _step_names)
                     and _last_blocked_tool != "escalate"):
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
-                await manager.broadcast({
-                    "type": "done", "session_id": session_id, "agent_type": agent_type,
-                    "content": f"Agent finished after {step} steps.",
-                    "status": "ok", "choices": choices or [],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                if is_final_step:
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": f"Agent finished after {step} steps.",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 break
 
         else:
-            await manager.broadcast({
-                "type": "done", "session_id": session_id, "agent_type": agent_type,
-                "content": f"Agent reached max steps ({max_steps}).",
-                "status": "ok", "choices": [],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            if is_final_step:
+                await manager.broadcast({
+                    "type": "done", "session_id": session_id, "agent_type": agent_type,
+                    "content": f"Agent reached max steps ({max_steps}).",
+                    "status": "ok", "choices": [],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
 
     except Exception as e:
         await manager.broadcast({
@@ -712,6 +716,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     agg_negative = 0
     agg_steps = 0
     final_status = "completed"
+    halted_early = False
+    all_tools = _build_tools_spec()
 
     for step_info in steps:
         step_intent = step_info["intent"]
@@ -741,7 +747,6 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             # First step: use the already-injected memory prompt
             step_system_prompt = system_prompt
 
-        all_tools = _build_tools_spec()
         step_tools = filter_tools(all_tools, step_agent_type, domain=step_domain or "general")
         log.info(
             "Agent=%s domain=%s filtered manifest: %d tools — %s",
@@ -755,6 +760,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             tools_spec=step_tools,
             agent_type=step_agent_type,
             client=client,
+            is_final_step=(step_num == total_steps),
         )
 
         all_tools_used.extend(step_result["tools_used"])
@@ -769,11 +775,21 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         if prior_verdict["verdict"] == "HALT" and step_num < total_steps:
             await manager.send_line(
                 "agent",
-                f"Step {step_num} returned HALT — stopping plan. "
+                f"⛔ Step {step_num} returned HALT — stopping plan. "
                 f"Reason: {prior_verdict['summary'][:200]}",
                 session_id=session_id,
             )
+            halted_early = True
             break
+
+    if halted_early:
+        await manager.broadcast({
+            "type": "done", "session_id": session_id,
+            "agent_type": first_intent,
+            "content": "Plan halted — pre-conditions not met.",
+            "status": "ok", "choices": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
     # ── Record outcome for feedback loop ─────────────────────────────────────
     try:
