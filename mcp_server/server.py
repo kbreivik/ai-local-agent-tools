@@ -79,8 +79,14 @@ def service_rollback(name: str) -> dict:
 
 @mcp.tool()
 def node_drain(node_id: str) -> dict:
-    """Safe drain before maintenance."""
+    """Safe drain before maintenance. Use node_activate to reverse."""
     return swarm.node_drain(node_id)
+
+
+@mcp.tool()
+def node_activate(node_id: str) -> dict:
+    """Re-activate a drained or paused node so it can accept tasks again."""
+    return swarm.node_activate(node_id)
 
 
 @mcp.tool()
