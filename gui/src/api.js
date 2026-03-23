@@ -266,6 +266,37 @@ export async function submitFeedback(sessionId, rating) {
   return r.json()
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+export async function fetchDashboardContainers() {
+  const r = await fetch(`${BASE}/api/dashboard/containers/agent01`, { headers: { ...authHeaders() } })
+  return r.json()
+}
+
+export async function fetchDashboardSwarm() {
+  const r = await fetch(`${BASE}/api/dashboard/containers/swarm`, { headers: { ...authHeaders() } })
+  return r.json()
+}
+
+export async function fetchDashboardVMs() {
+  const r = await fetch(`${BASE}/api/dashboard/vms`, { headers: { ...authHeaders() } })
+  return r.json()
+}
+
+export async function fetchDashboardExternal() {
+  const r = await fetch(`${BASE}/api/dashboard/external`, { headers: { ...authHeaders() } })
+  return r.json()
+}
+
+export async function dashboardAction(path, body = null) {
+  const r = await fetch(`${BASE}/api/dashboard/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  return r.json()
+}
+
 // ── WebSocket ────────────────────────────────────────────────────────────────
 
 const WS_BASE = (() => {
