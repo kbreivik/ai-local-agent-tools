@@ -45,6 +45,12 @@ _IMPORTS_DIR = os.path.join(
 )
 _IMPORTS_PROCESSED_DIR = os.path.join(_IMPORTS_DIR, "processed")
 
+# Public constant — imported by meta_tools and tests
+GENERATED_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+    "data", "skill_modules"
+)
+
 
 def _make_tool_handler(module, skill_name: str):
     """Create a tool handler function wrapping a skill's execute()."""
@@ -115,7 +121,9 @@ def load_single_skill(mcp_server, name: str) -> dict:
     """
     filepath = os.path.join(_MODULES_DIR, f"{name}.py")
     if not os.path.exists(filepath):
-        return {"loaded": False, "name": name, "error": f"File not found: {filepath}"}
+        filepath = os.path.join(GENERATED_DIR, f"{name}.py")
+    if not os.path.exists(filepath):
+        return {"loaded": False, "name": name, "error": f"File not found in modules/ or GENERATED_DIR"}
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -184,25 +192,47 @@ def list_loaded_skills() -> list:
 
 
 def load_all_skills(mcp_server) -> dict:
-    """Scan modules/ for skill files, load each, register in DB. Returns summary."""
+    """Scan modules/ and data/skill_modules/ for skill files. Returns summary."""
     loaded = []
     failed = []
 
-    if not os.path.isdir(_MODULES_DIR):
-        return {"loaded": loaded, "failed": failed, "total": 0}
-
-    for fname in sorted(os.listdir(_MODULES_DIR)):
-        if not fname.endswith(".py"):
-            continue
-        if fname.startswith("__") or fname.startswith("_template"):
+    for scan_dir in [_MODULES_DIR, GENERATED_DIR]:
+        if not os.path.isdir(scan_dir):
+            os.makedirs(scan_dir, exist_ok=True)
             continue
 
-        name = fname[:-3]  # strip .py
-        result = load_single_skill(mcp_server, name)
-        if result.get("loaded"):
-            loaded.append(name)
-        else:
-            failed.append({"name": name, "error": result.get("error", "unknown")})
+        for fname in sorted(os.listdir(scan_dir)):
+            if not fname.endswith(".py"):
+                continue
+            if fname.startswith("__") or fname.startswith("_template"):
+                continue
+
+            name = fname[:-3]  # strip .py
+            if name in _SKILL_HANDLERS:
+                continue  # Already loaded from higher-priority dir
+
+            # Use filepath directly to avoid double-lookup; both scan_dir values are already resolved
+            filepath = os.path.join(scan_dir, fname)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    code = f.read()
+                result = validator.validate_skill_code(code)
+                if not result["valid"]:
+                    failed.append({"name": name, "error": result["error"]})
+                    continue
+                module = _load_module_from_file(filepath, f"skill_{name}")
+                handler = _make_tool_handler(module, name)
+                _SKILL_HANDLERS[name] = handler
+                meta = module.SKILL_META
+                registry.register_skill(meta, filepath)
+                service_id = meta.get("compat", {}).get("service", "")
+                if service_id:
+                    _seed_service(service_id)
+                log.info("Loaded skill: %s (from %s)", name, scan_dir)
+                loaded.append(name)
+            except Exception as e:
+                log.error("Failed to load skill %s: %s", name, e)
+                failed.append({"name": name, "error": str(e)})
 
     log.info("Skill loader: %d loaded, %d failed", len(loaded), len(failed))
     return {"loaded": loaded, "failed": failed, "total": len(loaded) + len(failed)}

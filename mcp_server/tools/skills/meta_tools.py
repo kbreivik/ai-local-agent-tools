@@ -1,5 +1,6 @@
 """Agent-facing skill management tools."""
 import os
+import shutil
 from datetime import datetime, timezone
 
 from mcp_server.tools.skills import registry, generator, loader
@@ -70,8 +71,9 @@ def skill_create(
     name = data["name"]
     backend_used = data.get("backend_used", "unknown")
 
-    # Save to modules directory
-    dest = os.path.join(os.path.dirname(loader.__file__), "modules", f"{name}.py")
+    # Save to generated skills directory (persisted via data volume)
+    os.makedirs(loader.GENERATED_DIR, exist_ok=True)
+    dest = os.path.join(loader.GENERATED_DIR, f"{name}.py")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(code)
 
@@ -299,11 +301,19 @@ def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
     if not skill:
         return _err(f"Skill '{name}' not found")
 
-    # Back up old file
-    import shutil
-    skill_dir = os.path.join(os.path.dirname(loader.__file__), "modules")
+    # Always regenerate into persistent dir
+    _in_modules = os.path.join(os.path.dirname(loader.__file__), "modules", f"{name}.py")
+    _in_generated = os.path.join(loader.GENERATED_DIR, f"{name}.py")
+    os.makedirs(loader.GENERATED_DIR, exist_ok=True)
+    skill_dir = loader.GENERATED_DIR
     old_path = os.path.join(skill_dir, f"{name}.py")
     bak_path = os.path.join(skill_dir, f"{name}.py.bak")
+
+    # Source file for backup: prefer GENERATED_DIR copy, fall back to modules/ copy
+    _source_path = _in_generated if os.path.exists(_in_generated) else _in_modules
+    # If source is different from old_path (starter skill first regen), copy it first
+    if _source_path != old_path and os.path.exists(_source_path):
+        shutil.copy2(_source_path, old_path)
 
     if os.path.exists(old_path):
         shutil.copy2(old_path, bak_path)

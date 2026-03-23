@@ -125,118 +125,61 @@ class RunResponse(BaseModel):
 
 
 _AGENT_LABEL = {
-    'status':   'Status',
-    'action':   'Action',
-    'research': 'Research',
-    'ambiguous': 'Action',
+    'status':      'Observe',
+    'observe':     'Observe',
+    'action':      'Execute',
+    'execute':     'Execute',
+    'research':    'Investigate',
+    'investigate': 'Investigate',
+    'build':       'Build',
+    'ambiguous':   'Execute',
 }
 
 _AGENT_BADGE_COLOR = {
-    'status':   'blue',
-    'action':   'orange',
-    'research': 'purple',
-    'ambiguous': 'orange',
+    'status':      'blue',
+    'observe':     'blue',
+    'action':      'orange',
+    'execute':     'orange',
+    'research':    'purple',
+    'investigate': 'purple',
+    'build':       'yellow',
+    'ambiguous':   'orange',
 }
 
 
-async def _stream_agent(task: str, session_id: str, operation_id: str, owner_user: str = "admin"):
-    """Run the full agent loop, streaming every step to WebSocket clients."""
-    from openai import OpenAI
-    from api.agents.router import classify_task, filter_tools, get_prompt
+async def _run_single_agent_step(
+    task: str,
+    session_id: str,
+    operation_id: str,
+    owner_user: str,
+    *,
+    system_prompt: str,
+    tools_spec: list,
+    agent_type: str,
+    client,
+    is_final_step: bool = True,
+) -> dict:
+    """Run one agent loop iteration. Returns dict with output and feedback stats.
 
-    base_url = _lm_base()
-    model    = _lm_model()
-    api_key  = _lm_key()
-
-    # Classify task → select agent type, prompt, tool subset
-    agent_type = classify_task(task)
-    if agent_type == 'ambiguous':
-        agent_type = 'action'   # default to action for ambiguous tasks
-
-    system_prompt = get_prompt(agent_type)
-
-    # ── Inject past outcomes + relevant doc chunks into system prompt ─────────
-    try:
-        from api.memory.feedback import get_past_outcomes, build_outcome_prompt_section
-        from api.memory.client import get_client as _get_mem_client
-
-        injected_sections: list[str] = []
-        doc_chunks: list[dict] = []
-
-        # Past outcomes (all agent types)
-        past_outcomes = await get_past_outcomes(task, max_results=4)
-        outcome_section = build_outcome_prompt_section(past_outcomes)
-        if outcome_section:
-            injected_sections.append(outcome_section)
-
-        # Doc chunks (research agent — activate on task keywords + component names)
-        if agent_type == "research":
-            _mem = _get_mem_client()
-            doc_context_terms = [w for w in task.lower().split() if len(w) > 3][:6] + ["documentation"]
-            doc_activations = await _mem.activate(doc_context_terms, max_results=5)
-            doc_chunks = [
-                a for a in doc_activations
-                if "documentation" in a.get("tags", []) or
-                   a.get("concept", "").startswith("docs:")
-            ]
-            if doc_chunks:
-                doc_lines = ["RELEVANT DOCUMENTATION:"]
-                for dc in doc_chunks:
-                    content = dc.get("content", "")
-                    # Strip the metadata header line and show the content
-                    body = re.sub(r'^\[source:[^\]]+\]\n\n', '', content).strip()
-                    # Extract source name from header
-                    src_m = re.search(r'source:\s*([^|]+)', content)
-                    src = src_m.group(1).strip() if src_m else "docs"
-                    doc_lines.append(f"[{src}]\n{body[:500]}")
-                injected_sections.append("\n\n".join(doc_lines))
-
-        if injected_sections:
-            injection = "\n\n".join(injected_sections) + "\n\n"
-            system_prompt = injection + system_prompt
-            total_injected = len(past_outcomes) + (len(doc_chunks) if agent_type == "research" else 0)
-            await manager.send_line(
-                "memory",
-                f"[memory] {total_injected} context item(s) injected into prompt",
-                status="ok", session_id=session_id,
-            )
-    except Exception:
-        pass
-
-    client = OpenAI(base_url=base_url, api_key=api_key)
-    all_tools_spec = _build_tools_spec()
-    tools_spec = filter_tools(all_tools_spec, agent_type)
-    log.info(
-        "Agent=%s filtered manifest: %d tools — %s",
-        agent_type, len(tools_spec), [t["function"]["name"] for t in tools_spec],
-    )
-
+    Contains the existing while-loop body from _stream_agent — moved verbatim
+    except that agent_type, system_prompt, tools_spec, and client come from
+    parameters instead of being computed inside.
+    """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
     ]
 
     # ── Per-run feedback accumulators ─────────────────────────────────────────
-    tools_used_names: list[str] = []
+    tools_used_names: list = []
     positive_signals = 0
     negative_signals = 0
     _audit_logged = False        # allow at most one audit_log call per run
     plan_action_called = False   # track if plan_action was called this run
     _last_blocked_tool = None    # name of most recently blocked tool
 
-    # Broadcast agent type so GUI can display badge
-    await manager.broadcast({
-        "type":       "agent_start",
-        "agent_type": agent_type,
-        "session_id": session_id,
-        "timestamp":  datetime.now(timezone.utc).isoformat(),
-    })
-
-    await manager.send_line("step", f"Agent started — task: {task}", status="ok", session_id=session_id)
-    await manager.send_line("step", f"Model: {model} | Agent: {_AGENT_LABEL[agent_type]}", status="ok", session_id=session_id)
-
     step = 0
-    _MAX_STEPS_BY_TYPE = {"status": 8, "research": 12, "action": 20}
+    _MAX_STEPS_BY_TYPE = {"status": 8, "observe": 8, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
     max_steps = _MAX_STEPS_BY_TYPE.get(agent_type, 20)
     final_status = "completed"
     last_reasoning = ""
@@ -260,7 +203,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
 
             try:
                 response = client.chat.completions.create(
-                    model=model,
+                    model=_lm_model(),
                     messages=messages,
                     tools=tools_spec,
                     tool_choice="auto",
@@ -294,7 +237,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                 _has_destructive_intent = bool(_task_words & _DESTRUCTIVE_TASK_WORDS)
                 _plan_called = "plan_action" in tools_used_names
 
-                if (agent_type == "action" and _has_destructive_intent
+                if (agent_type in ("action", "execute") and _has_destructive_intent
                         and not _plan_called and step < max_steps - 2):
                     # Model forgot to call plan_action — inject a mandatory reminder
                     if msg.content:
@@ -316,17 +259,18 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                     continue  # Next iteration will call plan_action
 
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
-                payload = {
-                    "type":       "done",
-                    "session_id": session_id,
-                    "agent_type": agent_type,
-                    "content":    f"Agent finished after {step} steps.",
-                    "status":     "ok",
-                    "choices":    choices or [],
-                    "timestamp":  datetime.now(timezone.utc).isoformat(),
-                }
-                print(f"[DEBUG broadcast] agent done choices={choices}")
-                await manager.broadcast(payload)
+                if is_final_step:
+                    payload = {
+                        "type":       "done",
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "content":    f"Agent finished after {step} steps.",
+                        "status":     "ok",
+                        "choices":    choices or [],
+                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                    }
+                    log.debug("agent done choices=%s", choices)
+                    await manager.broadcast(payload)
                 break
 
             # Build assistant message for history
@@ -531,7 +475,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                             "data":    {"question": question, "answer": answer},
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         }
-                    elif fn_name == "escalate" and agent_type == "action" and not plan_action_called:
+                    elif fn_name == "escalate" and agent_type in ("action", "execute") and not plan_action_called:
                         # Fix 2: Block premature escalation — agent must plan first
                         _last_blocked_tool = "escalate"
                         result = {
@@ -572,7 +516,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                 # Log to SQLite
                 await logger_mod.log_tool_call(
                     operation_id, fn_name, fn_args, result,
-                    model, duration_ms
+                    _lm_model(), duration_ms
                 )
 
                 # Stream to GUI
@@ -620,7 +564,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                         await logger_mod.log_tool_call(
                             operation_id, "escalate",
                             {"reason": f"{fn_name} → {result_status}"}, esc,
-                            model, 0,
+                            _lm_model(), 0,
                         )
                     except Exception:
                         pass
@@ -640,21 +584,23 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             if (_step_names and all(n == "audit_log" for n in _step_names)
                     and _last_blocked_tool != "escalate"):
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
-                await manager.broadcast({
-                    "type": "done", "session_id": session_id, "agent_type": agent_type,
-                    "content": f"Agent finished after {step} steps.",
-                    "status": "ok", "choices": choices or [],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                if is_final_step:
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": f"Agent finished after {step} steps.",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 break
 
         else:
-            await manager.broadcast({
-                "type": "done", "session_id": session_id, "agent_type": agent_type,
-                "content": f"Agent reached max steps ({max_steps}).",
-                "status": "ok", "choices": [],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            if is_final_step:
+                await manager.broadcast({
+                    "type": "done", "session_id": session_id, "agent_type": agent_type,
+                    "content": f"Agent reached max steps ({max_steps}).",
+                    "status": "ok", "choices": [],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
 
     except Exception as e:
         await manager.broadcast({
@@ -675,18 +621,188 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
+    return {
+        "output":           last_reasoning,
+        "tools_used":       tools_used_names,
+        "final_status":     final_status,
+        "positive_signals": positive_signals,
+        "negative_signals": negative_signals,
+        "steps_taken":      step,
+    }
+
+
+async def _stream_agent(task: str, session_id: str, operation_id: str, owner_user: str = "admin"):
+    """Run the full agent loop, streaming every step to WebSocket clients."""
+    from openai import OpenAI
+    from api.agents.router import classify_task, filter_tools, get_prompt
+    from api.agents.orchestrator import build_step_plan, format_step_header, verdict_from_text
+
+    base_url = _lm_base()
+    api_key  = _lm_key()
+
+    # Classify task using first step intent for memory injection
+    first_intent = classify_task(task)
+    if first_intent == "ambiguous":
+        first_intent = "action"
+
+    system_prompt = get_prompt(first_intent)
+
+    # ── Inject past outcomes + relevant doc chunks into system prompt ─────────
+    try:
+        from api.memory.feedback import get_past_outcomes, build_outcome_prompt_section
+        from api.memory.client import get_client as _get_mem_client
+
+        injected_sections: list = []
+        doc_chunks: list = []
+
+        # Past outcomes (all agent types)
+        past_outcomes = await get_past_outcomes(task, max_results=4)
+        outcome_section = build_outcome_prompt_section(past_outcomes)
+        if outcome_section:
+            injected_sections.append(outcome_section)
+
+        # Doc chunks (research/investigate agent — activate on task keywords + component names)
+        if first_intent in ("research", "investigate"):
+            _mem = _get_mem_client()
+            doc_context_terms = [w for w in task.lower().split() if len(w) > 3][:6] + ["documentation"]
+            doc_activations = await _mem.activate(doc_context_terms, max_results=5)
+            doc_chunks = [
+                a for a in doc_activations
+                if "documentation" in a.get("tags", []) or
+                   a.get("concept", "").startswith("docs:")
+            ]
+            if doc_chunks:
+                doc_lines = ["RELEVANT DOCUMENTATION:"]
+                for dc in doc_chunks:
+                    content = dc.get("content", "")
+                    body = re.sub(r'^\[source:[^\]]+\]\n\n', '', content).strip()
+                    src_m = re.search(r'source:\s*([^|]+)', content)
+                    src = src_m.group(1).strip() if src_m else "docs"
+                    doc_lines.append(f"[{src}]\n{body[:500]}")
+                injected_sections.append("\n\n".join(doc_lines))
+
+        if injected_sections:
+            injection = "\n\n".join(injected_sections) + "\n\n"
+            system_prompt = injection + system_prompt
+            total_injected = len(past_outcomes) + (len(doc_chunks) if first_intent in ("research", "investigate") else 0)
+            await manager.send_line(
+                "memory",
+                f"[memory] {total_injected} context item(s) injected into prompt",
+                status="ok", session_id=session_id,
+            )
+    except Exception:
+        pass
+
+    client = OpenAI(base_url=base_url, api_key=api_key)
+
+    # Build orchestrator step plan
+    steps = build_step_plan(task)
+    prior_verdict = None
+
+    # Broadcast agent start (using first step's intent for badge)
+    await manager.broadcast({
+        "type":       "agent_start",
+        "agent_type": first_intent,
+        "session_id": session_id,
+        "timestamp":  datetime.now(timezone.utc).isoformat(),
+    })
+
+    await manager.send_line("step", f"Agent started — task: {task}", status="ok", session_id=session_id)
+    await manager.send_line("step", f"Model: {_lm_model()} | Agent: {_AGENT_LABEL.get(first_intent, 'Execute')}", status="ok", session_id=session_id)
+
+    # Aggregate feedback across all steps
+    all_tools_used: list = []
+    agg_positive = 0
+    agg_negative = 0
+    agg_steps = 0
+    final_status = "completed"
+    halted_early = False
+    all_tools = _build_tools_spec()
+
+    for step_info in steps:
+        step_intent = step_info["intent"]
+        step_domain = step_info.get("domain")
+        step_task   = step_info["task"]
+        step_num    = step_info["step"]
+        total_steps = len(steps)
+
+        if total_steps > 1:
+            header = format_step_header(step_num, total_steps, step_intent, step_domain)
+            await manager.send_line("agent", header, session_id=session_id)
+
+        step_agent_type = step_intent
+        if step_agent_type == "ambiguous":
+            step_agent_type = "execute"
+
+        step_system_prompt = get_prompt(step_agent_type)
+
+        # Prepend prior step verdict as context (minimal — no prose)
+        if prior_verdict:
+            context_line = (
+                f"[Prior step verdict: {prior_verdict['verdict']} — "
+                f"{prior_verdict['summary'][:200]}]\n\n"
+            )
+            step_system_prompt = context_line + step_system_prompt
+        else:
+            # First step: use the already-injected memory prompt
+            step_system_prompt = system_prompt
+
+        step_tools = filter_tools(all_tools, step_agent_type, domain=step_domain or "general")
+        log.info(
+            "Agent=%s domain=%s filtered manifest: %d tools — %s",
+            step_agent_type, step_domain, len(step_tools),
+            [t["function"]["name"] for t in step_tools],
+        )
+
+        step_result = await _run_single_agent_step(
+            step_task, session_id, operation_id, owner_user,
+            system_prompt=step_system_prompt,
+            tools_spec=step_tools,
+            agent_type=step_agent_type,
+            client=client,
+            is_final_step=(step_num == total_steps),
+        )
+
+        all_tools_used.extend(step_result["tools_used"])
+        agg_positive += step_result["positive_signals"]
+        agg_negative += step_result["negative_signals"]
+        agg_steps    += step_result["steps_taken"]
+        final_status  = step_result["final_status"]
+
+        prior_verdict = verdict_from_text(step_result["output"])
+
+        # If step halted and there are more steps, stop the plan
+        if prior_verdict["verdict"] == "HALT" and step_num < total_steps:
+            await manager.send_line(
+                "agent",
+                f"⛔ Step {step_num} returned HALT — stopping plan. "
+                f"Reason: {prior_verdict['summary'][:200]}",
+                session_id=session_id,
+            )
+            halted_early = True
+            break
+
+    if halted_early:
+        await manager.broadcast({
+            "type": "done", "session_id": session_id,
+            "agent_type": first_intent,
+            "content": "Plan halted — pre-conditions not met.",
+            "status": "ok", "choices": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
     # ── Record outcome for feedback loop ─────────────────────────────────────
     try:
         from api.memory.feedback import record_outcome
         await record_outcome(
             session_id=session_id,
             task=task,
-            agent_type=agent_type,
-            tools_used=tools_used_names,
+            agent_type=first_intent,
+            tools_used=all_tools_used,
             status=final_status,
-            steps=step,
-            positive_signals=positive_signals,
-            negative_signals=negative_signals,
+            steps=agg_steps,
+            positive_signals=agg_positive,
+            negative_signals=agg_negative,
         )
     except Exception as _oe:
         log.debug("record_outcome error: %s", _oe)
@@ -694,6 +810,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     # Release plan lock if this session holds it
     await plan_lock.release(session_id)
 
+    last_reasoning = prior_verdict["summary"] if prior_verdict else ""
     if last_reasoning:
         await logger_mod.set_operation_final_answer(session_id, last_reasoning)
     await logger_mod.complete_operation(operation_id, final_status)
