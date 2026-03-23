@@ -160,9 +160,6 @@ function InfrastructureTab({ draft, update }) {
         <Field label="Host" hint="IP or hostname only — https:// and port 8006 are added automatically. e.g. 192.168.1.5 or proxmox.local">
           <TextInput value={draft.proxmoxHost} onChange={v => update('proxmoxHost', v)} placeholder="192.168.1.5" />
         </Field>
-        <Field label="User">
-          <TextInput value={draft.proxmoxUser} onChange={v => update('proxmoxUser', v)} placeholder="root@pam" />
-        </Field>
         <Field label="Token ID" hint="Format: user@realm!tokenname — e.g. terraform@pve!terraform-token">
           <TextInput value={draft.proxmoxTokenId} onChange={v => update('proxmoxTokenId', v)} placeholder="terraform@pve!terraform-token" />
         </Field>

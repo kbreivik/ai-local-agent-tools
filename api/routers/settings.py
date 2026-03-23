@@ -35,7 +35,6 @@ SETTINGS_KEYS: dict[str, dict] = {
     "muninndbUrl":           {"env": "MUNINN_URL",              "sens": False, "default": ""},
     # Infrastructure — Proxmox
     "proxmoxHost":           {"env": "PROXMOX_HOST",            "sens": False, "default": ""},
-    "proxmoxUser":           {"env": "PROXMOX_USER",            "sens": False, "default": "root@pam"},
     "proxmoxTokenId":        {"env": "PROXMOX_TOKEN_ID",        "sens": False, "default": ""},
     "proxmoxTokenSecret":    {"env": "PROXMOX_TOKEN_SECRET",    "sens": True,  "default": ""},
     # Infrastructure — FortiGate
