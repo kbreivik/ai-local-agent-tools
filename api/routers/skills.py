@@ -4,6 +4,12 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from api.tool_registry import invoke_tool
 from api.auth import get_current_user
+from mcp_server.tools.skills.promoter import (
+    promote_skill as _promote_skill,
+    demote_skill as _demote_skill,
+    scrap_skill as _scrap_skill,
+    restore_skill as _restore_skill,
+)
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -68,8 +74,7 @@ class PromoteRequest(BaseModel):
 @router.post("/{skill_name}/promote")
 def promote_skill(skill_name: str, body: PromoteRequest, _: str = Depends(get_current_user)):
     """Promote a skill to @mcp.tool() and assign it to an agent domain."""
-    from mcp_server.tools.skills.promoter import promote_skill as _promote
-    result = _promote(skill_name, body.domain)
+    result = _promote_skill(skill_name, body.domain)
     if result["status"] == "error":
         msg = result.get("message", "")
         code = 400 if "not found" not in msg.lower() else 404
@@ -80,18 +85,18 @@ def promote_skill(skill_name: str, body: PromoteRequest, _: str = Depends(get_cu
 @router.post("/{skill_name}/demote")
 def demote_skill(skill_name: str, _: str = Depends(get_current_user)):
     """Remove a skill from the promoted state."""
-    from mcp_server.tools.skills.promoter import demote_skill as _demote
-    result = _demote(skill_name)
+    result = _demote_skill(skill_name)
     if result["status"] == "error":
-        raise HTTPException(404, result.get("message", "Not found"))
+        msg = result.get("message", "")
+        code = 400 if "not found" not in msg.lower() else 404
+        raise HTTPException(code, msg)
     return result
 
 
 @router.delete("/{skill_name}")
 def scrap_skill(skill_name: str, _: str = Depends(get_current_user)):
     """Scrap a skill — disable it and move file to holding area."""
-    from mcp_server.tools.skills.promoter import scrap_skill as _scrap
-    result = _scrap(skill_name)
+    result = _scrap_skill(skill_name)
     if result["status"] == "error":
         msg = result.get("message", "")
         if "not found" in msg.lower():
@@ -105,8 +110,7 @@ def scrap_skill(skill_name: str, _: str = Depends(get_current_user)):
 @router.post("/{skill_name}/restore")
 def restore_skill(skill_name: str, _: str = Depends(get_current_user)):
     """Restore a scrapped skill."""
-    from mcp_server.tools.skills.promoter import restore_skill as _restore
-    result = _restore(skill_name)
+    result = _restore_skill(skill_name)
     if result["status"] == "error":
         msg = result.get("message", "")
         if "not found" in msg.lower():
