@@ -28,7 +28,7 @@ const CATEGORY_COLOR = {
   orchestration: 'bg-amber-900 text-amber-300',
   elastic:       'bg-teal-900 text-teal-300',
   network:       'bg-green-900 text-green-300',
-  docker:        'bg-blue-900 text-blue-300',
+  docker:        'bg-sky-800 text-sky-200',
   // skill categories
   compute:       'bg-sky-900 text-sky-300',
   monitoring:    'bg-cyan-900 text-cyan-300',
@@ -50,13 +50,13 @@ function normaliseSkillParams(parameters) {
     type:        schema.type        ?? 'string',
     description: schema.description ?? '',
     required:    required.includes(name),
-    default:     schema.default     ?? '',
+    default:     schema.default     ?? (schema.type === 'boolean' ? false : ''),
   }))
 }
 
 function deriveTags(item) {
   if (item.source === 'skill') {
-    const parts = [item._compat?.service, item.category].filter(Boolean)
+    const parts = [item.compat?.service, item.category].filter(Boolean)
     return parts.length ? [...new Set(parts)] : ['general']
   }
   return [item.category || 'general']
