@@ -211,7 +211,7 @@ def load_all_skills(mcp_server) -> dict:
             if name in _SKILL_HANDLERS:
                 continue  # Already loaded from higher-priority dir
 
-            # load_single_skill normally looks only in _MODULES_DIR — pass filepath directly
+            # Use filepath directly to avoid double-lookup; both scan_dir values are already resolved
             filepath = os.path.join(scan_dir, fname)
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
