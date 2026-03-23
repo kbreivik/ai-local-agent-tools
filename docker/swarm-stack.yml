@@ -13,10 +13,6 @@ services:
         published: 8000
         protocol: tcp
         mode: ingress        # Swarm load-balances across replicas
-      - target: 5173
-        published: 5173
-        protocol: tcp
-        mode: ingress
 
     volumes:
       # Shared data volume — must be accessible from all nodes
