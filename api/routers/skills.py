@@ -10,6 +10,7 @@ from mcp_server.tools.skills.promoter import (
     scrap_skill as _scrap_skill,
     restore_skill as _restore_skill,
 )
+from mcp_server.tools.skills.meta_tools import skill_regenerate as _skill_regenerate
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -104,6 +105,16 @@ def scrap_skill(skill_name: str, _: str = Depends(get_current_user)):
         else:
             code = 400
         raise HTTPException(code, msg)
+    return result
+
+
+@router.post("/{skill_name}/regenerate")
+def regenerate_skill(skill_name: str, _: str = Depends(get_current_user)):
+    """Regenerate a skill from its description using the LLM, backing up the old version."""
+    result = _skill_regenerate(None, skill_name)
+    if result["status"] == "error":
+        msg = result.get("message", "")
+        raise HTTPException(404 if "not found" in msg.lower() else 400, msg)
     return result
 
 

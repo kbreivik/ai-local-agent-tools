@@ -70,7 +70,7 @@ export async function promoteSkill(skillName, domain) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ domain }),
   })
-  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
   return r.json()
 }
 
@@ -79,7 +79,7 @@ export async function demoteSkill(skillName) {
     method: 'POST',
     headers: { ...authHeaders() },
   })
-  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
   return r.json()
 }
 
@@ -88,7 +88,7 @@ export async function scrapSkill(skillName) {
     method: 'DELETE',
     headers: { ...authHeaders() },
   })
-  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
   return r.status === 204 ? {} : r.json()
 }
 
@@ -97,7 +97,16 @@ export async function restoreSkill(skillName) {
     method: 'POST',
     headers: { ...authHeaders() },
   })
-  if (!r.ok) throw new Error((await r.json()).message || `HTTP ${r.status}`)
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
+  return r.json()
+}
+
+export async function regenerateSkill(skillName) {
+  const r = await fetch(`${BASE}/api/skills/${encodeURIComponent(skillName)}/regenerate`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) { const d = await r.json(); throw new Error(d.detail || d.message || `HTTP ${r.status}`) }
   return r.json()
 }
 

@@ -2,7 +2,7 @@
  * SkillsPanel — browse and execute registered dynamic skills.
  */
 import { useEffect, useState, useCallback } from 'react'
-import { fetchSkills, executeSkill, promoteSkill, demoteSkill, scrapSkill, restoreSkill } from '../api'
+import { fetchSkills, executeSkill, promoteSkill, demoteSkill, scrapSkill, restoreSkill, regenerateSkill } from '../api'
 
 const CATEGORY_COLOR = {
   compute:    'bg-blue-900 text-blue-300',
@@ -108,6 +108,7 @@ function SkillCard({ skill, onReload }) {
   const hasParams = Object.keys(skill.parameters?.properties ?? {}).length > 0
   const tested    = result !== null
   const isEnabled = skill.enabled !== false && state !== 'scrapped'
+  const isStarter = skill.auto_generated === false
 
   const handleExecute = () => {
     setResult(null)
@@ -183,6 +184,20 @@ function SkillCard({ skill, onReload }) {
     }
   }
 
+  const handleRegenerate = async () => {
+    setWorking(true)
+    setResult(null)
+    try {
+      const r = await regenerateSkill(skill.name)
+      setResult(r)
+    } catch (e) {
+      setResult({ status: 'error', message: `Regenerate failed: ${e.message}` })
+    } finally {
+      setWorking(false)
+      onReload()
+    }
+  }
+
   return (
     <div className={`border rounded p-2 mb-2 bg-slate-900 ${
       state === 'promoted' ? 'border-green-800' :
@@ -224,12 +239,19 @@ function SkillCard({ skill, onReload }) {
                 className="px-2 py-1 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white disabled:bg-slate-700 disabled:text-slate-500">
                 {running ? '…' : '▶'}
               </button>
+              {!isStarter && (
+                <button onClick={handleRegenerate} disabled={working}
+                  title="Regenerate from description using LLM"
+                  className="px-2 py-1 text-xs rounded bg-indigo-900 hover:bg-indigo-800 text-indigo-300 disabled:bg-slate-700 disabled:text-slate-500">
+                  {working ? '…' : '⟳'}
+                </button>
+              )}
               {state === 'promoted' ? (
                 <button onClick={handleDemote} disabled={working}
                   className="px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300 disabled:opacity-40">
                   {working ? '…' : '↓'}
                 </button>
-              ) : (
+              ) : !isStarter ? (
                 <>
                   <button onClick={() => setPromoting(p => !p)} disabled={!tested || working}
                     title={tested ? 'Promote to @mcp.tool()' : 'Run test first'}
@@ -242,7 +264,7 @@ function SkillCard({ skill, onReload }) {
                     {working ? '…' : '✕'}
                   </button>
                 </>
-              )}
+              ) : null}
             </>
           )}
         </div>
@@ -253,6 +275,9 @@ function SkillCard({ skill, onReload }) {
           called {skill.call_count}×
           {skill.last_called_at && ` · ${new Date(skill.last_called_at).toLocaleString()}`}
         </p>
+      )}
+      {isStarter && (
+        <p className="text-slate-600 text-[10px] mt-1">built-in starter skill — cannot be scrapped or promoted</p>
       )}
 
       {open && (
