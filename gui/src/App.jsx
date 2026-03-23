@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
@@ -23,6 +23,27 @@ import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
+
+class ServiceCardsErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="px-5 py-8 text-center text-[#888] text-sm">
+          Dashboard sections unavailable — check browser console for details.
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // Dev-only layout test harness — renders as overlay at ?test=layout
 const _showLayoutTest = import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('test') === 'layout'
@@ -328,7 +349,9 @@ function DashboardView() {
     <div className="flex flex-col flex-1 overflow-auto min-h-0">
       <DashboardCards />
       <div className="px-5 py-4">
-        <ServiceCards showAlertBar={true} />
+        <ServiceCardsErrorBoundary>
+          <ServiceCards showAlertBar={true} />
+        </ServiceCardsErrorBoundary>
       </div>
     </div>
   )
