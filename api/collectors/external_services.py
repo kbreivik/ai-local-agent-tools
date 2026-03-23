@@ -114,7 +114,7 @@ class ExternalServicesCollector(BaseCollector):
                 latency_ms = round((time.monotonic() - t0) * 1000)
                 reachable = r.status_code < 500
             except Exception as e:
-                log.debug("External probe failed for %s: %s", cfg["slug"], e)
+                log.warning("External probe failed for %s: %s", cfg["slug"], e)
                 latency_ms = None
                 reachable = False
 
@@ -136,7 +136,7 @@ class ExternalServicesCollector(BaseCollector):
             })
 
         has_error = any(s["dot"] == "red" for s in cards if s["dot"] != "grey")
-        has_warn = any(s["dot"] == "amber" for s in cards)
+        has_warn = any(s["dot"] == "amber" for s in cards if s["dot"] != "grey")
         health = "critical" if has_error else "degraded" if has_warn else "healthy"
         return {"health": health, "services": cards}
 
