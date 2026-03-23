@@ -294,6 +294,11 @@ export async function dashboardAction(path, body = null) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   })
+  if (!r.ok) {
+    let msg = 'Action failed'
+    try { const j = await r.json(); msg = j.error || j.detail || msg } catch (_) {}
+    return { ok: false, error: msg }
+  }
   return r.json()
 }
 

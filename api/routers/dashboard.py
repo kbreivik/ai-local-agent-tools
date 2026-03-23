@@ -96,10 +96,10 @@ async def get_containers_swarm(user: str = Depends(get_current_user)):
             enriched["problem"] = _swarm_problem(svc)
             services.append(enriched)
 
-    # Split nodes into managers and workers
-    nodes = state.get("nodes", [])
-    swarm_managers = sum(1 for n in nodes if n.get("role") == "manager")
-    swarm_workers  = sum(1 for n in nodes if n.get("role") == "worker")
+        # Split nodes into managers and workers
+        nodes = state.get("nodes", [])
+        swarm_managers = sum(1 for n in nodes if n.get("role") == "manager")
+        swarm_workers  = sum(1 for n in nodes if n.get("role") == "worker")
 
     return {
         "services": services,
@@ -245,6 +245,9 @@ async def reboot_vm(node: str, vmid: int, user: str = Depends(get_current_user))
 
 def _do_vm_action(node: str, vmid: int, action: str) -> dict:
     import httpx
+    ALLOWED_NODES = {"Pmox1", "Pmox2", "Pmox3"}
+    if node not in ALLOWED_NODES:
+        return {"ok": False, "error": "unknown node"}
     host = os.environ.get("PROXMOX_HOST", "")
     token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
     token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")

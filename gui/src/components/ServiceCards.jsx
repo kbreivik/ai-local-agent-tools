@@ -4,7 +4,7 @@
  * Cards expand inline on click; one open at a time globally.
  * Renders AlertBar at top when showAlertBar prop is true.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   fetchDashboardContainers, fetchDashboardSwarm,
   fetchDashboardVMs, fetchDashboardExternal,
@@ -123,9 +123,9 @@ function ActionBtn({ label, onClick, variant = 'default', loading, disabled }) {
 // ── Confirm dialog ─────────────────────────────────────────────────────────────
 
 function useConfirm() {
-  const [pending, setPending] = React.useState(null)
-  const confirm = React.useCallback((msg) => new Promise(res => setPending({ msg, res })), [])
-  const resolve = React.useCallback((val) => setPending(p => { p?.res(val); return null }), [])
+  const [pending, setPending] = useState(null)
+  const confirm = useCallback((msg) => new Promise(res => setPending({ msg, res })), [])
+  const resolve = useCallback((val) => setPending(p => { p?.res(val); return null }), [])
   return { pending, confirm, resolve }
 }
 
@@ -200,9 +200,9 @@ function Actions({ buttons }) {
 function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
-  const [scaleVal, setScaleVal] = React.useState(1)
-  const mounted = React.useRef(true)
-  React.useEffect(() => () => { mounted.current = false }, [])
+  const [scaleVal, setScaleVal] = useState(1)
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
 
   const act = async (key, path, body, msg) => {
     if (msg) {
@@ -277,8 +277,8 @@ function ContainerCardCollapsed({ c }) {
 
 function VMCardExpanded({ vm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
-  const mounted = React.useRef(true)
-  React.useEffect(() => () => { mounted.current = false }, [])
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
 
   const act = async (key, action, msg) => {
     if (msg) {
@@ -334,8 +334,8 @@ function VMCardCollapsed({ vm }) {
 function ExternalCardExpanded({ svc, onAction }) {
   const [probeLoading, setProbeLoading] = useState(false)
   const [liveLatency, setLiveLatency] = useState(null)
-  const mounted = React.useRef(true)
-  React.useEffect(() => () => { mounted.current = false }, [])
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
 
   const probe = async () => {
     setProbeLoading(true)
