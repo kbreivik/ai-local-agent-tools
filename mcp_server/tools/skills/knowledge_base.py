@@ -8,6 +8,8 @@ import os
 import re
 from datetime import datetime, timezone
 
+from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_KEY
+
 from mcp_server.tools.skills import registry
 
 log = logging.getLogger(__name__)
@@ -387,7 +389,7 @@ def parse_changelog_for_breaking_changes(
                     {"role": "user", "content": "Extract breaking changes as a JSON array now."},
                 ],
             },
-            headers={"Authorization": f"Bearer {cfg.get('api_key', 'lm-studio')}"},
+            headers={"Authorization": f"Bearer {cfg.get('api_key', DEFAULT_LM_STUDIO_KEY)}"},
             timeout=240.0,
         )
         resp.raise_for_status()
@@ -489,9 +491,9 @@ def _get_llm_config() -> dict:
     except Exception:
         pass
     return {
-        "base_url": os.environ.get("LM_STUDIO_BASE_URL", file_cfg.get("base_url", "http://localhost:1234/v1")),
+        "base_url": os.environ.get("LM_STUDIO_BASE_URL", file_cfg.get("base_url", DEFAULT_LM_STUDIO_URL)),
         "model": os.environ.get("LM_STUDIO_MODEL", file_cfg.get("model", "")),
-        "api_key": os.environ.get("LM_STUDIO_API_KEY", file_cfg.get("api_key", "lm-studio")),
+        "api_key": os.environ.get("LM_STUDIO_API_KEY", file_cfg.get("api_key", DEFAULT_LM_STUDIO_KEY)),
     }
 
 

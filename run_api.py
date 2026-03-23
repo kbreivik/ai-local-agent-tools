@@ -31,22 +31,22 @@ if not os.environ.get("LM_STUDIO_API_KEY"):
         pass
 
 os.environ.setdefault("DOCKER_HOST",               "npipe:////./pipe/docker_engine")
-os.environ.setdefault("KAFKA_BOOTSTRAP_SERVERS",   "localhost:9092,localhost:9093,localhost:9094")
+os.environ.setdefault("KAFKA_BOOTSTRAP_SERVERS",   DEFAULT_KAFKA_BOOTSTRAP)
 os.environ.setdefault("AUDIT_LOG_PATH",            str(ROOT / "logs" / "audit.log"))
 os.environ.setdefault("CHECKPOINT_PATH",           str(ROOT / "checkpoints"))
 os.environ.setdefault("DB_PATH",                   str(ROOT / "data" / "hp1_agent.db"))
-os.environ.setdefault("LM_STUDIO_BASE_URL",        "http://localhost:1234/v1")
-os.environ.setdefault("LM_STUDIO_MODEL",
-    "lmstudio-community/qwen3-coder-30b-a3b-instruct")
+os.environ.setdefault("LM_STUDIO_BASE_URL",        DEFAULT_LM_STUDIO_URL)
+os.environ.setdefault("LM_STUDIO_MODEL",           DEFAULT_LM_STUDIO_MODEL)
 os.environ.setdefault("CORS_ALLOW_ALL", "true")
 
 sys.path.insert(0, str(ROOT))
 
+from api.constants import DEFAULT_API_PORT, DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_MODEL, DEFAULT_KAFKA_BOOTSTRAP
 import uvicorn
 uvicorn.run(
     "api.main:app",
     host=os.environ.get("API_HOST", "0.0.0.0"),
-    port=int(os.environ.get("API_PORT", "8000")),
+    port=int(os.environ.get("API_PORT", str(DEFAULT_API_PORT))),
     reload=False,
     log_level="info",
 )

@@ -27,6 +27,7 @@ from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
 from api.routers.settings import seed_defaults as _seed_settings
+from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
 from api.collectors import manager as collector_manager
 from api.memory.client import close_client as _close_memory
@@ -35,12 +36,12 @@ from mcp_server.tools.skills import loader as _skill_loader
 from mcp_server.tools.skills import registry as _skill_registry
 
 HOST = os.environ.get("API_HOST", "0.0.0.0")
-PORT = int(os.environ.get("API_PORT", "8000"))
+PORT = int(os.environ.get("API_PORT", str(DEFAULT_API_PORT)))
 
 CORS_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://0.0.0.0:5173",
+    f"http://localhost:{DEFAULT_GUI_PORT}",
+    f"http://127.0.0.1:{DEFAULT_GUI_PORT}",
+    f"http://0.0.0.0:{DEFAULT_GUI_PORT}",
     # Allow any LAN IP on common ports
     "http://192.168.0.0/16",
 ]
@@ -85,9 +86,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="HP1 AI Agent API",
+    title=f"{APP_NAME} API",
     description="Local AI infrastructure orchestration — Docker Swarm + Kafka",
-    version="1.9.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -141,8 +142,8 @@ def _get_host_ips() -> dict:
             "hostname": hostname,
             "lan_ips":  lan_ips,
             "all_ips":  all_ips,
-            "api_url":  f"http://{lan_ips[0]}:8000" if lan_ips else None,
-            "gui_url":  f"http://{lan_ips[0]}:8000" if lan_ips else None,
+            "api_url":  f"http://{lan_ips[0]}:{DEFAULT_API_PORT}" if lan_ips else None,
+            "gui_url":  f"http://{lan_ips[0]}:{DEFAULT_API_PORT}" if lan_ips else None,
         }
     except Exception:
         return {"hostname": "unknown", "lan_ips": [], "all_ips": []}
@@ -165,8 +166,8 @@ async def active_sessions(user: str = Depends(get_current_user)):
 async def health():
     return {
         "status": "ok",
-        "service": "HP1-AI-Agent",
-        "version": "1.9.0",
+        "service": APP_NAME,
+        "version": APP_VERSION,
         "deploy_mode": os.environ.get("HP1_DEPLOY_MODE", "bare-metal"),
         "ws_clients": manager.active_count,
         "network": _get_host_ips(),

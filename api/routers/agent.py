@@ -17,12 +17,13 @@ from pydantic import BaseModel
 from api.websocket import manager
 from api.auth import get_current_user
 import api.logger as logger_mod
+from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_MODEL, DEFAULT_LM_STUDIO_KEY
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
-def _lm_base():  return os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
-def _lm_model(): return os.environ.get("LM_STUDIO_MODEL", "lmstudio-community/qwen3-coder-30b-a3b-instruct")
-def _lm_key():   return os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
+def _lm_base():  return os.environ.get("LM_STUDIO_BASE_URL", DEFAULT_LM_STUDIO_URL)
+def _lm_model(): return os.environ.get("LM_STUDIO_MODEL",    DEFAULT_LM_STUDIO_MODEL)
+def _lm_key():   return os.environ.get("LM_STUDIO_API_KEY",  DEFAULT_LM_STUDIO_KEY)
 
 # Ensure project root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))

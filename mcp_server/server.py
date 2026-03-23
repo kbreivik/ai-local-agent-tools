@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastmcp import FastMCP
 
+from api.constants import APP_NAME
 from mcp_server.tools import swarm, kafka, orchestration, elastic
 from mcp_server.tools.docker_engine import (
     docker_engine_version,
@@ -15,7 +16,7 @@ from mcp_server.tools.docker_engine import (
 )
 from mcp_server.tools import ingest as ingest_tools
 
-mcp = FastMCP("HP1-AI-Agent")
+mcp = FastMCP(APP_NAME)
 
 
 # ── Docker Swarm tools ────────────────────────────────────────────────────────

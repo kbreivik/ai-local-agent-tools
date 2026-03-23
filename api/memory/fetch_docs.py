@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from api.constants import APP_NAME, APP_VERSION
+
 # ── Source definitions ─────────────────────────────────────────────────────────
 
 SOURCES: list[dict] = [
@@ -160,7 +162,7 @@ def _fetch_url(url: str) -> Optional[str]:
     """Fetch URL, return HTML string or None on error."""
     try:
         import requests
-        headers = {"User-Agent": "HP1-AI-Agent/1.0 (doc-ingestion)"}
+        headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION} (doc-ingestion)"}
         r = requests.get(url, headers=headers, timeout=FETCH_TIMEOUT, stream=True)
         r.raise_for_status()
 

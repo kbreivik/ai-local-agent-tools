@@ -8,9 +8,11 @@ from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 from kafka.admin import NewTopic
 from kafka.errors import KafkaError, NoBrokersAvailable
 
+from api.constants import DEFAULT_KAFKA_BOOTSTRAP
+
 
 def _bootstrap() -> list[str]:
-    servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092,localhost:9093,localhost:9094")
+    servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", DEFAULT_KAFKA_BOOTSTRAP)
     return [s.strip() for s in servers.split(",")]
 
 
