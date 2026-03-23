@@ -38,7 +38,7 @@ class DockerAgent01Collector(BaseCollector):
             return {"health": "error", "error": str(e), "containers": [], "agent01_ip": VM_IP}
 
         try:
-            containers = client.containers.list(all=False)
+            containers = client.containers.list(all=True)
             volume_usage = _get_volume_usage(client)
             last_digests = _load_last_digests()
 
@@ -137,7 +137,7 @@ def _load_last_digests() -> dict:
         from sqlalchemy import text
         with _engine.connect() as conn:
             rows = conn.execute(
-                text("SELECT component, state FROM status_snapshots "
+                text("SELECT component, state, timestamp FROM status_snapshots "
                      "WHERE component LIKE 'image_digest:%' "
                      "ORDER BY timestamp DESC")
             ).fetchall()
@@ -145,7 +145,9 @@ def _load_last_digests() -> dict:
         for row in rows:
             comp = row[0]
             state = row[1] if isinstance(row[1], dict) else json.loads(row[1] or "{}")
+            ts = row[2]
             if comp not in result:
+                state["_ts"] = str(ts) if ts else None
                 result[comp] = state
         return result
     except Exception:
@@ -174,7 +176,7 @@ def _check_digest(container_id: str, image: str, image_id: str | None, last_dige
         except Exception:
             pass
         return now
-    return stored.get("pulled_at")
+    return stored.get("_ts")  # timestamp from DB row
 
 
 def _classify_container(state: str, health: str) -> tuple[str, str | None]:

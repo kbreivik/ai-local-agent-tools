@@ -24,10 +24,13 @@ def test_poll_returns_containers_key():
     mock_client.containers.list.return_value = [mock_container]
     mock_client.df.return_value = {"Volumes": []}
 
-    with patch("docker.DockerClient", return_value=mock_client):
+    with patch("docker.DockerClient", return_value=mock_client), \
+         patch("api.collectors.docker_agent01._load_last_digests", return_value={}), \
+         patch("api.collectors.docker_agent01._check_digest", return_value="2026-01-01T00:00:00+00:00"):
         import asyncio
         result = asyncio.get_event_loop().run_until_complete(collector.poll())
 
     assert "containers" in result
     assert result["health"] in ("healthy", "degraded", "error", "critical")
     assert result["containers"][0]["name"] == "hp1_agent"
+    assert result["containers"][0]["last_pull_at"] is not None
