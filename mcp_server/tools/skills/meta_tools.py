@@ -301,16 +301,23 @@ def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
         return _err(f"Skill '{name}' not found")
 
     # Back up old file
-    import shutil
-    # Check both dirs — starter skills are in modules/, generated in GENERATED_DIR
+    import shutil as _shutil
+    # Always regenerate into persistent dir
     _in_modules = os.path.join(os.path.dirname(loader.__file__), "modules", f"{name}.py")
     _in_generated = os.path.join(loader.GENERATED_DIR, f"{name}.py")
-    skill_dir = loader.GENERATED_DIR if os.path.exists(_in_generated) else os.path.dirname(_in_modules)
+    os.makedirs(loader.GENERATED_DIR, exist_ok=True)
+    skill_dir = loader.GENERATED_DIR
     old_path = os.path.join(skill_dir, f"{name}.py")
     bak_path = os.path.join(skill_dir, f"{name}.py.bak")
 
+    # Source file for backup: prefer GENERATED_DIR copy, fall back to modules/ copy
+    _source_path = _in_generated if os.path.exists(_in_generated) else _in_modules
+    # If source is different from old_path (starter skill first regen), copy it first
+    if _source_path != old_path and os.path.exists(_source_path):
+        _shutil.copy2(_source_path, old_path)
+
     if os.path.exists(old_path):
-        shutil.copy2(old_path, bak_path)
+        _shutil.copy2(old_path, bak_path)
 
     # Get description from skill registry
     description = skill.get("description", name)
