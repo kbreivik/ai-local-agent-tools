@@ -235,8 +235,8 @@ def test_containers_swarm_returns_services_and_nodes():
     assert "health" in body
     assert body["health"] == "healthy"
     assert isinstance(body["services"], list)
-    assert isinstance(body["swarm_managers"], list)
-    assert isinstance(body["swarm_workers"], list)
+    assert isinstance(body["swarm_managers"], int)
+    assert isinstance(body["swarm_workers"], int)
 
 
 def test_containers_swarm_services_have_dot_and_problem():
@@ -278,10 +278,8 @@ def test_containers_swarm_managers_and_workers_split_correctly():
 
     assert r.status_code == 200
     body = r.json()
-    assert len(body["swarm_managers"]) == 2
-    assert len(body["swarm_workers"]) == 1
-    assert body["swarm_managers"][0]["hostname"] == "manager-01"
-    assert body["swarm_workers"][0]["hostname"] == "worker-01"
+    assert body["swarm_managers"] == 2
+    assert body["swarm_workers"] == 1
 
 
 def test_containers_swarm_no_snapshot_returns_unknown():
@@ -298,8 +296,8 @@ def test_containers_swarm_no_snapshot_returns_unknown():
     body = r.json()
     assert body["health"] == "unknown"
     assert body["services"] == []
-    assert body["swarm_managers"] == []
-    assert body["swarm_workers"] == []
+    assert body["swarm_managers"] == 0
+    assert body["swarm_workers"] == 0
 
 
 # ── /vms ──────────────────────────────────────────────────────────────────────

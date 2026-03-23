@@ -96,8 +96,8 @@ async def get_containers_swarm(user: str = Depends(get_current_user)):
 
     # Split nodes into managers and workers
     nodes = state.get("nodes", [])
-    swarm_managers = [n for n in nodes if n.get("role") == "manager"]
-    swarm_workers = [n for n in nodes if n.get("role") == "worker"]
+    swarm_managers = sum(1 for n in nodes if n.get("role") == "manager")
+    swarm_workers  = sum(1 for n in nodes if n.get("role") == "worker")
 
     return {
         "services": services,
