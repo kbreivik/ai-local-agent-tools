@@ -270,6 +270,27 @@ skill_registry.init_db()  # triggers auto-detect: PostgreSQL → SQLite fallback
 _skill_load_result = skill_loader.load_all_skills(mcp)
 _skill_import_result = skill_loader.scan_imports(mcp)
 
+# Register promoted skills as first-class @mcp.tool() wrappers
+try:
+    from mcp_server.tools.skills.registry import list_skills as _ls_promoted
+    for _ps in _ls_promoted(enabled_only=True):
+        if _ps.get("lifecycle_state") != "promoted":
+            continue
+        _pname = _ps["name"]
+        _pdesc = _ps.get("description", _pname)
+        def _make_promoted_tool(_n: str, _d: str):
+            def _promoted_fn(**kwargs) -> dict:
+                """Promoted skill wrapper."""
+                from mcp_server.tools.skills.loader import dispatch_skill
+                return dispatch_skill(_n, **kwargs)
+            _promoted_fn.__name__ = _n
+            _promoted_fn.__doc__ = _d
+            return mcp.tool()(_promoted_fn)
+        _make_promoted_tool(_pname, _pdesc)
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("Promoted skill registration failed: %s", _e)
+
 
 @mcp.tool()
 def skill_search(query: str, category: str = "") -> dict:
