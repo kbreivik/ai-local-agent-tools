@@ -1,9 +1,10 @@
 """GET/POST /api/settings — DB-backed settings with env-var seeding."""
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, HTTPException
 from api.auth import get_current_user
 from mcp_server.tools.skills.storage import get_backend
 
@@ -39,6 +40,10 @@ SETTINGS_KEYS: dict[str, dict] = {
 }
 
 
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _mask(value: Any) -> str:
     """Return a masked version of a sensitive value."""
     s = str(value)
@@ -71,45 +76,60 @@ def seed_defaults() -> int:
 @router.get("")
 def get_settings(_: str = Depends(get_current_user)):
     """Return all server-managed settings. Sensitive values are masked."""
-    backend = get_backend()
-    result = {}
-    for key, meta in SETTINGS_KEYS.items():
-        val = backend.get_setting(key)
-        if val is None:
-            # Fall back to env var then hardcoded default
-            env_var = meta["env"]
-            val = os.environ.get(env_var, meta["default"]) if env_var else meta["default"]
-        result[key] = _mask(val) if (meta["sens"] and val) else val
-    return {"settings": result}
+    try:
+        backend = get_backend()
+        result = {}
+        for key, meta in SETTINGS_KEYS.items():
+            val = backend.get_setting(key)
+            if val is None:
+                # Fall back to env var then hardcoded default
+                env_var = meta["env"]
+                val = os.environ.get(env_var, meta["default"]) if env_var else meta["default"]
+            result[key] = _mask(val) if (meta["sens"] and val) else val
+        return {"status": "ok", "data": {"settings": result}, "timestamp": _ts(), "message": "OK"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @router.post("")
 def update_settings(
-    body: dict = Body(...),
+    body: dict[str, Any] = Body(...),
     _: str = Depends(get_current_user),
 ):
     """Persist settings to DB. Only recognised keys are saved. Returns updated values (masked)."""
-    backend = get_backend()
-    updated = {}
-    for key, value in body.items():
-        if key not in SETTINGS_KEYS:
-            continue
-        backend.set_setting(key, value)
-        meta = SETTINGS_KEYS[key]
-        updated[key] = _mask(value) if (meta["sens"] and value) else value
-    return {"status": "ok", "updated": updated}
+    try:
+        backend = get_backend()
+        updated = {}
+        for key, value in body.items():
+            if key not in SETTINGS_KEYS:
+                continue
+            backend.set_setting(key, value)
+            meta = SETTINGS_KEYS[key]
+            updated[key] = _mask(value) if (meta["sens"] and value) else value
+        return {"status": "ok", "data": {"updated": updated}, "timestamp": _ts(), "message": f"Updated {len(updated)} setting(s)"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @router.post("/seed")
 def reseed_settings(_: str = Depends(get_current_user)):
     """Force re-seed settings from env vars (overwrites existing DB values)."""
-    backend = get_backend()
-    seeded = 0
-    for key, meta in SETTINGS_KEYS.items():
-        env_var = meta["env"]
-        value = os.environ.get(env_var, "") if env_var else ""
-        if value:
-            backend.set_setting(key, value)
-            seeded += 1
-    logger.info("Settings: force-reseeded %d keys", seeded)
-    return {"status": "ok", "seeded": seeded}
+    try:
+        backend = get_backend()
+        seeded = 0
+        for key, meta in SETTINGS_KEYS.items():
+            env_var = meta["env"]
+            value = os.environ.get(env_var, "") if env_var else meta["default"]
+            if value is not None and value != "":
+                backend.set_setting(key, value)
+                seeded += 1
+        logger.info("Settings: force-reseeded %d keys", seeded)
+        return {"status": "ok", "data": {"seeded": seeded}, "timestamp": _ts(), "message": f"Seeded {seeded} key(s)"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
