@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from mcp_server.tools.skills import registry, generator, loader
 from mcp_server.tools import orchestration
+from api.constants import DEFAULT_LM_STUDIO_KEY
 
 
 def _ts():
@@ -150,7 +151,7 @@ def skill_generation_config() -> dict:
     # Redact API keys
     if cfg.get("anthropic_api_key"):
         cfg["anthropic_api_key"] = cfg["anthropic_api_key"][:8] + "..."
-    if cfg.get("lm_studio_api_key") and cfg["lm_studio_api_key"] != "lm-studio":
+    if cfg.get("lm_studio_api_key") and cfg["lm_studio_api_key"] != DEFAULT_LM_STUDIO_KEY:
         cfg["lm_studio_api_key"] = cfg["lm_studio_api_key"][:8] + "..."
     return _ok(cfg, "Skill generation config")
 
