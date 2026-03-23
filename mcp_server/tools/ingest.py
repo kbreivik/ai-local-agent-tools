@@ -17,16 +17,19 @@ def _err(message, data=None):
 
 
 def _api_base():
-    return f"http://localhost:{os.environ.get('API_PORT', '8000')}"
+    return f"http://127.0.0.1:{os.environ.get('API_PORT', '8000')}"
 
 
 def _get_token():
     """Get JWT token for API calls from the agent context."""
     try:
         import httpx
+        password = os.environ.get("ADMIN_PASSWORD", "")
+        if not password:
+            return ""
         r = httpx.post(
             f"{_api_base()}/api/auth/login",
-            json={"username": "admin", "password": os.environ.get("ADMIN_PASSWORD", "superduperadmin")},
+            json={"username": "admin", "password": password},
             timeout=5,
         )
         if r.status_code == 200:
@@ -96,9 +99,11 @@ def ingest_pdf(filename: str, tags: list = None) -> dict:
     try:
         import os
         from pathlib import Path
-        # Look for file in data/docs/
-        docs_dir = Path(__file__).parent.parent.parent / "data" / "docs"
-        pdf_path = docs_dir / filename
+        # Look for file in data/docs/ — resolve and verify path stays within docs_dir
+        docs_dir = (Path(__file__).parent.parent.parent / "data" / "docs").resolve()
+        pdf_path = (docs_dir / filename).resolve()
+        if not str(pdf_path).startswith(str(docs_dir)):
+            return _err("Invalid filename: path traversal not allowed.")
         if not pdf_path.exists():
             return _err(f"PDF not found in data/docs/: {filename}. Upload it first via the GUI.")
 

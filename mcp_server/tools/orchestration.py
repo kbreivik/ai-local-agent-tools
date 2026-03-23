@@ -209,7 +209,7 @@ def pre_upgrade_check(service: str = "") -> dict:
         import httpx
         api_port = os.environ.get("API_PORT", "8000")
         r = httpx.post(
-            f"http://localhost:{api_port}/api/memory/activate",
+            f"http://127.0.0.1:{api_port}/api/memory/activate",
             json=[f"upgrade {service}", "upgrade failure", "rollback"],
             timeout=3.0,
         )
@@ -342,7 +342,7 @@ def post_upgrade_verify(service: str, operation_id: str = "") -> dict:
         if new_errors:
             tags.append("errors_detected")
         httpx.post(
-            f"http://localhost:{api_port}/api/memory/store",
+            f"http://127.0.0.1:{api_port}/api/memory/store",
             json={"concept": concept, "content": content, "tags": tags},
             timeout=3.0,
         )
