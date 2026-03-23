@@ -136,14 +136,14 @@ function SkillCard({ skill, onReload }) {
 
   const handlePromote = async (domain) => {
     setWorking(true)
-    setPromoting(false)
     try {
       await promoteSkill(skill.name, domain)
-      onReload()
     } catch (e) {
       setResult({ status: 'error', message: `Promote failed: ${e.message}` })
     } finally {
+      setPromoting(false)
       setWorking(false)
+      onReload()
     }
   }
 
@@ -151,11 +151,11 @@ function SkillCard({ skill, onReload }) {
     setWorking(true)
     try {
       await demoteSkill(skill.name)
-      onReload()
     } catch (e) {
       setResult({ status: 'error', message: `Demote failed: ${e.message}` })
     } finally {
       setWorking(false)
+      onReload()
     }
   }
 
@@ -163,11 +163,11 @@ function SkillCard({ skill, onReload }) {
     setWorking(true)
     try {
       await scrapSkill(skill.name)
-      onReload()
     } catch (e) {
       setResult({ status: 'error', message: `Scrap failed: ${e.message}` })
     } finally {
       setWorking(false)
+      onReload()
     }
   }
 
@@ -175,11 +175,11 @@ function SkillCard({ skill, onReload }) {
     setWorking(true)
     try {
       await restoreSkill(skill.name)
-      onReload()
     } catch (e) {
       setResult({ status: 'error', message: `Restore failed: ${e.message}` })
     } finally {
       setWorking(false)
+      onReload()
     }
   }
 
