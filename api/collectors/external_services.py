@@ -34,6 +34,9 @@ SERVICES_CONFIG = [
         "path": "/api2/json/version",
         "port": 8006,
         "scheme": "https",
+        "auth_type": "pve_token",
+        "auth_token_id_env": "PROXMOX_TOKEN_ID",
+        "auth_token_secret_env": "PROXMOX_TOKEN_SECRET",
         "open_ui_url_template": "https://{host}:8006",
     },
     {
@@ -106,9 +109,15 @@ class ExternalServicesCollector(BaseCollector):
                 continue
 
             headers = {}
-            auth_key = os.environ.get(cfg.get("auth_env", ""), "")
-            if auth_key and "auth_header" in cfg:
-                headers[cfg["auth_header"]] = cfg.get("auth_prefix", "") + auth_key
+            if cfg.get("auth_type") == "pve_token":
+                token_id = os.environ.get(cfg.get("auth_token_id_env", ""), "")
+                token_secret = os.environ.get(cfg.get("auth_token_secret_env", ""), "")
+                if token_id and token_secret:
+                    headers["Authorization"] = f"PVEAPIToken={token_id}={token_secret}"
+            else:
+                auth_key = os.environ.get(cfg.get("auth_env", ""), "")
+                if auth_key and "auth_header" in cfg:
+                    headers[cfg["auth_header"]] = cfg.get("auth_prefix", "") + auth_key
 
             url = base_url + cfg["path"]
             r = None
@@ -116,7 +125,7 @@ class ExternalServicesCollector(BaseCollector):
                 t0 = time.monotonic()
                 r = httpx.get(url, headers=headers, verify=False, timeout=8, follow_redirects=True)
                 latency_ms = round((time.monotonic() - t0) * 1000)
-                reachable = r.status_code < 400
+                reachable = r.status_code < 500
             except Exception as e:
                 log.warning("External probe failed for %s: %s", cfg["slug"], e)
                 latency_ms = None

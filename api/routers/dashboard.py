@@ -291,9 +291,15 @@ def _do_probe(slug: str) -> dict:
         base_url = f"{scheme}://{host_raw}" + (f":{port}" if port else "")
 
     headers = {}
-    auth_key = os.environ.get(cfg.get("auth_env", ""), "")
-    if auth_key and "auth_header" in cfg:
-        headers[cfg["auth_header"]] = cfg.get("auth_prefix", "") + auth_key
+    if cfg.get("auth_type") == "pve_token":
+        token_id = os.environ.get(cfg.get("auth_token_id_env", ""), "")
+        token_secret = os.environ.get(cfg.get("auth_token_secret_env", ""), "")
+        if token_id and token_secret:
+            headers["Authorization"] = f"PVEAPIToken={token_id}={token_secret}"
+    else:
+        auth_key = os.environ.get(cfg.get("auth_env", ""), "")
+        if auth_key and "auth_header" in cfg:
+            headers[cfg["auth_header"]] = cfg.get("auth_prefix", "") + auth_key
 
     try:
         t0 = time.monotonic()

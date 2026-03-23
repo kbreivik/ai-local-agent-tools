@@ -81,6 +81,28 @@ def seed_defaults() -> int:
     return seeded
 
 
+def sync_env_from_db() -> int:
+    """Mirror DB settings into os.environ so collectors see user-saved values.
+
+    Called on startup after seed_defaults(). DB is the source of truth after
+    first save — this ensures settings saved via the UI survive process restarts
+    without requiring env var changes in .env / Ansible.
+    Returns number of keys synced.
+    """
+    backend = get_backend()
+    synced = 0
+    for key, meta in SETTINGS_KEYS.items():
+        env_var = meta["env"]
+        if not env_var:
+            continue
+        db_value = backend.get_setting(key)
+        if db_value is not None and str(db_value).strip():
+            os.environ[env_var] = str(db_value)
+            synced += 1
+    logger.info("Settings: synced %d keys from DB into os.environ", synced)
+    return synced
+
+
 @router.get("")
 def get_settings(_: str = Depends(get_current_user)):
     """Return all server-managed settings. Sensitive values are masked."""
