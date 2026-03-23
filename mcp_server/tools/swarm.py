@@ -420,8 +420,8 @@ def service_rollback(name: str) -> dict:
         return _err(f"service_rollback error: {e}")
 
 
-def node_drain(node_id: str) -> dict:
-    """Safely drain a node before maintenance."""
+def _node_set_availability(node_id: str, availability: str) -> dict:
+    """Internal helper — set a node's availability to drain/active/pause."""
     try:
         client = _client()
         nodes = client.nodes.list()
@@ -435,14 +435,25 @@ def node_drain(node_id: str) -> dict:
             client.close()
             return _err(f"Node '{node_id}' not found")
         spec = target.attrs.get("Spec", {})
-        spec["Availability"] = "drain"
+        spec["Availability"] = availability
         target.update(spec)
         client.close()
-        return _ok({"node_id": node_id, "availability": "drain"}, f"Node '{node_id}' set to drain")
+        return _ok({"node_id": node_id, "availability": availability},
+                   f"Node '{node_id}' set to {availability}")
     except DockerException as e:
         return _err(f"Docker connection failed: {e}")
     except Exception as e:
-        return _err(f"node_drain error: {e}")
+        return _err(f"node availability update error: {e}")
+
+
+def node_drain(node_id: str) -> dict:
+    """Safely drain a node before maintenance. Use node_activate to reverse."""
+    return _node_set_availability(node_id, "drain")
+
+
+def node_activate(node_id: str) -> dict:
+    """Re-activate a drained or paused node so it can accept tasks again."""
+    return _node_set_availability(node_id, "active")
 
 
 def pre_upgrade_check() -> dict:
