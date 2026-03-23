@@ -285,7 +285,14 @@ try:
                 return dispatch_skill(_n, **kwargs)
             _promoted_fn.__name__ = _n
             _promoted_fn.__doc__ = _d
-            return mcp.tool()(_promoted_fn)
+            try:
+                return mcp.tool()(_promoted_fn)
+            except Exception as _reg_e:
+                import logging as _reg_log
+                _reg_log.getLogger(__name__).warning(
+                    "Promoted skill '%s' registration skipped: %s", _n, _reg_e
+                )
+                return None
         _make_promoted_tool(_pname, _pdesc)
 except Exception as _e:
     import logging as _logging
