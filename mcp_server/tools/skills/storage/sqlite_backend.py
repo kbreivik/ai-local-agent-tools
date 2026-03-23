@@ -131,6 +131,19 @@ class SqliteBackend(StorageBackend):
         """)
         conn.commit()
 
+        # Migration: add lifecycle columns (idempotent — safe to run on existing DBs)
+        for _col, _default in [
+            ("lifecycle_state", "auto_generated"),
+            ("agent_domain",    ""),
+        ]:
+            try:
+                conn.execute(
+                    f"ALTER TABLE skills ADD COLUMN {_col} TEXT DEFAULT '{_default}'"
+                )
+                conn.commit()
+            except Exception:
+                pass  # Column already exists — safe to ignore
+
     def close(self) -> None:
         if self._conn:
             self._conn.close()
