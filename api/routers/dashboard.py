@@ -282,6 +282,9 @@ def _do_probe(slug: str) -> dict:
 
     if host_raw.startswith("http"):
         base_url = host_raw.rstrip("/")
+        strip = cfg.get("strip_suffix", "")
+        if strip and base_url.endswith(strip):
+            base_url = base_url[: -len(strip)]
     else:
         scheme = cfg.get("scheme", "http")
         port = cfg.get("port", "")

@@ -21,8 +21,9 @@ SERVICES_CONFIG = [
         "name": "LM Studio",
         "slug": "lm_studio",
         "service_type": "OpenAI-compat API",
-        "host_env": "LM_STUDIO_BASE_URL",   # already ends with /v1
-        "path": "/models",
+        "host_env": "LM_STUDIO_BASE_URL",   # typically http://host:1234/v1
+        "strip_suffix": "/v1",              # strip so we probe the root server
+        "path": "/api/v0/models",           # LM Studio native endpoint (no log errors)
         "open_ui_url": None,
     },
     {
@@ -78,6 +79,9 @@ class ExternalServicesCollector(BaseCollector):
             host_raw = os.environ.get(cfg["host_env"], "")
             if host_raw.startswith("http"):
                 base_url = host_raw.rstrip("/")
+                strip = cfg.get("strip_suffix", "")
+                if strip and base_url.endswith(strip):
+                    base_url = base_url[: -len(strip)]
             else:
                 scheme = cfg.get("scheme", "http")
                 port = cfg.get("port", "")
