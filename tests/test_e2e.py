@@ -24,6 +24,20 @@ os.environ.setdefault("CHECKPOINT_PATH", "D:/claude_code/FAJK/HP1-AI-Agent-v1/ch
 from mcp_server.tools import swarm, kafka, orchestration
 
 
+def _docker_available() -> bool:
+    """Return True if the local Docker daemon is reachable."""
+    try:
+        import docker
+        docker.from_env().ping()
+        return True
+    except Exception:
+        return False
+
+
+_DOCKER_UP = _docker_available()
+_skip_no_docker = pytest.mark.skipif(not _DOCKER_UP, reason="Docker daemon not available")
+
+
 def _assert_not_failed(result: dict, context: str = ""):
     assert result["status"] not in ("failed",), \
         f"HALT: {context} returned failed: {result['message']}"
@@ -57,10 +71,12 @@ def kafka_load_producer(stop_flag: list, bootstrap: str):
         print(f"  [kafka_producer] Error (non-blocking): {e}")
 
 
+@_skip_no_docker
 class TestE2ERollingUpgrade:
     """
     Agent simulation: rolling upgrade of workload service with health gates.
     Mirrors the exact sequence the LLM agent would execute.
+    Requires a live Docker Swarm — skipped when Docker daemon is unavailable.
     """
 
     def test_step1_initial_swarm_health_check(self):
