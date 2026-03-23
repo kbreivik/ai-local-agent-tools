@@ -70,8 +70,9 @@ def skill_create(
     name = data["name"]
     backend_used = data.get("backend_used", "unknown")
 
-    # Save to modules directory
-    dest = os.path.join(os.path.dirname(loader.__file__), "modules", f"{name}.py")
+    # Save to generated skills directory (persisted via data volume)
+    os.makedirs(loader.GENERATED_DIR, exist_ok=True)
+    dest = os.path.join(loader.GENERATED_DIR, f"{name}.py")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(code)
 
@@ -301,7 +302,10 @@ def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
 
     # Back up old file
     import shutil
-    skill_dir = os.path.join(os.path.dirname(loader.__file__), "modules")
+    # Check both dirs — starter skills are in modules/, generated in GENERATED_DIR
+    _in_modules = os.path.join(os.path.dirname(loader.__file__), "modules", f"{name}.py")
+    _in_generated = os.path.join(loader.GENERATED_DIR, f"{name}.py")
+    skill_dir = loader.GENERATED_DIR if os.path.exists(_in_generated) else os.path.dirname(_in_modules)
     old_path = os.path.join(skill_dir, f"{name}.py")
     bak_path = os.path.join(skill_dir, f"{name}.py.bak")
 
