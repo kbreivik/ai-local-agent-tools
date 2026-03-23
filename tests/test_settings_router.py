@@ -83,3 +83,10 @@ def test_post_settings_requires_auth():
     """POST /api/settings without token returns 401 or 403."""
     r = client.post("/api/settings", json={"modelName": "x"})
     assert r.status_code in (401, 403)
+
+
+def test_settings_seeded_on_startup():
+    """At least lmStudioUrl is present in GET response (seeded from env or default)."""
+    r = client.get("/api/settings", headers=auth_headers())
+    assert r.status_code == 200
+    assert "lmStudioUrl" in r.json()["data"]["settings"]
