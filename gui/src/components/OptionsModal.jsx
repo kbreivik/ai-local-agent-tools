@@ -157,16 +157,16 @@ function InfrastructureTab({ draft, update }) {
       {/* Proxmox */}
       <div className="mb-5">
         <SectionHeader label="Proxmox" />
-        <Field label="Host">
+        <Field label="Host" hint="IP or hostname only — https:// and port 8006 are added automatically. e.g. 192.168.1.5 or proxmox.local">
           <TextInput value={draft.proxmoxHost} onChange={v => update('proxmoxHost', v)} placeholder="192.168.1.5" />
         </Field>
         <Field label="User">
           <TextInput value={draft.proxmoxUser} onChange={v => update('proxmoxUser', v)} placeholder="root@pam" />
         </Field>
-        <Field label="Token ID" hint="user@realm!tokenname">
+        <Field label="Token ID" hint="Format: user@realm!tokenname — e.g. terraform@pve!terraform-token">
           <TextInput value={draft.proxmoxTokenId} onChange={v => update('proxmoxTokenId', v)} placeholder="terraform@pve!terraform-token" />
         </Field>
-        <Field label="Token Secret">
+        <Field label="Token Secret" hint="UUID from Proxmox → Datacenter → API Tokens">
           <TextInput type="password" value={draft.proxmoxTokenSecret} onChange={v => update('proxmoxTokenSecret', v)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
         </Field>
       </div>
@@ -174,22 +174,22 @@ function InfrastructureTab({ draft, update }) {
       {/* FortiGate */}
       <div className="mb-5">
         <SectionHeader label="FortiGate" />
-        <Field label="Host">
+        <Field label="Host" hint="IP or hostname only — https:// is added automatically. e.g. 192.168.1.1 or fortigate.local">
           <TextInput value={draft.fortigateHost} onChange={v => update('fortigateHost', v)} placeholder="192.168.1.1" />
         </Field>
-        <Field label="API Key">
-          <TextInput type="password" value={draft.fortigateApiKey} onChange={v => update('fortigateApiKey', v)} placeholder="API key…" />
+        <Field label="API Key" hint="REST API key from FortiGate → System → Administrators → REST API Admin">
+          <TextInput type="password" value={draft.fortigateApiKey} onChange={v => update('fortigateApiKey', v)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
         </Field>
       </div>
 
       {/* TrueNAS */}
       <div className="mb-5">
         <SectionHeader label="TrueNAS" />
-        <Field label="Host">
+        <Field label="Host" hint="IP or hostname only — https:// is added automatically. e.g. 192.168.1.10 or truenas.local">
           <TextInput value={draft.truenasHost} onChange={v => update('truenasHost', v)} placeholder="192.168.1.10" />
         </Field>
-        <Field label="API Key">
-          <TextInput type="password" value={draft.truenasApiKey} onChange={v => update('truenasApiKey', v)} placeholder="API key…" />
+        <Field label="API Key" hint="API key from TrueNAS → Credentials → API Keys">
+          <TextInput type="password" value={draft.truenasApiKey} onChange={v => update('truenasApiKey', v)} placeholder="1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
         </Field>
       </div>
     </div>

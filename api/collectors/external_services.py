@@ -21,8 +21,8 @@ SERVICES_CONFIG = [
         "name": "LM Studio",
         "slug": "lm_studio",
         "service_type": "OpenAI-compat API",
-        "host_env": "LM_STUDIO_URL",
-        "path": "/v1/models",
+        "host_env": "LM_STUDIO_BASE_URL",   # already ends with /v1
+        "path": "/models",
         "open_ui_url": None,
     },
     {
