@@ -240,22 +240,56 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
   const { markRunning, markDone } = useAgent()
   const { task, setTask }         = useTask()
   const { pendingChoices, clearChoices, runState, setRunState, stopAgent } = useAgentOutput()
-  const [tools, setTools]     = useState([])
-  const [loading, setLoading] = useState(true)
-  const [category, setCategory] = useState('all')
+  const [items,    setItems]   = useState([])
+  const [loading,  setLoading] = useState(true)
+  const [selectedTags, setSelectedTags] = useState(new Set())
+  const [andMode,  setAndMode] = useState(false)
   const [agentMsg, setAgentMsg] = useState('')
 
   const isTab = mode === 'tab'
 
   useEffect(() => {
-    fetchTools()
-      .then(setTools)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    Promise.all([
+      fetchTools().catch(() => []),
+      fetchSkills().catch(() => []),
+    ]).then(([tools, skills]) => {
+      const normTools = tools.map(t => ({
+        ...t,
+        source: 'tool',
+        tags: [t.category || 'general'],
+      }))
+      const normSkills = skills.map(s => ({
+        name:        s.name,
+        description: s.description ?? '',
+        category:    s.category ?? 'general',
+        params:      normaliseSkillParams(s.parameters),
+        source:      'skill',
+        compat:      s.compat ?? null,
+        tags:        [],
+      })).map(s => ({ ...s, tags: deriveTags(s) }))
+
+      const sorted = [
+        ...normTools.sort((a, b) => a.name.localeCompare(b.name)),
+        ...normSkills.sort((a, b) => a.name.localeCompare(b.name)),
+      ]
+      setItems(sorted)
+    }).finally(() => setLoading(false))
   }, [])
 
-  const categories = ['all', ...new Set(tools.map(t => t.category))]
-  const visible = category === 'all' ? tools : tools.filter(t => t.category === category)
+  const toolTags  = new Set(items.filter(i => i.source === 'tool').flatMap(i => i.tags))
+  const skillTags = new Set(items.filter(i => i.source === 'skill').flatMap(i => i.tags))
+  const allTags   = [
+    ...[...toolTags].sort(),
+    ...[...skillTags].filter(t => !toolTags.has(t)).sort(),
+  ]
+
+  const visible = selectedTags.size === 0
+    ? items
+    : items.filter(item =>
+        andMode
+          ? [...selectedTags].every(t => item.tags.includes(t))
+          : [...selectedTags].some(t => item.tags.includes(t))
+      )
 
   const runAgentTask = async () => {
     if (!task.trim() || runState !== 'idle') return
@@ -310,32 +344,36 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
       <ClarificationWidget dark />
 
-      {/* Category filter */}
+      {/* Tag filter — placeholder; replaced by Task 4 */}
       <div className={`flex gap-1 border-b border-slate-700 flex-wrap shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
-        {categories.map(c => (
+        {allTags.map(t => (
           <button
-            key={c}
-            onClick={() => setCategory(c)}
+            key={t}
+            onClick={() => setSelectedTags(prev => {
+              const next = new Set(prev)
+              next.has(t) ? next.delete(t) : next.add(t)
+              return next
+            })}
             className={`text-xs px-2 py-0.5 rounded transition-colors ${
-              category === c
+              selectedTags.has(t)
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
             }`}
           >
-            {c === 'all' ? 'All' : humanizeCategory(c)}
+            {humanizeCategory(t)}
           </button>
         ))}
       </div>
 
       {/* Tool list — 2-column grid in tab mode, single column in panel mode */}
       <div className={`flex-1 overflow-y-auto ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
-        {loading && <p className="text-xs text-slate-500 animate-pulse">Loading tools…</p>}
+        {loading && <p className="text-xs text-slate-500 animate-pulse">Loading…</p>}
         {!loading && visible.length === 0 && (
-          <p className="text-xs text-slate-600">No tools found.</p>
+          <p className="text-xs text-slate-600">No items match the selected tags.</p>
         )}
         <div className={isTab ? 'grid grid-cols-2 gap-x-4' : ''}>
-          {visible.map(tool => (
-            <ToolCard key={tool.name} tool={tool} onResult={onResult} />
+          {visible.map(item => (
+            <ToolCard key={item.name} tool={item} onResult={onResult} />
           ))}
         </div>
       </div>
