@@ -12,6 +12,7 @@ import re
 import time as _time
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import JSONResponse
 
 from api.auth import get_current_user
 from api.db.base import get_engine
@@ -224,7 +225,7 @@ async def get_container_tags(container_id: str, user: str = Depends(get_current_
     container = next((c for c in containers if c["id"] == container_id), None)
 
     if container is None:
-        raise HTTPException(status_code=404, detail="container not found")
+        return JSONResponse(status_code=404, content={"error": "container not found"})
 
     image = container.get("image", "")
     if not image.startswith("ghcr.io/"):
@@ -237,10 +238,10 @@ async def get_container_tags(container_id: str, user: str = Depends(get_current_
         return {"tags": tags}
     except RuntimeError as exc:
         log.warning("GHCR auth error for %s: %s", bare, exc)
-        raise HTTPException(status_code=503, detail=str(exc))
+        return JSONResponse(status_code=503, content={"error": "ghcr auth failed"})
     except IOError as exc:
         log.warning("GHCR network error for %s: %s", bare, exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        return JSONResponse(status_code=502, content={"error": "ghcr unreachable"})
 
 
 # ── Action endpoints ────────────────────────────────────────────────────────────
