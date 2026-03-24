@@ -7,9 +7,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { fetchStatus, fetchMemoryHealth, fetchHealth, dashboardAction } from '../api'
 import { useOptions } from '../context/OptionsContext'
 import VersionBadge from '../utils/VersionBadge'
-import CardFilterBar, { ALL_CARD_KEYS } from './CardFilterBar'
-
-const FILTER_KEY = 'hp1_cardFilter'
 
 // ── Health colour maps ─────────────────────────────────────────────────────────
 
@@ -575,7 +572,7 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
 
 // ── Root ───────────────────────────────────────────────────────────────────────
 
-export default function DashboardCards() {
+export default function DashboardCards({ activeFilters = [] }) {
   const { dashboardRefreshInterval, cardMinHeight, cardMaxHeight, cardMinWidth, cardMaxWidth, showVersionBadges } = useOptions()
 
   const [snap,        setSnap]        = useState(null)
@@ -583,34 +580,6 @@ export default function DashboardCards() {
   const [apiHealth,   setApiHealth]   = useState(null)
   const [loading,     setLoading]     = useState(true)
   const [lastUpdated, setLastUpdated] = useState(null)
-
-  // Card filter — persisted to localStorage
-  const [activeFilters, setActiveFilters] = useState(() => {
-    try {
-      const saved = localStorage.getItem(FILTER_KEY)
-      return saved ? JSON.parse(saved) : ALL_CARD_KEYS.map(c => c.key)
-    } catch {
-      return ALL_CARD_KEYS.map(c => c.key)
-    }
-  })
-
-  const toggleFilter = (key) => {
-    setActiveFilters(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
-  const toggleAll = () => {
-    setActiveFilters(prev => {
-      const allKeys = ALL_CARD_KEYS.map(c => c.key)
-      const allActive = allKeys.every(k => prev.includes(k))
-      const next = allActive ? [] : allKeys
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
 
   // Returns display style: undefined (visible) or 'none' (hidden, not unmounted)
   const vis = (key) => activeFilters.includes(key) ? {} : { display: 'none' }
@@ -662,32 +631,25 @@ export default function DashboardCards() {
   }
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden min-h-0 w-full">
-      <CardFilterBar
-        activeFilters={activeFilters}
-        onToggle={toggleFilter}
-        onToggleAll={toggleAll}
-      />
-      <div className="overflow-auto flex-1 min-h-0 w-full" style={gridStyle}>
-        <div style={vis('swarm_nodes')}>
-          <SwarmNodesCard     {...cardProps} data={snap?.swarm} />
-        </div>
-        <div style={vis('kafka_brokers')}>
-          <KafkaBrokersCard   {...cardProps} data={snap?.kafka} />
-        </div>
-        <div style={vis('swarm_services')}>
-          <SwarmServicesCard  {...cardProps} data={snap?.swarm} showVersionBadges={showVersionBadges} />
-        </div>
-        <div style={vis('elasticsearch')}>
-          <ElasticsearchCard  {...cardProps} data={snap?.elasticsearch} />
-        </div>
-        <div style={vis('muninndb')}>
-          <MuninnDBCard       {...cardProps} data={memHealth} loading={loading && !memHealth} />
-        </div>
-        <div style={vis('system_summary')}>
-          <SystemSummaryCard  {...cardProps} statusData={snap} apiHealth={apiHealth}
-                              loading={loading && !apiHealth} />
-        </div>
+    <div style={gridStyle}>
+      <div style={vis('swarm_nodes')}>
+        <SwarmNodesCard     {...cardProps} data={snap?.swarm} />
+      </div>
+      <div style={vis('kafka_brokers')}>
+        <KafkaBrokersCard   {...cardProps} data={snap?.kafka} />
+      </div>
+      <div style={vis('swarm_services')}>
+        <SwarmServicesCard  {...cardProps} data={snap?.swarm} showVersionBadges={showVersionBadges} />
+      </div>
+      <div style={vis('elasticsearch')}>
+        <ElasticsearchCard  {...cardProps} data={snap?.elasticsearch} />
+      </div>
+      <div style={vis('muninndb')}>
+        <MuninnDBCard       {...cardProps} data={memHealth} loading={loading && !memHealth} />
+      </div>
+      <div style={vis('system_summary')}>
+        <SystemSummaryCard  {...cardProps} statusData={snap} apiHealth={apiHealth}
+                            loading={loading && !apiHealth} />
       </div>
     </div>
   )

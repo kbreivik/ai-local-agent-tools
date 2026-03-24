@@ -16,13 +16,16 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats, fetchStatus } from './api'
+import { fetchHealth, fetchStats, fetchStatus, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal } from './api'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
+import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
+
+const FILTER_KEY = 'hp1_cardFilter'
 
 class ServiceCardsErrorBoundary extends React.Component {
   constructor(props) {
@@ -221,14 +224,34 @@ function SubBar({ onTab }) {
   const { wsState, agentType, lastAgentType } = useAgentOutput()
   const [stats,  setStats]  = useState(null)
   const [health, setHealth] = useState(null)
-  const [swarmNodes, setSwarmNodes] = useState(null)
+  const [alerts, setAlerts] = useState([])
 
   useEffect(() => {
     const refreshStats = () => fetchStats().then(setStats).catch(() => setStats(null))
+
+    const refreshAlerts = () => {
+      Promise.allSettled([
+        fetchDashboardContainers(),
+        fetchDashboardSwarm(),
+        fetchDashboardVMs(),
+        fetchDashboardExternal(),
+      ]).then(([c, s, v, e]) => {
+        const issues = []
+        let idx = 0
+        const SEV = { red: 0, amber: 1, grey: 2, green: 3 }
+        if (c.status === 'fulfilled') for (const x of c.value?.containers || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+        if (s.status === 'fulfilled') for (const x of s.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+        if (v.status === 'fulfilled') for (const x of [...(v.value?.vms || []), ...(v.value?.lxc || [])]) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+        if (e.status === 'fulfilled') for (const x of e.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+        issues.sort((a, b) => (SEV[a.sev] ?? 2) - (SEV[b.sev] ?? 2) || a.idx - b.idx)
+        setAlerts(issues)
+      }).catch(() => {})
+    }
+
     const loadAll = () => {
       refreshStats()
       fetchHealth().then(setHealth).catch(() => setHealth(null))
-      fetchStatus().then(d => setSwarmNodes(d?.swarm?.nodes ?? null)).catch(() => {})
+      refreshAlerts()
     }
     loadAll()
     const id = setInterval(loadAll, 30_000)
@@ -277,29 +300,20 @@ function SubBar({ onTab }) {
         )}
       </div>
 
-      {/* Compact swarm node strip — click to open Cluster tab */}
-      {swarmNodes?.length > 0 && (
+      {/* Alert strip — shows stopped/unhealthy infra items, click to open Dashboard */}
+      {alerts.length > 0 && (
         <button
-          onClick={() => onTab?.('Cluster')}
-          title="Swarm nodes — click to open Cluster view"
-          className="flex items-center gap-1 px-3 h-full border-l border-gray-200 hover:bg-gray-50 transition-colors shrink-0"
+          onClick={() => onTab?.('Dashboard')}
+          title={`${alerts.length} infrastructure alert${alerts.length !== 1 ? 's' : ''} — click to view`}
+          className="flex items-center gap-1.5 px-2 h-full border-l border-orange-100 bg-orange-50/60 hover:bg-orange-50 transition-colors shrink min-w-0 overflow-hidden"
+          style={{ maxWidth: 420 }}
         >
-          {[...swarmNodes]
-            .sort((a, b) => {
-              if (a.role === 'manager' && b.role !== 'manager') return -1
-              if (a.role !== 'manager' && b.role === 'manager') return 1
-              return (a.hostname || '').localeCompare(b.hostname || '')
-            })
-            .map(n => (
-              <span key={n.id} className="flex items-center gap-0.5" title={`${n.hostname} (${n.role})`}>
-                <span className={`text-[9px] font-bold leading-none ${n.role === 'manager' ? 'text-blue-500' : 'text-gray-400'}`}>
-                  {n.role === 'manager' ? 'M' : 'W'}
-                </span>
-                {n.leader && <span className="text-yellow-400 text-[8px] leading-none">★</span>}
-                <span className={`w-1 h-1 rounded-full ${n.state === 'ready' ? 'bg-green-500' : 'bg-red-500'}`} />
-              </span>
-            ))
-          }
+          <span className="text-orange-500 text-[12px] shrink-0">⚠</span>
+          <span className="text-[11px] text-orange-700/80 truncate">
+            {alerts.slice(0, 3).map(i => i.text).join(' · ')}
+            {alerts.length > 3 ? ` · +${alerts.length - 3} more` : ''}
+          </span>
+          <span className="text-[10px] bg-orange-400 text-white rounded-full px-1.5 py-px shrink-0 ml-0.5">{alerts.length}</span>
         </button>
       )}
 
@@ -399,17 +413,44 @@ function CommandSidePanel() {
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
 function DashboardView() {
+  const [activeFilters, setActiveFilters] = useState(() => {
+    try {
+      const saved = localStorage.getItem(FILTER_KEY)
+      return saved ? JSON.parse(saved) : ALL_CARD_KEYS.map(c => c.key)
+    } catch {
+      return ALL_CARD_KEYS.map(c => c.key)
+    }
+  })
+
+  const toggleFilter = (key) => {
+    setActiveFilters(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    setActiveFilters(prev => {
+      const allKeys = ALL_CARD_KEYS.map(c => c.key)
+      const allActive = allKeys.every(k => prev.includes(k))
+      const next = allActive ? [] : allKeys
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      {/* Top section: status cards — own scrollbar */}
-      <div className="flex flex-col min-h-0 overflow-hidden flex-1">
-        <DashboardCards />
-      </div>
-      {/* Bottom section: infra cards — own scrollbar */}
-      <div className="flex-1 min-h-0 overflow-auto border-t border-gray-200 px-5 py-4">
-        <ServiceCardsErrorBoundary>
-          <ServiceCards showAlertBar={true} />
-        </ServiceCardsErrorBoundary>
+      <CardFilterBar activeFilters={activeFilters} onToggle={toggleFilter} onToggleAll={toggleAll} />
+      {/* Single unified scroll area — one scrollbar for both sections */}
+      <div className="flex-1 overflow-auto min-h-0">
+        <DashboardCards activeFilters={activeFilters} />
+        <div className="border-t border-gray-200 px-5 py-4">
+          <ServiceCardsErrorBoundary>
+            <ServiceCards activeFilters={activeFilters} />
+          </ServiceCardsErrorBoundary>
+        </div>
       </div>
     </div>
   )
