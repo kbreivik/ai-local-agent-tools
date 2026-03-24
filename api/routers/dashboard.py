@@ -114,13 +114,14 @@ async def get_containers_swarm(user: str = Depends(get_current_user)):
 
 @router.get("/vms")
 async def get_vms(user: str = Depends(get_current_user)):
-    """Proxmox VM list from latest snapshot."""
+    """Proxmox VM and LXC list from latest snapshot."""
     async with get_engine().connect() as conn:
         snap = await q.get_latest_snapshot(conn, "proxmox_vms")
 
     state = _parse_state(snap)
     return {
         "vms": state.get("vms", []),
+        "lxc": state.get("lxc", []),
         "health": state.get("health", "unknown"),
         "last_updated": snap.get("timestamp") if snap else None,
     }
@@ -235,18 +236,33 @@ def _do_scale(service_name: str, replicas: int) -> dict:
 
 @router.post("/vms/{node}/{vmid}/start")
 async def start_vm(node: str, vmid: int, user: str = Depends(get_current_user)):
-    return await asyncio.to_thread(_do_vm_action, node, vmid, "start")
+    return await asyncio.to_thread(_do_proxmox_action, "qemu", node, vmid, "start")
 
 
 @router.post("/vms/{node}/{vmid}/reboot")
 async def reboot_vm(node: str, vmid: int, user: str = Depends(get_current_user)):
-    return await asyncio.to_thread(_do_vm_action, node, vmid, "reboot")
+    return await asyncio.to_thread(_do_proxmox_action, "qemu", node, vmid, "reboot")
 
 
-def _do_vm_action(node: str, vmid: int, action: str) -> dict:
+@router.post("/lxc/{node}/{vmid}/start")
+async def start_lxc(node: str, vmid: int, user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(_do_proxmox_action, "lxc", node, vmid, "start")
+
+
+@router.post("/lxc/{node}/{vmid}/stop")
+async def stop_lxc(node: str, vmid: int, user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(_do_proxmox_action, "lxc", node, vmid, "stop")
+
+
+@router.post("/lxc/{node}/{vmid}/reboot")
+async def reboot_lxc(node: str, vmid: int, user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(_do_proxmox_action, "lxc", node, vmid, "reboot")
+
+
+def _do_proxmox_action(pve_type: str, node: str, vmid: int, action: str) -> dict:
+    """pve_type: 'qemu' for VMs, 'lxc' for containers."""
     import httpx
     from api.collectors.proxmox_vms import NODES
-    # node is the Proxmox API hostname (e.g. "pve", "pve2", "pve3") — not the display label
     if node not in NODES:
         return {"ok": False, "error": f"unknown node '{node}' — must be one of {NODES}"}
     host = os.environ.get("PROXMOX_HOST", "")
@@ -256,7 +272,7 @@ def _do_vm_action(node: str, vmid: int, action: str) -> dict:
         return {"ok": False, "error": "PROXMOX_HOST not configured"}
     try:
         headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
-        url = f"https://{host}:8006/api2/json/nodes/{node}/qemu/{vmid}/status/{action}"
+        url = f"https://{host}:8006/api2/json/nodes/{node}/{pve_type}/{vmid}/status/{action}"
         r = httpx.post(url, headers=headers, verify=False, timeout=10)
         if r.status_code in (200, 202):
             return {"ok": True}
