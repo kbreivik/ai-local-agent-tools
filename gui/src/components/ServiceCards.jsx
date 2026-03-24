@@ -240,6 +240,8 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         setTagsLoading(false)
         setTagsError(err?.message || 'fetch failed')
       })
+  // onTagsLoaded intentionally excluded — it's a stable useCallback from the parent;
+  // including it would cause re-fetching on every render without behavior change.
   }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const act = async (key, path, body, msg) => {
@@ -295,23 +297,25 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
               </div>
             )}
             {/* Status badge */}
-            <div className="flex justify-between text-[9px] mb-1.5">
-              <span className="text-gray-700">Status</span>
-              {tagsLoading
-                ? <span className="text-gray-700">…</span>
-                : tagsError
-                ? <span className="text-gray-700">version check unavailable</span>
-                : !tags.length
-                ? <span className="text-gray-700">no versioned tags</span>
-                : severity === 'current'
-                ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
-                : hasUpdate
-                ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
-                    ⬆ {tags[0]} {severity}
-                  </span>
-                : null
-              }
-            </div>
+            {c.running_version && (
+              <div className="flex justify-between text-[9px] mb-1.5">
+                <span className="text-gray-700">Status</span>
+                {tagsLoading
+                  ? <span className="text-gray-700">…</span>
+                  : tagsError
+                  ? <span className="text-gray-700">version check unavailable</span>
+                  : !tags.length
+                  ? <span className="text-gray-700">no versioned tags</span>
+                  : severity === 'current'
+                  ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                  : hasUpdate
+                  ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
+                      ⬆ {tags[0]} {severity}
+                    </span>
+                  : <span className="text-gray-700">—</span>
+                }
+              </div>
+            )}
 
             {/* Update drawer trigger — only when update available */}
             {hasUpdate && !tagsError && (
