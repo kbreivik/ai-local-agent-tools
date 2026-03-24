@@ -100,9 +100,13 @@ services:
       # Override here so it applies even if not set in .env.
       # Port 2375 = plain TCP (ensure dockerd on manager-01 has -H tcp://0.0.0.0:2375).
       - DOCKER_HOST=${DOCKER_HOST:-tcp://192.168.199.21:2375}
+      # AGENT01_DOCKER_HOST is the LOCAL socket used only by DockerAgent01Collector to list
+      # agent-01's own containers. Kept separate so DOCKER_HOST can still target manager-01.
+      - AGENT01_DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
-      # Socket mount removed — agent uses DOCKER_HOST TCP to reach manager-01.
-      # Re-add '- /var/run/docker.sock:/var/run/docker.sock:ro' if reverting to local mode.
+      # Local socket mounted read-only so DockerAgent01Collector can list agent-01's containers.
+      # DOCKER_HOST still points to manager-01 for Swarm tools — these are separate connections.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - agent-data:/app/data
       - agent-logs:/app/logs
     depends_on:

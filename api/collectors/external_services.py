@@ -24,6 +24,9 @@ SERVICES_CONFIG = [
         "host_env": "LM_STUDIO_BASE_URL",   # typically http://host:1234/v1
         "strip_suffix": "/v1",              # strip so we probe the root server
         "path": "/api/v0/models",           # LM Studio native endpoint (no log errors)
+        "auth_env": "LM_STUDIO_API_KEY",
+        "auth_header": "Authorization",
+        "auth_prefix": "Bearer ",
         "open_ui_url": None,
     },
     {
