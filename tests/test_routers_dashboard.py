@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.auth import get_current_user
+import api.routers.dashboard as _dash
 
 _tc = TestClient(app)
 
@@ -491,116 +492,107 @@ def test_probe_external_unknown_slug(client):
 
 # ── /containers/{id}/tags ─────────────────────────────────────────────────────
 
-import api.routers.dashboard as _dash
+class TestContainerTags:
+    @pytest.fixture(autouse=True)
+    def _clear_ghcr_cache(self):
+        """Clear the module-level GHCR tag cache before and after each test.
+        Without this, a successful tags fetch populates the cache, and subsequent
+        503/502 tests hit the cache before reaching the token check or httpx.get.
+        """
+        _dash._GHCR_TAG_CACHE.clear()
+        yield
+        _dash._GHCR_TAG_CACHE.clear()
 
-@pytest.fixture(autouse=True)
-def _clear_ghcr_cache():
-    """Clear the module-level GHCR tag cache before and after each test.
-    Without this, a successful tags fetch populates the cache, and subsequent
-    503/502 tests hit the cache before reaching the token check or httpx.get.
-    """
-    _dash._GHCR_TAG_CACHE.clear()
-    yield
-    _dash._GHCR_TAG_CACHE.clear()
+    def test_container_tags_requires_auth(self):
+        r = _tc.get("/api/dashboard/containers/abc123/tags")
+        assert r.status_code == 401
 
+    def test_container_tags_returns_sorted_semver_tags(self, client):
+        """Returns descending semver tags from GHCR for a GHCR container."""
+        snap = _agent01_snap()
+        # Make the test container a GHCR image
+        state = json.loads(snap["state"])
+        state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
+        snap["state"] = json.dumps(state)
 
-def test_container_tags_requires_auth():
-    r = _tc.get("/api/dashboard/containers/abc123/tags")
-    assert r.status_code == 401
+        fake_ghcr_response = {
+            "tags": ["latest", "1.11.0", "1.10.0", "1.9.2", "sha-abc123"]
+        }
 
+        import os
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
+             patch.dict(os.environ, {"GHCR_TOKEN": "test-token"}), \
+             patch("httpx.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.ok = True
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = fake_ghcr_response
+            mock_resp.headers = {}
+            mock_get.return_value = mock_resp
+            r = client.get("/api/dashboard/containers/abc123/tags")
 
-def test_container_tags_returns_sorted_semver_tags(client):
-    """Returns descending semver tags from GHCR for a GHCR container."""
-    snap = _agent01_snap()
-    # Make the test container a GHCR image
-    import json
-    state = json.loads(snap["state"])
-    state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
-    snap["state"] = json.dumps(state)
+        assert r.status_code == 200
+        body = r.json()
+        assert "tags" in body
+        assert body["tags"] == ["1.11.0", "1.10.0", "1.9.2"]  # sorted desc, no non-semver
 
-    fake_ghcr_response = {
-        "tags": ["latest", "1.11.0", "1.10.0", "1.9.2", "sha-abc123"]
-    }
+    def test_container_tags_returns_404_for_unknown_container(self, client):
+        """Container not found in snapshot → 404."""
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=_agent01_snap())):
+            r = client.get("/api/dashboard/containers/notexist/tags")
+        assert r.status_code == 404
 
-    import os
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
-         patch.dict(os.environ, {"GHCR_TOKEN": "test-token"}), \
-         patch("httpx.get") as mock_get:
+    def test_container_tags_returns_empty_for_non_ghcr_image(self, client):
+        """Non-GHCR image → 200 with empty tags list."""
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=_agent01_snap())):
+            # abc123 has image "hp1-ai-agent:latest" (not ghcr.io/…) in _agent01_snap
+            r = client.get("/api/dashboard/containers/abc123/tags")
+        assert r.status_code == 200
+        assert r.json()["tags"] == []
+
+    def test_container_tags_returns_503_when_token_missing(self, client):
+        """No GHCR_TOKEN (empty string) → 503."""
+        snap = _agent01_snap()
+        import os
+        state = json.loads(snap["state"])
+        state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
+        snap["state"] = json.dumps(state)
+
+        # Override GHCR_TOKEN to empty string. The implementation does `if not token:`
+        # which treats both missing and empty as "not configured".
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
+             patch.dict(os.environ, {"GHCR_TOKEN": ""}):
+            r = client.get("/api/dashboard/containers/abc123/tags")
+        assert r.status_code == 503
+
+    def test_container_tags_returns_502_on_ghcr_network_error(self, client):
+        """GHCR unreachable (network error) → 502."""
+        snap = _agent01_snap()
+        import os
+        state = json.loads(snap["state"])
+        state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
+        snap["state"] = json.dumps(state)
+
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
+             patch.dict(os.environ, {"GHCR_TOKEN": "test-token"}), \
+             patch("httpx.get", side_effect=Exception("connection refused")):
+            r = client.get("/api/dashboard/containers/abc123/tags")
+        assert r.status_code == 502
+
+    def test_container_tags_returns_503_when_ghcr_rejects_token(self, client):
+        """Token present but GHCR returns 401 → 503."""
+        snap = _agent01_snap()
+        import os
+        state = json.loads(snap["state"])
+        state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
+        snap["state"] = json.dumps(state)
+
         mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = fake_ghcr_response
-        mock_resp.headers = {}
-        mock_get.return_value = mock_resp
-        r = client.get("/api/dashboard/containers/abc123/tags")
+        mock_resp.status_code = 401
+        mock_resp.ok = False
 
-    assert r.status_code == 200
-    body = r.json()
-    assert "tags" in body
-    assert body["tags"] == ["1.11.0", "1.10.0", "1.9.2"]  # sorted desc, no non-semver
-
-
-def test_container_tags_returns_404_for_unknown_container(client):
-    """Container not found in snapshot → 404."""
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=_agent01_snap())):
-        r = client.get("/api/dashboard/containers/notexist/tags")
-    assert r.status_code == 404
-
-
-def test_container_tags_returns_empty_for_non_ghcr_image(client):
-    """Non-GHCR image → 200 with empty tags list."""
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=_agent01_snap())):
-        # abc123 has image "hp1-ai-agent:latest" (not ghcr.io/…) in _agent01_snap
-        r = client.get("/api/dashboard/containers/abc123/tags")
-    assert r.status_code == 200
-    assert r.json()["tags"] == []
-
-
-def test_container_tags_returns_503_when_token_missing(client):
-    """No GHCR_TOKEN (empty string) → 503."""
-    snap = _agent01_snap()
-    import json, os
-    state = json.loads(snap["state"])
-    state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
-    snap["state"] = json.dumps(state)
-
-    # Override GHCR_TOKEN to empty string. The implementation does `if not token:`
-    # which treats both missing and empty as "not configured".
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
-         patch.dict(os.environ, {"GHCR_TOKEN": ""}):
-        r = client.get("/api/dashboard/containers/abc123/tags")
-    assert r.status_code == 503
-
-
-def test_container_tags_returns_502_on_ghcr_network_error(client):
-    """GHCR unreachable (network error) → 502."""
-    snap = _agent01_snap()
-    import json, os
-    state = json.loads(snap["state"])
-    state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
-    snap["state"] = json.dumps(state)
-
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
-         patch.dict(os.environ, {"GHCR_TOKEN": "test-token"}), \
-         patch("httpx.get", side_effect=Exception("connection refused")):
-        r = client.get("/api/dashboard/containers/abc123/tags")
-    assert r.status_code == 502
-
-
-def test_container_tags_returns_503_when_ghcr_rejects_token(client):
-    """Token present but GHCR returns 401 → 503."""
-    snap = _agent01_snap()
-    import json, os
-    state = json.loads(snap["state"])
-    state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
-    snap["state"] = json.dumps(state)
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 401
-    mock_resp.ok = False
-
-    with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
-         patch.dict(os.environ, {"GHCR_TOKEN": "bad-token"}), \
-         patch("httpx.get", return_value=mock_resp):
-        r = client.get("/api/dashboard/containers/abc123/tags")
-    assert r.status_code == 503
+        with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
+             patch.dict(os.environ, {"GHCR_TOKEN": "bad-token"}), \
+             patch("httpx.get", return_value=mock_resp):
+            r = client.get("/api/dashboard/containers/abc123/tags")
+        assert r.status_code == 503
