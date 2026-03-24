@@ -2,7 +2,7 @@
  * ServiceCards — four-section infrastructure dashboard.
  * Sections: Containers·agent-01, Containers·Swarm, VMs·Proxmox, External Services
  * Cards expand inline on click; one open at a time globally.
- * Renders AlertBar at top when showAlertBar prop is true.
+ * Accepts activeFilters prop to show/hide sections (containers_local, containers_swarm, vms, external).
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
@@ -665,7 +665,9 @@ function _computeContainerSub(c, knownLatest) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ showAlertBar = false }) {
+export default function ServiceCards({ activeFilters = null }) {
+  // If no filter passed, show everything
+  const show = (key) => !activeFilters || activeFilters.includes(key)
   const [containers, setContainers] = useState(null)
   const [swarm, setSwarm]           = useState(null)
   const [vms, setVMs]               = useState(null)
@@ -723,8 +725,6 @@ export default function ServiceCards({ showAlertBar = false }) {
           </div>
         </div>
       )}
-      {showAlertBar && <AlertBar containers={containers} swarm={swarm} vms={vms} external={external} />}
-
       {isInitialLoad && (
         <div className="flex justify-center py-12">
           <div className="w-6 h-6 border-2 border-[#7c6af7] border-t-transparent rounded-full animate-spin" />
@@ -733,43 +733,47 @@ export default function ServiceCards({ showAlertBar = false }) {
 
       {!isInitialLoad && <>
         {/* Containers · agent-01 */}
-        <Section
-          label="Containers · agent-01"
-          meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
-          errorCount={errorCount(containers?.containers)}
-        >
-          {(containers?.containers || []).map(c => (
-            <InfraCard
-              key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-              dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port}
-              collapsed={<ContainerCardCollapsed c={c} />}
-              expanded={<ContainerCardExpanded
-                c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
-                onTagsLoaded={onTagsLoaded}
-              />}
-            />
-          ))}
-        </Section>
+        {show('containers_local') && (
+          <Section
+            label="Containers · agent-01"
+            meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
+            errorCount={errorCount(containers?.containers)}
+          >
+            {(containers?.containers || []).map(c => (
+              <InfraCard
+                key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
+                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port}
+                collapsed={<ContainerCardCollapsed c={c} />}
+                expanded={<ContainerCardExpanded
+                  c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
+                  onTagsLoaded={onTagsLoaded}
+                />}
+              />
+            ))}
+          </Section>
+        )}
 
         {/* Containers · Swarm */}
-        <Section
-          label="Containers · Swarm"
-          meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
-          errorCount={errorCount(swarm?.services)}
-          cols={4}
-        >
-          {(swarm?.services || []).map(s => (
-            <InfraCard
-              key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
-              dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
-              collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas · since ${_relativeTime(s.created_at)}`, last_pull_at: s.last_pull_at }} />}
-              expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} />}
-            />
-          ))}
-        </Section>
+        {show('containers_swarm') && (
+          <Section
+            label="Containers · Swarm"
+            meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
+            errorCount={errorCount(swarm?.services)}
+            cols={4}
+          >
+            {(swarm?.services || []).map(s => (
+              <InfraCard
+                key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
+                dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
+                collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas · since ${_relativeTime(s.created_at)}`, last_pull_at: s.last_pull_at }} />}
+                expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} />}
+              />
+            ))}
+          </Section>
+        )}
 
         {/* VMs + LXC · Proxmox */}
-        {(() => {
+        {show('vms') && (() => {
           const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
           const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
           const nodeSet = [...new Set(allItems.map(v => v.node))].join(' · ') || 'no data'
@@ -805,21 +809,23 @@ export default function ServiceCards({ showAlertBar = false }) {
         })()}
 
         {/* External Services */}
-        <Section
-          label="External Services"
-          meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
-          errorCount={errorCount(external?.services)}
-          cols={4}
-        >
-          {(external?.services || []).map(svc => (
-            <InfraCard
-              key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
-              dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
-              collapsed={<ExternalCardCollapsed svc={svc} />}
-              expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
-            />
-          ))}
-        </Section>
+        {show('external') && (
+          <Section
+            label="External Services"
+            meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
+            errorCount={errorCount(external?.services)}
+            cols={4}
+          >
+            {(external?.services || []).map(svc => (
+              <InfraCard
+                key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
+                dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
+                collapsed={<ExternalCardCollapsed svc={svc} />}
+                expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
+              />
+            ))}
+          </Section>
+        )}
       </>}
 
       <Toast toasts={toasts} />
