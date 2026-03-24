@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
@@ -219,7 +219,7 @@ const SUBBAR_BADGE = {
   research: { label: 'Research', color: '#d8b4fe' },
 }
 
-function SubBar({ onTab }) {
+function SubBar({ onTab, onAlertNavigate }) {
   const { panelOpen, togglePanel } = useCommandPanel()
   const { wsState, agentType, lastAgentType } = useAgentOutput()
   const [stats,  setStats]  = useState(null)
@@ -412,41 +412,10 @@ function CommandSidePanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DashboardView() {
-  const [activeFilters, setActiveFilters] = useState(() => {
-    try {
-      const saved = localStorage.getItem(FILTER_KEY)
-      if (!saved) return ALL_CARD_KEYS.map(c => c.key)
-      const loaded = JSON.parse(saved)
-      // Any key not in the saved state is a new addition — default it to visible
-      const newKeys = ALL_CARD_KEYS.map(c => c.key).filter(k => !loaded.includes(k))
-      return [...loaded, ...newKeys]
-    } catch {
-      return ALL_CARD_KEYS.map(c => c.key)
-    }
-  })
-
-  const toggleFilter = (key) => {
-    setActiveFilters(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
-  const toggleAll = () => {
-    setActiveFilters(prev => {
-      const allKeys = ALL_CARD_KEYS.map(c => c.key)
-      const allActive = allKeys.every(k => prev.includes(k))
-      const next = allActive ? [] : allKeys
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      <CardFilterBar activeFilters={activeFilters} onToggle={toggleFilter} onToggleAll={toggleAll} />
+      <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
       {/* Single unified scroll area — one scrollbar for both sections */}
       <div className="flex-1 overflow-auto min-h-0">
         <DashboardCards activeFilters={activeFilters} />
@@ -495,6 +464,44 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const { panelOpen } = useCommandPanel()
 
+  // Filter state (lifted here so SubBar can set it via onAlertNavigate)
+  const [activeFilters, setActiveFilters] = useState(() => {
+    try {
+      const saved = localStorage.getItem(FILTER_KEY)
+      if (!saved) return ALL_CARD_KEYS.map(c => c.key)
+      const loaded = JSON.parse(saved)
+      const newKeys = ALL_CARD_KEYS.map(c => c.key).filter(k => !loaded.includes(k))
+      return [...loaded, ...newKeys]
+    } catch {
+      return ALL_CARD_KEYS.map(c => c.key)
+    }
+  })
+
+  const toggleFilter = (key) => {
+    setActiveFilters(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    setActiveFilters(prev => {
+      const allKeys = ALL_CARD_KEYS.map(c => c.key)
+      const allActive = allKeys.every(k => prev.includes(k))
+      const next = allActive ? [] : allKeys
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  // Called by SubBar tray — navigates to Dashboard and isolates one section.
+  // localStorage is NOT updated (transient navigation; user restores with filter bar).
+  const onAlertNavigate = useCallback((sectionKey) => {
+    setActiveTab('Dashboard')
+    setActiveFilters([sectionKey])
+  }, [])
+
   // "Full log →" link in AgentFeed navigates to Output tab
   useEffect(() => {
     const handler = () => setActiveTab('Output')
@@ -516,7 +523,7 @@ function AppShell() {
       <Header activeTab={activeTab} onTab={setActiveTab} />
 
       {/* Row 2: commands toggle + stats + API status */}
-      <SubBar onTab={setActiveTab} />
+      <SubBar onTab={setActiveTab} onAlertNavigate={onAlertNavigate} />
 
       {/* Main content — CSS Grid controls panel vs content widths */}
       <div
@@ -539,7 +546,11 @@ function AppShell() {
           data-testid="main-content"
         >
           {activeTab === 'Dashboard' && (
-            <DashboardView />
+            <DashboardView
+              activeFilters={activeFilters}
+              onToggleFilter={toggleFilter}
+              onToggleAll={toggleAll}
+            />
           )}
 
           {activeTab === 'Cluster' && <ClusterView />}
