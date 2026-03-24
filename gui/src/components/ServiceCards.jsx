@@ -136,9 +136,11 @@ function useConfirm() {
 function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapsed, expanded }) {
   const isOpen = openKey === cardKey
   const cs = cardState(dot)
+  const { cardMinHeight } = useOptions()
   return (
     <div
       className={`${cs.bg} border ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : cs.border} rounded-lg px-2.5 py-2.5 cursor-pointer transition-colors`}
+      style={isOpen ? undefined : { minHeight: cardMinHeight }}
       onClick={() => setOpenKey(isOpen ? null : cardKey)}
     >
       <div className="flex items-center gap-1.5 mb-0.5">
