@@ -30,7 +30,7 @@ class DockerAgent01Collector(BaseCollector):
         import docker
         from docker.errors import DockerException
 
-        docker_host = os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
+        docker_host = os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
         try:
             client = docker.DockerClient(base_url=docker_host, timeout=10)
         except Exception as e:
