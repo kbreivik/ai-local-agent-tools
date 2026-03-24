@@ -48,7 +48,7 @@ def test_unreachable_service_returns_red_dot():
     from api.collectors.external_services import ExternalServicesCollector
     collector = ExternalServicesCollector()
 
-    env = {"LM_STUDIO_URL": "http://192.168.1.100:1234"}
+    env = {"LM_STUDIO_BASE_URL": "http://192.168.1.100:1234/v1"}
     with patch.dict(os.environ, env, clear=False), \
          patch("api.collectors.external_services.httpx.get", side_effect=Exception("connection refused")):
         result = asyncio.run(collector.poll())

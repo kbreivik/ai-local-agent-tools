@@ -8,7 +8,7 @@ client = TestClient(app)
 SERVER_KEYS = [
     "lmStudioUrl", "lmStudioApiKey", "modelName",
     "kafkaBootstrapServers", "elasticsearchUrl", "kibanaUrl", "muninndbUrl",
-    "dockerHost", "swarmManagerIPs", "swarmWorkerIPs",
+    "dockerHost",
     "externalProvider", "externalApiKey", "externalModel",
     "autoEscalate", "requireConfirmation", "dashboardRefreshInterval",
 ]
