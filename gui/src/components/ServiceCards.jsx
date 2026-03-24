@@ -286,7 +286,7 @@ function VMCardExpanded({ vm, onAction, confirm, showToast }) {
       if (!ok) return
     }
     setLoading(l => ({ ...l, [key]: true }))
-    const r = await dashboardAction(`vms/${vm.node.toLowerCase().replace('pmox', 'pve')}/${vm.vmid}/${action}`)
+    const r = await dashboardAction(`vms/${vm.node_api}/${vm.vmid}/${action}`)
     if (!mounted.current) return
     setLoading(l => ({ ...l, [key]: false }))
     if (!r.ok) showToast(r.error || 'Action failed', 'error')
@@ -309,7 +309,7 @@ function VMCardExpanded({ vm, onAction, confirm, showToast }) {
             <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
           ]
           : [
-            <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=kvm&vmid=${vm.vmid}&node=${vm.node.toLowerCase().replace('pmox', 'pve')}&novnc=1`, '_blank')} />,
+            <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=kvm&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
             <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
             <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? The VM will be temporarily unreachable.`)} />,
           ]
@@ -503,7 +503,7 @@ export default function ServiceCards({ showAlertBar = false }) {
         </Section>
 
         {/* VMs · Proxmox */}
-        <Section label="VMs · Proxmox Cluster" meta="Pmox1 · Pmox2 · Pmox3" errorCount={errorCount(vms?.vms)} cols={4}>
+        <Section label="VMs · Proxmox Cluster" meta={[...new Set((vms?.vms || []).map(v => v.node))].join(' · ') || 'no data'} errorCount={errorCount(vms?.vms)} cols={4}>
           {(vms?.vms || []).map(vm => (
             <InfraCard
               key={vm.vmid} cardKey={`v-${vm.vmid}`} openKey={openKey} setOpenKey={setOpenKey}

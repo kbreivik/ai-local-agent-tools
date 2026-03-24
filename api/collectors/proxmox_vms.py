@@ -15,7 +15,16 @@ from api.collectors.base import BaseCollector
 
 log = logging.getLogger(__name__)
 
-NODES = ["pve", "pve2", "pve3"]  # Proxmox node names; override via PROXMOX_NODES env
+# Proxmox API node hostnames — override all three via PROXMOX_NODES env (comma-separated)
+# These must match what `pvesh get /nodes` returns (the "node" field).
+NODES = ["pve", "pve2", "pve3"]
+
+# Display label for each node API name — shown in the GUI header and VM cards.
+NODE_DISPLAY = {
+    "pve":  "Pmox1",
+    "pve2": "Pmox2",
+    "pve3": "Pmox3",
+}
 
 VM_IP_MAP = {
     9200: "192.168.199.10",
@@ -26,12 +35,6 @@ VM_IP_MAP = {
     9222: "192.168.199.32",
     9223: "192.168.199.33",
     9230: "192.168.199.40",
-}
-
-VM_NODE_LABEL = {
-    9200: "Pmox1", 9230: "Pmox1",
-    9211: "Pmox3", 9212: "Pmox3", 9213: "Pmox3",
-    9221: "Pmox3", 9222: "Pmox3", 9223: "Pmox3",
 }
 
 
@@ -83,7 +86,8 @@ class ProxmoxVMsCollector(BaseCollector):
                         vms.append({
                             "vmid": vmid,
                             "name": vm.get("name", f"vm-{vmid}"),
-                            "node": VM_NODE_LABEL.get(vmid, node),
+                            "node": NODE_DISPLAY.get(node, node),   # display label e.g. "Pmox1"
+                            "node_api": node,                        # Proxmox API hostname e.g. "pve"
                             "status": status,
                             "ip": VM_IP_MAP.get(vmid, ""),
                             "vcpus": vm.get("cpus", 0),
