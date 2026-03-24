@@ -260,16 +260,31 @@ def _docker_client():
 
 
 @router.post("/containers/{container_id}/pull")
-async def pull_container(container_id: str, user: str = Depends(get_current_user)):
-    return await asyncio.to_thread(_do_pull, container_id)
+async def pull_container(
+    container_id: str,
+    tag: str | None = None,
+    user: str = Depends(get_current_user),
+):
+    return await asyncio.to_thread(_do_pull, container_id, tag)
 
 
-def _do_pull(container_id: str) -> dict:
+def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
         client = _docker_client()
         container = client.containers.get(container_id)
         image_name = container.attrs["Config"]["Image"]
-        client.images.pull(image_name)
+
+        if tag:
+            # Pull the versioned image, then re-tag it as the container's current image
+            # so container.restart() uses the new version.
+            bare = image_name.split("@")[0].split(":")[0]
+            versioned = f"{bare}:{tag}"
+            pulled = client.images.pull(versioned)
+            current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
+            pulled.tag(bare, tag=current_tag)
+        else:
+            client.images.pull(image_name)
+
         container.restart()
         return {"ok": True}
     except Exception as e:
