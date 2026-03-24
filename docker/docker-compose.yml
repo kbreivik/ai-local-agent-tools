@@ -1,23 +1,39 @@
-# HP1 AI Agent — local services
+# HP1 AI Agent — production services
 # Start with: docker compose -f docker/docker-compose.yml up -d
+# Dev with local postgres: docker compose -f docker/docker-compose.yml --profile dev up -d
+#
+# Naming conventions:
+#   Container names: hp1_<name> (underscore) for compose services
+#   Volumes:         <name>-data (hyphen) — Docker convention
+#   Networks:        <name>-net (hyphen) — Docker convention
+#   Env vars:        UPPER_CASE_UNDERSCORE
 
 networks:
   agent-net:
     driver: bridge
+  # Ansible-managed bridge shared with hp1-postgres (created by postgres role).
+  # External so Compose doesn't own it — Ansible creates it via postgres role.
+  hp1-pg-net:
+    external: true
 
 volumes:
-  hp1_pgdata:
-  hp1_pgadmin:
+  hp1-pgdata:        # postgres dev volume (profile: dev only)
+  hp1-pgadmin:       # pgadmin dev volume  (profile: pgadmin only)
   muninndb-data:
     external: true
   agent-data:
   agent-logs:
 
 services:
+  # ── Dev-only PostgreSQL ───────────────────────────────────────────────────────
+  # Production uses Ansible-managed hp1-postgres on hp1-pg-net (port 5433).
+  # This service exists for local development only (no Ansible required).
+  # Start with: --profile dev
   postgres:
     image: postgres:16-alpine
     container_name: hp1_postgres
     restart: unless-stopped
+    profiles: ["dev"]
     networks:
       - agent-net
     ports:
@@ -28,7 +44,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hp1pass}
       PGDATA:            /var/lib/postgresql/data/pgdata
     volumes:
-      - hp1_pgdata:/var/lib/postgresql/data
+      - hp1-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hp1user} -d ${POSTGRES_DB:-hp1_agent}"]
       interval: 5s
@@ -50,10 +66,11 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     volumes:
-      - hp1_pgadmin:/var/lib/pgadmin
+      - hp1-pgadmin:/var/lib/pgadmin
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     profiles:
       - pgadmin
 
@@ -92,6 +109,10 @@ services:
     restart: unless-stopped
     networks:
       - agent-net
+      # hp1-pg-net: shared bridge with Ansible-managed hp1-postgres container.
+      # Allows DATABASE_URL=@hp1-postgres:5432 to resolve.
+      # Created by Ansible postgres role; must exist before compose up.
+      - hp1-pg-net
     ports:
       - "8000:8000"
     env_file: .env
@@ -114,6 +135,7 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+        required: false    # dev profile only; production uses hp1-postgres on hp1-pg-net
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
       interval: 30s
