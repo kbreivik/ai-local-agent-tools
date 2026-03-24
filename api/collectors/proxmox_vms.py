@@ -17,13 +17,14 @@ log = logging.getLogger(__name__)
 
 # Proxmox API node hostnames — override all three via PROXMOX_NODES env (comma-separated)
 # These must match what `pvesh get /nodes` returns (the "node" field).
-NODES = ["pve", "pve2", "pve3"]
+NODES = ["Pmox1", "Pmox2", "Pmox3"]
 
 # Display label for each node API name — shown in the GUI header and VM cards.
+# Node names happen to match the display labels in this cluster.
 NODE_DISPLAY = {
-    "pve":  "Pmox1",
-    "pve2": "Pmox2",
-    "pve3": "Pmox3",
+    "Pmox1": "Pmox1",
+    "Pmox2": "Pmox2",
+    "Pmox3": "Pmox3",
 }
 
 VM_IP_MAP = {
