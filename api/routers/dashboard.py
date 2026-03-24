@@ -245,9 +245,10 @@ async def reboot_vm(node: str, vmid: int, user: str = Depends(get_current_user))
 
 def _do_vm_action(node: str, vmid: int, action: str) -> dict:
     import httpx
-    ALLOWED_NODES = {"Pmox1", "Pmox2", "Pmox3"}
-    if node not in ALLOWED_NODES:
-        return {"ok": False, "error": "unknown node"}
+    from api.collectors.proxmox_vms import NODES
+    # node is the Proxmox API hostname (e.g. "pve", "pve2", "pve3") — not the display label
+    if node not in NODES:
+        return {"ok": False, "error": f"unknown node '{node}' — must be one of {NODES}"}
     host = os.environ.get("PROXMOX_HOST", "")
     token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
     token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
