@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
 
   hp1_agent:
-    image: hp1-ai-agent:latest
+    image: ${HP1_IMAGE:-ghcr.io/kbreivik/hp1-ai-agent:latest}
     container_name: hp1_agent
     restart: unless-stopped
     networks:
@@ -124,6 +124,11 @@ services:
       # AGENT01_DOCKER_HOST is the LOCAL socket used only by DockerAgent01Collector to list
       # agent-01's own containers. Kept separate so DOCKER_HOST can still target manager-01.
       - AGENT01_DOCKER_HOST=unix:///var/run/docker.sock
+    # Runtime Docker socket GID — added as supplemental group so the agent user can
+    # access /var/run/docker.sock without baking the GID into the image at build time.
+    # DOCKER_GID is read from .env (set by Ansible from stat /var/run/docker.sock).
+    group_add:
+      - "${DOCKER_GID:-994}"
     volumes:
       # Local socket mounted read-only so DockerAgent01Collector can list agent-01's containers.
       # DOCKER_HOST still points to manager-01 for Swarm tools — these are separate connections.
