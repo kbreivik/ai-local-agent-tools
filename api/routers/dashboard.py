@@ -259,6 +259,22 @@ def _docker_client():
     return docker.DockerClient(base_url=host, timeout=15)
 
 
+def _resolve_container(container_id: str):
+    """Return (DockerClient, Container) checking agent-01 local daemon first, then DOCKER_HOST."""
+    import docker
+    hosts = [
+        os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock"),
+        os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock"),
+    ]
+    for host in hosts:
+        try:
+            client = docker.DockerClient(base_url=host, timeout=15)
+            return client, client.containers.get(container_id)
+        except docker.errors.NotFound:
+            continue
+    raise docker.errors.NotFound(container_id)
+
+
 @router.post("/containers/{container_id}/pull")
 async def pull_container(
     container_id: str,
@@ -270,8 +286,7 @@ async def pull_container(
 
 def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
-        client = _docker_client()
-        container = client.containers.get(container_id)
+        client, container = _resolve_container(container_id)
         image_name = container.attrs["Config"]["Image"]
 
         if tag:
@@ -298,8 +313,8 @@ async def restart_container(container_id: str, user: str = Depends(get_current_u
 
 def _do_restart(container_id: str) -> dict:
     try:
-        client = _docker_client()
-        client.containers.get(container_id).restart()
+        _, container = _resolve_container(container_id)
+        container.restart()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -312,8 +327,8 @@ async def stop_container(container_id: str, user: str = Depends(get_current_user
 
 def _do_stop(container_id: str) -> dict:
     try:
-        client = _docker_client()
-        client.containers.get(container_id).stop()
+        _, container = _resolve_container(container_id)
+        container.stop()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
