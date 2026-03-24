@@ -11,6 +11,7 @@ import {
   dashboardAction, fetchContainerTags
 } from '../api'
 import { compareSemver } from '../utils/versionCheck'
+import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
 
@@ -135,9 +136,11 @@ function useConfirm() {
 function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapsed, expanded }) {
   const isOpen = openKey === cardKey
   const cs = cardState(dot)
+  const { cardMinHeight } = useOptions()
   return (
     <div
       className={`${cs.bg} border ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : cs.border} rounded-lg px-2.5 py-2.5 cursor-pointer transition-colors`}
+      style={isOpen ? undefined : { minHeight: cardMinHeight }}
       onClick={() => setOpenKey(isOpen ? null : cardKey)}
     >
       <div className="flex items-center gap-1.5 mb-0.5">
@@ -162,7 +165,10 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapse
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, cols = 5, filterBar, children }) {
+function Section({ label, meta, errorCount, filterBar, children }) {
+  const { cardMinWidth, cardMaxWidth } = useOptions()
+  const _min = cardMinWidth ?? 300
+  const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
@@ -171,7 +177,10 @@ function Section({ label, meta, errorCount, cols = 5, filterBar, children }) {
         {errorCount > 0 && <span className="text-[10px] text-red-500/60">{errorCount} issue{errorCount !== 1 ? 's' : ''}</span>}
       </div>
       {filterBar}
-      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+      <div className="grid gap-2" style={{
+        gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
+        ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
+      }}>
         {children}
       </div>
     </div>
@@ -759,7 +768,6 @@ export default function ServiceCards({ activeFilters = null }) {
             label="Containers · Swarm"
             meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
             errorCount={errorCount(swarm?.services)}
-            cols={4}
           >
             {(swarm?.services || []).map(s => (
               <InfraCard
@@ -785,11 +793,10 @@ export default function ServiceCards({ activeFilters = null }) {
               label="Proxmox Cluster"
               meta={metaStr}
               errorCount={errorCount(allItems)}
-              cols={4}
               filterBar={<ProxmoxFilterBar items={allItems} filters={proxmoxFilters} setFilters={setProxmoxFilters} />}
             >
               {filtered.length === 0 && allItems.length > 0 && (
-                <div className="col-span-4 text-[10px] text-gray-700 py-2">no items match filter</div>
+                <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
               )}
               {filtered.map(vm => (
                 <InfraCard
@@ -814,7 +821,6 @@ export default function ServiceCards({ activeFilters = null }) {
             label="External Services"
             meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
             errorCount={errorCount(external?.services)}
-            cols={4}
           >
             {(external?.services || []).map(svc => (
               <InfraCard
