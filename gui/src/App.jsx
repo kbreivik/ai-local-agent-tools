@@ -16,7 +16,7 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats } from './api'
+import { fetchHealth, fetchStats, fetchStatus } from './api'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
