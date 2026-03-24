@@ -613,7 +613,9 @@ def test_pull_container_with_tag(client):
     assert r.json()["ok"] is True
 
     # Versioned image was pulled (ghcr.io/kbreivik/hp1-ai-agent:1.11.0)
-    mock_dc.return_value.images.pull.assert_called_once_with("ghcr.io/kbreivik/hp1-ai-agent:1.11.0")
+    mock_dc.return_value.images.pull.assert_called_once_with(
+        "ghcr.io/kbreivik/hp1-ai-agent:1.11.0", auth_config=None
+    )
 
     # Re-tagged as :latest (the container's current image tag)
     mock_pulled_image.tag.assert_called_once()
