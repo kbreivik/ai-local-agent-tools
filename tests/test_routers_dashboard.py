@@ -518,12 +518,12 @@ class TestContainerTags:
         import os
         # Two httpx.get calls: (1) token exchange → {"token": "..."}, (2) tags list → {"tags": [...]}
         token_resp = MagicMock()
-        token_resp.ok = True
+        token_resp.is_success =True
         token_resp.status_code = 200
         token_resp.json.return_value = {"token": "fake-bearer"}
 
         tags_resp = MagicMock()
-        tags_resp.ok = True
+        tags_resp.is_success =True
         tags_resp.status_code = 200
         tags_resp.json.return_value = {"tags": ["latest", "1.11.0", "1.10.0", "1.9.2", "sha-abc123"]}
         tags_resp.headers = {}
@@ -591,7 +591,7 @@ class TestContainerTags:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 401
-        mock_resp.ok = False
+        mock_resp.is_success =False
 
         with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
              patch.dict(os.environ, {"GHCR_TOKEN": "bad-token"}), \
