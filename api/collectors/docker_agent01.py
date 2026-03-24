@@ -68,7 +68,7 @@ class DockerAgent01Collector(BaseCollector):
                 # OCI image labels — only extracted for GHCR images
                 running_version = None
                 built_at = None
-                if image.startswith("ghcr.io/"):
+                if image.startswith("ghcr.io/") and c.image:
                     try:
                         labels = c.image.labels or {}
                     except Exception:
