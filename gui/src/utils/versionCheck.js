@@ -85,3 +85,30 @@ export function compareSemver(current, latest) {
   if (lat[0] === cur[0] && lat[1] === cur[1] && lat[2] > cur[2]) return 'patch'
   return 'ahead'
 }
+
+/**
+ * Extract the build number from a "{major}.{minor}.{patch}-{buildnum}-{sha}" tag.
+ * Returns the build number as an integer, or null if the tag doesn't match.
+ */
+function parseBuildNum(tag) {
+  if (!tag) return null
+  const m = tag.match(/^\d+\.\d+\.\d+-(\d+)-[0-9a-f]+$/)
+  return m ? parseInt(m[1], 10) : null
+}
+
+/**
+ * Like compareSemver but also detects newer builds when version parts are equal.
+ * If both tags are in "{version}-{buildnum}-{sha}" format and versions are equal,
+ * a higher build number returns 'patch' (shown as yellow ⬆ badge).
+ */
+export function compareBuildTag(current, latest) {
+  const base = compareSemver(current, latest)
+  if (base !== 'current') return base
+
+  const curBuild = parseBuildNum(current)
+  const latBuild = parseBuildNum(latest)
+  if (curBuild === null || latBuild === null) return 'current'
+  if (latBuild > curBuild) return 'patch'
+  if (latBuild < curBuild) return 'ahead'
+  return 'current'
+}
