@@ -39,6 +39,13 @@ data/docs/*.pdf
 
 # Claude Code internal
 .claude/
+.superpowers/
+
+# Skill export artifacts
+data/skill_exports/
+
+# Visual companion / brainstorm HTML docs
+docs/*.html
 
 # IDE
 .vscode/
