@@ -45,6 +45,15 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 WORKDIR /app
 COPY . .
 
+# Generate build_info.json stub if not present in build context (local builds without CI)
+RUN if [ ! -f api/build_info.json ]; then \
+      python -c "import json; json.dump( \
+        {'version': open('VERSION').read().strip(), \
+         'commit':'unknown','branch':'unknown', \
+         'built_at':'unknown','build_number':'unknown'}, \
+        open('api/build_info.json','w'))"; \
+    fi
+
 # Copy pre-built GUI from gui-builder stage
 COPY --from=gui-builder /gui/dist /app/gui/dist
 
