@@ -416,7 +416,11 @@ function DashboardView() {
   const [activeFilters, setActiveFilters] = useState(() => {
     try {
       const saved = localStorage.getItem(FILTER_KEY)
-      return saved ? JSON.parse(saved) : ALL_CARD_KEYS.map(c => c.key)
+      if (!saved) return ALL_CARD_KEYS.map(c => c.key)
+      const loaded = JSON.parse(saved)
+      // Any key not in the saved state is a new addition — default it to visible
+      const newKeys = ALL_CARD_KEYS.map(c => c.key).filter(k => !loaded.includes(k))
+      return [...loaded, ...newKeys]
     } catch {
       return ALL_CARD_KEYS.map(c => c.key)
     }
