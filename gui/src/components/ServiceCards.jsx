@@ -8,8 +8,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   fetchDashboardContainers, fetchDashboardSwarm,
   fetchDashboardVMs, fetchDashboardExternal,
-  dashboardAction
+  dashboardAction, fetchContainerTags
 } from '../api'
+import { compareSemver } from '../utils/versionCheck'
 
 const POLL_MS = 30_000
 
@@ -143,7 +144,11 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapse
         <Dot color={dot} />
         <span className={`text-[12px] font-semibold truncate ${cs.nameCls}`}>{name}</span>
       </div>
-      {sub && <div className="text-[10px] text-[#3a3a5a] font-mono truncate mb-0.5">{sub}</div>}
+      {sub && (
+        typeof sub === 'object'
+          ? <div className={`text-[10px] font-mono truncate mb-0.5 ${sub.cls}`}>{sub.text}</div>
+          : <div className="text-[10px] text-[#3a3a5a] font-mono truncate mb-0.5">{sub}</div>
+      )}
       <div className="text-[10px] text-[#4a5a7a] font-mono mb-1">{net || '—'}</div>
       {isOpen ? (
         <div onClick={e => e.stopPropagation()}>
@@ -508,6 +513,16 @@ function _relativeTime(iso) {
   return `${Math.round(hours / 24)}d ago`
 }
 
+function _computeContainerSub(c, knownLatest) {
+  const latestTag = knownLatest[c.id]
+  if (!latestTag || !c.running_version) return c.image
+  const severity = compareSemver(c.running_version, latestTag)
+  const imageName = c.image.split('/').pop().split(':')[0]
+  if (severity === 'major') return { text: `${imageName}: not latest`, cls: 'text-[#b04020]' }
+  if (severity === 'minor' || severity === 'patch') return { text: `${imageName}: not latest`, cls: 'text-[#92601a]' }
+  return c.image
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function ServiceCards({ showAlertBar = false }) {
@@ -518,7 +533,12 @@ export default function ServiceCards({ showAlertBar = false }) {
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [proxmoxFilters, setProxmoxFilters] = useState({})
+  const [knownLatest, setKnownLatest] = useState({})
   const { pending, confirm, resolve } = useConfirm()
+
+  const onTagsLoaded = useCallback((containerId, latestTag) => {
+    setKnownLatest(prev => ({ ...prev, [containerId]: latestTag }))
+  }, [])
   const { toasts, show: showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -528,7 +548,13 @@ export default function ServiceCards({ showAlertBar = false }) {
       fetchDashboardVMs(),
       fetchDashboardExternal(),
     ])
-    if (c.status === 'fulfilled') setContainers(c.value)
+    if (c.status === 'fulfilled') {
+      setContainers(c.value)
+      const currentIds = new Set((c.value?.containers || []).map(x => x.id))
+      setKnownLatest(prev =>
+        Object.fromEntries(Object.entries(prev).filter(([id]) => currentIds.has(id)))
+      )
+    }
     if (s.status === 'fulfilled') setSwarm(s.value)
     if (v.status === 'fulfilled') setVMs(v.value)
     if (e.status === 'fulfilled') setExternal(e.value)
@@ -575,9 +601,12 @@ export default function ServiceCards({ showAlertBar = false }) {
           {(containers?.containers || []).map(c => (
             <InfraCard
               key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-              dot={c.dot} name={c.name} sub={c.image} net={c.ip_port}
+              dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port}
               collapsed={<ContainerCardCollapsed c={c} />}
-              expanded={<ContainerCardExpanded c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast} />}
+              expanded={<ContainerCardExpanded
+                c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
+                onTagsLoaded={onTagsLoaded}
+              />}
             />
           ))}
         </Section>
