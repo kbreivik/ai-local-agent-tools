@@ -297,6 +297,14 @@ export async function fetchDashboardExternal() {
   return r.json()
 }
 
+export async function fetchContainerTags(containerId) {
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags`, {
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) return { tags: [], error: `HTTP ${r.status}` }
+  return r.json()
+}
+
 export async function dashboardAction(path, body = null) {
   const r = await fetch(`${BASE}/api/dashboard/${path}`, {
     method: 'POST',
