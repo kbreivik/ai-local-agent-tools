@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react'
 import { Terminal } from 'lucide-react'
 import CommandPanel   from './components/CommandPanel'
 import OutputPanel    from './components/OutputPanel'
@@ -219,12 +219,20 @@ const SUBBAR_BADGE = {
   research: { label: 'Research', color: '#d8b4fe' },
 }
 
-function SubBar({ onTab }) {
+const SEV = { red: 0, amber: 1, grey: 2, green: 3 }
+
+function SubBar({ onTab, onAlertNavigate }) {
   const { panelOpen, togglePanel } = useCommandPanel()
   const { wsState, agentType, lastAgentType } = useAgentOutput()
   const [stats,  setStats]  = useState(null)
   const [health, setHealth] = useState(null)
   const [alerts, setAlerts] = useState([])
+  const [rawContainers, setRawContainers] = useState(null)
+  const [rawSwarm,      setRawSwarm]      = useState(null)
+  const [rawVms,        setRawVms]        = useState(null)
+  const [rawExternal,   setRawExternal]   = useState(null)
+  const [alertTrayOpen, setAlertTrayOpen] = useState(false)
+  const trayRef = useRef(null)
 
   useEffect(() => {
     const refreshStats = () => fetchStats().then(setStats).catch(() => setStats(null))
@@ -236,15 +244,20 @@ function SubBar({ onTab }) {
         fetchDashboardVMs(),
         fetchDashboardExternal(),
       ]).then(([c, s, v, e]) => {
+        if (c.status === 'fulfilled') setRawContainers(c.value)
+        if (s.status === 'fulfilled') setRawSwarm(s.value)
+        if (v.status === 'fulfilled') setRawVms(v.value)
+        if (e.status === 'fulfilled') setRawExternal(e.value)
+
         const issues = []
         let idx = 0
-        const SEV = { red: 0, amber: 1, grey: 2, green: 3 }
         if (c.status === 'fulfilled') for (const x of c.value?.containers || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
         if (s.status === 'fulfilled') for (const x of s.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
         if (v.status === 'fulfilled') for (const x of [...(v.value?.vms || []), ...(v.value?.lxc || [])]) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
         if (e.status === 'fulfilled') for (const x of e.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
         issues.sort((a, b) => (SEV[a.sev] ?? 2) - (SEV[b.sev] ?? 2) || a.idx - b.idx)
         setAlerts(issues)
+        if (issues.length === 0) setAlertTrayOpen(false)
       }).catch(() => {})
     }
 
@@ -260,6 +273,22 @@ function SubBar({ onTab }) {
       clearInterval(id)
       window.removeEventListener('agent-done', refreshStats)
     }
+  }, [])
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (trayRef.current && !trayRef.current.contains(e.target)) {
+        setAlertTrayOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') setAlertTrayOpen(false) }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
   }, [])
 
   const topTool = stats?.most_used_tools?.[0]
@@ -300,21 +329,90 @@ function SubBar({ onTab }) {
         )}
       </div>
 
-      {/* Alert strip — shows stopped/unhealthy infra items, click to open Dashboard */}
+      {/* Alert strip — shows stopped/unhealthy infra items, click to open dropdown tray */}
       {alerts.length > 0 && (
-        <button
-          onClick={() => onTab?.('Dashboard')}
-          title={`${alerts.length} infrastructure alert${alerts.length !== 1 ? 's' : ''} — click to view`}
-          className="flex items-center gap-1.5 px-2 h-full border-l border-orange-100 bg-orange-50/60 hover:bg-orange-50 transition-colors shrink min-w-0 overflow-hidden"
-          style={{ maxWidth: 420 }}
-        >
-          <span className="text-orange-500 text-[12px] shrink-0">⚠</span>
-          <span className="text-[11px] text-orange-700/80 truncate">
-            {alerts.slice(0, 3).map(i => i.text).join(' · ')}
-            {alerts.length > 3 ? ` · +${alerts.length - 3} more` : ''}
-          </span>
-          <span className="text-[10px] bg-orange-400 text-white rounded-full px-1.5 py-px shrink-0 ml-0.5">{alerts.length}</span>
-        </button>
+        <div ref={trayRef} className="relative border-l border-orange-100 flex-1 min-w-0">
+          <button
+            onClick={() => setAlertTrayOpen(o => !o)}
+            title={`${alerts.length} infrastructure alert${alerts.length !== 1 ? 's' : ''} — click for details`}
+            className="flex items-center gap-1.5 px-2 h-8 w-full bg-orange-50/60 hover:bg-orange-50 transition-colors overflow-hidden"
+          >
+            <span className="text-orange-500 text-[12px] shrink-0">⚠</span>
+            <span className="text-[11px] text-orange-700/80 truncate">
+              {alerts.slice(0, 3).map(i => i.text).join(' · ')}
+              {alerts.length > 3 ? ` · +${alerts.length - 3} more` : ''}
+            </span>
+            <span className="text-[10px] bg-orange-400 text-white rounded-full px-1.5 py-px shrink-0 ml-0.5">{alerts.length}</span>
+          </button>
+
+          {alertTrayOpen && (
+            <div className="absolute top-full left-0 z-50 min-w-full bg-[#1e293b] border border-[#334155] rounded-b shadow-xl"
+                 style={{ maxHeight: 400, overflowY: 'auto' }}>
+              <div className="px-3 py-2 border-b border-[#334155] flex items-center gap-2">
+                <span className="text-orange-400 text-[11px]">⚠</span>
+                <span className="text-[11px] font-semibold text-slate-200">{alerts.length} Infrastructure Issue{alerts.length !== 1 ? 's' : ''}</span>
+              </div>
+
+              {[
+                {
+                  key: 'containers_local',
+                  label: 'CONTAINERS · agent-01',
+                  items: (rawContainers?.containers || []).filter(x => x.problem).map(x => ({ name: x.name, problem: x.problem })),
+                },
+                {
+                  key: 'containers_swarm',
+                  label: 'SWARM SERVICES',
+                  items: (rawSwarm?.services || []).filter(x => x.problem).map(x => ({ name: x.name, problem: x.problem })),
+                },
+                {
+                  key: 'vms',
+                  label: 'PROXMOX VMs / LXC',
+                  items: [...(rawVms?.vms || []), ...(rawVms?.lxc || [])].filter(x => x.problem).map(x => ({ name: x.name, problem: x.problem })),
+                },
+                {
+                  key: 'external',
+                  label: 'EXTERNAL SERVICES',
+                  items: (rawExternal?.services || []).filter(x => x.problem).map(x => ({ name: x.name, problem: x.problem })),
+                },
+              ].map(({ key, label, items }) => {
+                const shown = items.slice(0, 5)
+                const extra = items.length - shown.length
+                const hasIssues = items.length > 0
+                return (
+                  <div
+                    key={key}
+                    className={`border-b border-[#1e293b] ${hasIssues ? 'cursor-pointer hover:bg-[#243447]' : 'opacity-50'} transition-colors`}
+                    onClick={hasIssues ? () => { onAlertNavigate(key); setAlertTrayOpen(false) } : undefined}
+                  >
+                    <div className="flex items-center justify-between px-3 py-1.5">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase tracking-wider font-semibold">{label}</span>
+                        {hasIssues
+                          ? <span className="ml-2 text-[10px] text-orange-400">{items.length} issue{items.length !== 1 ? 's' : ''}</span>
+                          : <span className="ml-2 text-[10px] text-slate-600">0 issues</span>
+                        }
+                      </div>
+                      <span className="text-[10px] text-slate-500 shrink-0 ml-2">→</span>
+                    </div>
+                    {shown.length > 0 && (
+                      <div className="px-3 pb-1.5 flex flex-col gap-0.5">
+                        {shown.map((item, i) => (
+                          <div key={i} className="flex justify-between text-[10px]">
+                            <span className="text-amber-300 truncate">{item.name}</span>
+                            <span className="text-slate-500 ml-2 shrink-0">{item.problem}</span>
+                          </div>
+                        ))}
+                        {extra > 0 && (
+                          <div className="text-[9px] text-slate-600 mt-0.5">+ {extra} more</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       <div className="flex items-center ml-auto">
@@ -412,41 +510,10 @@ function CommandSidePanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DashboardView() {
-  const [activeFilters, setActiveFilters] = useState(() => {
-    try {
-      const saved = localStorage.getItem(FILTER_KEY)
-      if (!saved) return ALL_CARD_KEYS.map(c => c.key)
-      const loaded = JSON.parse(saved)
-      // Any key not in the saved state is a new addition — default it to visible
-      const newKeys = ALL_CARD_KEYS.map(c => c.key).filter(k => !loaded.includes(k))
-      return [...loaded, ...newKeys]
-    } catch {
-      return ALL_CARD_KEYS.map(c => c.key)
-    }
-  })
-
-  const toggleFilter = (key) => {
-    setActiveFilters(prev => {
-      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
-  const toggleAll = () => {
-    setActiveFilters(prev => {
-      const allKeys = ALL_CARD_KEYS.map(c => c.key)
-      const allActive = allKeys.every(k => prev.includes(k))
-      const next = allActive ? [] : allKeys
-      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      <CardFilterBar activeFilters={activeFilters} onToggle={toggleFilter} onToggleAll={toggleAll} />
+      <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
       {/* Single unified scroll area — one scrollbar for both sections */}
       <div className="flex-1 overflow-auto min-h-0">
         <DashboardCards activeFilters={activeFilters} />
@@ -495,6 +562,44 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const { panelOpen } = useCommandPanel()
 
+  // Filter state (lifted here so SubBar can set it via onAlertNavigate)
+  const [activeFilters, setActiveFilters] = useState(() => {
+    try {
+      const saved = localStorage.getItem(FILTER_KEY)
+      if (!saved) return ALL_CARD_KEYS.map(c => c.key)
+      const loaded = JSON.parse(saved)
+      const newKeys = ALL_CARD_KEYS.map(c => c.key).filter(k => !loaded.includes(k))
+      return [...loaded, ...newKeys]
+    } catch {
+      return ALL_CARD_KEYS.map(c => c.key)
+    }
+  })
+
+  const toggleFilter = (key) => {
+    setActiveFilters(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    setActiveFilters(prev => {
+      const allKeys = ALL_CARD_KEYS.map(c => c.key)
+      const allActive = allKeys.every(k => prev.includes(k))
+      const next = allActive ? [] : allKeys
+      localStorage.setItem(FILTER_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  // Called by SubBar tray — navigates to Dashboard and isolates one section.
+  // localStorage is NOT updated (transient navigation; user restores with filter bar).
+  const onAlertNavigate = useCallback((sectionKey) => {
+    setActiveTab('Dashboard')
+    setActiveFilters([sectionKey])
+  }, [])
+
   // "Full log →" link in AgentFeed navigates to Output tab
   useEffect(() => {
     const handler = () => setActiveTab('Output')
@@ -516,7 +621,7 @@ function AppShell() {
       <Header activeTab={activeTab} onTab={setActiveTab} />
 
       {/* Row 2: commands toggle + stats + API status */}
-      <SubBar onTab={setActiveTab} />
+      <SubBar onTab={setActiveTab} onAlertNavigate={onAlertNavigate} />
 
       {/* Main content — CSS Grid controls panel vs content widths */}
       <div
@@ -539,7 +644,11 @@ function AppShell() {
           data-testid="main-content"
         >
           {activeTab === 'Dashboard' && (
-            <DashboardView />
+            <DashboardView
+              activeFilters={activeFilters}
+              onToggleFilter={toggleFilter}
+              onToggleAll={toggleAll}
+            />
           )}
 
           {activeTab === 'Cluster' && <ClusterView />}
