@@ -65,6 +65,19 @@ class DockerAgent01Collector(BaseCollector):
                 image_id = c.image.id if c.image else None
                 last_pull_at = _check_digest(c.id, image, image_id, last_digests)
 
+                # OCI image labels — only extracted for GHCR images
+                running_version = None
+                built_at = None
+                if image.startswith("ghcr.io/") and c.image:
+                    try:
+                        labels = c.image.labels or {}
+                    except Exception:
+                        labels = {}
+                    raw_ver = labels.get("org.opencontainers.image.version", "")
+                    if raw_ver:
+                        running_version = raw_ver.lstrip("v")
+                    built_at = labels.get("org.opencontainers.image.created") or None
+
                 dot, problem = _classify_container(state_str, health_str)
                 first_port = ports[0].split("→")[0] if ports else ""
                 ip_port = f"{VM_IP}:{first_port}" if first_port else ""
@@ -80,6 +93,8 @@ class DockerAgent01Collector(BaseCollector):
                     "ports": ports,
                     "volumes": volumes,
                     "last_pull_at": last_pull_at,
+                    "running_version": running_version,
+                    "built_at": built_at,
                     "dot": dot,
                     "problem": problem,
                 })

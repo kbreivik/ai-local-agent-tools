@@ -6,15 +6,24 @@ Never calls Docker/Proxmox/external services directly — that's the collectors'
 """
 import asyncio
 import json
+import logging
 import os
+import re
+import time as _time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import JSONResponse
 
 from api.auth import get_current_user
 from api.db.base import get_engine
 from api.db import queries as q
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+log = logging.getLogger(__name__)
+
+_GHCR_TAG_CACHE: dict = {}   # { image_bare: (tags, fetched_at) }
+_GHCR_TAG_TTL = 600          # 10 minutes
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -143,6 +152,98 @@ async def get_external(user: str = Depends(get_current_user)):
     }
 
 
+# ── GET /containers/{id}/tags ─────────────────────────────────────────────────
+
+def _fetch_ghcr_tags(image_bare: str) -> list[str]:
+    """Fetch semver tags from GHCR for a bare image name (e.g. ghcr.io/user/repo).
+    Returns sorted-descending list of strict semver tags, up to 20.
+    Raises RuntimeError on auth failure, IOError on network failure.
+    Results cached for _GHCR_TAG_TTL seconds.
+    """
+    import httpx
+
+    cached = _GHCR_TAG_CACHE.get(image_bare)
+    if cached and (_time.monotonic() - cached[1]) < _GHCR_TAG_TTL:
+        return cached[0]
+
+    token = os.environ.get("GHCR_TOKEN", "")
+    if not token:
+        raise RuntimeError("GHCR_TOKEN not configured")
+
+    repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
+    headers = {"Authorization": f"Bearer {token}"}
+    semver_re = re.compile(r"^\d+\.\d+\.\d+$")
+    all_tags: list[str] = []
+    url = f"https://ghcr.io/v2/{repo}/tags/list?n=100"
+
+    for _ in range(3):
+        try:
+            r = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+        except Exception as exc:
+            raise IOError(f"GHCR unreachable: {exc}") from exc
+
+        if r.status_code in (401, 403):
+            raise RuntimeError(f"GHCR auth failed: HTTP {r.status_code}")
+        if not r.ok:
+            raise IOError(f"GHCR error: HTTP {r.status_code}")
+
+        all_tags.extend(r.json().get("tags") or [])
+
+        if len([t for t in all_tags if semver_re.match(t)]) >= 20:
+            break
+
+        # Follow Link header pagination
+        next_url = None
+        for part in r.headers.get("link", "").split(","):
+            part = part.strip()
+            if 'rel="next"' in part:
+                next_url = part.split(";")[0].strip().strip("<>")
+                break
+        if not next_url:
+            break
+        url = next_url
+
+    semver_tags = [t for t in all_tags if semver_re.match(t)]
+    semver_tags.sort(key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True)
+    result = semver_tags[:20]
+    _GHCR_TAG_CACHE[image_bare] = (result, _time.monotonic())
+    return result
+
+
+@router.get("/containers/{container_id}/tags")
+async def get_container_tags(container_id: str, user: str = Depends(get_current_user)):
+    """Available GHCR semver tags for a GHCR-hosted container image.
+
+    Returns { tags: [...] } sorted descending. Cached 10 min on the backend.
+    Returns empty tags list for non-GHCR images (not an error).
+    """
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "docker_agent01")
+
+    state = _parse_state(snap)
+    containers = state.get("containers", [])
+    container = next((c for c in containers if c["id"] == container_id), None)
+
+    if container is None:
+        return JSONResponse(status_code=404, content={"error": "container not found"})
+
+    image = container.get("image", "")
+    if not image.startswith("ghcr.io/"):
+        return {"tags": [], "error": "not a ghcr image"}
+
+    bare = image.split("@")[0].split(":")[0]   # ghcr.io/kbreivik/hp1-ai-agent
+
+    try:
+        tags = await asyncio.to_thread(_fetch_ghcr_tags, bare)
+        return {"tags": tags}
+    except RuntimeError as exc:
+        log.warning("GHCR auth error for %s: %s", bare, exc)
+        return JSONResponse(status_code=503, content={"error": "ghcr auth failed"})
+    except IOError as exc:
+        log.warning("GHCR network error for %s: %s", bare, exc)
+        return JSONResponse(status_code=502, content={"error": "ghcr unreachable"})
+
+
 # ── Action endpoints ────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel
@@ -159,16 +260,31 @@ def _docker_client():
 
 
 @router.post("/containers/{container_id}/pull")
-async def pull_container(container_id: str, user: str = Depends(get_current_user)):
-    return await asyncio.to_thread(_do_pull, container_id)
+async def pull_container(
+    container_id: str,
+    tag: str | None = None,
+    user: str = Depends(get_current_user),
+):
+    return await asyncio.to_thread(_do_pull, container_id, tag)
 
 
-def _do_pull(container_id: str) -> dict:
+def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
         client = _docker_client()
         container = client.containers.get(container_id)
         image_name = container.attrs["Config"]["Image"]
-        client.images.pull(image_name)
+
+        if tag:
+            # Pull the versioned image, then re-tag it as the container's current image
+            # so container.restart() uses the new version.
+            bare = image_name.split("@")[0].split(":")[0]
+            versioned = f"{bare}:{tag}"
+            pulled = client.images.pull(versioned)
+            current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
+            pulled.tag(bare, tag=current_tag)
+        else:
+            client.images.pull(image_name)
+
         container.restart()
         return {"ok": True}
     except Exception as e:
