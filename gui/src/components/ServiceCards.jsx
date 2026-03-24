@@ -10,7 +10,7 @@ import {
   fetchDashboardVMs, fetchDashboardExternal,
   dashboardAction, fetchContainerTags
 } from '../api'
-import { compareSemver } from '../utils/versionCheck'
+import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
@@ -665,7 +665,7 @@ function _relativeTime(iso) {
 function _computeContainerSub(c, knownLatest) {
   const latestTag = knownLatest[c.id]
   if (!latestTag || !c.running_version) return c.image
-  const severity = compareSemver(c.running_version, latestTag)
+  const severity = compareBuildTag(c.running_version, latestTag)
   const imageName = c.image.split('/').pop().split(':')[0]
   if (severity === 'major') return { text: `${imageName}: not latest`, cls: 'text-[#b04020]' }
   if (severity === 'minor' || severity === 'patch') return { text: `${imageName}: not latest`, cls: 'text-[#92601a]' }
