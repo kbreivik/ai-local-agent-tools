@@ -13,7 +13,7 @@ const INFRA_SECTION_KEYS = [
   { key: 'containers_local', label: 'Docker',   group: 'infra' },
   { key: 'containers_swarm', label: 'Swarm',    group: 'infra' },
   { key: 'vms',              label: 'VMs',      group: 'infra' },
-  { key: 'external',         label: 'Network',  group: 'infra' },
+  { key: 'external',         label: 'External', group: 'infra' },
 ]
 
 export const ALL_CARD_KEYS = [...STATUS_CARD_KEYS, ...INFRA_SECTION_KEYS]
