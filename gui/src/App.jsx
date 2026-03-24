@@ -303,8 +303,34 @@ function SubBar() {
           <span style={{ color: wsState === 'connected' ? '#22c55e' : wsState === 'connecting' ? '#eab308' : '#9ca3af', fontSize: '0.6rem', lineHeight: 1 }}>●</span>
         </div>
         {health?.version && (
-          <div className="flex items-center px-3 border-l border-gray-200 h-8">
-            <span className="text-gray-400 text-xs font-mono">v{health.version}</span>
+          <div className="relative flex items-center px-3 border-l border-gray-200 h-8 group">
+            <span className="text-gray-400 text-xs font-mono cursor-default select-none">
+              v{health.version}
+            </span>
+            {health?.build_info && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 hidden group-hover:block">
+                <div className="bg-slate-800 border border-slate-700 rounded px-2.5 py-2 w-[210px] shadow-lg">
+                  <div className="grid gap-x-3 gap-y-0.5" style={{ gridTemplateColumns: 'auto 1fr' }}>
+                    <span className="text-slate-500 text-xs">commit</span>
+                    <span className="font-mono text-indigo-300 text-xs">{health.build_info.commit}</span>
+                    <span className="text-slate-500 text-xs">branch</span>
+                    <span className="font-mono text-emerald-400 text-xs">{health.build_info.branch}</span>
+                    <span className="text-slate-500 text-xs">built</span>
+                    <span className="font-mono text-slate-200 text-xs">
+                      {health.build_info.built_at !== 'unknown'
+                        ? health.build_info.built_at.replace('T', ' ').replace('Z', ' UTC')
+                        : 'unknown'}
+                    </span>
+                    <span className="text-slate-500 text-xs">build</span>
+                    <span className="font-mono text-slate-200 text-xs">
+                      {health.build_info.build_number === 'local'
+                        ? 'local'
+                        : `#${health.build_info.build_number}`}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -34,6 +34,22 @@ from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
 from mcp_server.tools.skills import loader as _skill_loader
 from mcp_server.tools.skills import registry as _skill_registry
+import json as _json
+
+def _load_build_info() -> dict | None:
+    """Load api/build_info.json if present. Returns None if absent.
+
+    In the container: main.py is at /app/api/main.py and build_info.json
+    is at /app/api/build_info.json — so Path(__file__).parent is correct.
+    Locally: same relative layout (api/main.py → api/build_info.json).
+    """
+    path = Path(__file__).parent / "build_info.json"
+    try:
+        return _json.loads(path.read_text())
+    except (OSError, _json.JSONDecodeError):
+        return None
+
+_BUILD_INFO = _load_build_info()
 
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", str(DEFAULT_API_PORT)))
@@ -54,33 +70,37 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _start_logger()
     await _start_session_store()
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    if _BUILD_INFO:
+        _log.info("Build info: v%s commit=%s branch=%s build=#%s",
+                  _BUILD_INFO.get("version"), _BUILD_INFO.get("commit"),
+                  _BUILD_INFO.get("branch"), _BUILD_INFO.get("build_number"))
+    else:
+        _log.warning("build_info.json not found — run scripts/gen_build_info.py before docker build")
     # Seed settings from env vars on first run (no-op if already seeded), then
     # mirror DB → os.environ so collectors pick up user-saved values on restart.
     try:
         _seed_settings()
         _sync_env()
     except Exception as e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("Settings seed/sync skipped: %s", e)
+        _log.warning("Settings seed/sync skipped: %s", e)
     collector_manager.start_all()
     # Load dynamic skills from modules/ into memory so skill_execute works after restart
     try:
         _skill_registry.init_db()
         result = _skill_loader.load_all_skills(None)
         _skill_loader.scan_imports(None)
-        import logging as _logging
-        _logging.getLogger(__name__).info(
+        _log.info(
             "Skills loaded: %d ok, %d failed", len(result["loaded"]), len(result["failed"])
         )
     except Exception as e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("Skill load skipped: %s", e)
+        _log.warning("Skill load skipped: %s", e)
     # Ingest runbooks into MuninnDB (non-blocking — failures are logged, not raised)
     try:
         await ingest_runbooks()
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("Memory ingest skipped: %s", e)
+        _log.warning("Memory ingest skipped: %s", e)
     yield
     collector_manager.stop_all()
     await _close_memory()
@@ -166,7 +186,7 @@ async def active_sessions(user: str = Depends(get_current_user)):
 
 @app.get("/api/health")
 async def health():
-    return {
+    response = {
         "status": "ok",
         "service": APP_NAME,
         "version": APP_VERSION,
@@ -174,6 +194,9 @@ async def health():
         "ws_clients": manager.active_count,
         "network": _get_host_ips(),
     }
+    if _BUILD_INFO:
+        response["build_info"] = {k: v for k, v in _BUILD_INFO.items() if k != "version"}
+    return response
 
 
 @app.websocket("/ws/output")
