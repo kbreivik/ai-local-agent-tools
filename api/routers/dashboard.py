@@ -289,16 +289,22 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
         client, container = _resolve_container(container_id)
         image_name = container.attrs["Config"]["Image"]
 
+        auth_config = None
+        if image_name.startswith("ghcr.io/"):
+            token = os.environ.get("GHCR_TOKEN", "")
+            if token:
+                auth_config = {"username": "token", "password": token}
+
         if tag:
             # Pull the versioned image, then re-tag it as the container's current image
             # so container.restart() uses the new version.
             bare = image_name.split("@")[0].split(":")[0]
             versioned = f"{bare}:{tag}"
-            pulled = client.images.pull(versioned)
+            pulled = client.images.pull(versioned, auth_config=auth_config)
             current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
             pulled.tag(bare, tag=current_tag)
         else:
-            client.images.pull(image_name)
+            client.images.pull(image_name, auth_config=auth_config)
 
         container.restart()
         return {"ok": True}
