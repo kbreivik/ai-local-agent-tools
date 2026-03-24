@@ -32,7 +32,8 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           VERSION=$(cat VERSION)
-          echo "image_tag=${{ env.IMAGE_NAME }}:${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          BUILD_NUM=${{ github.run_number }}
+          echo "image_tag=${{ env.IMAGE_NAME }}:${VERSION}-${BUILD_NUM}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "version_tag=${{ env.IMAGE_NAME }}:${VERSION}" >> $GITHUB_OUTPUT
           echo "latest_tag=${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
 
