@@ -216,17 +216,19 @@ const SUBBAR_BADGE = {
   research: { label: 'Research', color: '#d8b4fe' },
 }
 
-function SubBar() {
+function SubBar({ onTab }) {
   const { panelOpen, togglePanel } = useCommandPanel()
   const { wsState, agentType, lastAgentType } = useAgentOutput()
   const [stats,  setStats]  = useState(null)
   const [health, setHealth] = useState(null)
+  const [swarmNodes, setSwarmNodes] = useState(null)
 
   useEffect(() => {
     const refreshStats = () => fetchStats().then(setStats).catch(() => setStats(null))
     const loadAll = () => {
       refreshStats()
       fetchHealth().then(setHealth).catch(() => setHealth(null))
+      fetchStatus().then(d => setSwarmNodes(d?.swarm?.nodes ?? null)).catch(() => {})
     }
     loadAll()
     const id = setInterval(loadAll, 30_000)
@@ -274,6 +276,32 @@ function SubBar() {
           </div>
         )}
       </div>
+
+      {/* Compact swarm node strip — click to open Cluster tab */}
+      {swarmNodes?.length > 0 && (
+        <button
+          onClick={() => onTab?.('Cluster')}
+          title="Swarm nodes — click to open Cluster view"
+          className="flex items-center gap-1 px-3 h-full border-l border-gray-200 hover:bg-gray-50 transition-colors shrink-0"
+        >
+          {[...swarmNodes]
+            .sort((a, b) => {
+              if (a.role === 'manager' && b.role !== 'manager') return -1
+              if (a.role !== 'manager' && b.role === 'manager') return 1
+              return (a.hostname || '').localeCompare(b.hostname || '')
+            })
+            .map(n => (
+              <span key={n.id} className="flex items-center gap-0.5" title={`${n.hostname} (${n.role})`}>
+                <span className={`text-[9px] font-bold leading-none ${n.role === 'manager' ? 'text-blue-500' : 'text-gray-400'}`}>
+                  {n.role === 'manager' ? 'M' : 'W'}
+                </span>
+                {n.leader && <span className="text-yellow-400 text-[8px] leading-none">★</span>}
+                <span className={`w-1 h-1 rounded-full ${n.state === 'ready' ? 'bg-green-500' : 'bg-red-500'}`} />
+              </span>
+            ))
+          }
+        </button>
+      )}
 
       <div className="flex items-center ml-auto">
         {/* Agent type indicator */}
@@ -372,9 +400,13 @@ function CommandSidePanel() {
 
 function DashboardView() {
   return (
-    <div className="flex flex-col flex-1 overflow-auto min-h-0">
-      <DashboardCards />
-      <div className="px-5 py-4">
+    <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+      {/* Top section: status cards — own scrollbar */}
+      <div className="flex flex-col min-h-0 overflow-hidden flex-1">
+        <DashboardCards />
+      </div>
+      {/* Bottom section: infra cards — own scrollbar */}
+      <div className="flex-1 min-h-0 overflow-auto border-t border-gray-200 px-5 py-4">
         <ServiceCardsErrorBoundary>
           <ServiceCards showAlertBar={true} />
         </ServiceCardsErrorBoundary>
@@ -439,7 +471,7 @@ function AppShell() {
       <Header activeTab={activeTab} onTab={setActiveTab} />
 
       {/* Row 2: commands toggle + stats + API status */}
-      <SubBar />
+      <SubBar onTab={setActiveTab} />
 
       {/* Main content — CSS Grid controls panel vs content widths */}
       <div
