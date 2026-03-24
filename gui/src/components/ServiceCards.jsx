@@ -157,7 +157,7 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapse
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, cols = 5, children }) {
+function Section({ label, meta, errorCount, cols = 5, filterBar, children }) {
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
@@ -165,6 +165,7 @@ function Section({ label, meta, errorCount, cols = 5, children }) {
         {meta && <span className="text-[10px] text-gray-800">{meta}</span>}
         {errorCount > 0 && <span className="text-[10px] text-red-500/60">{errorCount} issue{errorCount !== 1 ? 's' : ''}</span>}
       </div>
+      {filterBar}
       <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
         {children}
       </div>
@@ -273,12 +274,14 @@ function ContainerCardCollapsed({ c }) {
   )
 }
 
-// ── VM card ───────────────────────────────────────────────────────────────────
+// ── VM / LXC card ─────────────────────────────────────────────────────────────
 
-function VMCardExpanded({ vm, onAction, confirm, showToast }) {
+function ProxmoxCardExpanded({ vm, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+
+  const apiBase = vm.type === 'lxc' ? 'lxc' : 'vms'
 
   const act = async (key, action, msg) => {
     if (msg) {
@@ -286,12 +289,14 @@ function VMCardExpanded({ vm, onAction, confirm, showToast }) {
       if (!ok) return
     }
     setLoading(l => ({ ...l, [key]: true }))
-    const r = await dashboardAction(`vms/${vm.node_api}/${vm.vmid}/${action}`)
+    const r = await dashboardAction(`${apiBase}/${vm.node_api}/${vm.vmid}/${action}`)
     if (!mounted.current) return
     setLoading(l => ({ ...l, [key]: false }))
     if (!r.ok) showToast(r.error || 'Action failed', 'error')
     else { showToast('Done'); onAction() }
   }
+
+  const isLxc = vm.type === 'lxc'
 
   return (
     <>
@@ -305,28 +310,118 @@ function VMCardExpanded({ vm, onAction, confirm, showToast }) {
       <Actions buttons={
         vm.status === 'stopped'
           ? [
-            <ActionBtn key="start" label="Start VM" variant="urgent" loading={loading.start} onClick={() => act('start', 'start', null)} />,
+            <ActionBtn key="start" label={isLxc ? 'Start Container' : 'Start VM'} variant="urgent" loading={loading.start} onClick={() => act('start', 'start', null)} />,
             <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
           ]
           : [
-            <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=kvm&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
+            !isLxc && <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=kvm&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
+            isLxc && <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=lxc&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
             <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
-            <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? The VM will be temporarily unreachable.`)} />,
-          ]
+            isLxc && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', 'stop', `Stop ${vm.name}?`)} />,
+            <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? It will be temporarily unreachable.`)} />,
+          ].filter(Boolean)
       } />
     </>
   )
 }
 
-function VMCardCollapsed({ vm }) {
+function ProxmoxCardCollapsed({ vm }) {
+  const typeBadge = vm.type === 'lxc'
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
   return (
     <>
       <div className="text-[10px] text-[#383850] mb-1">{vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM</div>
       {vm.problem
         ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30 mb-1">⚠ {vm.problem}</div>
-        : <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span>}
+        : <div className="flex items-center">{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></div>}
     </>
   )
+}
+
+// ── Proxmox filter bar ────────────────────────────────────────────────────────
+
+function ProxmoxFilterBar({ items, filters, setFilters }) {
+  const nodes = [...new Set(items.map(v => v.node_api))].sort()
+  const pools = [...new Set(items.map(v => v.pool || '').filter(Boolean))].sort()
+  const hasLxc = items.some(v => v.type === 'lxc')
+  const hasVm  = items.some(v => v.type === 'vm')
+
+  const toggle = (key, val) => setFilters(f => ({ ...f, [key]: f[key] === val ? null : val }))
+
+  const chipBase = 'text-[9px] px-1.5 py-px rounded border cursor-pointer select-none transition-colors'
+  const chip = (active) => active
+    ? `${chipBase} bg-violet-600/30 text-violet-300 border-violet-500/40`
+    : `${chipBase} bg-[#0d0d1a] text-gray-600 border-[#1a1a30] hover:text-gray-400`
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 px-0.5">
+      {/* Node filter */}
+      {nodes.length > 1 && (
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-gray-700">node</span>
+          {nodes.map(n => (
+            <button key={n} className={chip(filters.node === n)} onClick={() => toggle('node', n)}>{n}</button>
+          ))}
+        </div>
+      )}
+      {/* Pool filter */}
+      {pools.length > 0 && (
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-gray-700">pool</span>
+          {pools.map(p => (
+            <button key={p} className={chip(filters.pool === p)} onClick={() => toggle('pool', p)}>{p}</button>
+          ))}
+        </div>
+      )}
+      {/* Type filter */}
+      {hasLxc && hasVm && (
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-gray-700">type</span>
+          <button className={chip(filters.type === 'vm')}  onClick={() => toggle('type', 'vm')}>VM</button>
+          <button className={chip(filters.type === 'lxc')} onClick={() => toggle('type', 'lxc')}>LXC</button>
+        </div>
+      )}
+      {/* Status filter */}
+      <div className="flex items-center gap-1">
+        <span className="text-[9px] text-gray-700">status</span>
+        <button className={chip(filters.status === 'running')} onClick={() => toggle('status', 'running')}>running</button>
+        <button className={chip(filters.status === 'stopped')} onClick={() => toggle('status', 'stopped')}>stopped</button>
+      </div>
+      {/* Name prefix filter */}
+      <div className="flex items-center gap-1">
+        <span className="text-[9px] text-gray-700">name</span>
+        <input
+          type="text"
+          placeholder="hp1-"
+          value={filters.name || ''}
+          onChange={e => setFilters(f => ({ ...f, name: e.target.value || null }))}
+          className="text-[9px] w-16 bg-[#0d0d1a] border border-[#1a1a30] rounded px-1.5 py-px text-gray-400 placeholder-gray-700 focus:outline-none focus:border-violet-500/40"
+        />
+        {filters.name && (
+          <button className="text-[9px] text-gray-700 hover:text-gray-500" onClick={() => setFilters(f => ({ ...f, name: null }))}>✕</button>
+        )}
+      </div>
+      {/* Clear all */}
+      {(filters.node || filters.pool || filters.type || filters.status || filters.name) && (
+        <button
+          className="text-[9px] text-gray-700 hover:text-violet-400 ml-1"
+          onClick={() => setFilters({})}
+        >clear</button>
+      )}
+    </div>
+  )
+}
+
+function applyProxmoxFilters(items, filters) {
+  return items.filter(v => {
+    if (filters.node   && v.node_api !== filters.node)              return false
+    if (filters.pool   && (v.pool || '') !== filters.pool)          return false
+    if (filters.type   && v.type !== filters.type)                  return false
+    if (filters.status && v.status !== filters.status)              return false
+    if (filters.name   && !v.name.toLowerCase().includes(filters.name.toLowerCase())) return false
+    return true
+  })
 }
 
 // ── External service card ─────────────────────────────────────────────────────
@@ -380,7 +475,7 @@ function AlertBar({ containers, swarm, vms, external }) {
   let idx = 0
   for (const c of containers?.containers || []) if (c.problem) issues.push({ sev: c.dot, text: `${c.name} ${c.problem}`, idx: idx++ })
   for (const s of swarm?.services || []) if (s.problem) issues.push({ sev: s.dot, text: `${s.name} ${s.problem}`, idx: idx++ })
-  for (const v of vms?.vms || []) if (v.problem) issues.push({ sev: v.dot, text: `${v.name} ${v.problem}`, idx: idx++ })
+  for (const v of [...(vms?.vms || []), ...(vms?.lxc || [])]) if (v.problem) issues.push({ sev: v.dot, text: `${v.name} ${v.problem}`, idx: idx++ })
   for (const e of external?.services || []) if (e.problem) issues.push({ sev: e.dot, text: `${e.name} ${e.problem}`, idx: idx++ })
   if (!issues.length) return null
   const SEV_ORDER = { red: 0, amber: 1, grey: 2, green: 3 }
@@ -422,6 +517,7 @@ export default function ServiceCards({ showAlertBar = false }) {
   const [external, setExternal]     = useState(null)
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const [proxmoxFilters, setProxmoxFilters] = useState({})
   const { pending, confirm, resolve } = useConfirm()
   const { toasts, show: showToast } = useToast()
 
@@ -502,17 +598,41 @@ export default function ServiceCards({ showAlertBar = false }) {
           ))}
         </Section>
 
-        {/* VMs · Proxmox */}
-        <Section label="VMs · Proxmox Cluster" meta={[...new Set((vms?.vms || []).map(v => v.node))].join(' · ') || 'no data'} errorCount={errorCount(vms?.vms)} cols={4}>
-          {(vms?.vms || []).map(vm => (
-            <InfraCard
-              key={vm.vmid} cardKey={`v-${vm.vmid}`} openKey={openKey} setOpenKey={setOpenKey}
-              dot={vm.dot} name={vm.name} sub={`VM ${vm.vmid} · ${vm.node}`} net={vm.ip}
-              collapsed={<VMCardCollapsed vm={vm} />}
-              expanded={<VMCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
-            />
-          ))}
-        </Section>
+        {/* VMs + LXC · Proxmox */}
+        {(() => {
+          const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
+          const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+          const nodeSet = [...new Set(allItems.map(v => v.node))].join(' · ') || 'no data'
+          const vmCount = (vms?.vms || []).length
+          const lxcCount = (vms?.lxc || []).length
+          const metaStr = `${nodeSet} · ${vmCount} VM${vmCount !== 1 ? 's' : ''} · ${lxcCount} LXC`
+          return (
+            <Section
+              label="Proxmox Cluster"
+              meta={metaStr}
+              errorCount={errorCount(allItems)}
+              cols={4}
+              filterBar={<ProxmoxFilterBar items={allItems} filters={proxmoxFilters} setFilters={setProxmoxFilters} />}
+            >
+              {filtered.length === 0 && allItems.length > 0 && (
+                <div className="col-span-4 text-[10px] text-gray-700 py-2">no items match filter</div>
+              )}
+              {filtered.map(vm => (
+                <InfraCard
+                  key={`${vm.type}-${vm.vmid}`}
+                  cardKey={`v-${vm.type}-${vm.vmid}`}
+                  openKey={openKey} setOpenKey={setOpenKey}
+                  dot={vm.dot}
+                  name={vm.name}
+                  sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
+                  net={vm.ip || ''}
+                  collapsed={<ProxmoxCardCollapsed vm={vm} />}
+                  expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
+                />
+              ))}
+            </Section>
+          )
+        })()}
 
         {/* External Services */}
         <Section
