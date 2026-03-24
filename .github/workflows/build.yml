@@ -34,6 +34,7 @@ jobs:
           VERSION=$(cat VERSION)
           echo "image_tag=${{ env.IMAGE_NAME }}:${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "version_tag=${{ env.IMAGE_NAME }}:${VERSION}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
 
       - name: Sync package.json version
         run: |
@@ -59,6 +60,7 @@ jobs:
           tags: |
             ${{ steps.tag.outputs.image_tag }}
             ${{ steps.tag.outputs.version_tag }}
+            ${{ steps.tag.outputs.latest_tag }}
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
