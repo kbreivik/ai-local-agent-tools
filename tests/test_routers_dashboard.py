@@ -596,3 +596,32 @@ class TestContainerTags:
              patch("httpx.get", return_value=mock_resp):
             r = client.get("/api/dashboard/containers/abc123/tags")
         assert r.status_code == 503
+
+
+def test_pull_container_with_tag(client):
+    """POST /containers/{id}/pull?tag=1.11.0 pulls versioned image, re-tags it, and restarts."""
+    with patch("docker.DockerClient") as mock_dc:
+        mock_container = MagicMock()
+        mock_container.attrs = {"Config": {"Image": "ghcr.io/kbreivik/hp1-ai-agent:latest"}}
+        mock_pulled_image = MagicMock()
+        mock_dc.return_value.containers.get.return_value = mock_container
+        mock_dc.return_value.images.pull.return_value = mock_pulled_image
+
+        r = client.post("/api/dashboard/containers/abc123/pull?tag=1.11.0")
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    # Versioned image was pulled (ghcr.io/kbreivik/hp1-ai-agent:1.11.0)
+    pull_calls = mock_dc.return_value.images.pull.call_args_list
+    assert any("1.11.0" in str(call) for call in pull_calls), \
+        f"Expected versioned pull, got: {pull_calls}"
+
+    # Re-tagged as :latest (the container's current image tag)
+    mock_pulled_image.tag.assert_called_once()
+    tag_args = mock_pulled_image.tag.call_args
+    assert "latest" in str(tag_args), \
+        f"Expected re-tag to :latest, got: {tag_args}"
+
+    # Container was restarted
+    mock_container.restart.assert_called_once()
