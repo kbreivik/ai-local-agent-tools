@@ -79,13 +79,25 @@ def service_rollback(name: str) -> dict:
 
 @mcp.tool()
 def node_drain(node_id: str) -> dict:
-    """Set a node to DRAIN availability before maintenance. ONLY use to drain — never to activate. To restore a drained node to active, use node_activate instead."""
+    """Drain a Swarm node before maintenance. Requires plan_action() approval first.
+    IMPORTANT: node_id must be the Docker Swarm hex node ID — NOT the hostname.
+    Reverse with node_activate(node_id=<same hex id>).
+    HP1 node IDs: manager-01=yxm2ust947ch, manager-02=tzrptdzsvggh, manager-03=z7zscpi5dxe9
+                  worker-01=tyimr0p3dsow,  worker-02=scdz8rfwou0i,  worker-03=g7nkt24xs0oq
+    Example: node_drain(node_id='tyimr0p3dsow')  # drains worker-01
+    """
     return swarm.node_drain(node_id)
 
 
 @mcp.tool()
 def node_activate(node_id: str) -> dict:
-    """Set a node to ACTIVE availability. Use this to restore a drained or paused node so it can accept tasks again. Do NOT use node_drain for this — use node_activate."""
+    """Re-activate a drained Swarm node.
+    IMPORTANT: node_id must be the Docker Swarm hex node ID — NOT the hostname.
+    Always call swarm_status() first to resolve hostname → node_id.
+    HP1 node IDs: manager-01=yxm2ust947ch, manager-02=tzrptdzsvggh, manager-03=z7zscpi5dxe9
+                  worker-01=tyimr0p3dsow,  worker-02=scdz8rfwou0i,  worker-03=g7nkt24xs0oq
+    Example: node_activate(node_id='yxm2ust947ch')  # activates manager-01
+    """
     return swarm.node_activate(node_id)
 
 
@@ -142,9 +154,20 @@ def checkpoint_restore(label: str) -> dict:
 
 
 @mcp.tool()
-def audit_log(action: str, result: str) -> dict:
-    """Structured log of every agent decision."""
-    return orchestration.audit_log(action, result)
+def audit_log(action: str, result: str, target: str = "", details: str = "") -> dict:
+    """Log an agent action to the audit table.
+    action: verb (upgrade, drain, create, restart, check)
+    result: ok | failed | escalated | skipped | error
+    target: resource acted on e.g. 'kafka', 'manager-01' (optional)
+    details: additional context (optional)
+    Note: called at most once per run — subsequent calls are skipped automatically.
+    """
+    full_result = result
+    if target:
+        full_result += f" | target={target}"
+    if details:
+        full_result += f" | {details}"
+    return orchestration.audit_log(action, full_result)
 
 
 @mcp.tool()
@@ -437,21 +460,45 @@ def skill_regenerate(name: str, backend: str = "") -> dict:
 
 # ── Skill v3: Discovery, dispatcher, live validation ─────────────────────────
 
+_HP1_DEFAULT_HOSTS = [
+    {"address": "192.168.199.10"},
+    {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
+    {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
+    {"address": "192.168.199.40"},
+    {"address": "192.168.1.5", "port": 8006},
+    {"address": "192.168.1.6", "port": 8006},
+    {"address": "192.168.1.7", "port": 8006},
+]
+
 @mcp.tool()
-def discover_environment(hosts: list) -> dict:
-    """Scan hosts and auto-identify services via deterministic fingerprinting.
-    Each host: {"address": "192.168.1.1"} or {"address": "...", "port": 8006}.
-    Runs 4-phase pipeline: ENUMERATE → IDENTIFY → CATALOG → RECOMMEND.
-    Returns identified services, existing skill coverage, and skill_create recommendations.
-    No LLM calls — pure HTTP probing against known service fingerprints."""
-    return skill_tools.discover_environment(hosts)
+def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
+    """Scan hosts for services via deterministic fingerprinting. No LLM calls.
+    Returns identified services, skill coverage gaps, and skill_create recommendations.
+    If called with no arguments, scans all HP1 homelab hosts automatically.
+    hosts: list of {"address": "...", "port": N} dicts (optional)
+    hosts_json: JSON string alternative to hosts param (optional)
+    Examples:
+      discover_environment()
+      discover_environment(hosts=[{"address": "192.168.199.40"}])
+    """
+    import json as _json
+    if hosts_json:
+        try:
+            hosts = _json.loads(hosts_json)
+        except Exception:
+            pass
+    return skill_tools.discover_environment(hosts or _HP1_DEFAULT_HOSTS)
 
 
 @mcp.tool()
 def skill_execute(name: str, **kwargs) -> dict:
-    """Execute a dynamic skill by name. Call skill_search() first to discover available skills.
-    Pass skill parameters as keyword arguments matching the skill's parameter schema.
-    Example: skill_execute(name='proxmox_vm_status', node='pve1')"""
+    """Execute a dynamic skill by name. Call skill_search() first to find available skills.
+    Pass skill parameters as direct keyword arguments — do NOT wrap in arguments= or kwargs_json=.
+    Examples:
+      skill_execute(name='proxmox_vm_status', host='192.168.1.5')
+      skill_execute(name='http_health_check', url='http://127.0.0.1:8000/api/health')
+      skill_execute(name='kafka_broker_status')
+    """
     return skill_tools.skill_execute(name, **kwargs)
 
 
