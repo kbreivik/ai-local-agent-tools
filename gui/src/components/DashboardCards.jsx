@@ -581,8 +581,20 @@ export default function DashboardCards({ activeFilters = [] }) {
   const [loading,     setLoading]     = useState(true)
   const [lastUpdated, setLastUpdated] = useState(null)
 
+  // Related-filter logic: infra section selections also surface their status cards.
+  // e.g. selecting "Swarm" (containers_swarm) should reveal Nodes/Services/Kafka cards.
+  const RELATED = {
+    swarm_nodes:      ['containers_swarm'],
+    swarm_services:   ['containers_swarm'],
+    kafka_brokers:    ['containers_swarm'],
+    system_summary:   ['containers_local'],
+  }
+  const isVisible = (key) => {
+    if (activeFilters.includes(key)) return true
+    return (RELATED[key] || []).some(rel => activeFilters.includes(rel))
+  }
   // Returns display style: undefined (visible) or 'none' (hidden, not unmounted)
-  const vis = (key) => activeFilters.includes(key) ? {} : { display: 'none' }
+  const vis = (key) => isVisible(key) ? {} : { display: 'none' }
 
   const refresh = useCallback(async () => {
     setLoading(true)
