@@ -813,6 +813,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         last_reasoning = prior_verdict["summary"] if prior_verdict else ""
         if last_reasoning:
             await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+        await logger_mod.flush_now()                                      # drain queue before task exits
         await logger_mod.complete_operation(operation_id, final_status)
     finally:
         # Release plan lock — guaranteed even if record_outcome or logger calls throw
@@ -875,6 +876,15 @@ async def stop_agent(req: StopRequest):
     if not req.session_id:
         return {"status": "error", "message": "session_id required"}
     _cancel_flags[req.session_id] = True
+    try:
+        from api.db.base import get_engine
+        from api.db import queries as q
+        async with get_engine().begin() as conn:
+            op = await q.get_operation_by_session(conn, req.session_id)
+            if op and op.get("status") == "running":
+                await q.complete_operation(conn, op["id"], "stopped")
+    except Exception as _e:
+        log.debug("stop_agent DB update failed: %s", _e)
     return {"status": "ok", "message": f"Stop signal sent for session '{req.session_id}'"}
 
 
