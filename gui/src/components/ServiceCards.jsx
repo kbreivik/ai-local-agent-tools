@@ -203,12 +203,44 @@ function Actions({ buttons }) {
 
 // ── Container card ─────────────────────────────────────────────────────────────
 
-function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast }) {
+function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded }) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
   const [scaleVal, setScaleVal] = useState(1)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+
+  const [tags, setTags]             = useState([])
+  const [tagsLoading, setTagsLoading] = useState(false)
+  const [tagsError, setTagsError]   = useState(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [selectedTag, setSelectedTag] = useState('')
+
+  useEffect(() => {
+    if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
+    setTagsLoading(true)
+    fetchContainerTags(c.id)
+      .then(data => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        if (data.error && !data.tags?.length) {
+          setTagsError(data.error)
+          return
+        }
+        const t = data.tags || []
+        setTags(t)
+        setTagsError(null)
+        if (t[0]) {
+          setSelectedTag(t[0])
+          onTagsLoaded?.(c.id, t[0])
+        }
+      })
+      .catch(err => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        setTagsError(err?.message || 'fetch failed')
+      })
+  }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const act = async (key, path, body, msg) => {
     if (msg) {
@@ -240,8 +272,112 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast }) {
       <Divider />
       {(c.volumes || []).map(v => <VolBar key={v.name || v.mountpoint} vol={v} />)}
       {c.volumes?.length > 0 && <Divider />}
+      {!isSwarm && c.image?.startsWith('ghcr.io/') && (() => {
+        const severity = (c.running_version && tags[0])
+          ? compareSemver(c.running_version, tags[0])
+          : null
+        const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
+
+        return (
+          <>
+            <Divider />
+            {/* Running version info rows */}
+            {c.running_version && (
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className="text-gray-700">Running</span>
+                <span className="text-gray-500 font-mono">{c.running_version}</span>
+              </div>
+            )}
+            {c.built_at && (
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className="text-gray-700">Built</span>
+                <span className="text-gray-500 font-mono">{c.built_at.slice(0, 10)}</span>
+              </div>
+            )}
+            {/* Status badge */}
+            <div className="flex justify-between text-[9px] mb-1.5">
+              <span className="text-gray-700">Status</span>
+              {tagsLoading
+                ? <span className="text-gray-700">…</span>
+                : tagsError
+                ? <span className="text-gray-700">version check unavailable</span>
+                : !tags.length
+                ? <span className="text-gray-700">no versioned tags</span>
+                : severity === 'current'
+                ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                : hasUpdate
+                ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
+                    ⬆ {tags[0]} {severity}
+                  </span>
+                : null
+              }
+            </div>
+
+            {/* Update drawer trigger — only when update available */}
+            {hasUpdate && !tagsError && (
+              <>
+                <ActionBtn
+                  key="update"
+                  label={drawerOpen ? '✕ Cancel Update' : `⬆ Update Available — Choose Version`}
+                  variant={severity === 'major' ? 'urgent' : 'primary'}
+                  onClick={() => setDrawerOpen(o => !o)}
+                />
+                {drawerOpen && (
+                  <div className="mt-1 mb-2 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
+                    <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
+                    <select
+                      className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag}
+                      onChange={e => setSelectedTag(e.target.value)}
+                    >
+                      {tags.map(t => (
+                        <option key={t} value={t}>
+                          {t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ActionBtn
+                      key="pull-versioned"
+                      label={`↓ Pull ${selectedTag}`}
+                      variant="primary"
+                      loading={loading['pull-versioned']}
+                      onClick={() => {
+                        act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null)
+                        setDrawerOpen(false)
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Re-pull when up to date */}
+            {!hasUpdate && !tagsError && tags.length > 0 && severity === 'current' && (
+              <ActionBtn
+                key="repull"
+                label="↓ Re-pull Image"
+                loading={loading.pull}
+                onClick={() => act('pull', `containers/${c.id}/pull`, null, null)}
+              />
+            )}
+
+            {/* Fallback pull when version check unavailable or no tags */}
+            {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') && (
+              <ActionBtn
+                key="pull"
+                label="↓ Pull Latest"
+                variant={pullColor}
+                loading={loading.pull}
+                onClick={() => act('pull', pullPath, null, null)}
+              />
+            )}
+          </>
+        )
+      })()}
       <Actions buttons={[
-        <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />,
+        !c.image?.startsWith('ghcr.io/') && !isSwarm && (
+          <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
+        ),
         <ActionBtn key="logs" label="View Logs" loading={loading.logs} onClick={() => { window.location.hash = '#logs' }} />,
         !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
         !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
