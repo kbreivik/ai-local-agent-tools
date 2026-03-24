@@ -4,7 +4,7 @@
  * Target card heights: Nodes~110, Brokers~120, Services~130, ES~90, Muninn~70, Summary~100
  */
 import { useState, useEffect, useCallback } from 'react'
-import { fetchStatus, fetchMemoryHealth, fetchHealth } from '../api'
+import { fetchStatus, fetchMemoryHealth, fetchHealth, dashboardAction } from '../api'
 import { useOptions } from '../context/OptionsContext'
 import VersionBadge from '../utils/VersionBadge'
 import CardFilterBar, { ALL_CARD_KEYS } from './CardFilterBar'
@@ -441,6 +441,39 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
   const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
   const sortedLanIPs     = sortIPs(net.lan_ips ?? [])
 
+  const [updateState, setUpdateState] = useState('idle') // idle | pulling | restarting | done | error
+  const [updateError, setUpdateError] = useState(null)
+
+  const triggerUpdate = async () => {
+    setUpdateState('pulling')
+    setUpdateError(null)
+    try {
+      const r = await dashboardAction('self-update')
+      if (r.ok) {
+        setUpdateState('restarting')
+        // Agent will go down ~5s after response. Poll /api/health until it comes back.
+        await new Promise(resolve => setTimeout(resolve, 6000))
+        for (let i = 0; i < 20; i++) {
+          try {
+            const h = await fetchHealth()
+            if (h?.status === 'ok') { setUpdateState('done'); onRefresh(); return }
+          } catch (_) {}
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+        setUpdateState('done') // give up polling, assume it worked
+      } else {
+        setUpdateError(r.error || 'Update failed')
+        setUpdateState('error')
+      }
+    } catch (e) {
+      setUpdateError(String(e))
+      setUpdateState('error')
+    }
+  }
+
+  const updateLabel = { idle: '↑ Update', pulling: 'Pulling…', restarting: 'Restarting…', done: '✓ Done', error: '✕ Error' }[updateState]
+  const updateDisabled = updateState === 'pulling' || updateState === 'restarting'
+
   return (
     <Card title="System Summary" health={overallHealth} lastUpdated={lastUpdated}
           onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
@@ -461,6 +494,28 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
                 <span style={{ color: '#4b5563', fontSize: '0.75rem' }}>WS clients</span>
                 <span style={S.rowMono}>{apiHealth.ws_clients}</span>
               </div>
+            )}
+          </div>
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={triggerUpdate}
+              disabled={updateDisabled}
+              style={{
+                fontSize: '0.7rem', padding: '2px 10px', borderRadius: 4, cursor: updateDisabled ? 'not-allowed' : 'pointer',
+                border: '1px solid', transition: 'opacity .15s',
+                opacity: updateDisabled ? 0.6 : 1,
+                background: updateState === 'done' ? '#dcfce7' : updateState === 'error' ? '#fee2e2' : '#eff6ff',
+                color:      updateState === 'done' ? '#15803d' : updateState === 'error' ? '#dc2626' : '#1d4ed8',
+                borderColor:updateState === 'done' ? '#86efac' : updateState === 'error' ? '#fca5a5' : '#93c5fd',
+              }}
+            >
+              {updateLabel}
+            </button>
+            {updateState === 'restarting' && (
+              <span style={{ fontSize: '0.68rem', color: '#6b7280' }}>agent restarting…</span>
+            )}
+            {updateError && (
+              <span style={{ fontSize: '0.68rem', color: '#dc2626', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={updateError}>{updateError}</span>
             )}
           </div>
           {sortedCollectors.length > 0 && (

@@ -326,3 +326,50 @@ def _do_probe(slug: str) -> dict:
         return {"reachable": r.status_code < 500, "latency_ms": latency_ms}
     except Exception:
         return {"reachable": False, "latency_ms": None}
+
+
+# ── Self-update ────────────────────────────────────────────────────────────────
+
+@router.post("/self-update")
+async def self_update(user: str = Depends(get_current_user)):
+    """Pull latest image from GHCR and restart via docker compose.
+
+    Returns 202 immediately. The compose up runs in a background thread after a
+    short delay so this response has time to reach the client before the
+    container restarts.
+    """
+    image = os.environ.get("HP1_IMAGE", "ghcr.io/kbreivik/hp1-ai-agent:latest")
+    compose_file = _find_compose_file()
+    if not compose_file:
+        return {"ok": False, "error": "docker-compose.yml not found — cannot restart"}
+
+    asyncio.get_event_loop().run_in_executor(None, _do_self_update, image, compose_file)
+    return {"ok": True, "image": image, "message": "Update triggered — agent will restart in ~5s"}
+
+
+def _find_compose_file() -> str | None:
+    import pathlib
+    candidates = [
+        pathlib.Path("/app/docker/docker-compose.yml"),
+        pathlib.Path("/opt/hp1-agent/docker/docker-compose.yml"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
+def _do_self_update(image: str, compose_file: str) -> None:
+    import subprocess, time
+    log.info("self-update: pulling %s", image)
+    try:
+        subprocess.run(["docker", "pull", image], check=True, timeout=120)
+        log.info("self-update: pull complete, restarting via compose in 3s")
+        time.sleep(3)
+        subprocess.run(
+            ["docker", "compose", "-f", compose_file, "up", "-d",
+             "--remove-orphans", "--pull", "never"],
+            check=True, timeout=60,
+        )
+    except Exception as e:
+        log.error("self-update failed: %s", e)
