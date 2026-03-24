@@ -183,7 +183,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
         raise IOError(f"GHCR unreachable: {exc}") from exc
     if tok_resp.status_code in (401, 403):
         raise RuntimeError(f"GHCR auth failed: HTTP {tok_resp.status_code}")
-    if not tok_resp.ok:
+    if not tok_resp.is_success:
         raise IOError(f"GHCR token error: HTTP {tok_resp.status_code}")
     bearer = tok_resp.json().get("token", "")
 
@@ -200,7 +200,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
         if r.status_code in (401, 403):
             raise RuntimeError(f"GHCR auth failed: HTTP {r.status_code}")
-        if not r.ok:
+        if not r.is_success:
             raise IOError(f"GHCR error: HTTP {r.status_code}")
 
         all_tags.extend(r.json().get("tags") or [])
