@@ -21,6 +21,7 @@ mcp.json
 logs/*.log
 checkpoints/*.json
 .code-index/
+api/build_info.json
 data/*.db
 data/*.db-shm
 data/*.db-wal

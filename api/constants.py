@@ -6,8 +6,21 @@ Change here to update everywhere.
 
 # ── Application identity ──────────────────────────────────────────────────────
 
-APP_NAME    = "HP1-AI-Agent"
-APP_VERSION = "1.9.0"
+APP_NAME = "HP1-AI-Agent"
+
+# ── Version management ───────────────────────────────────────────────────────
+
+from pathlib import Path as _Path
+
+def _read_version() -> str:
+    try:
+        return _Path(__file__).parent.parent.joinpath("VERSION").read_text().strip()
+    except OSError:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("VERSION file not found — defaulting to 'unknown'")
+        return "unknown"
+
+APP_VERSION = _read_version()
 
 # ── Network ports ─────────────────────────────────────────────────────────────
 
