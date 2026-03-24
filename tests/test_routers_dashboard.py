@@ -515,20 +515,22 @@ class TestContainerTags:
         state["containers"][0]["image"] = "ghcr.io/kbreivik/hp1-ai-agent:latest"
         snap["state"] = json.dumps(state)
 
-        fake_ghcr_response = {
-            "tags": ["latest", "1.11.0", "1.10.0", "1.9.2", "sha-abc123"]
-        }
-
         import os
+        # Two httpx.get calls: (1) token exchange → {"token": "..."}, (2) tags list → {"tags": [...]}
+        token_resp = MagicMock()
+        token_resp.ok = True
+        token_resp.status_code = 200
+        token_resp.json.return_value = {"token": "fake-bearer"}
+
+        tags_resp = MagicMock()
+        tags_resp.ok = True
+        tags_resp.status_code = 200
+        tags_resp.json.return_value = {"tags": ["latest", "1.11.0", "1.10.0", "1.9.2", "sha-abc123"]}
+        tags_resp.headers = {}
+
         with patch("api.routers.dashboard.q.get_latest_snapshot", new=AsyncMock(return_value=snap)), \
              patch.dict(os.environ, {"GHCR_TOKEN": "test-token"}), \
-             patch("httpx.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.ok = True
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = fake_ghcr_response
-            mock_resp.headers = {}
-            mock_get.return_value = mock_resp
+             patch("httpx.get", side_effect=[token_resp, tags_resp]):
             r = client.get("/api/dashboard/containers/abc123/tags")
 
         assert r.status_code == 200

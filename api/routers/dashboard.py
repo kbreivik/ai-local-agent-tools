@@ -171,7 +171,23 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
         raise RuntimeError("GHCR_TOKEN not configured")
 
     repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
-    headers = {"Authorization": f"Bearer {token}"}
+
+    # GHCR v2 API requires OAuth token exchange — PAT cannot be used directly as Bearer.
+    try:
+        tok_resp = httpx.get(
+            f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io",
+            auth=("token", token),
+            timeout=10,
+        )
+    except Exception as exc:
+        raise IOError(f"GHCR unreachable: {exc}") from exc
+    if tok_resp.status_code in (401, 403):
+        raise RuntimeError(f"GHCR auth failed: HTTP {tok_resp.status_code}")
+    if not tok_resp.ok:
+        raise IOError(f"GHCR token error: HTTP {tok_resp.status_code}")
+    bearer = tok_resp.json().get("token", "")
+
+    headers = {"Authorization": f"Bearer {bearer}"}
     semver_re = re.compile(r"^\d+\.\d+\.\d+$")
     all_tags: list[str] = []
     url = f"https://ghcr.io/v2/{repo}/tags/list?n=100"
