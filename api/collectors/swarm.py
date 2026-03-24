@@ -72,7 +72,8 @@ class SwarmCollector(BaseCollector):
                         active_managers += 1
 
                 if state != "ready" or avail not in ("active",):
-                    degraded_nodes.append(spec.get("Name", "?"))
+                    node_name = spec.get("Name") or desc.get("Hostname", "unknown")
+                    degraded_nodes.append(node_name)
 
                 node_data.append({
                     "id": attrs.get("ID", "")[:12],
@@ -147,9 +148,9 @@ class SwarmCollector(BaseCollector):
                 health = "degraded"
                 parts = []
                 if degraded_nodes:
-                    parts.append(f"nodes not active: {degraded_nodes}")
+                    parts.append(f"nodes not active: {', '.join(degraded_nodes)}")
                 if degraded_services:
-                    parts.append(f"under-replicated: {degraded_services}")
+                    parts.append(f"under-replicated: {', '.join(degraded_services)}")
                 message = "; ".join(parts)
             else:
                 health = "healthy"

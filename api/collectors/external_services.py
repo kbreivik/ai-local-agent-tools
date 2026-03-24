@@ -100,13 +100,15 @@ class ExternalServicesCollector(BaseCollector):
             elif "open_ui_url" in cfg:
                 open_ui = cfg["open_ui_url"]
 
-            if not host_raw:
+            _PLACEHOLDER = ("your-", "change-me", "example.")
+            is_placeholder = any(host_raw.lower().startswith(p) for p in _PLACEHOLDER)
+            if not host_raw or is_placeholder:
                 cards.append({
                     "name": cfg["name"], "slug": cfg["slug"],
                     "service_type": cfg["service_type"],
-                    "host_port": host_display, "summary": "not configured",
+                    "host_port": "not configured", "summary": "not configured",
                     "latency_ms": None, "reachable": False,
-                    "open_ui_url": open_ui, "storage": None,
+                    "open_ui_url": None, "storage": None,
                     "dot": "grey", "problem": "not configured",
                 })
                 continue

@@ -66,11 +66,11 @@ function Dot({ color }) {
 
 function PullBadge({ lastPullAt }) {
   if (!lastPullAt) return <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1010] text-red-400 border border-[#3a1818]">↓ unknown</span>
-  const age = Date.now() - new Date(lastPullAt).getTime()
+  const age = Math.max(0, Date.now() - new Date(lastPullAt).getTime())
   const hours = age / 3600000
   if (hours < 24) {
     const mins = Math.round(age / 60000)
-    const label = mins < 60 ? `${mins} min ago` : `${Math.round(hours)}h ago`
+    const label = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${Math.round(hours)}h ago`
     return <span className="text-[9px] px-1.5 py-px rounded bg-[#0d2a0d] text-green-400 border border-[#1a3a1a]">↓ {label}</span>
   }
   const days = Math.round(hours / 24)
@@ -541,7 +541,8 @@ export default function ServiceCards({ showAlertBar = false }) {
     return () => clearInterval(id)
   }, [load])
 
-  const errorCount = (items) => (items || []).filter(i => i.dot === 'red' || i.dot === 'amber').length
+  // Don't count intentionally stopped resources as issues — only real problems
+  const errorCount = (items) => (items || []).filter(i => i.problem && i.problem !== 'stopped').length
 
   return (
     <div className="flex flex-col gap-6">

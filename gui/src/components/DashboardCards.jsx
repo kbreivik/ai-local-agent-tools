@@ -264,8 +264,8 @@ function SwarmServicesCard({ data, loading, lastUpdated, onRefresh, minHeight, m
           <div style={S.countRow}>
             <span style={S.bigNum}>{services.length}</span>
             <span style={S.countLabel}>services</span>
-            <span style={{ ...S.countStatus, color: allOk ? '#15803d' : '#a16207' }}>
-              {allOk ? 'all healthy' : 'degraded'}
+            <span style={{ ...S.countStatus, color: allOk ? '#15803d' : services.length === 0 ? '#9ca3af' : '#a16207' }}>
+              {allOk ? 'all healthy' : services.length === 0 ? 'empty' : 'degraded'}
             </span>
           </div>
           <div>
