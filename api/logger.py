@@ -90,8 +90,19 @@ async def log_operation_complete(
     status: str,
     duration_ms: int = 0,
 ) -> None:
-    _enqueue(q.complete_operation,
-             operation_id=operation_id, status=status, total_duration_ms=duration_ms)
+    """Write operation completion directly to DB — no queue, guaranteed write."""
+    if not operation_id:
+        return
+    try:
+        async with get_engine().begin() as conn:
+            await q.complete_operation(
+                conn,
+                operation_id=operation_id,
+                status=status,
+                total_duration_ms=duration_ms,
+            )
+    except Exception as e:
+        log.error("log_operation_complete failed for %s: %s", operation_id, e)
 
 
 # Legacy alias
