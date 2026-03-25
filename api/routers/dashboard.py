@@ -485,44 +485,54 @@ def _do_probe(slug: str) -> dict:
 
 @router.post("/self-update")
 async def self_update(user: str = Depends(get_current_user)):
-    """Pull latest image from GHCR and restart via docker compose.
-
-    Returns 202 immediately. The compose up runs in a background thread after a
-    short delay so this response has time to reach the client before the
-    container restarts.
-    """
+    """Pull latest image from GHCR via Docker SDK. Runs synchronously — may take up to 2 min.
+    Returns {"ok": true} when pull is complete; client should then call /self-restart."""
     image = os.environ.get("HP1_IMAGE", "ghcr.io/kbreivik/hp1-ai-agent:latest")
-    compose_file = _find_compose_file()
-    if not compose_file:
-        return {"ok": False, "error": "docker-compose.yml not found — cannot restart"}
-
-    asyncio.get_event_loop().run_in_executor(None, _do_self_update, image, compose_file)
-    return {"ok": True, "image": image, "message": "Update triggered — agent will restart in ~5s"}
-
-
-def _find_compose_file() -> str | None:
-    import pathlib
-    candidates = [
-        pathlib.Path("/app/docker/docker-compose.yml"),
-        pathlib.Path("/opt/hp1-agent/docker/docker-compose.yml"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return str(p)
-    return None
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(None, _pull_image, image)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
-def _do_self_update(image: str, compose_file: str) -> None:
-    import subprocess, time
+@router.post("/self-restart")
+async def self_restart(user: str = Depends(get_current_user)):
+    """Restart the hp1_agent container. Fire-and-forget — agent will go down ~5s after response."""
+    asyncio.get_running_loop().run_in_executor(None, _restart_self_container)
+    return {"ok": True, "message": "Restart triggered — agent will be back in ~15s"}
+
+
+def _pull_image(image: str) -> dict:
+    """Pull a Docker image synchronously via Docker SDK."""
+    import docker
     log.info("self-update: pulling %s", image)
     try:
-        subprocess.run(["docker", "pull", image], check=True, timeout=120)
-        log.info("self-update: pull complete, restarting via compose in 3s")
-        time.sleep(3)
-        subprocess.run(
-            ["docker", "compose", "-f", compose_file, "up", "-d",
-             "--remove-orphans", "--pull", "never"],
-            check=True, timeout=60,
-        )
+        client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        client.images.pull(image)
+        log.info("self-update: pull complete for %s", image)
+        return {"ok": True, "image": image}
     except Exception as e:
-        log.error("self-update failed: %s", e)
+        log.error("self-update pull failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def _restart_self_container() -> None:
+    """Find the hp1_agent container by partial name match and restart it."""
+    import re
+    import docker
+    log.info("self-restart: finding hp1_agent container")
+    try:
+        client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        container = None
+        for c in client.containers.list():
+            clean = re.sub(r'^[0-9a-f]{12}_', '', c.name)
+            if clean == 'hp1_agent' or c.name == 'hp1_agent':
+                container = c
+                break
+        if not container:
+            log.error("self-restart: hp1_agent container not found")
+            return
+        log.info("self-restart: restarting %s", container.name)
+        container.restart()
+    except Exception as e:
+        log.error("self-restart failed: %s", e)

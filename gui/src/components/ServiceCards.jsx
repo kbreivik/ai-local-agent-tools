@@ -417,13 +417,29 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   )
 }
 
-function ContainerCardCollapsed({ c }) {
+function ContainerCardCollapsed({ c, latestTag }) {
+  const severity = (c.running_version && latestTag)
+    ? compareSemver(c.running_version, latestTag)
+    : null
   return (
     <>
       <div className="text-[10px] text-[#383850] mb-1">{c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired} replicas` : '')}</div>
       {c.problem
         ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
         : <PullBadge lastPullAt={c.last_pull_at} />}
+      {c.running_version && (
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[9px] text-gray-700 font-mono">{c.running_version}</span>
+          {severity === 'current' && (
+            <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+          )}
+          {(severity === 'major' || severity === 'minor' || severity === 'patch') && (
+            <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
+              ↑ {latestTag}
+            </span>
+          )}
+        </div>
+      )}
     </>
   )
 }
@@ -690,6 +706,19 @@ export default function ServiceCards({ activeFilters = null }) {
   const onTagsLoaded = useCallback((containerId, latestTag) => {
     setKnownLatest(prev => ({ ...prev, [containerId]: latestTag }))
   }, [])
+
+  // Proactively fetch tags for GHCR containers so version badge shows on collapsed view
+  const fetchedTagIds = useRef(new Set())
+  useEffect(() => {
+    for (const container of containers?.containers || []) {
+      if (!container.image?.startsWith('ghcr.io/')) continue
+      if (fetchedTagIds.current.has(container.id)) continue
+      fetchedTagIds.current.add(container.id)
+      fetchContainerTags(container.id).then(data => {
+        if (data?.tags?.[0]) setKnownLatest(prev => ({ ...prev, [container.id]: data.tags[0] }))
+      }).catch(() => {})
+    }
+  }, [containers])
   const { toasts, show: showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -752,7 +781,7 @@ export default function ServiceCards({ activeFilters = null }) {
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port}
-                collapsed={<ContainerCardCollapsed c={c} />}
+                collapsed={<ContainerCardCollapsed c={c} latestTag={knownLatest[c.id]} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
                   onTagsLoaded={onTagsLoaded}
