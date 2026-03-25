@@ -413,3 +413,29 @@ def escalate(reason: str) -> dict:
         "timestamp": _ts(),
         "message": f"ESCALATED: {reason} — agent halted, human review required",
     }
+
+
+def agent_status() -> dict:
+    """Check agent's own health and performance metrics."""
+    import httpx
+    base = f"http://localhost:{os.environ.get('API_PORT', '8000')}"
+    try:
+        health_r = httpx.get(f"{base}/api/health", timeout=5)
+        health = health_r.json()
+        data = {
+            "version": health.get("version"),
+            "deploy_mode": health.get("deploy_mode"),
+            "ws_clients": health.get("ws_clients"),
+            "build": health.get("build_info", {}).get("commit") if health.get("build_info") else None,
+            "lm_studio": health.get("lm_studio", "unknown"),
+        }
+        try:
+            stats_r = httpx.get(f"{base}/api/logs/stats", timeout=5)
+            stats = stats_r.json()
+            data["success_rate"] = stats.get("success_rate")
+            data["total_operations"] = stats.get("total_operations")
+        except Exception:
+            pass
+        return _ok(data)
+    except Exception as e:
+        return _err(f"agent_status: {e}")

@@ -169,6 +169,30 @@ def kafka_rolling_restart_safe() -> dict:
         return _err(f"kafka_rolling_restart_safe error: {e}")
 
 
+def kafka_topic_list() -> dict:
+    """List all Kafka topics with partition count and replication factor."""
+    try:
+        admin = KafkaAdminClient(
+            bootstrap_servers=_bootstrap(),
+            client_id="hp1-agent-topic-list",
+            request_timeout_ms=8000,
+        )
+        topics = admin.list_topics()
+        metadata = admin.describe_topics(list(topics))
+        result = []
+        for t in metadata:
+            partitions = t.get("partitions", [])
+            result.append({
+                "name": t["name"],
+                "partitions": len(partitions),
+                "replication_factor": len(partitions[0]["replicas"]) if partitions else 0,
+            })
+        admin.close()
+        return _ok({"topics": sorted(result, key=lambda x: x["name"]), "count": len(result)})
+    except Exception as e:
+        return _err(f"kafka_topic_list: {e}")
+
+
 def pre_kafka_check() -> dict:
     """Full Kafka readiness gate — checks all brokers and topics before any Kafka operation.
     Call this tool when asked to 'run pre_kafka_check', 'check kafka readiness', or
