@@ -1,8 +1,24 @@
 """GET /api/alerts — recent alert notifications."""
 from fastapi import APIRouter, Query
-from api.alerts import get_recent, dismiss, dismiss_all
+from api.alerts import get_recent, dismiss, dismiss_all, fire_alert, update_content
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
+
+
+# ── Internal helpers (not HTTP endpoints) ─────────────────────────────────────
+
+def create_alert_internal(
+    concept: str, content: str, tags: list, severity: str = "warning"
+) -> None:
+    """Internal: create a new alert record. Called by collectors, not HTTP."""
+    component = concept.replace("alert:", "")
+    fire_alert(component, severity, content, source="collector")
+
+
+def update_alert_content_internal(concept: str, content: str) -> None:
+    """Internal: update content of the most recent undismissed alert for a concept."""
+    component = concept.replace("alert:", "")
+    update_content(component, content)
 
 
 @router.get("/recent")

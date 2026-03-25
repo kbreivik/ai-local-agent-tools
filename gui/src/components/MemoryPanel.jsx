@@ -367,6 +367,7 @@ export default function MemoryPanel() {
   const [mode, setMode]           = useState('recent')   // 'recent' | 'search' | 'activate' | 'patterns' | 'docs'
   const [loading, setLoading]     = useState(false)
   const [count, setCount]         = useState(0)
+  const [showAlerts, setShowAlerts] = useState(false)
   const inputRef                  = useRef(null)
 
   const loadRecent = useCallback(async () => {
@@ -429,6 +430,10 @@ export default function MemoryPanel() {
   }
 
   const reachable = health?.reachable !== false
+  const alertCount = (engrams).filter(e => e.concept?.startsWith('alert:')).length
+  const visibleEngrams = (mode !== 'recent' || showAlerts)
+    ? engrams
+    : engrams.filter(e => !e.concept?.startsWith('alert:'))
 
   return (
     <div className="flex flex-col h-full text-sm">
@@ -439,6 +444,16 @@ export default function MemoryPanel() {
           <span className={`w-2 h-2 rounded-full ${reachable ? 'bg-green-500' : 'bg-red-600 animate-pulse'}`} />
           {count > 0 && (
             <span className="text-xs text-slate-600 font-mono">{count}</span>
+          )}
+          {mode === 'recent' && alertCount > 0 && (
+            <button
+              onClick={() => setShowAlerts(v => !v)}
+              style={{fontSize:'11px', opacity:0.7, background:'transparent',
+                      border:'1px solid #444', borderRadius:'4px',
+                      padding:'1px 6px', cursor:'pointer', color:'#8b949e'}}
+            >
+              {showAlerts ? 'Hide alerts' : `+${alertCount} alerts`}
+            </button>
           )}
         </div>
         <div className="flex gap-1">
@@ -497,7 +512,7 @@ export default function MemoryPanel() {
                 {mode === 'recent' ? 'No engrams stored yet' : 'No results'}
               </p>
             )}
-            {engrams.map(e => (
+            {visibleEngrams.map(e => (
               <EngramCard key={e.id} engram={e} onDelete={handleDelete} />
             ))}
           </div>

@@ -138,6 +138,15 @@ def fire_alert(
         pass
 
 
+def update_content(component: str, content: str) -> bool:
+    """Update the message of the most recent undismissed alert for a component."""
+    for alert in _alerts:
+        if alert["component"] == component and not alert["dismissed"]:
+            alert["message"] = content
+            return True
+    return False
+
+
 def get_recent(limit: int = 20, include_dismissed: bool = False) -> list[dict]:
     alerts = list(_alerts)[:limit]
     if not include_dismissed:

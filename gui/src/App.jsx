@@ -508,6 +508,89 @@ function CommandSidePanel() {
 }
 
 
+// ── Alerts panel ──────────────────────────────────────────────────────────────
+
+function AlertsPanel() {
+  const [alerts, setAlerts] = React.useState([])
+
+  const fetchAlerts = React.useCallback(() => {
+    fetch('/api/alerts/recent?limit=20&include_dismissed=false')
+      .then(r => r.json())
+      .then(d => setAlerts(d.alerts || []))
+      .catch(() => {})
+  }, [])
+
+  React.useEffect(() => {
+    fetchAlerts()
+    const t = setInterval(fetchAlerts, 30000)
+    return () => clearInterval(t)
+  }, [fetchAlerts])
+
+  const dismiss = (id) => {
+    fetch(`/api/alerts/${id}/dismiss`, { method: 'POST' }).then(fetchAlerts)
+  }
+
+  const dismissAll = () => {
+    fetch('/api/alerts/dismiss-all', { method: 'POST' }).then(fetchAlerts)
+  }
+
+  const severityColor = (s) =>
+    s === 'error' || s === 'critical' ? '#ff4444' :
+    s === 'warning' ? '#ffaa00' : '#4488ff'
+
+  if (alerts.length === 0) {
+    return (
+      <div style={{padding:'6px 12px', color:'#4caf50', fontSize:'12px',
+                   borderBottom:'1px solid #1e2a3a', marginBottom:'8px'}}>
+        ✓ No active alerts
+      </div>
+    )
+  }
+
+  return (
+    <div style={{marginBottom:'12px', borderBottom:'1px solid #1e2a3a', paddingBottom:'8px'}}>
+      <div style={{display:'flex', justifyContent:'space-between',
+                   alignItems:'center', padding:'4px 12px 6px'}}>
+        <span style={{fontSize:'11px', fontWeight:600, letterSpacing:'0.08em',
+                      color:'#8899aa', textTransform:'uppercase'}}>
+          ALERTS — {alerts.length} active
+        </span>
+        <button onClick={dismissAll}
+          style={{fontSize:'10px', background:'transparent', border:'1px solid #444',
+                  color:'#8899aa', borderRadius:'3px', padding:'1px 6px', cursor:'pointer'}}>
+          Dismiss all
+        </button>
+      </div>
+      {alerts.map(a => (
+        <div key={a.id}
+          style={{display:'flex', alignItems:'flex-start', padding:'4px 12px',
+                  borderLeft:`2px solid ${severityColor(a.severity)}`,
+                  marginBottom:'2px', background:'rgba(255,255,255,0.02)'}}>
+          <div style={{flex:1, minWidth:0}}>
+            <span style={{fontSize:'10px', color:severityColor(a.severity),
+                          fontWeight:600, marginRight:'6px', textTransform:'uppercase'}}>
+              {a.severity}
+            </span>
+            <span style={{fontSize:'11px', color:'#ccd6e0'}}>
+              {a.component}
+            </span>
+            <div style={{fontSize:'11px', color:'#7a8899', marginTop:'1px',
+                         overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+              {a.message}
+            </div>
+          </div>
+          <button onClick={() => dismiss(a.id)}
+            style={{fontSize:'10px', background:'transparent', border:'none',
+                    color:'#556677', cursor:'pointer', padding:'0 0 0 8px',
+                    flexShrink:0}}>
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
@@ -516,6 +599,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
       <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
       {/* Single unified scroll area — one scrollbar for both sections */}
       <div className="flex-1 overflow-auto min-h-0">
+        <AlertsPanel />
         <DashboardCards activeFilters={activeFilters} />
         <div className="border-t border-gray-200 px-5 py-4">
           <ServiceCardsErrorBoundary>
