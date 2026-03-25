@@ -813,8 +813,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         last_reasoning = prior_verdict["summary"] if prior_verdict else ""
         if last_reasoning:
             await logger_mod.set_operation_final_answer(session_id, last_reasoning)
-        await logger_mod.flush_now()                                      # drain queue before task exits
         await logger_mod.complete_operation(operation_id, final_status)
+        await logger_mod.flush_now()                                      # flush AFTER enqueuing
     finally:
         # Release plan lock — guaranteed even if record_outcome or logger calls throw
         await plan_lock.release(session_id)
