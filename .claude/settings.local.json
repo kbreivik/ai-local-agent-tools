@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(docker info:*)",
+      "Bash(docker swarm:*)",
+      "Bash(docker:*)",
+      "Bash(pip show:*)",
+      "Bash(curl:*)",
+      "Read(//c/Users/kentb/.lmstudio/**)",
+      "Bash(cat:*)",
+      "Bash(LM_STUDIO_API_KEY=\"***REMOVED***\" python:*)",
+      "Bash(node:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(pkill:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:muninndb.com)",
+      "Bash(docker exec:*)",
+      "Bash(kill %1:*)",
+      "Bash(ELASTIC_URL=http://host.docker.internal:9200 docker compose:*)",
+      "Bash(head:*)",
+      "Bash(ELASTIC_URL=http://localhost:9200 python3:*)",
+      "Bash(python3.11:*)",
+      "Bash(ELASTIC_URL=http://localhost:9200 python:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell:*)",
+      "Bash(ELASTIC_URL=http://localhost:9200 MUNINNDB_URL=http://localhost:9475 python:*)",
+      "Bash(xxd:*)",
+      "Bash(npx vite:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(ls:*)",
+      "Bash(chmod +x:*)",
+      "Bash(python3:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"fix\\(alerts\\): route filebeat alerts to /api/alerts/ + live logs stream:*)",
+      "Bash(grep '\"\"version\"\"' gui/package.json)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "infra-agent",
+    "jcodemunch"
+  ]
+}

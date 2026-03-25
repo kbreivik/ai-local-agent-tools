@@ -15,6 +15,7 @@ venv/
 .env.*.local
 mcp.json
 .mcp.json
+docker/.env
 # .env.defaults IS committed (no secrets, just structure — see .env.defaults)
 
 # Runtime artifacts
@@ -37,12 +38,14 @@ data/docs/*.txt
 data/docs/*.html
 data/docs/*.pdf
 
-# Claude Code internal
-.claude/
-.superpowers/
-
 # Skill export artifacts
 data/skill_exports/
+
+# GUI build output — built inside Docker, not committed
+gui/dist/
+
+# WISC session state — never commit
+state/
 
 # Visual companion / brainstorm HTML docs
 docs/*.html
@@ -55,3 +58,6 @@ docs/*.html
 Thumbs.db
 .DS_Store
 .worktrees/
+
+# Other tools
+.superpowers/

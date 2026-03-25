@@ -5,76 +5,85 @@ Self-improving AI infrastructure agent with MCP server, FastAPI backend, Vue GUI
 
 - **Repo**: github.com/kbreivik/ai-local-agent-tools
 - **Runtime**: Python 3.13, FastMCP, FastAPI, Vue 3
-- **Deployed**: Docker Swarm on 192.168.199.10 (hp1-prod-agent-01)
+- **Deployed**: Single container on hp1-prod-agent-01 (192.168.199.10:8000) — standalone mode
 - **LLM**: LM Studio (Qwen3-Coder-30B) at 192.168.199.51:1234
+- **Swarm cluster**: 3 managers (199.21-23) + 3 workers (199.31-33) — SERVICE TEST cluster
+  - Runs: Kafka cluster, Elasticsearch, Logstash, Filebeat, services under test/upgrade
+  - The agent manages swarm but does NOT run in it
+  - These VMs are ephemeral — can be destroyed and recreated
+
+## WISC Context Protocol
+- **Always read `state/HANDOFF.md`** at session start if it exists
+- **Always run `/handoff`** before ending a session
+- **Use subagents** — don't load full skill modules or service state directly
+- **Session split points**: new feature (plan) → implement → test/verify
+- Context >60%: run `/compact`
 
 ## Architecture
 
 ```
 ai-local-agent-tools/
-├── api/                        ← FastAPI app (port 8000, serves GUI + REST + WebSocket)
-│   ├── main.py                 ← App entry, CORS, health endpoint, static mount for gui/dist
+├── api/                        ← FastAPI app (port 8000, GUI + REST + WebSocket)
+│   ├── main.py                 ← App entry, CORS, health endpoint, static mount
 │   ├── db/                     ← SQLAlchemy database layer
-│   └── routers/                ← API routes (auth, tools, agent, status)
+│   └── routers/                ← auth, tools, agent, status
 ├── mcp_server/
-│   ├── server.py               ← FastMCP tool registrations (all tools registered here)
+│   ├── server.py               ← FastMCP tool registrations (ALL tools registered here)
 │   └── tools/
 │       ├── skills/             ← Self-improving skill system
 │       │   ├── registry.py     ← Thin wrapper over storage backend
-│       │   ├── validator.py    ← AST validation for generated skills
-│       │   ├── prompt_builder.py ← LLM prompt construction
+│       │   ├── validator.py    ← AST validation (blocks dangerous imports)
+│       │   ├── prompt_builder.py
 │       │   ├── generator.py    ← 3 backends: local LLM, cloud API, export
 │       │   ├── loader.py       ← Hot-load skills, scan imports, version tracking
-│       │   ├── meta_tools.py   ← MCP tools: skill_search, skill_create, etc.
+│       │   ├── meta_tools.py   ← skill_search, skill_create, etc.
 │       │   ├── knowledge_base.py ← Compat checking, breaking change detection
-│       │   ├── doc_retrieval.py  ← Multi-strategy MuninnDB document retrieval
+│       │   ├── doc_retrieval.py  ← MuninnDB document retrieval
 │       │   ├── discovery.py    ← 4-phase environment discovery pipeline
-│       │   ├── fingerprints.py ← ~15 known service fingerprints (deterministic)
-│       │   ├── spec_generator.py ← SKILL_SPEC before code (spec-first generation)
-│       │   ├── live_validator.py ← Validate against real service endpoints
-│       │   ├── storage/        ← Database abstraction
-│       │   │   ├── interface.py     ← Abstract base class
-│       │   │   ├── sqlite_backend.py ← Default (7 tables)
-│       │   │   ├── postgres_backend.py ← Production (Phase 5)
-│       │   │   ├── cache.py         ← Optional Redis cache
-│       │   │   └── auto_detect.py   ← Auto-detect available backends
-│       │   └── modules/        ← Skill Python files (one per skill)
-│       │       ├── _template.py               ← Contract: SKILL_META + execute()
-│       │       ├── proxmox_vm_status.py       ← Starter skill
-│       │       ├── fortigate_system_status.py ← Starter skill
-│       │       └── http_health_check.py       ← Starter skill
-│       └── [other tool modules]
+│       │   ├── fingerprints.py ← ~15 known service fingerprints
+│       │   ├── spec_generator.py ← SKILL_SPEC before code (spec-first)
+│       │   ├── live_validator.py ← Validate against real endpoints
+│       │   └── storage/        ← SQLite (default) / PostgreSQL / Redis cache
+│       │       ├── interface.py
+│       │       ├── sqlite_backend.py
+│       │       ├── postgres_backend.py
+│       │       ├── cache.py
+│       │       └── auto_detect.py
+│       └── modules/            ← Skill Python files (one per skill)
+│           ├── _template.py    ← Contract: SKILL_META + execute()
+│           ├── proxmox_vm_status.py
+│           ├── fortigate_system_status.py
+│           └── http_health_check.py
 ├── agent/                      ← Agent loop (LLM-driven task execution)
-├── gui/                        ← Vue 3 frontend (source in src/, built to dist/)
-│   ├── src/                    ← Vue components, contexts, pages
-│   └── dist/                   ← Built by Docker (Node.js build stage)
+├── gui/                        ← Vue 3 (src/ → built to dist/ by Docker)
 ├── docker/
-│   ├── Dockerfile              ← Multi-stage: node (GUI) → python (API) → slim runtime
-│   ├── swarm-stack.yml         ← Production Swarm deployment
-│   ├── docker-compose.yml      ← Dev/standalone deployment
-│   ├── entrypoint.sh           ← Auto-detects Docker socket, Swarm, LLM URL
-│   ├── healthcheck.sh          ← Checks /api/health
-│   └── .env                    ← Generated by Ansible (never edit manually)
-├── data/                       ← Runtime data (SQLite DB, skill exports/imports)
-├── logs/                       ← Application logs
-└── docs/                       ← Design documents
+│   ├── Dockerfile              ← Multi-stage: node (GUI) → python → slim runtime
+│   ├── swarm-stack.yml         ← Swarm deployment (upgrade testing)
+│   ├── docker-compose.yml      ← Dev/standalone
+│   ├── entrypoint.sh
+│   ├── healthcheck.sh
+│   └── .env                    ← Generated by Ansible hp1-infra (never edit manually)
+├── data/                       ← SQLite DB, skill exports/imports
+├── logs/
+└── docs/
 ```
 
 ## Rules
 
 ### Absolute Rules
-- **All functions sync** — no async/await anywhere (project pattern)
+- **All functions sync** — no async/await anywhere (project pattern — enforce strictly)
 - **Return format**: `{"status": "ok"|"error"|"degraded", "data": ..., "timestamp": ..., "message": ...}`
-- **Helpers**: every module uses `_ts()`, `_ok()`, `_err()`, `_degraded()`
-- **Config**: env vars with `agent_settings.json` fallback
+- **Helpers**: every module uses `_ts()`, `_ok()`, `_err()`, `_degraded()` — never raw dicts
+- **Config**: env vars with `agent_settings.json` fallback — never hardcode
 - **Always** run `git push` after every commit
-- **Never** hardcode IPs, passwords, or API keys
+- **Never** hardcode IPs, passwords, or API keys — 192.168.x.x never appears in Python
 - **Never** add `async` to tool functions or skill execute()
 - **Never** import dangerous modules in skills (subprocess, os.system, eval, exec)
+- **Never** edit docker/.env — it is generated by Ansible (hp1-infra repo)
 
 ### Code Patterns
 
-#### MCP Tool Registration (in server.py)
+#### MCP Tool Registration (server.py only)
 ```python
 @mcp.tool()
 def tool_name(param: str) -> dict:
@@ -88,7 +97,7 @@ def tool_name(param: str) -> dict:
 SKILL_META = {
     "name": "skill_name",
     "description": "What this skill does",
-    "category": "monitoring",
+    "category": "monitoring",  # compute | networking | monitoring | storage | orchestration
     "parameters": {"host": {"type": "string", "required": False}},
     "compat": {
         "service": "proxmox",
@@ -99,201 +108,90 @@ SKILL_META = {
 }
 
 def execute(**kwargs) -> dict:
-    """Must return _ok/_err/_degraded dict. Must be sync. Must handle missing config gracefully."""
+    """Sync. Return _ok/_err/_degraded. Handle missing config gracefully."""
     ...
 ```
 
 #### Storage Pattern
 ```python
 from mcp_server.tools.skills.storage import get_backend
-backend = get_backend()  # Returns SQLite or PostgreSQL singleton
-result = backend.get_skill("proxmox_vm_status")
+backend = get_backend()  # SQLite or PostgreSQL singleton
 ```
 
 ### Naming Conventions
 - Commits: `feat|fix|refactor|docs|test(scope): message`
-- Skills: snake_case, `{service}_{action}` (e.g., `proxmox_vm_status`)
+- Skills: snake_case, `{service}_{action}` (e.g., `kafka_consumer_lag`)
 - MCP tools: snake_case, verb_noun (e.g., `skill_create`, `discover_environment`)
-- Config: UPPER_SNAKE_CASE env vars (e.g., `LM_STUDIO_BASE_URL`)
+- Config env vars: UPPER_SNAKE_CASE (e.g., `LM_STUDIO_BASE_URL`)
 
 ## Skill Generation Flow (spec-first)
-
 ```
-1. description → LLM → SKILL_SPEC (JSON, not code)
-2. SKILL_SPEC → validate_spec_live (probe real endpoints)
-3. Validated spec → generate_code_from_spec (near-deterministic)
-4. Generated code → validator.py (AST check: no dangerous imports)
-5. Valid code → save to modules/, register in DB
+description → LLM → SKILL_SPEC (JSON) → live_validator (probe real endpoint)
+→ generate_code_from_spec → validator.py (AST: no dangerous imports)
+→ save to modules/ + register in DB
 ```
-
-### Three Generation Backends
-- **local** (default): POST to LM Studio at `LM_STUDIO_BASE_URL`
-- **cloud** (optional): Anthropic API when `ANTHROPIC_API_KEY` set
-- **export** (airgapped): Writes .md to `data/skill_exports/` with full prompt + instructions
 
 ## Docker
 
-### Build
 ```bash
+# Build
 docker build --build-arg DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) \
   -t hp1-ai-agent:latest -f docker/Dockerfile .
+
+# Swarm deploy (for upgrade testing)
+cd docker && set -a; source .env; set +a
+docker stack deploy -c swarm-stack.yml hp1
+
+# Health check
+curl -s http://192.168.199.10:8000/api/health | python3 -m json.tool
 ```
 
-### Multi-stage Dockerfile
-1. **gui-builder**: Node 20, `npm ci && npm run build` → gui/dist
-2. **builder**: Python 3.13, install wheels from requirements.txt
-3. **runtime**: Python 3.13-slim, copy wheels + gui/dist + app code, non-root `agent` user
-
-### Key Docker Facts
-- GUI served by FastAPI at port 8000 (not 5173 — that's dev only)
-- Entrypoint: `docker/entrypoint.sh` → uvicorn api.main:app
-- Health check: `curl -sf http://localhost:8000/api/health`
+**Key facts:**
+- GUI served by FastAPI at port 8000 (not 5173 — dev only)
 - Docker socket mounted read-only for Swarm tools
 - Volumes: agent-data, agent-logs, agent-checkpoints, agent-skills
+- gui/dist is built inside Docker — gitignored, not in repo
 
-### Swarm Deploy
-```bash
-cd docker
-set -a; source .env; set +a  # docker stack doesn't read .env files!
-docker stack deploy -c swarm-stack.yml hp1
-```
+## GUI Rules
+- API base: `import.meta.env.VITE_API_BASE || ''` — empty string = relative paths
+- WebSocket: always `window.location.host` — never hardcode localhost
+- Files using API_BASE: IngestPanel.jsx, LockBadge.jsx, AgentOutputContext.jsx, AuthContext.jsx
 
-## GUI
-
-### API Base URL
-Components use `import.meta.env.VITE_API_BASE || ''` — empty string means relative paths. This allows the GUI to work on any host without hardcoded URLs.
-
-### Files that reference API_BASE
-- `gui/src/components/IngestPanel.jsx`
-- `gui/src/components/LockBadge.jsx`
-- `gui/src/context/AgentOutputContext.jsx`
-- `gui/src/context/AuthContext.jsx`
-
-### WebSocket URLs
-Must use `window.location.host` — never hardcode localhost.
-
-## Database Tables (7)
-
-| Table | Purpose |
-|-------|---------|
-| skills | Skill metadata, code, status, compat info |
-| service_catalog | Known services with detected versions |
-| breaking_changes | API changes that may break skills |
-| skill_compat_log | Compatibility check history |
-| audit_log | All skill operations (create, disable, etc.) |
-| checkpoints | Agent state snapshots |
-| settings | Key-value config store |
+## Database (7 tables)
+skills | service_catalog | breaking_changes | skill_compat_log | audit_log | checkpoints | settings
 
 ## Validation Commands
-
 ```bash
-# Python syntax check
 python -m py_compile api/main.py
 python -m py_compile mcp_server/server.py
-
-# Check all skill modules
 for f in mcp_server/tools/skills/modules/*.py; do python -m py_compile "$f"; done
-
-# Run tests
 python -m pytest tests/ -x -q
-
-# Docker build test
-docker build -t hp1-ai-agent:test -f docker/Dockerfile .
-
-# Container smoke test
-docker run --rm hp1-ai-agent:test 2>&1 | head -20
-# Should show "HP1-AI-Agent — Starting" and "Uvicorn running"
-
-# API health check
-curl -s http://localhost:8000/api/health | python3 -m json.tool
+curl -s http://192.168.199.10:8000/api/health
 ```
 
 ## Pre-Commit Checklist
-
-1. `git diff --stat` — only expected files changed?
-2. `grep -rE "password|secret|token|key|192\.168\." --include="*.py" <changed files>` — no hardcoded secrets/IPs?
-3. `python -m py_compile <each changed .py>` — valid syntax?
-4. For skill modules: verify SKILL_META + execute() present, no dangerous imports
-5. For GUI changes: verify no hardcoded localhost URLs
-6. Conventional commit message?
-
-## After Every Commit
-
-```bash
-git add -A
-git diff --cached --stat
-git commit -m "<type>(<scope>): <message>"
-# Always run git push after every commit
-```
+1. `grep -rE "192\.168\.|password|secret|token" --include="*.py"` — no hardcoded values?
+2. `python -m py_compile <changed .py files>` — valid syntax?
+3. Skill modules: SKILL_META + execute() present, no dangerous imports?
+4. GUI changes: no hardcoded localhost URLs?
+5. Conventional commit message?
 
 ## Known Issues
+- sqlalchemy missing: add to requirements.txt, rebuild image
+- gui/dist not in container: multi-stage Dockerfile required (Node.js build stage)
+- localhost API in GUI: use `''` as fallback, never `http://localhost:8000`
+- Port 5173 in production: not used, remove from swarm-stack.yml
+- `set -a; source .env; set +a` before `docker stack deploy` — always
 
-### sqlalchemy missing
-- **Symptom**: ModuleNotFoundError on container start
-- **Cause**: Not in requirements.txt
-- **Fix**: Added to requirements.txt, rebuild Docker image
-
-### gui/dist not in container
-- **Symptom**: `{"detail":"Not Found"}` when accessing port 8000 in browser
-- **Cause**: gui/dist is gitignored, Dockerfile needs Node.js build stage
-- **Fix**: Multi-stage Dockerfile with gui-builder stage
-
-### localhost API URLs in GUI
-- **Symptom**: "Failed to fetch" / ERR_CONNECTION_REFUSED in browser console
-- **Cause**: Components hardcoded `http://localhost:8000` as API base
-- **Fix**: Changed fallback to `''` (empty string = relative paths)
-
-### Port 5173
-- **Symptom**: Connection refused on port 5173 in production
-- **Cause**: 5173 is the Vite dev server port, not used in production
-- **Fix**: GUI served by FastAPI on port 8000. Remove 5173 from swarm-stack.yml
-
-## Patterns
-
-### Adding a New MCP Tool
-1. Create function in appropriate `mcp_server/tools/` module
-2. Register in `mcp_server/server.py` with `@mcp.tool()`
-3. Return `_ok()` / `_err()` / `_degraded()` dict
-4. Audit log the operation
-5. Test: start server, call the tool
-
-### Adding a New Skill Module
-1. Copy `modules/_template.py`
-2. Fill in `SKILL_META` with correct service, compat info
-3. Implement `execute(**kwargs)` — must be sync, return _ok/_err/_degraded
-4. Handle missing config with clear `_err()` message
-5. Validate: `python -m py_compile modules/new_skill.py`
-6. It auto-loads on startup via `loader.py`
-
-### Adding a New API Endpoint
-1. Create or update router in `api/routers/`
-2. Register in `api/main.py`
-3. Add authentication if needed
-4. Test: `curl -s http://localhost:8000/api/new-endpoint`
-
-### Adding a New Service to Fingerprints
-1. Edit `mcp_server/tools/skills/fingerprints.py`
-2. Add entry to `FINGERPRINTS` dict with probes, ports, ssh_commands
-3. `discover_environment` will auto-detect it
-
-### Updating Requirements
-1. Add to `requirements.txt`
-2. Rebuild Docker image
-3. Test: `docker run --rm hp1-ai-agent:latest pip list | grep <package>`
-
-## Environment Variables (key ones)
-
+## Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
-| LM_STUDIO_BASE_URL | http://host.docker.internal:1234/v1 | Local LLM endpoint |
-| LM_STUDIO_API_KEY | (empty) | LM Studio API token |
-| ADMIN_PASSWORD | changeme | GUI login password |
-| SKILL_GEN_BACKEND | local | Skill generation: local/cloud/export |
-| ANTHROPIC_API_KEY | (empty) | For cloud skill generation |
-| DATABASE_URL | (empty) | PostgreSQL (optional, SQLite default) |
-| REDIS_URL | (empty) | Redis cache (optional) |
-| STORAGE_BACKEND | (empty) | Force: sqlite/postgres |
+| LM_STUDIO_BASE_URL | http://host.docker.internal:1234/v1 | Local LLM |
+| ADMIN_PASSWORD | changeme | GUI login |
+| SKILL_GEN_BACKEND | local | local/cloud/export |
+| ANTHROPIC_API_KEY | (empty) | Cloud skill generation |
+| DATABASE_URL | (empty) | PostgreSQL (SQLite default) |
 | KAFKA_BOOTSTRAP_SERVERS | kafka1:9092,... | Kafka brokers |
-| ELASTIC_URL | (empty) | Elasticsearch URL |
-| PROXMOX_HOST | (empty) | Proxmox API host |
-| FORTIGATE_HOST | (empty) | FortiGate API host |
+| ELASTIC_URL | (empty) | Elasticsearch |
+| PROXMOX_HOST | (empty) | Proxmox API |
+| FORTIGATE_HOST | (empty) | FortiGate API |
