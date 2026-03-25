@@ -8,6 +8,7 @@ State shape: { health, containers: [ContainerCard], agent01_ip }
 import asyncio
 import logging
 import os
+import re
 
 from api.collectors.base import BaseCollector
 
@@ -45,6 +46,8 @@ class DockerAgent01Collector(BaseCollector):
             for c in containers:
                 attrs = c.attrs
                 name = (attrs.get("Name") or "").lstrip("/")
+                # Strip hash prefix Docker adds on naming conflicts: "abc123ef_hp1_agent" → "hp1_agent"
+                name = re.sub(r'^[0-9a-f]{12}_', '', name)
                 image = attrs.get("Config", {}).get("Image", "")
                 state_str = (attrs.get("State") or {}).get("Status", "unknown")
                 health_obj = (attrs.get("State") or {}).get("Health", {})
