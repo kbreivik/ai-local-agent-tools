@@ -812,11 +812,18 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
 
         last_reasoning = prior_verdict["summary"] if prior_verdict else ""
         if last_reasoning:
-            await logger_mod.set_operation_final_answer(session_id, last_reasoning)
-        await logger_mod.complete_operation(operation_id, final_status)
+            try:
+                await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+            except Exception as _sfa_e:
+                log.debug("set_operation_final_answer failed: %s", _sfa_e)
     finally:
-        # Release plan lock — guaranteed even if record_outcome or logger calls throw
+        # Release plan lock and mark operation complete — both guaranteed to run
         await plan_lock.release(session_id)
+        log.info("COMPLETING operation_id=%r status=%r", operation_id, final_status)
+        try:
+            await logger_mod.complete_operation(operation_id, final_status)
+        except Exception as _comp_e:
+            log.error("complete_operation failed for %s: %s", operation_id, _comp_e)
 
 
 @router.post("/run", response_model=RunResponse)
