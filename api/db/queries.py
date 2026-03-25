@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, func, update, text, desc, and_, cast, Text as SAText
+from sqlalchemy import select, func, update, text, desc, and_
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from api.db.models import (
@@ -87,7 +87,7 @@ async def complete_operation(
 ) -> None:
     await conn.execute(
         update(operations)
-        .where(cast(operations.c.id, SAText) == str(operation_id))
+        .where(operations.c.id == operation_id)
         .values(completed_at=_now(), status=status, total_duration_ms=total_duration_ms)
     )
 
@@ -112,7 +112,7 @@ async def get_operations(
 
 
 async def get_operation(conn: AsyncConnection, op_id: str) -> dict:
-    result = await conn.execute(select(operations).where(cast(operations.c.id, SAText) == str(op_id)))
+    result = await conn.execute(select(operations).where(operations.c.id == op_id))
     row = result.fetchone()
     return _row_to_dict(row) if row else {}
 
