@@ -166,36 +166,72 @@ def _check_sync() -> list[dict]:
     return alerts
 
 
+import time as _time
+
+# In-memory dedup: track last fire_alert time per concept
+_alert_last_written: dict = {}
+_ALERT_DEDUP_SECONDS = 1800  # 30 minutes
+
+
+def _publish_log_event(service: str, level: str, message: str, source: str = "") -> None:
+    """Push an event to the Live Logs WebSocket stream (fire-and-forget)."""
+    try:
+        import asyncio
+        from api.websocket import manager
+        payload = {
+            "type": "log",
+            "service": service,
+            "level": level,
+            "message": message,
+            "source": source,
+            "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(manager.broadcast(payload))
+        except Exception:
+            pass
+    except Exception as e:
+        log.debug("_publish_log_event failed: %s", e)
+
+
 async def run_elastic_alerts() -> None:
     """
     Async entry point — run alert checks in thread executor, fire any alerts found.
     Called from ElasticCollector after each poll.
+    Alerts go to /api/alerts/ (in-memory deque) with 30-min dedup. Never writes to MuninnDB.
     """
     import asyncio
-    from api.alerts import fire_alert
-    from api.memory.hooks import _fire
+    from api.alerts import fire_alert, update_content
 
     try:
         loop = asyncio.get_event_loop()
         found_alerts = await loop.run_in_executor(None, _check_sync)
 
         for a in found_alerts:
-            fire_alert(a["component"], a["severity"], a["message"], source="elastic")
+            concept = f"alert:{a['component']}"
+            now_ts = _time.time()
+            last = _alert_last_written.get(concept, 0)
 
-            # Store notable alerts in MuninnDB
-            if a["severity"] in ("critical", "warning"):
-                from api.memory.client import get_client
-                async def _store_alert(alert=a):
-                    try:
-                        client = get_client()
-                        await client.store(
-                            f"alert:{alert['component']}",
-                            alert["message"],
-                            ["alert", alert["severity"], alert["component"]],
-                        )
-                    except Exception:
-                        pass
-                asyncio.create_task(_store_alert())
+            if now_ts - last < _ALERT_DEDUP_SECONDS:
+                # Within dedup window — update existing alert content, don't create new
+                try:
+                    update_content(a["component"], a["message"])
+                except Exception:
+                    pass
+            else:
+                # Outside window — create new alert
+                _alert_last_written[concept] = now_ts
+                fire_alert(a["component"], a["severity"], a["message"], source="elastic")
+
+            # Always publish to live log stream regardless of dedup
+            _publish_log_event(
+                service=a["component"],
+                level=a["severity"],
+                message=a["message"],
+                source="collector",
+            )
 
     except Exception as e:
         log.debug("ElasticAlerter run failed: %s", e)
