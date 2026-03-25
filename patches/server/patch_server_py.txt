@@ -1,0 +1,161 @@
+# PATCH FILE: mcp_server/server.py
+# Four changes. Apply all in one edit session + one rebuild (batch with patch 1).
+#
+# Verified source structure (line numbers confirmed from live source read):
+#   Line 144: def audit_log(action, result) — needs target, details params
+#   Line 440: def discover_environment(hosts: list) — needs default + hosts_json alias
+#   Line 450: def skill_execute(name, **kwargs) — works but description misleads LLM
+#   Node tools: def node_activate, def node_drain — need hex node_id in description
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 1 — audit_log (line ~144)
+# Add target and details optional params. Underlying orchestration.audit_log(action, result)
+# only takes two params — pass target+details as part of result dict.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND:
+def audit_log(action: str, result: str) -> dict:
+    """Structured log of every agent decision."""
+    return orchestration.audit_log(action, result)
+
+REPLACE WITH:
+def audit_log(action: str, result: str, target: str = "", details: str = "") -> dict:
+    """Log an agent action to the audit table.
+    action: verb describing what happened (upgrade, drain, create, restart, check)
+    result: ok | failed | escalated | skipped | error
+    target: resource acted on, e.g. 'kafka', 'manager-01', 'proxmox_vm_status' (optional)
+    details: additional context (optional)
+    Note: called at most once per run — subsequent calls in same run are skipped automatically.
+    """
+    # Embed target/details into result string so underlying function receives them
+    if target or details:
+        result_str = result
+        if target:
+            result_str += f" | target={target}"
+        if details:
+            result_str += f" | {details}"
+        return orchestration.audit_log(action, result_str)
+    return orchestration.audit_log(action, result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 2 — discover_environment (line ~440)
+# server.py wrapper takes hosts: list, but skill_meta_tools takes hosts_json: str.
+# The LLM calls with no args — add HP1 default hosts + accept hosts_json string alias.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND:
+def discover_environment(hosts: list) -> dict:
+    """Scan hosts and auto-identify services via deterministic fingerprinting.
+    Each host: {"address": "192.168.1.1"} or {"address": "...", "port": 8006}.
+    Runs 4-phase pipeline: ENUMERATE → IDENTIFY → CATALOG → RECOMMEND.
+    Returns identified services, existing skill coverage, and skill_create recommendations.
+    No LLM calls — pure HTTP probing against known service fingerprints."""
+    return skill_tools.discover_environment(hosts)
+
+REPLACE WITH:
+_HP1_DEFAULT_HOSTS = [
+    {"address": "192.168.199.10"},
+    {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
+    {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
+    {"address": "192.168.199.40"},
+    {"address": "192.168.1.5", "port": 8006},
+    {"address": "192.168.1.6", "port": 8006},
+    {"address": "192.168.1.7", "port": 8006},
+]
+
+def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
+    """Scan hosts for services via deterministic fingerprinting. No LLM calls.
+    Returns identified services, skill coverage gaps, and skill_create recommendations.
+
+    If called with no arguments, scans all HP1 homelab hosts automatically.
+    hosts: list of {"address": "...", "port": N} dicts (optional)
+    hosts_json: JSON string of host list — alternative to hosts param (optional)
+
+    Examples:
+      discover_environment()                          # scans all HP1 hosts
+      discover_environment(hosts=[{"address":"192.168.199.40"}])
+      discover_environment(hosts_json='[{"address":"192.168.199.40"}]')
+    """
+    import json as _json
+    if hosts_json:
+        try:
+            hosts = _json.loads(hosts_json)
+        except Exception:
+            pass
+    if not hosts:
+        hosts = _HP1_DEFAULT_HOSTS
+    return skill_tools.discover_environment(hosts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 3 — skill_execute (line ~450)
+# Current: skill_execute(name, **kwargs) — works but LLM passes wrong kwarg names.
+# The LLM sees kwargs_json in the tool description but this wrapper uses **kwargs.
+# Fix: update description to be explicit about both calling styles.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND:
+def skill_execute(name: str, **kwargs) -> dict:
+    """Execute a dynamic skill by name. Call skill_search() first to discover available skills.
+    Pass skill parameters as keyword arguments matching the skill's parameter schema.
+    Example: skill_execute(name='proxmox_vm_status', node='pve1')"""
+    return skill_tools.skill_execute(name, **kwargs)
+
+REPLACE WITH:
+def skill_execute(name: str, **kwargs) -> dict:
+    """Execute a dynamic skill by name. Call skill_search() first to discover available skills.
+    Pass skill parameters directly as keyword arguments matching the skill's parameter schema.
+
+    DO NOT use kwargs_json= or arguments= wrapper keys — pass parameters directly:
+      skill_execute(name='proxmox_vm_status', host='192.168.1.5')
+      skill_execute(name='http_health_check', url='http://127.0.0.1:8000/api/health')
+      skill_execute(name='fortigate_system_status')
+
+    If a skill has no required parameters, call with name only:
+      skill_execute(name='kafka_broker_status')
+    """
+    return skill_tools.skill_execute(name, **kwargs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 4 — node_activate and node_drain descriptions
+# Embed confirmed HP1 node IDs directly in the description so the LLM never
+# passes hostnames again.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND (node_activate — exact first line):
+def node_activate(node_id: str) -> dict:
+    """Set a node to ACTIV
+
+REPLACE THE DOCSTRING (keep the function body unchanged):
+def node_activate(node_id: str) -> dict:
+    """Re-activate a drained Swarm node. CRITICAL: node_id must be the Docker Swarm
+    hex node ID — NOT the hostname. Always call swarm_status() first to resolve.
+
+    HP1 confirmed node IDs (use these directly):
+      manager-01 (199.21): yxm2ust947ch  ← Raft leader
+      manager-02 (199.22): tzrptdzsvggh
+      manager-03 (199.23): z7zscpi5dxe9
+      worker-01  (199.31): tyimr0p3dsow
+      worker-02  (199.32): scdz8rfwou0i
+      worker-03  (199.33): g7nkt24xs0oq
+
+    Example: node_activate(node_id='yxm2ust947ch')  # activates manager-01
+    If unsure: swarm_status() → find node where hostname=='manager-01' → use its 'id' field
+    """
+
+
+FIND (node_drain — exact first line, find similar pattern):
+def node_drain(node_id: str) -> dict:
+
+REPLACE THE DOCSTRING (keep function body):
+def node_drain(node_id: str) -> dict:
+    """Drain a Swarm node before maintenance. Requires plan_action() approval first.
+    CRITICAL: node_id must be hex Swarm ID — NOT the hostname.
+    Reverse with node_activate(node_id=<same hex id>).
+
+    HP1 node IDs: manager-01=yxm2ust947ch, worker-01=tyimr0p3dsow
+    For others: swarm_status() → find node by hostname → use 'id' field.
+    Example: node_drain(node_id='tyimr0p3dsow')  # drains worker-01
+    """

@@ -1,0 +1,62 @@
+# PATCH FILE: api/routers/agent.py
+# Two changes. Apply both in one edit session + one rebuild.
+# 
+# Verified source structure:
+#   Line 814-815: set_operation_final_answer + complete_operation (inside _stream_agent)
+#   Line 872-878: stop_agent (sets _cancel_flags only, no DB write)
+#   logger_mod: flush_now() exists at logger.py:57
+#   logger_mod: log_operation_complete(operation_id, status, duration_ms) at logger.py:87
+#   queries.py: get_operation_by_session(conn, session_id) at line 119
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 1 — agent.py line ~814
+# Add flush_now() to drain the async write queue before the background task exits.
+# Without this, complete_operation is enqueued but the queue never flushes (100ms timer).
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND (exact, inside _stream_agent finally block):
+        if last_reasoning:
+            await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+        await logger_mod.complete_operation(operation_id, final_status)
+
+REPLACE WITH:
+        if last_reasoning:
+            await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+        await logger_mod.flush_now()                                      # drain queue before task exits
+        await logger_mod.complete_operation(operation_id, final_status)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE 2 — agent.py line 872
+# stop_agent: mark operation stopped in DB when stop signal is sent.
+# Currently only sets _cancel_flags[session_id] = True — DB never updated.
+# Uses get_operation_by_session via a direct DB call (no logger abstraction needed).
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND (exact, the stop_agent function):
+@router.post("/stop")
+async def stop_agent(req: StopRequest):
+    """Signal the running agent loop for a session to cancel after its current step."""
+    if not req.session_id:
+        return {"status": "error", "message": "session_id required"}
+    _cancel_flags[req.session_id] = True
+    return {"status": "ok", "message": f"Stop signal sent for session '{req.session_id}'"}
+
+REPLACE WITH:
+@router.post("/stop")
+async def stop_agent(req: StopRequest):
+    """Signal the running agent loop for a session to cancel after its current step."""
+    if not req.session_id:
+        return {"status": "error", "message": "session_id required"}
+    _cancel_flags[req.session_id] = True
+    # Mark the operation as stopped in DB — cancel flag alone never updates status
+    try:
+        from api.db.base import get_engine
+        from api.db import queries as q
+        async with get_engine().begin() as conn:
+            op = await q.get_operation_by_session(conn, req.session_id)
+            if op and op.get("status") == "running":
+                await q.complete_operation(conn, op["id"], "stopped")
+    except Exception as _e:
+        log.debug("stop_agent DB update failed: %s", _e)
+    return {"status": "ok", "message": f"Stop signal sent for session '{req.session_id}'"}
