@@ -483,3 +483,76 @@ def pre_upgrade_check() -> dict:
                    "Swarm ready for upgrade")
     except Exception as e:
         return _err(f"pre_upgrade_check error: {e}")
+
+
+def postgres_health() -> dict:
+    """Check PostgreSQL database health."""
+    import re
+    import os
+    db_url = os.environ.get("DATABASE_URL", "")
+    host = "hp1-postgres"
+    port = "5432"
+    user = "hp1"
+    dbname = "hp1_agent"
+    password = ""
+    if db_url:
+        m = re.match(r'postgresql\+?(?:asyncpg)?://([^:]+):([^@]+)@([^:/]+):?(\d+)?/(.+)', db_url)
+        if m:
+            user = m.group(1)
+            password = m.group(2)
+            host = m.group(3)
+            port = m.group(4) or "5432"
+            dbname = m.group(5)
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=host, port=int(port), user=user, password=password, dbname=dbname,
+            connect_timeout=5,
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()));")
+        db_size = cur.fetchone()[0]
+        cur.execute(
+            "SELECT relname, n_live_tup FROM pg_stat_user_tables "
+            "WHERE relname IN ('operations','tool_calls','escalations','audit_log') "
+            "ORDER BY relname;"
+        )
+        counts = {r[0]: r[1] for r in cur.fetchall()}
+        conn.close()
+        return _ok({"status": "connected", "host": host, "db_size": db_size, "table_counts": counts})
+    except Exception as e:
+        return _err(f"postgres_health: {e}")
+
+
+def service_logs(service_name: str, lines: int = 50, since_minutes: int = 10) -> dict:
+    """Fetch recent logs from a Docker service or container."""
+    import subprocess
+    lines = min(lines, 200)
+    env = {**os.environ}
+    docker_host = env.get("DOCKER_HOST", "")
+    if not docker_host:
+        env["DOCKER_HOST"] = (
+            "npipe:////./pipe/docker_engine" if os.name == "nt"
+            else "unix:///var/run/docker.sock"
+        )
+    try:
+        cmd = ["docker", "service", "logs", service_name,
+               f"--tail={lines}", f"--since={since_minutes}m", "--no-task-ids"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=env)
+        output = (r.stdout + r.stderr).strip()
+        log_lines = output.splitlines() if output else []
+        if r.returncode != 0 and not log_lines:
+            # Fallback: try plain container logs
+            cmd2 = ["docker", "logs", service_name, f"--tail={lines}", f"--since={since_minutes}m"]
+            r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=15, env=env)
+            output2 = (r2.stdout + r2.stderr).strip()
+            log_lines = output2.splitlines() if output2 else []
+        return _ok({
+            "service": service_name,
+            "lines_returned": len(log_lines),
+            "logs": log_lines[-lines:] if len(log_lines) > lines else log_lines,
+        })
+    except subprocess.TimeoutExpired:
+        return _err(f"service_logs: timeout fetching logs for {service_name}")
+    except Exception as e:
+        return _err(f"service_logs: {e}")

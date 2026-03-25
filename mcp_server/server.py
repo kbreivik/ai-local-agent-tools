@@ -34,8 +34,16 @@ def service_list() -> dict:
 
 
 @mcp.tool()
-def service_health(name: str) -> dict:
-    """Specific service ready/degraded/failed state."""
+def service_health(name: str = "") -> dict:
+    """Check service health. With no args, returns health summary of ALL services.
+    With name, checks that specific service only.
+    Examples:
+      service_health()           # all services overview
+      service_health(name="kafka")   # specific service
+    """
+    if not name:
+        services = swarm.service_list()
+        return services
     return swarm.service_health(name)
 
 
@@ -80,10 +88,9 @@ def service_rollback(name: str) -> dict:
 @mcp.tool()
 def node_drain(node_id: str) -> dict:
     """Drain a Swarm node before maintenance. Requires plan_action() approval first.
-    IMPORTANT: node_id must be the Docker Swarm hex node ID — NOT the hostname.
-    Reverse with node_activate(node_id=<same hex id>).
-    HP1 node IDs: manager-01=yxm2ust947ch, manager-02=tzrptdzsvggh, manager-03=z7zscpi5dxe9
-                  worker-01=tyimr0p3dsow,  worker-02=scdz8rfwou0i,  worker-03=g7nkt24xs0oq
+    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
+    Reverse with: node_activate(node_id=<same hex id>)
+    HP1 node IDs: manager-01=yxm2ust947ch, worker-01=tyimr0p3dsow (swarm_status for others)
     Example: node_drain(node_id='tyimr0p3dsow')  # drains worker-01
     """
     return swarm.node_drain(node_id)
@@ -92,10 +99,11 @@ def node_drain(node_id: str) -> dict:
 @mcp.tool()
 def node_activate(node_id: str) -> dict:
     """Re-activate a drained Swarm node.
-    IMPORTANT: node_id must be the Docker Swarm hex node ID — NOT the hostname.
-    Always call swarm_status() first to resolve hostname → node_id.
-    HP1 node IDs: manager-01=yxm2ust947ch, manager-02=tzrptdzsvggh, manager-03=z7zscpi5dxe9
-                  worker-01=tyimr0p3dsow,  worker-02=scdz8rfwou0i,  worker-03=g7nkt24xs0oq
+    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
+    Always call swarm_status() first if unsure: find node where hostname matches → use its 'id' field.
+    HP1 node IDs (use these directly):
+      manager-01=yxm2ust947ch  manager-02=tzrptdzsvggh  manager-03=z7zscpi5dxe9
+      worker-01=tyimr0p3dsow   worker-02=scdz8rfwou0i   worker-03=g7nkt24xs0oq
     Example: node_activate(node_id='yxm2ust947ch')  # activates manager-01
     """
     return swarm.node_activate(node_id)
@@ -107,11 +115,39 @@ def pre_upgrade_check() -> dict:
     return swarm.pre_upgrade_check()
 
 
+@mcp.tool()
+def postgres_health() -> dict:
+    """Check PostgreSQL database health: connection status, DB size, and key table row counts.
+    Returns connected/error status. Uses DATABASE_URL env var or defaults to hp1-postgres:5432.
+    Useful for verifying DB is reachable before/after container restarts.
+    """
+    return swarm.postgres_health()
+
+
+@mcp.tool()
+def service_logs(service_name: str, lines: int = 50, since_minutes: int = 10) -> dict:
+    """Fetch recent logs from a Docker Swarm service or container.
+    service_name: Docker service name (e.g. 'hp1_kafka1') or container name/ID
+    lines: number of log lines to return (max 200, default 50)
+    since_minutes: only return logs from last N minutes (default 10)
+    Examples:
+      service_logs(service_name="hp1_kafka1")
+      service_logs(service_name="hp1_elasticsearch", lines=100, since_minutes=30)
+    """
+    return swarm.service_logs(service_name, lines, since_minutes)
+
+
 # ── Kafka tools ───────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def kafka_broker_status() -> dict:
-    """Broker health, leader election state."""
+def kafka_broker_status(broker_id: int = None, broker_name: str = "") -> dict:
+    """Get Kafka broker health and controller status.
+    Call with no args to check all 3 brokers (most common usage).
+    broker_id and broker_name params are accepted but ignored — always returns all brokers.
+    Key field to check: controller_id (None = no controller elected = broken cluster).
+    HP1 brokers: id=1 on 192.168.199.31:9092, id=2 on 192.168.199.32:9093, id=3 on 192.168.199.33:9094
+    Example: kafka_broker_status()
+    """
     return kafka.kafka_broker_status()
 
 
@@ -125,6 +161,16 @@ def kafka_consumer_lag(group: str) -> dict:
 def kafka_topic_health(topic: str) -> dict:
     """Partition count, replication, under-replicated check."""
     return kafka.kafka_topic_health(topic)
+
+
+@mcp.tool()
+def kafka_topic_list() -> dict:
+    """List all Kafka topics with partition count and replication factor.
+    Skips internal (__consumer_offsets, __transaction_state) topics by default.
+    Use to inventory topics before/after operations or to verify topic creation.
+    Example: kafka_topic_list()
+    """
+    return kafka.kafka_topic_list()
 
 
 @mcp.tool()
@@ -142,6 +188,17 @@ def pre_kafka_check() -> dict:
 # ── Orchestration tools ───────────────────────────────────────────────────────
 
 @mcp.tool()
+def agent_status() -> dict:
+    """Check agent's own health and performance metrics.
+    Returns: version, deploy_mode, ws_clients (active WebSocket connections),
+    lm_studio connectivity, success_rate, total_operations.
+    Use to verify the agent is healthy before long-running tasks.
+    Example: agent_status()
+    """
+    return orchestration.agent_status()
+
+
+@mcp.tool()
 def checkpoint_save(label: str) -> dict:
     """Snapshot current state before risky ops."""
     return orchestration.checkpoint_save(label)
@@ -156,11 +213,16 @@ def checkpoint_restore(label: str) -> dict:
 @mcp.tool()
 def audit_log(action: str, result: str, target: str = "", details: str = "") -> dict:
     """Log an agent action to the audit table.
-    action: verb (upgrade, drain, create, restart, check)
-    result: ok | failed | escalated | skipped | error
-    target: resource acted on e.g. 'kafka', 'manager-01' (optional)
-    details: additional context (optional)
-    Note: called at most once per run — subsequent calls are skipped automatically.
+    REQUIRED: action (verb) and result (outcome).
+    action: what happened — upgrade | drain | restart | create | check | rollback
+    result: outcome — ok | failed | escalated | skipped | error
+    target: what was acted on — kafka | manager-01 | proxmox_vm_status (optional)
+    details: extra context (optional)
+    EXAMPLES (copy these patterns):
+      audit_log(action="upgrade", result="ok", target="kafka")
+      audit_log(action="health_check", result="ok")
+      audit_log(action="drain", result="failed", target="worker-01", details="node unreachable")
+    Note: only logged once per run — subsequent calls skipped automatically.
     """
     full_result = result
     if target:
@@ -411,7 +473,14 @@ def service_catalog_list() -> dict:
 
 @mcp.tool()
 def service_catalog_update(service_id: str, detected_version: str = "", known_latest: str = "", notes: str = "") -> dict:
-    """Update a service's version info. Use after firmware upgrades or discoveries."""
+    """Update service catalog entry with detected or known version info.
+    service_id: identifier string — must match an existing catalog entry.
+    Existing catalog entries: 'kafka', 'proxmox', 'elasticsearch', 'generic', 'fortigate'
+    EXAMPLES:
+      service_catalog_update(service_id="kafka", detected_version="3.7.0", known_latest="3.7.0")
+      service_catalog_update(service_id="proxmox", detected_version="8.3.2")
+      service_catalog_update(service_id="elasticsearch", notes="Single node, hp1-logs cluster")
+    """
     return skill_tools.service_catalog_update(service_id, detected_version, known_latest, notes)
 
 
@@ -460,7 +529,7 @@ def skill_regenerate(name: str, backend: str = "") -> dict:
 
 # ── Skill v3: Discovery, dispatcher, live validation ─────────────────────────
 
-_HP1_DEFAULT_HOSTS = [
+_HP1_HOSTS = [
     {"address": "192.168.199.10"},
     {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
     {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
@@ -473,7 +542,6 @@ _HP1_DEFAULT_HOSTS = [
 @mcp.tool()
 def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
     """Scan hosts for services via deterministic fingerprinting. No LLM calls.
-    Returns identified services, skill coverage gaps, and skill_create recommendations.
     If called with no arguments, scans all HP1 homelab hosts automatically.
     hosts: list of {"address": "...", "port": N} dicts (optional)
     hosts_json: JSON string alternative to hosts param (optional)
@@ -487,7 +555,7 @@ def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
             hosts = _json.loads(hosts_json)
         except Exception:
             pass
-    return skill_tools.discover_environment(hosts or _HP1_DEFAULT_HOSTS)
+    return skill_tools.discover_environment(hosts or _HP1_HOSTS)
 
 
 @mcp.tool()
