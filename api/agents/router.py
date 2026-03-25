@@ -79,6 +79,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     # Skill system — read-only
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "storage_health",
+    "agent_status", "postgres_health",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -96,6 +97,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
     "skill_recommend_updates", "service_catalog_list", "storage_health",
+    "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -104,26 +106,30 @@ _EXECUTE_BASE = frozenset({
     "checkpoint_save", "checkpoint_restore",
 })
 
+_DIAGNOSTICS = frozenset({
+    "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
+})
+
 EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "kafka_rolling_restart_safe",
-}) | _EXECUTE_BASE
+}) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_upgrade",
     "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
-}) | _EXECUTE_BASE
+}) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
     # Populated at startup by _load_promoted_into_allowlists().
     # Only plan_action / escalate / audit_log in base until proxmox skills are promoted.
-}) | _EXECUTE_BASE
+}) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_GENERAL_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "docker_engine_update",
-}) | _EXECUTE_BASE
+}) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
 BUILD_AGENT_TOOLS = frozenset({
@@ -133,6 +139,7 @@ BUILD_AGENT_TOOLS = frozenset({
     "discover_environment", "service_catalog_list", "storage_health",
     "skill_compat_check", "skill_compat_check_all", "skill_export_prompt",
     "plan_action", "audit_log", "escalate",
+    "agent_status", "postgres_health",
 })
 
 # Backward-compat aliases
