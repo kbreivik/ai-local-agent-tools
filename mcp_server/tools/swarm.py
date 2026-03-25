@@ -487,38 +487,21 @@ def pre_upgrade_check() -> dict:
 
 def postgres_health() -> dict:
     """Check PostgreSQL database health."""
-    import re
-    import os
-    db_url = os.environ.get("DATABASE_URL", "")
-    host = "hp1-postgres"
-    port = "5432"
-    user = "hp1"
-    dbname = "hp1_agent"
-    password = ""
-    if db_url:
-        m = re.match(r'postgresql\+?(?:asyncpg)?://([^:]+):([^@]+)@([^:/]+):?(\d+)?/(.+)', db_url)
-        if m:
-            user = m.group(1)
-            password = m.group(2)
-            host = m.group(3)
-            port = m.group(4) or "5432"
-            dbname = m.group(5)
     try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host=host, port=int(port), user=user, password=password, dbname=dbname,
-            connect_timeout=5,
-        )
-        cur = conn.cursor()
-        cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()));")
-        db_size = cur.fetchone()[0]
-        cur.execute(
-            "SELECT relname, n_live_tup FROM pg_stat_user_tables "
-            "WHERE relname IN ('operations','tool_calls','escalations','audit_log') "
-            "ORDER BY relname;"
-        )
-        counts = {r[0]: r[1] for r in cur.fetchall()}
-        conn.close()
+        from api.db.base import get_engine
+        from sqlalchemy import text as _text
+        engine = get_engine()
+        with engine.connect() as conn:
+            db_size = conn.execute(_text(
+                "SELECT pg_size_pretty(pg_database_size(current_database()))"
+            )).scalar()
+            rows = conn.execute(_text(
+                "SELECT relname, n_live_tup FROM pg_stat_user_tables "
+                "WHERE relname IN ('operations','tool_calls','escalations','audit_log') "
+                "ORDER BY relname"
+            )).fetchall()
+        counts = {r[0]: r[1] for r in rows}
+        host = engine.url.host or "unknown"
         return _ok({"status": "connected", "host": host, "db_size": db_size, "table_counts": counts})
     except Exception as e:
         return _err(f"postgres_health: {e}")
@@ -526,21 +509,30 @@ def postgres_health() -> dict:
 
 def service_logs(service_name: str, lines: int = 50, since_minutes: int = 10) -> dict:
     """Fetch recent logs from a Docker service or container."""
+    import re as _re
     from datetime import datetime, timedelta, timezone
     lines = min(lines, 200)
     since_dt = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
     try:
         import docker as _docker
-        # Use local socket (mounted at /var/run/docker.sock) for agent-01 containers
         try:
             client = _docker.DockerClient(base_url="unix:///var/run/docker.sock")
         except Exception:
             client = _docker.from_env()
-        container = client.containers.get(service_name)
+        # Strip hash prefix (e.g. "c3cd1f4c623c_hp1_agent" → "hp1_agent") for matching
+        container = None
+        for c in client.containers.list(all=True):
+            c_name = _re.sub(r'^[0-9a-f]{12}_', '', c.name.lstrip("/"))
+            if c_name == service_name or c.name.lstrip("/") == service_name:
+                container = c
+                break
+        if container is None:
+            return _err(f"service_logs: no container matching '{service_name}'")
         raw = container.logs(tail=lines, since=since_dt, timestamps=False)
         log_lines = raw.decode("utf-8", errors="replace").splitlines()
         return _ok({
             "service": service_name,
+            "container": container.name.lstrip("/"),
             "lines_returned": len(log_lines),
             "logs": log_lines,
         })
