@@ -526,33 +526,23 @@ def postgres_health() -> dict:
 
 def service_logs(service_name: str, lines: int = 50, since_minutes: int = 10) -> dict:
     """Fetch recent logs from a Docker service or container."""
-    import subprocess
+    from datetime import datetime, timedelta, timezone
     lines = min(lines, 200)
-    env = {**os.environ}
-    docker_host = env.get("DOCKER_HOST", "")
-    if not docker_host:
-        env["DOCKER_HOST"] = (
-            "npipe:////./pipe/docker_engine" if os.name == "nt"
-            else "unix:///var/run/docker.sock"
-        )
+    since_dt = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
     try:
-        cmd = ["docker", "service", "logs", service_name,
-               f"--tail={lines}", f"--since={since_minutes}m", "--no-task-ids"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=env)
-        output = (r.stdout + r.stderr).strip()
-        log_lines = output.splitlines() if output else []
-        if r.returncode != 0 and not log_lines:
-            # Fallback: try plain container logs
-            cmd2 = ["docker", "logs", service_name, f"--tail={lines}", f"--since={since_minutes}m"]
-            r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=15, env=env)
-            output2 = (r2.stdout + r2.stderr).strip()
-            log_lines = output2.splitlines() if output2 else []
+        import docker as _docker
+        # Use local socket (mounted at /var/run/docker.sock) for agent-01 containers
+        try:
+            client = _docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        except Exception:
+            client = _docker.from_env()
+        container = client.containers.get(service_name)
+        raw = container.logs(tail=lines, since=since_dt, timestamps=False)
+        log_lines = raw.decode("utf-8", errors="replace").splitlines()
         return _ok({
             "service": service_name,
             "lines_returned": len(log_lines),
-            "logs": log_lines[-lines:] if len(log_lines) > lines else log_lines,
+            "logs": log_lines,
         })
-    except subprocess.TimeoutExpired:
-        return _err(f"service_logs: timeout fetching logs for {service_name}")
     except Exception as e:
-        return _err(f"service_logs: {e}")
+        return _err(f"service_logs({service_name}): {e}")
