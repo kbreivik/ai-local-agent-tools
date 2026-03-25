@@ -90,7 +90,7 @@ async def log_operation_complete(
     status: str,
     duration_ms: int = 0,
 ) -> None:
-    """Write operation completion directly to DB — no queue, guaranteed write."""
+    """Write directly to DB — bypasses queue to guarantee the write completes."""
     if not operation_id:
         return
     try:
