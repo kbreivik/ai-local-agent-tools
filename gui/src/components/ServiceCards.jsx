@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   fetchDashboardContainers, fetchDashboardSwarm,
   fetchDashboardVMs, fetchDashboardExternal,
-  dashboardAction, fetchContainerTags
+  dashboardAction, fetchContainerTags, createLogStream
 } from '../api'
 import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
@@ -239,12 +239,27 @@ function Actions({ buttons }) {
 
 // ── Container card ─────────────────────────────────────────────────────────────
 
-function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded }) {
+function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab }) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
   const [scaleVal, setScaleVal] = useState(1)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [logLines, setLogLines] = useState([])
+  const [logsPaused, setLogsPaused] = useState(false)
+  const logsPausedRef = useRef(false)
+  const esRef = useRef(null)
+  const logsEndRef = useRef(null)
+
+  useEffect(() => () => { esRef.current?.close() }, [])
+
+  useEffect(() => {
+    if (!logsPaused && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logLines, logsPaused])
 
   const [tags, setTags]             = useState([])
   const [tagsLoading, setTagsLoading] = useState(false)
@@ -292,6 +307,35 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
     setLoading(l => ({ ...l, [key]: false }))
     if (!r.ok) showToast(r.error || 'Action failed', 'error')
     else { showToast('Done'); onAction() }
+  }
+
+  const openLogs = () => {
+    if (logsOpen) {
+      esRef.current?.close()
+      esRef.current = null
+      setLogLines([])
+      setLogsOpen(false)
+      return
+    }
+    setLogLines([])
+    setLogsPaused(false)
+    logsPausedRef.current = false
+    setLogsOpen(true)
+    esRef.current = createLogStream(
+      c.id,
+      200,
+      (line) => {
+        if (logsPausedRef.current) return
+        setLogLines(prev => [...prev, line].slice(-500))
+      },
+      () => { esRef.current = null },
+    )
+  }
+
+  const pauseLogs = () => {
+    const next = !logsPaused
+    setLogsPaused(next)
+    logsPausedRef.current = next
   }
 
   const pullPath = isSwarm ? `services/${c.name}/pull` : `containers/${c.id}/pull`
@@ -456,7 +500,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         !c.image?.startsWith('ghcr.io/') && !isSwarm && (
           <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
         ),
-        <ActionBtn key="logs" label="View Logs" loading={loading.logs} onClick={() => onTab && onTab("Logs")} />,
+        <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
         !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
         !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
         isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.replicas_desired ?? 1); setScaleOpen(true) }} />,
@@ -476,6 +520,36 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
             onClick={() => { act('scale', `services/${c.name}/scale`, { replicas: scaleVal }, null); setScaleOpen(false) }}
           >Confirm</button>
           <button className="px-2 py-1 text-[#888] text-sm" onClick={() => setScaleOpen(false)}>✕</button>
+        </div>
+      )}
+      {logsOpen && (
+        <div className="mt-2 rounded border border-[#2a2a4a] bg-[#060610] overflow-hidden">
+          <div className="flex justify-between items-center px-2 py-1 border-b border-[#1a1a3a]">
+            <span className="text-[9px] text-gray-600 font-mono">logs — {c.name}</span>
+            <div className="flex gap-1">
+              <button
+                className={`text-[9px] px-1.5 py-0.5 rounded ${logsPaused ? 'bg-[#7c6af7] text-white' : 'bg-[#1a1a3a] text-gray-400 hover:text-white'}`}
+                onClick={pauseLogs}
+              >
+                {logsPaused ? '▶ Resume' : '⏸ Pause'}
+              </button>
+              <button
+                className="text-[9px] px-1.5 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
+                onClick={() => { setLogLines([]); setLogsPaused(false); logsPausedRef.current = false }}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="overflow-y-auto max-h-48 font-mono p-2">
+            {logLines.length === 0
+              ? <span className="text-[9px] text-gray-700 italic">waiting for log lines…</span>
+              : logLines.map((l, i) => (
+                  <div key={i} className="text-[9px] text-green-400 leading-tight whitespace-pre-wrap break-all">{l}</div>
+                ))
+            }
+            <div ref={logsEndRef} />
+          </div>
         </div>
       )}
     </>
