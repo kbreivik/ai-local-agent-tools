@@ -328,7 +328,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         if (logsPausedRef.current) return
         setLogLines(prev => [...prev, line].slice(-500))
       },
-      () => { esRef.current = null },
+      () => { esRef.current?.close(); esRef.current = null; setLogsOpen(false) },
     )
   }
 
