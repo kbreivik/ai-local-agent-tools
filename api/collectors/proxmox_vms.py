@@ -116,6 +116,9 @@ def _build_vm_card(base: str, headers: dict, node: str, vm: dict) -> dict:
     maxmem_gb = round(maxmem / 1e9, 1) if maxmem else None
 
     disks = _get_vm_disk_usage(base, headers, node, vmid) if status == "running" else []
+    # Fallback: use list-level disk info when guest agent is unavailable or VM stopped
+    if not disks and vm.get("maxdisk"):
+        disks = [{"mountpoint": "/", "used_bytes": vm.get("disk") or 0, "total_bytes": vm["maxdisk"]}]
     dot, problem = _classify(status, disks)
 
     return {
