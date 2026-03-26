@@ -4,7 +4,7 @@
  * Target card heights: Nodes~110, Brokers~120, Services~130, ES~90, Muninn~70, Summary~100
  */
 import { useState, useEffect, useCallback } from 'react'
-import { fetchStatus, fetchMemoryHealth, fetchHealth, dashboardAction } from '../api'
+import { fetchStatus, fetchMemoryHealth, fetchHealth } from '../api'
 import { useOptions } from '../context/OptionsContext'
 import VersionBadge from '../utils/VersionBadge'
 
@@ -438,51 +438,6 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
   const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
   const sortedLanIPs     = sortIPs(net.lan_ips ?? [])
 
-  // idle | pulling | pulled | restarting | done | timeout | error
-  const [updateState, setUpdateState] = useState('idle')
-  const [updateError, setUpdateError] = useState(null)
-
-  const resetUpdate = () => { setUpdateState('idle'); setUpdateError(null) }
-
-  useEffect(() => {
-    if (updateState === 'done') {
-      const t = setTimeout(resetUpdate, 3000)
-      return () => clearTimeout(t)
-    }
-  }, [updateState])
-
-  const triggerUpdate = async () => {
-    setUpdateState('pulling')
-    setUpdateError(null)
-    try {
-      const r = await dashboardAction('self-update')
-      if (r.ok) {
-        setUpdateState('pulled')
-      } else {
-        setUpdateError(r.error || 'Pull failed')
-        setUpdateState('error')
-      }
-    } catch (e) {
-      setUpdateError(String(e))
-      setUpdateState('error')
-    }
-  }
-
-  const triggerRestart = async () => {
-    setUpdateState('restarting')
-    try { await dashboardAction('self-restart') } catch (_) {}
-    // Agent goes down ~5s after restart — wait then poll
-    await new Promise(resolve => setTimeout(resolve, 6000))
-    for (let i = 0; i < 20; i++) {
-      try {
-        const h = await fetchHealth()
-        if (h?.status === 'ok') { setUpdateState('done'); onRefresh(); return }
-      } catch (_) {}
-      await new Promise(resolve => setTimeout(resolve, 2000))
-    }
-    setUpdateState('timeout')
-  }
-
   return (
     <Card title="System Summary" health={overallHealth} lastUpdated={lastUpdated}
           onRefresh={onRefresh} loading={loading} minHeight={minHeight} maxHeight={maxHeight} minWidth={minWidth} maxWidth={maxWidth}>
@@ -490,7 +445,7 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
         <>
           <div>
             <div style={S.row}>
-              <span style={{ color: '#4b5563', fontSize: '0.75rem' }}>API</span>
+              <span style={{ color: '#4b5563', fontSize: '0.75rem' }}>API{net.hostname ? ` — ${net.hostname}` : ''}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <RowDot ok={apiOk} />
                 <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: apiOk ? '#15803d' : '#dc2626' }}>
@@ -503,52 +458,6 @@ function SystemSummaryCard({ statusData, apiHealth, loading, lastUpdated, onRefr
                 <span style={{ color: '#4b5563', fontSize: '0.75rem' }}>WS clients</span>
                 <span style={S.rowMono}>{apiHealth.ws_clients}</span>
               </div>
-            )}
-          </div>
-          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {apiHealth.version && (
-              <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#6b7280' }}>v{apiHealth.version}</span>
-            )}
-            {updateState === 'idle' && (
-              <button
-                onClick={triggerUpdate}
-                style={{ fontSize: '0.7rem', padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
-                         border: '1px solid #93c5fd', background: '#eff6ff', color: '#1d4ed8' }}
-              >
-                ↑ Update
-              </button>
-            )}
-            {updateState === 'pulling' && (
-              <span style={{ fontSize: '0.7rem', color: '#6b7280' }}>Pulling image…</span>
-            )}
-            {updateState === 'pulled' && (
-              <button
-                onClick={triggerRestart}
-                style={{ fontSize: '0.7rem', padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
-                         border: '1px solid #86efac', background: '#dcfce7', color: '#15803d' }}
-              >
-                ✓ Pulled — click Restart to apply
-              </button>
-            )}
-            {updateState === 'restarting' && (
-              <span style={{ fontSize: '0.7rem', color: '#6b7280' }}>Restarting…</span>
-            )}
-            {updateState === 'done' && (
-              <span style={{ fontSize: '0.7rem', color: '#15803d' }}>✓ Restarted successfully</span>
-            )}
-            {updateState === 'timeout' && (
-              <>
-                <span style={{ fontSize: '0.68rem', color: '#d97706' }}>Timed out waiting for restart. Check agent manually.</span>
-                <button onClick={resetUpdate} style={{ fontSize: '0.7rem', color: '#6b7280', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}>Try again</button>
-              </>
-            )}
-            {updateState === 'error' && (
-              <>
-                {updateError && (
-                  <span style={{ fontSize: '0.68rem', color: '#dc2626', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={updateError}>{updateError}</span>
-                )}
-                <button onClick={resetUpdate} style={{ fontSize: '0.7rem', color: '#6b7280', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}>Try again</button>
-              </>
             )}
           </div>
           {sortedCollectors.length > 0 && (
