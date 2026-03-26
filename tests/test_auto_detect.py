@@ -32,6 +32,20 @@ class TestSource1DatabaseUrl(unittest.TestCase):
             result = _build_postgres_dsn()
         self.assertEqual(result, "postgres://hp1:pass@hp1-postgres:5432/hp1_agent")
 
+    def test_postgres_short_scheme_dialect_stripped(self):
+        """postgres+asyncpg:// (short form with dialect) is also handled."""
+        env = {"DATABASE_URL": "postgres+asyncpg://hp1:pass@hp1-postgres:5432/hp1_agent"}
+        with patch.dict("os.environ", env, clear=True):
+            result = _build_postgres_dsn()
+        self.assertEqual(result, "postgres://hp1:pass@hp1-postgres:5432/hp1_agent")
+
+    def test_url_with_plus_in_password_not_corrupted(self):
+        """A + in the password is not stripped — only the scheme dialect is."""
+        env = {"DATABASE_URL": "postgresql://hp1:p%2Bword@hp1-postgres:5432/hp1_agent"}
+        with patch.dict("os.environ", env, clear=True):
+            result = _build_postgres_dsn()
+        self.assertEqual(result, "postgresql://hp1:p%2Bword@hp1-postgres:5432/hp1_agent")
+
 
 class TestSource2PostgresVars(unittest.TestCase):
 

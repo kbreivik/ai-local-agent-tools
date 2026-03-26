@@ -113,7 +113,7 @@ def _build_postgres_dsn() -> str:
     # The main app uses asyncpg; the storage backend uses psycopg2.
     url = os.environ.get("DATABASE_URL", "")
     if url:
-        url = re.sub(r'\+\w+', '', url, count=1)
+        url = re.sub(r'^(postgresql|postgres)\+\w+(://)', r'\1\2', url)
         if url.startswith(("postgresql://", "postgres://")):
             return url
 
@@ -142,7 +142,7 @@ def _build_postgres_dsn() -> str:
             log.info("PostgreSQL detected at %s:5432", candidate)
             db = os.environ.get("POSTGRES_DB", "hp1_agent")
             user = os.environ.get("POSTGRES_USER", "hp1")
-            password = os.environ.get("POSTGRES_PASSWORD", "hp1agent")
+            password = os.environ.get("POSTGRES_PASSWORD", "")
             return f"postgresql://{user}:{password}@{candidate}:5432/{db}"
 
     return ""
