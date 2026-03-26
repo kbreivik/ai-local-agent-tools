@@ -9,6 +9,7 @@ Runs once at startup. Cached in storage/__init__.py as singleton.
 """
 import logging
 import os
+import re
 import socket
 
 log = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def detect_cache():
     try:
         socket.getaddrinfo("host.docker.internal", 6379, socket.AF_INET)
         probe_hosts.insert(0, "host.docker.internal")
-    except socket.gaierror:
+    except OSError:
         pass
 
     probe_hosts.append("172.17.0.1")  # Linux bridge gateway
@@ -100,11 +101,21 @@ def _try_postgres():
 
 
 def _build_postgres_dsn() -> str:
-    """Build a PostgreSQL DSN from env vars or network probe."""
+    """Build a PostgreSQL DSN from env vars or network probe.
+
+    Detection order:
+      1. DATABASE_URL — dialect suffix stripped for psycopg2 compatibility
+      2. POSTGRES_HOST env var — build DSN from individual POSTGRES_* vars
+      3. Network probe — try hp1-postgres first, then generic Docker DNS names
+    """
     # Source 1: explicit DATABASE_URL
+    # Strip +dialect suffix (e.g. +asyncpg) so psycopg2 can use the URL.
+    # The main app uses asyncpg; the storage backend uses psycopg2.
     url = os.environ.get("DATABASE_URL", "")
-    if url and url.startswith(("postgresql://", "postgres://")):
-        return url
+    if url:
+        url = re.sub(r'\+\w+', '', url, count=1)
+        if url.startswith(("postgresql://", "postgres://")):
+            return url
 
     # Source 2: individual POSTGRES_* env vars
     host = os.environ.get("POSTGRES_HOST", "")
@@ -116,12 +127,13 @@ def _build_postgres_dsn() -> str:
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
     # Source 3: probe well-known Docker DNS names + gateway
-    probe_hosts = ["postgres", "postgresql", "db", "database"]
+    # hp1-postgres is the container name on hp1-pg-net — try it first.
+    probe_hosts = ["hp1-postgres", "postgres", "postgresql", "db", "database"]
 
     try:
         socket.getaddrinfo("host.docker.internal", 5432, socket.AF_INET)
         probe_hosts.append("host.docker.internal")
-    except socket.gaierror:
+    except OSError:
         pass
     probe_hosts.append("172.17.0.1")
 
