@@ -424,11 +424,8 @@ function ContainerCardCollapsed({ c, latestTag }) {
   return (
     <>
       <div className="text-[10px] text-[#383850] mb-1">{c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired} replicas` : '')}</div>
-      {c.problem
-        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
-        : <PullBadge lastPullAt={c.last_pull_at} />}
       {c.running_version && (
-        <div className="flex items-center gap-1.5 mt-0.5">
+        <div className="flex items-center gap-1.5 mb-0.5">
           <span className="text-[9px] text-gray-700 font-mono">{c.running_version}</span>
           {severity === 'current' && (
             <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
@@ -440,6 +437,9 @@ function ContainerCardCollapsed({ c, latestTag }) {
           )}
         </div>
       )}
+      {c.problem
+        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
+        : <PullBadge lastPullAt={c.last_pull_at} />}
     </>
   )
 }
