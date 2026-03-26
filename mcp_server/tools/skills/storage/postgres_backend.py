@@ -138,14 +138,14 @@ class PostgresBackend(StorageBackend):
                 checked_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
-            CREATE TABLE IF NOT EXISTS audit_log (
+            CREATE TABLE IF NOT EXISTS skill_audit_log (
                 id          SERIAL PRIMARY KEY,
                 timestamp   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 action      TEXT NOT NULL,
                 result      JSONB DEFAULT '{}'
             );
-            CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
-            CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_skill_audit_action ON skill_audit_log(action);
+            CREATE INDEX IF NOT EXISTS idx_skill_audit_ts ON skill_audit_log(timestamp);
 
             CREATE TABLE IF NOT EXISTS checkpoints (
                 label       TEXT NOT NULL,
@@ -425,19 +425,19 @@ class PostgresBackend(StorageBackend):
 
     def append_audit(self, action: str, result: Any) -> None:
         self._execute(
-            "INSERT INTO audit_log (action, result) VALUES (%s, %s)",
+            "INSERT INTO skill_audit_log (action, result) VALUES (%s, %s)",
             (action, json.dumps(result, default=str)),
         )
 
     def query_audit(self, action_prefix: str = "", limit: int = 50, offset: int = 0) -> list[dict]:
         if action_prefix:
             rows = self._execute("""
-                SELECT * FROM audit_log WHERE action LIKE %s
+                SELECT * FROM skill_audit_log WHERE action LIKE %s
                 ORDER BY id DESC LIMIT %s OFFSET %s
             """, (f"{action_prefix}%", limit, offset), fetch="all") or []
         else:
             rows = self._execute(
-                "SELECT * FROM audit_log ORDER BY id DESC LIMIT %s OFFSET %s",
+                "SELECT * FROM skill_audit_log ORDER BY id DESC LIMIT %s OFFSET %s",
                 (limit, offset), fetch="all",
             ) or []
         return [dict(r) for r in rows]
