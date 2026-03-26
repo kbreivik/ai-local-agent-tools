@@ -9,11 +9,12 @@ import json
 import logging
 import os
 import re
+import queue as _queue
 import threading
 import time as _time
 
 from fastapi import APIRouter, Depends, HTTPException
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from api.auth import get_current_user
 from api.db.base import get_engine
@@ -270,6 +271,106 @@ class ScaleRequest(BaseModel):
     replicas: int
 
 
+# ── Container log stream ───────────────────────────────────────────────────────
+
+async def _log_generator(container_id: str, tail: int):
+    """Async generator that streams Docker log lines as SSE data events.
+
+    Uses a background thread to run the blocking Docker SDK iterator and
+    bridges output to the async generator via a queue.
+
+    Note: token auth via query param is a necessary compromise. EventSource
+    cannot send custom headers. Tokens appear in access logs; acceptable here
+    because this is a single-admin homelab with no multi-user exposure.
+    """
+    import docker
+    q = _queue.Queue(maxsize=200)
+    _DONE = object()
+    stop = threading.Event()
+
+    def _reader():
+        try:
+            _, container = _resolve_container(container_id)
+        except docker.errors.NotFound:
+            q.put(f"data: [container '{container_id}' not found]\n\n")
+            q.put(_DONE)
+            return
+        except Exception as e:
+            q.put(f"data: [connection error: {e}]\n\n")
+            q.put(_DONE)
+            return
+        try:
+            remainder = ""
+            for chunk in container.logs(stream=True, follow=True, tail=tail):
+                if stop.is_set():
+                    return
+                text = remainder + chunk.decode("utf-8", errors="replace")
+                lns = text.splitlines(keepends=True)
+                remainder = lns.pop() if lns and not lns[-1].endswith("\n") else ""
+                for line in lns:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # SSE spec: embedded newlines must be split into separate data: lines
+                    sse_line = line.replace("\n", "\ndata: ")
+                    try:
+                        q.put(f"data: {sse_line}\n\n", timeout=1)
+                    except _queue.Full:
+                        if stop.is_set():
+                            return
+            if remainder.strip():
+                sse_line = remainder.strip().replace("\n", "\ndata: ")
+                try:
+                    q.put(f"data: {sse_line}\n\n", timeout=1)
+                except _queue.Full:
+                    pass
+        except Exception as e:
+            if not stop.is_set():
+                try:
+                    q.put(f"data: [stream ended: {e}]\n\n", timeout=1)
+                except _queue.Full:
+                    pass
+        finally:
+            q.put(_DONE)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    try:
+        while True:
+            try:
+                item = await asyncio.to_thread(q.get, timeout=30)
+            except _queue.Empty:
+                # Safety net: if _DONE was somehow never put, terminate cleanly
+                break
+            if item is _DONE:
+                break
+            yield item
+    except GeneratorExit:
+        stop.set()
+        raise
+
+
+
+@router.get("/containers/{container_id}/logs/stream")
+async def stream_container_logs(
+    container_id: str,
+    tail: int = 200,
+    token: str = "",
+):
+    """Stream container stdout/stderr as SSE. Auth via ?token= (EventSource can't send headers)."""
+    from api.auth import decode_token
+    try:
+        decode_token(token)
+    except HTTPException:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+    return StreamingResponse(
+        _log_generator(container_id, tail),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _docker_client():
     import docker
     host = os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
@@ -305,7 +406,6 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
         client, container = _resolve_container(container_id)
         image_name = container.attrs["Config"]["Image"]
-        bare = image_name.split("@")[0].split(":")[0]
 
         auth_config = None
         if image_name.startswith("ghcr.io/"):
@@ -314,150 +414,20 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
                 auth_config = {"username": "token", "password": token}
 
         if tag:
+            # Pull the versioned image, then re-tag it as the container's current image
+            # so container.restart() uses the new version.
+            bare = image_name.split("@")[0].split(":")[0]
             versioned = f"{bare}:{tag}"
             pulled = client.images.pull(versioned, auth_config=auth_config)
             current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
             pulled.tag(bare, tag=current_tag)
-            new_image = f"{bare}:{current_tag}"
         else:
             client.images.pull(image_name, auth_config=auth_config)
-            new_image = image_name
 
-        # Recreate in background — never just restart (restart reuses old image layers)
-        threading.Thread(
-            target=_recreate_container,
-            args=(client, container, new_image),
-            daemon=True,
-        ).start()
+        container.restart()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
-
-def _recreate_container(client, container, new_image: str) -> None:
-    """Recreate container with new image. Two paths: compose helper or SDK recreate."""
-    import time
-    time.sleep(2)
-
-    labels = container.attrs.get("Config", {}).get("Labels", {}) or {}
-    compose_service = labels.get("com.docker.compose.service")
-    compose_files_str = labels.get("com.docker.compose.project.config_files", "")
-    working_dir = labels.get("com.docker.compose.project.working_dir", "")
-
-    if compose_service and compose_files_str and working_dir:
-        _recreate_via_compose_helper(client, container, new_image, compose_service, compose_files_str, working_dir)
-    else:
-        _recreate_via_sdk(client, container, new_image)
-
-
-def _recreate_via_compose_helper(
-    client, container, new_image: str,
-    service: str, compose_files_str: str, working_dir: str,
-) -> None:
-    """Launch a docker:cli sidecar to run 'docker compose up --force-recreate'.
-
-    Handles the self-referential case (agent updating itself): the helper starts
-    before we stop the container, waits 5 s, then recreates it via compose.
-    Compose picks up the re-tagged image automatically.
-    """
-    compose_args = " ".join(
-        f"-f {f.strip()}" for f in compose_files_str.split(",") if f.strip()
-    )
-    cmd = f"sleep 5 && docker compose {compose_args} up -d --force-recreate {service}"
-
-    try:
-        client.containers.run(
-            "docker:cli",
-            command=["sh", "-c", cmd],
-            volumes={
-                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
-                working_dir: {"bind": working_dir, "mode": "ro"},
-            },
-            remove=True,
-            detach=True,
-        )
-    except Exception as e:
-        log.error("compose helper launch failed for %s: %s — falling back to SDK recreate", service, e)
-        _recreate_via_sdk(client, container, new_image)
-        return
-
-    import time
-    time.sleep(1)
-    try:
-        container.stop(timeout=15)
-    except Exception as e:
-        log.warning("Stop %s after helper launch: %s", container.name, e)
-
-
-def _recreate_via_sdk(client, container, new_image: str) -> None:
-    """Stop, remove, recreate container via docker-py SDK. For non-compose containers."""
-    name = container.name
-    cfg = container.attrs.get("Config", {}) or {}
-    hcfg = container.attrs.get("HostConfig", {}) or {}
-    networks = container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
-    net_mode = hcfg.get("NetworkMode", "bridge") or "bridge"
-
-    try:
-        container.stop(timeout=10)
-        container.remove()
-    except Exception as e:
-        log.warning("Stop/remove %s: %s", name, e)
-        try:
-            container.remove(force=True)
-        except Exception:
-            pass
-
-    host_config = client.api.create_host_config(
-        binds=hcfg.get("Binds") or [],
-        port_bindings=hcfg.get("PortBindings") or {},
-        restart_policy=hcfg.get("RestartPolicy") or {"Name": "unless-stopped"},
-        network_mode=net_mode,
-        privileged=hcfg.get("Privileged", False),
-        devices=hcfg.get("Devices") or [],
-        group_add=hcfg.get("GroupAdd") or [],
-        cap_add=hcfg.get("CapAdd") or [],
-        cap_drop=hcfg.get("CapDrop") or [],
-        security_opt=hcfg.get("SecurityOpt") or [],
-        mem_limit=hcfg.get("Memory") or 0,
-        nano_cpus=hcfg.get("NanoCpus") or 0,
-        pid_mode=hcfg.get("PidMode") or "",
-        ipc_mode=hcfg.get("IpcMode") or "",
-        extra_hosts=hcfg.get("ExtraHosts") or [],
-    )
-
-    net_cfg = None
-    if net_mode not in ("host", "none", "bridge", "") and net_mode in networks:
-        aliases = networks[net_mode].get("Aliases") or []
-        net_cfg = client.api.create_networking_config(
-            {net_mode: client.api.create_endpoint_config(aliases=aliases)}
-        )
-
-    try:
-        new_ctr = client.api.create_container(
-            image=new_image,
-            name=name,
-            environment=cfg.get("Env") or [],
-            labels=cfg.get("Labels") or {},
-            host_config=host_config,
-            networking_config=net_cfg,
-            entrypoint=cfg.get("Entrypoint"),
-            command=cfg.get("Cmd"),
-            user=cfg.get("User") or "",
-            working_dir=cfg.get("WorkingDir") or "",
-        )
-        client.api.start(new_ctr["Id"])
-
-        for net_name, net_info in networks.items():
-            if net_name == net_mode:
-                continue
-            try:
-                aliases = (net_info or {}).get("Aliases") or []
-                client.networks.get(net_name).connect(new_ctr["Id"], aliases=aliases)
-            except Exception as ne:
-                log.warning("Network connect %s -> %s: %s", name, net_name, ne)
-
-    except Exception as e:
-        log.error("SDK recreate failed for %s: %s", name, e)
 
 
 @router.post("/containers/{container_id}/restart")
