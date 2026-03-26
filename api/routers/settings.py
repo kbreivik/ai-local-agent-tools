@@ -33,10 +33,16 @@ SETTINGS_KEYS: dict[str, dict] = {
     "elasticsearchUrl":      {"env": "ELASTIC_URL",             "sens": False, "default": ""},
     "kibanaUrl":             {"env": "KIBANA_URL",              "sens": False, "default": ""},
     "muninndbUrl":           {"env": "MUNINN_URL",              "sens": False, "default": ""},
+    "swarmManagerIPs":       {"env": "",                        "sens": False, "default": ""},
+    "swarmWorkerIPs":        {"env": "",                        "sens": False, "default": ""},
+    "ghcrToken":             {"env": "GHCR_TOKEN",             "sens": True,  "default": ""},
+    "agentDockerHost":       {"env": "AGENT01_DOCKER_HOST",    "sens": False, "default": ""},
     # Infrastructure — Proxmox
     "proxmoxHost":           {"env": "PROXMOX_HOST",            "sens": False, "default": ""},
     "proxmoxTokenId":        {"env": "PROXMOX_TOKEN_ID",        "sens": False, "default": ""},
     "proxmoxTokenSecret":    {"env": "PROXMOX_TOKEN_SECRET",    "sens": True,  "default": ""},
+    "proxmoxUser":           {"env": "PROXMOX_USER",           "sens": False, "default": ""},
+    "proxmoxNodes":          {"env": "PROXMOX_NODES",          "sens": False, "default": ""},
     # Infrastructure — FortiGate
     "fortigateHost":         {"env": "FORTIGATE_HOST",          "sens": False, "default": ""},
     "fortigateApiKey":       {"env": "FORTIGATE_API_KEY",       "sens": True,  "default": ""},
