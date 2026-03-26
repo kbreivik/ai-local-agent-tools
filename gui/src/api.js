@@ -350,3 +350,14 @@ export function createOutputStream(onMessage, onOpen, onClose) {
 
   return ws
 }
+
+// ── Container log stream (SSE) ────────────────────────────────────────────────
+
+export function createLogStream(containerId, tail = 200, onLine, onError) {
+  const token = getAuthToken()
+  const url = `${BASE}/api/dashboard/containers/${encodeURIComponent(containerId)}/logs/stream?tail=${tail}&token=${encodeURIComponent(token)}`
+  const es = new EventSource(url)
+  es.onmessage = (e) => onLine(e.data)
+  es.onerror = onError || (() => es.close())
+  return es
+}
