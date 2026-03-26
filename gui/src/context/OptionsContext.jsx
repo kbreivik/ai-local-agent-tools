@@ -17,6 +17,15 @@ const DEFAULTS = {
   kibanaUrl:              '',
   muninndbUrl:            '',
 
+  // Infrastructure credentials
+  proxmoxHost:         '',
+  proxmoxTokenId:      '',
+  proxmoxTokenSecret:  '',
+  fortigateHost:       '',
+  fortigateApiKey:     '',
+  truenasHost:         '',
+  truenasApiKey:       '',
+
   // AI Services — Local
   lmStudioUrl:    '',
   lmStudioApiKey: '',
@@ -50,6 +59,9 @@ const SERVER_KEYS = new Set([
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs',
   'dashboardRefreshInterval',
+  'proxmoxHost', 'proxmoxTokenId', 'proxmoxTokenSecret',
+  'fortigateHost', 'fortigateApiKey',
+  'truenasHost', 'truenasApiKey',
 ])
 
 function isMasked(v) {
