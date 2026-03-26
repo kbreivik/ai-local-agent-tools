@@ -82,19 +82,37 @@ function PullBadge({ lastPullAt }) {
   return <span className={`text-[9px] px-1.5 py-px rounded border ${cls}`}>↓ {days}d ago</span>
 }
 
+function _fmtBytes(bytes) {
+  if (bytes == null) return null
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
+  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
 function VolBar({ vol }) {
-  if (!vol.used_bytes || !vol.total_bytes) {
-    return <div className="text-[10px] text-gray-600 mb-1">{vol.name || vol.mountpoint}</div>
+  const name = vol.name || vol.mountpoint
+  const used = _fmtBytes(vol.used_bytes)
+  if (!vol.used_bytes && !vol.total_bytes) {
+    return <div className="text-[10px] text-gray-600 mb-1">{name}</div>
+  }
+  if (!vol.total_bytes) {
+    // Only usage known (Docker volumes) — show name + size badge, no bar
+    return (
+      <div className="flex justify-between text-[10px] text-gray-600 mb-[5px]" title={`${name}: ${used} used`}>
+        <span>{name}</span>
+        <span className="text-gray-700 font-mono">{used}</span>
+      </div>
+    )
   }
   const pct = Math.round((vol.used_bytes / vol.total_bytes) * 100)
   const fillCls = pct > 80 ? 'bg-red-500' : pct > 60 ? 'bg-amber-500' : 'bg-violet-500'
-  const usedGb = (vol.used_bytes / 1e9).toFixed(1)
-  const totalGb = (vol.total_bytes / 1e9).toFixed(1)
+  const totalFmt = _fmtBytes(vol.total_bytes)
   return (
-    <div className="mb-[5px]">
+    <div className="mb-[5px]" title={`${name}: ${used} / ${totalFmt} (${pct}%)`}>
       <div className="flex justify-between text-[10px] text-gray-600 mb-[2px]">
-        <span>{vol.name || vol.mountpoint}</span>
-        <span className="text-gray-700">{usedGb} / {totalGb} GB</span>
+        <span>{name}</span>
+        <span className="text-gray-700">{used} / {totalFmt}</span>
       </div>
       <div className="h-[4px] rounded bg-[#0a0a18] overflow-hidden">
         <div className={`h-full rounded ${fillCls}`} style={{ width: `${pct}%` }} />
@@ -224,6 +242,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   const [tagsError, setTagsError]   = useState(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selectedTag, setSelectedTag] = useState('')
+  const [versionPickerOpen, setVersionPickerOpen] = useState(false)
 
   useEffect(() => {
     if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
@@ -272,8 +291,8 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   return (
     <>
       <StatRow stats={[
+        { v: c.last_pull_at ? _pulledAgo(c.last_pull_at) : 'unknown', l: 'Pulled', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
         { v: c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired}` : '—'), l: isSwarm ? 'Replicas' : 'Uptime' },
-        { v: c.last_pull_at ? _relativeTime(c.last_pull_at) : 'unknown', l: 'Last Pull', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
       ]} />
       {c.ports?.length > 0 && (
         <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
@@ -384,6 +403,43 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                 onClick={() => act('pull', pullPath, null, null)}
               />
             )}
+
+            {/* Choose version picker — always available when tags loaded */}
+            {tags.length > 0 && (
+              <>
+                <ActionBtn
+                  key="choose-version"
+                  label={versionPickerOpen ? '✕ Cancel' : '↓ Choose version ▾'}
+                  onClick={() => setVersionPickerOpen(o => !o)}
+                />
+                {versionPickerOpen && (
+                  <div className="mt-1 mb-1 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
+                    <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
+                    <select
+                      className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag}
+                      onChange={e => setSelectedTag(e.target.value)}
+                    >
+                      {tags.map(t => (
+                        <option key={t} value={t}>
+                          {t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ActionBtn
+                      key="pull-versioned-picker"
+                      label={`↓ Pull ${selectedTag}`}
+                      variant="primary"
+                      loading={loading['pull-versioned']}
+                      onClick={() => {
+                        act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null)
+                        setVersionPickerOpen(false)
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </>
         )
       })()}
@@ -421,25 +477,40 @@ function ContainerCardCollapsed({ c, latestTag }) {
   const severity = (c.running_version && latestTag)
     ? compareSemver(c.running_version, latestTag)
     : null
+  const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
   return (
     <>
       <div className="text-[10px] text-[#383850] mb-1">{c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired} replicas` : '')}</div>
-      {c.running_version && (
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-[9px] text-gray-700 font-mono">{c.running_version}</span>
-          {severity === 'current' && (
-            <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+      {c.problem && (
+        <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
+      )}
+      {(c.running_version || c.built_at) && (
+        <div className="border-t border-[#1a1a30] pt-1 mt-0.5">
+          {c.running_version && (
+            <div className="flex justify-between text-[9px] mb-0.5">
+              <span className="text-gray-700">Running</span>
+              <span className="text-gray-500 font-mono">{c.running_version}</span>
+            </div>
           )}
-          {(severity === 'major' || severity === 'minor' || severity === 'patch') && (
-            <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
-              ↑ {latestTag}
-            </span>
+          {c.built_at && (
+            <div className="flex justify-between text-[9px] mb-0.5">
+              <span className="text-gray-700">Built</span>
+              <span className="text-gray-500 font-mono">{c.built_at.slice(0, 10)}</span>
+            </div>
+          )}
+          {c.running_version && (
+            <div className="flex justify-between text-[9px]">
+              <span className="text-gray-700">Status</span>
+              {severity === 'current'
+                ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                : hasUpdate
+                ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>↑ {latestTag}</span>
+                : <span className="text-gray-700">—</span>
+              }
+            </div>
           )}
         </div>
       )}
-      {c.problem
-        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
-        : <PullBadge lastPullAt={c.last_pull_at} />}
     </>
   )
 }
@@ -676,6 +747,18 @@ function _relativeTime(iso) {
   const hours = Math.round(age / 3600000)
   if (hours < 24) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
+}
+
+function _pulledAgo(iso) {
+  if (!iso) return 'unknown'
+  const age = Date.now() - new Date(iso).getTime()
+  const mins = Math.round(age / 60000)
+  if (mins < 60) return `${Math.max(1, mins)}m ago`
+  const hours = Math.floor(age / 3600000)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  const remHours = hours % 24
+  return remHours > 0 ? `${days}d ${remHours}h ago` : `${days}d ago`
 }
 
 function _computeContainerSub(c, knownLatest) {
