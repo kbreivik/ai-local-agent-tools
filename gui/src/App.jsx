@@ -593,7 +593,7 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
       <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
@@ -603,7 +603,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
         <DashboardCards activeFilters={activeFilters} />
         <div className="border-t border-gray-200 px-5 py-4">
           <ServiceCardsErrorBoundary>
-            <ServiceCards activeFilters={activeFilters} onTab={setActiveTab} />
+            <ServiceCards activeFilters={activeFilters} onTab={onTab} />
           </ServiceCardsErrorBoundary>
         </div>
       </div>
@@ -732,6 +732,7 @@ function AppShell() {
               activeFilters={activeFilters}
               onToggleFilter={toggleFilter}
               onToggleAll={toggleAll}
+              onTab={setActiveTab}
             />
           )}
 
