@@ -9,9 +9,11 @@ const DEFAULTS = {
   dashboardRefreshInterval: 15000,
 
   // Infrastructure
+  dockerHost:             '',
   swarmManagerIPs:        '',
   swarmWorkerIPs:         '',
-  dockerHost:             '',
+  ghcrToken:              '',
+  agentDockerHost:        '',
   kafkaBootstrapServers:  '',
   elasticsearchUrl:       '',
   kibanaUrl:              '',
@@ -21,6 +23,8 @@ const DEFAULTS = {
   proxmoxHost:         '',
   proxmoxTokenId:      '',
   proxmoxTokenSecret:  '',
+  proxmoxUser:         'root@pam',
+  proxmoxNodes:        '',
   fortigateHost:       '',
   fortigateApiKey:     '',
   truenasHost:         '',
@@ -57,9 +61,9 @@ const SERVER_KEYS = new Set([
   'externalProvider', 'externalApiKey', 'externalModel',
   'autoEscalate', 'requireConfirmation',
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
-  'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs',
+  'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',
   'dashboardRefreshInterval',
-  'proxmoxHost', 'proxmoxTokenId', 'proxmoxTokenSecret',
+  'proxmoxHost', 'proxmoxTokenId', 'proxmoxTokenSecret', 'proxmoxUser', 'proxmoxNodes',
   'fortigateHost', 'fortigateApiKey',
   'truenasHost', 'truenasApiKey',
 ])

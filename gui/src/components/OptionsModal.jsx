@@ -140,6 +140,18 @@ function InfrastructureTab({ draft, update }) {
         <Field label="Docker Host" hint="TCP endpoint of the swarm manager — gives full swarm API access">
           <TextInput value={draft.dockerHost} onChange={v => update('dockerHost', v)} placeholder="tcp://192.168.199.21:2375" />
         </Field>
+        <Field label="Swarm Manager IPs" hint="Comma-separated manager IPs">
+          <TextInput value={draft.swarmManagerIPs} onChange={v => update('swarmManagerIPs', v)} placeholder="192.168.199.21:2375" />
+        </Field>
+        <Field label="Swarm Worker IPs">
+          <TextInput value={draft.swarmWorkerIPs} onChange={v => update('swarmWorkerIPs', v)} placeholder="192.168.199.31,192.168.199.32,192.168.199.33" />
+        </Field>
+        <Field label="GHCR Token" hint="GitHub PAT with read:packages scope — enables version checking">
+          <TextInput type="password" value={draft.ghcrToken} onChange={v => update('ghcrToken', v)} placeholder="ghp_..." />
+        </Field>
+        <Field label="Agent Docker Host">
+          <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
+        </Field>
         <Field label="Kafka Bootstrap Servers" hint="Comma-separated host:port pairs">
           <TextInput value={draft.kafkaBootstrapServers} onChange={v => update('kafkaBootstrapServers', v)} placeholder="192.168.199.31:9092,192.168.199.32:9093" />
         </Field>
@@ -165,6 +177,12 @@ function InfrastructureTab({ draft, update }) {
         </Field>
         <Field label="Token Secret" hint="UUID from Proxmox → Datacenter → API Tokens">
           <TextInput type="password" value={draft.proxmoxTokenSecret} onChange={v => update('proxmoxTokenSecret', v)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+        </Field>
+        <Field label="User">
+          <TextInput value={draft.proxmoxUser} onChange={v => update('proxmoxUser', v)} placeholder="root@pam" />
+        </Field>
+        <Field label="Nodes" hint="Comma-separated node hostnames">
+          <TextInput value={draft.proxmoxNodes} onChange={v => update('proxmoxNodes', v)} placeholder="pve,pve2,pve3" />
         </Field>
       </div>
 
