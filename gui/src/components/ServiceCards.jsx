@@ -105,9 +105,18 @@ function VolBar({ vol }) {
       </div>
     )
   }
+  const totalFmt = _fmtBytes(vol.total_bytes)
+  // used_bytes=0 means Proxmox list-level fallback (no guest agent) — show capacity only
+  if (!vol.used_bytes) {
+    return (
+      <div className="flex justify-between text-[10px] text-gray-600 mb-[5px]" title={`${name}: ${totalFmt} provisioned`}>
+        <span>{name}</span>
+        <span className="text-gray-700 font-mono">{totalFmt}</span>
+      </div>
+    )
+  }
   const pct = Math.round((vol.used_bytes / vol.total_bytes) * 100)
   const fillCls = pct > 80 ? 'bg-red-500' : pct > 60 ? 'bg-amber-500' : 'bg-violet-500'
-  const totalFmt = _fmtBytes(vol.total_bytes)
   return (
     <div className="mb-[5px]" title={`${name}: ${used} / ${totalFmt} (${pct}%)`}>
       <div className="flex justify-between text-[10px] text-gray-600 mb-[2px]">
