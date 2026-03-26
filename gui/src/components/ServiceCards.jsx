@@ -456,7 +456,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         !c.image?.startsWith('ghcr.io/') && !isSwarm && (
           <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
         ),
-        <ActionBtn key="logs" label="View Logs" loading={loading.logs} onClick={() => { window.location.hash = '#logs' }} />,
+        <ActionBtn key="logs" label="View Logs" loading={loading.logs} onClick={() => onTab && onTab("Logs")} />,
         !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
         !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
         isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.replicas_desired ?? 1); setScaleOpen(true) }} />,
@@ -782,7 +782,7 @@ function _computeContainerSub(c, knownLatest) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null }) {
+export default function ServiceCards({ activeFilters = null, onTab }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
   const [containers, setContainers] = useState(null)
@@ -876,7 +876,7 @@ export default function ServiceCards({ activeFilters = null }) {
                 collapsed={<ContainerCardCollapsed c={c} latestTag={knownLatest[c.id]} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
-                  onTagsLoaded={onTagsLoaded}
+                  onTagsLoaded={onTagsLoaded} onTab={onTab}
                 />}
               />
             ))}
@@ -895,7 +895,7 @@ export default function ServiceCards({ activeFilters = null }) {
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
                 collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas · since ${_relativeTime(s.created_at)}`, last_pull_at: s.last_pull_at }} />}
-                expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} />}
+                expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
               />
             ))}
           </Section>

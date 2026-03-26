@@ -603,7 +603,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll }) {
         <DashboardCards activeFilters={activeFilters} />
         <div className="border-t border-gray-200 px-5 py-4">
           <ServiceCardsErrorBoundary>
-            <ServiceCards activeFilters={activeFilters} />
+            <ServiceCards activeFilters={activeFilters} onTab={setActiveTab} />
           </ServiceCardsErrorBoundary>
         </div>
       </div>
