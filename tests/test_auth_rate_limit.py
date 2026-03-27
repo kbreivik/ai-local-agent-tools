@@ -9,9 +9,6 @@ client = TestClient(app)
 
 def test_login_rate_limit():
     """Sending 11 login attempts from the same IP triggers 429 on the 11th."""
-    # Clear any state from previous test runs
-    auth_router_module._login_attempts.clear()
-
     payload = {"username": "admin", "password": "wrong-password"}
     last_status = None
     for i in range(11):
@@ -21,5 +18,3 @@ def test_login_rate_limit():
     assert last_status == 429, (
         f"Expected 429 on 11th attempt, got {last_status}"
     )
-    # Cleanup: reset state so subsequent tests can log in normally
-    auth_router_module._login_attempts.clear()
