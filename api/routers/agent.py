@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.websocket import manager
 from api.auth import get_current_user
@@ -115,8 +115,11 @@ def _extract_choices(text: str) -> list[str] | None:
 
 
 class RunRequest(BaseModel):
-    task: str = "Perform a full infrastructure health check and report status."
-    session_id: str = ""
+    task: str = Field(
+        default="Perform a full infrastructure health check and report status.",
+        max_length=4096,
+    )
+    session_id: str = Field(default="", max_length=128)
 
 
 class RunResponse(BaseModel):
