@@ -86,10 +86,15 @@ function _ensureWS(url) {
     } catch { /* ignore parse errors */ }
   }
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     clearInterval(_pingTimer)
     _pingTimer = null
     _notifyState('disconnected')
+    if (event.code === 1008) {
+      // Auth rejection — token expired or invalid. Stop retrying and signal re-login.
+      _notifyState('auth_error')
+      return
+    }
     if (_ws === ws) _scheduleReconnect()
   }
 
