@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 def list_skills(
     category: str = Query("", description="Filter by category"),
     include_disabled: bool = Query(False),
+    _: str = Depends(get_current_user),
 ):
     """Return all registered skills, optionally filtered by category."""
     try:
@@ -36,7 +37,7 @@ def list_skills(
 
 
 @router.post("/{skill_name}/execute")
-def execute_skill(skill_name: str, params: dict = {}):
+def execute_skill(skill_name: str, params: dict = {}, _: str = Depends(get_current_user)):
     """Execute a skill by name. Params are passed as keyword arguments."""
     try:
         check = invoke_tool("skill_info", {"name": skill_name})
@@ -53,7 +54,7 @@ def execute_skill(skill_name: str, params: dict = {}):
 
 
 @router.get("/{skill_name}")
-def get_skill(skill_name: str):
+def get_skill(skill_name: str, _: str = Depends(get_current_user)):
     """Return metadata for a single skill."""
     try:
         result = invoke_tool("skill_info", {"name": skill_name})
