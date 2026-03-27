@@ -27,6 +27,11 @@ class ConnectionManager:
                 from api.auth import decode_token
                 decode_token(token)
             except Exception:
+                # Accept first so the browser receives a proper 1008 close code
+                # (without accept, the upgrade returns HTTP 403 and the browser
+                # gets code=1006/abnormal, making auth errors indistinguishable
+                # from network errors)
+                await ws.accept()
                 await ws.close(code=1008)
                 return
         await ws.accept()
