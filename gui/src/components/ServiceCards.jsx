@@ -798,6 +798,38 @@ function applyProxmoxFilters(items, filters) {
   })
 }
 
+function sortProxmoxItems(items, sortBy, sortDir) {
+  const dir = sortDir === 'asc' ? 1 : -1
+  return [...items].sort((a, b) => {
+    switch (sortBy) {
+      case 'vmid':
+        return (a.vmid - b.vmid) * dir
+      case 'name':
+        return (a.name || '').localeCompare(b.name || '') * dir
+      case 'status': {
+        const rank = s => s === 'running' ? 0 : s === 'stopped' ? 1 : 2
+        return (rank(a.status) - rank(b.status)) * dir
+      }
+      case 'cpu': {
+        if (a.cpu_pct == null && b.cpu_pct == null) return 0
+        if (a.cpu_pct == null) return 1
+        if (b.cpu_pct == null) return -1
+        return (a.cpu_pct - b.cpu_pct) * dir
+      }
+      case 'ram': {
+        const aPct = a.maxmem_gb ? (a.mem_used_gb ?? 0) / a.maxmem_gb : null
+        const bPct = b.maxmem_gb ? (b.mem_used_gb ?? 0) / b.maxmem_gb : null
+        if (aPct == null && bPct == null) return 0
+        if (aPct == null) return 1
+        if (bPct == null) return -1
+        return (aPct - bPct) * dir
+      }
+      default:
+        return 0
+    }
+  })
+}
+
 // ── External service card ─────────────────────────────────────────────────────
 
 function ExternalCardExpanded({ svc, onAction }) {
