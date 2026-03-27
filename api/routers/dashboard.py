@@ -1,3 +1,5 @@
+Warning: Permanently added '192.168.222.10' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.168.199.10' (ED25519) to the list of known hosts.
 """
 GET /api/dashboard/* — Dashboard card data from DB snapshots.
 
@@ -5,6 +7,7 @@ All data comes from the status_snapshots table, written by background collectors
 Never calls Docker/Proxmox/external services directly — that's the collectors' job.
 """
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -366,6 +369,222 @@ async def stream_container_logs(
 
     return StreamingResponse(
         _log_generator(container_id, tail),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+# ── Unified log stream ─────────────────────────────────────────────────────────
+
+_LEVEL_PAT = re.compile(r'\b(DEBUG|INFO|WARN(?:ING)?|ERROR|CRITICAL|FATAL)\b', re.IGNORECASE)
+
+
+def _detect_level(line: str) -> str:
+    """Scan a raw log line for a level keyword; default to 'info'."""
+    m = _LEVEL_PAT.search(line)
+    if not m:
+        return 'info'
+    w = m.group(1).upper()
+    if w in ('WARN', 'WARNING'):
+        return 'warn'
+    if w == 'FATAL':
+        return 'error'
+    return w.lower()
+
+
+async def _unified_log_generator(tail: int):
+    """Async generator that fans out to all local Docker containers + Elasticsearch.
+
+    Each SSE event is a JSON object:
+        {"ts": "<ISO8601>", "source": "docker|es|status", "container": "<name>",
+         "level": "debug|info|warn|error|critical", "msg": "<text>"}
+
+    Docker: one background thread per container using AGENT01_DOCKER_HOST.
+    ES: one background polling thread using ELASTIC_URL via httpx.Client (sync).
+    All threads share one queue. Generator exits when all sources finish or
+    the client disconnects (GeneratorExit -> stop event set).
+    """
+    import docker as _docker
+
+    shared_q: _queue.Queue = _queue.Queue(maxsize=500)
+    stop = threading.Event()
+    _DONE = object()
+    _lock = threading.Lock()
+    _active = [0]  # mutable counter of live source threads
+
+    def _emit(obj: dict) -> None:
+        line = json.dumps(obj)
+        try:
+            shared_q.put(f"data: {line}\n\n", timeout=1)
+        except _queue.Full:
+            pass
+
+    def _source_done() -> None:
+        with _lock:
+            _active[0] -= 1
+            if _active[0] <= 0:
+                try:
+                    shared_q.put(_DONE, timeout=2)
+                except _queue.Full:
+                    pass
+
+    # ── Discover local Docker containers ──────────────────────────────────────
+    local_host = os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
+    try:
+        dc = _docker.DockerClient(base_url=local_host, timeout=15)
+        try:
+            containers = dc.containers.list()
+        finally:
+            dc.close()
+    except Exception as exc:
+        _emit({"source": "status", "msg": f"Docker unavailable: {exc}"})
+        containers = []
+
+    # ── Docker reader (one per container) ─────────────────────────────────────
+    def _docker_reader(container) -> None:
+        try:
+            remainder = ""
+            for chunk in container.logs(stream=True, follow=True, tail=tail):
+                if stop.is_set():
+                    return
+                text = remainder + chunk.decode("utf-8", errors="replace")
+                lns = text.splitlines(keepends=True)
+                remainder = lns.pop() if lns and not lns[-1].endswith("\n") else ""
+                for raw in lns:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    _emit({
+                        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "source": "docker",
+                        "container": container.name,
+                        "level": _detect_level(raw),
+                        "msg": raw,
+                    })
+            if remainder.strip():
+                _emit({
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "source": "docker",
+                    "container": container.name,
+                    "level": _detect_level(remainder.strip()),
+                    "msg": remainder.strip(),
+                })
+        except Exception as exc:
+            if not stop.is_set():
+                _emit({"source": "status", "msg": f"[{container.name} ended: {exc}]"})
+        finally:
+            _source_done()
+
+    # ── Elasticsearch polling reader ───────────────────────────────────────────
+    def _es_reader() -> None:
+        import httpx
+        elastic_url = os.environ.get("ELASTIC_URL", "").rstrip("/")
+        index = os.environ.get("ELASTIC_INDEX_PATTERN", "hp1-logs-*")
+        if not elastic_url:
+            _emit({"source": "status", "msg": "ES offline"})
+            _source_done()
+            return
+        # Connectivity check
+        try:
+            with httpx.Client(timeout=5) as c:
+                c.get(f"{elastic_url}/_cluster/health")
+        except Exception:
+            _emit({"source": "status", "msg": "ES offline"})
+            _source_done()
+            return
+
+        seen_ids: set = set()
+        last_ts = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)
+        ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        with httpx.Client(timeout=10) as client:
+            while not stop.is_set():
+                try:
+                    r = client.post(
+                        f"{elastic_url}/{index}/_search",
+                        json={
+                            "query": {"range": {"@timestamp": {"gte": last_ts}}},
+                            "sort": [{"@timestamp": "asc"}],
+                            "size": 50,
+                        },
+                    )
+                    if r.is_success:
+                        for hit in r.json().get("hits", {}).get("hits", []):
+                            if hit["_id"] in seen_ids:
+                                continue
+                            seen_ids.add(hit["_id"])
+                            src = hit.get("_source", {})
+                            ts = src.get("@timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat())
+                            if ts > last_ts:
+                                last_ts = ts
+                            container_name = ""
+                            if isinstance(src.get("container"), dict):
+                                container_name = src["container"].get("name", "")
+                            elif isinstance(src.get("host"), dict):
+                                container_name = src["host"].get("name", "")
+                            level_raw = "info"
+                            if isinstance(src.get("log"), dict):
+                                level_raw = src["log"].get("level") or "info"
+                            _emit({
+                                "ts": ts,
+                                "source": "es",
+                                "container": container_name,
+                                "level": level_raw.lower(),
+                                "msg": src.get("message", ""),
+                            })
+                except Exception as exc:
+                    if not stop.is_set():
+                        _emit({"source": "status", "msg": f"ES connection lost: {exc}"})
+                    _source_done()
+                    return
+                # 2-second poll interval in 100ms chunks for responsive stop
+                for _ in range(20):
+                    if stop.is_set():
+                        break
+                    _time.sleep(0.1)
+        _source_done()
+
+    # ── Start all threads ──────────────────────────────────────────────────────
+    source_count = len(containers) + 1  # docker containers + ES thread
+    _active[0] = source_count  # set before threads start — no lock needed yet
+
+    for c in containers:
+        threading.Thread(target=_docker_reader, args=(c,), daemon=True).start()
+    threading.Thread(target=_es_reader, daemon=True).start()
+
+    # ── Fan-in ────────────────────────────────────────────────────────────────
+    try:
+        while True:
+            try:
+                item = await asyncio.to_thread(shared_q.get, timeout=30)
+            except _queue.Empty:
+                break
+            if item is _DONE:
+                break
+            yield item
+    except GeneratorExit:
+        stop.set()
+        raise
+
+
+@router.get("/logs/stream")
+async def stream_all_logs(
+    tail: int = 200,
+    token: str = "",
+):
+    """Stream all local Docker containers + Elasticsearch as a unified SSE JSON feed.
+
+    Auth via ?token= (EventSource cannot send custom headers).
+    Each event: data: {"ts","source","container","level","msg"}
+    """
+    from api.auth import decode_token
+    try:
+        decode_token(token)
+    except HTTPException:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+    return StreamingResponse(
+        _unified_log_generator(tail),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

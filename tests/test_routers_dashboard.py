@@ -1,3 +1,5 @@
+Warning: Permanently added '192.168.222.10' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.168.199.10' (ED25519) to the list of known hosts.
 """Tests for GET /api/dashboard/* endpoints.
 
 All tests mock `api.db.queries.get_latest_snapshot` to avoid a real DB,
@@ -627,3 +629,115 @@ def test_pull_container_with_tag(client):
 
     # Container was restarted
     mock_container.restart.assert_called_once()
+
+
+# ── Container log stream ───────────────────────────────────────────────────────
+
+class TestStreamContainerLogs:
+
+    def test_no_token_returns_401(self):
+        r = _tc.get("/api/dashboard/containers/mycontainer/logs/stream")
+        assert r.status_code == 401
+
+    def test_bad_token_returns_401(self):
+        r = _tc.get("/api/dashboard/containers/mycontainer/logs/stream?token=notavalidtoken")
+        assert r.status_code == 401
+
+    def test_container_not_found_streams_error_message(self):
+        import docker
+        from api.auth import create_token
+        token = create_token("admin")
+        with patch("api.routers.dashboard._resolve_container") as mock:
+            mock.side_effect = docker.errors.NotFound("not found")
+            with _tc.stream(
+                "GET",
+                f"/api/dashboard/containers/nocontainer/logs/stream?token={token}",
+            ) as r:
+                assert r.status_code == 200
+                content = b"".join(r.iter_bytes()).decode()
+        assert "not found" in content.lower()
+
+    def test_valid_token_streams_log_lines_as_sse(self):
+        from unittest.mock import MagicMock
+        from api.auth import create_token
+        token = create_token("admin")
+        mock_container = MagicMock()
+        mock_container.logs.return_value = iter([b"hello world\n", b"second line\n"])
+        with patch("api.routers.dashboard._resolve_container") as mock_resolve:
+            mock_resolve.return_value = (MagicMock(), mock_container)
+            with _tc.stream(
+                "GET",
+                f"/api/dashboard/containers/c1/logs/stream?tail=10&token={token}",
+            ) as r:
+                assert r.status_code == 200
+                content = b"".join(r.iter_bytes()).decode()
+        assert "data: hello world" in content
+        assert "data: second line" in content
+
+
+
+
+# ── Unified log stream ─────────────────────────────────────────────────────────
+
+class TestStreamAllLogs:
+
+    def test_no_token_returns_401(self):
+        r = _tc.get("/api/dashboard/logs/stream")
+        assert r.status_code == 401
+
+    def test_bad_token_returns_401(self):
+        r = _tc.get("/api/dashboard/logs/stream?token=notavalidtoken")
+        assert r.status_code == 401
+
+    def test_streams_docker_lines_as_json(self):
+        from unittest.mock import MagicMock
+        from api.auth import create_token
+        token = create_token("admin")
+        mock_container = MagicMock()
+        mock_container.name = "test_container"
+        mock_container.logs.return_value = iter([b"INFO hello world\n", b"ERROR something failed\n"])
+        with patch("docker.DockerClient") as mock_dc, \
+             patch("httpx.Client") as mock_httpx:
+            mock_dc.return_value.containers.list.return_value = [mock_container]
+            mock_httpx.return_value.__enter__ = lambda s: s
+            mock_httpx.return_value.__exit__ = MagicMock(return_value=False)
+            mock_httpx.return_value.get.side_effect = Exception("ES offline")
+            with _tc.stream(
+                "GET",
+                f"/api/dashboard/logs/stream?token={token}",
+            ) as r:
+                assert r.status_code == 200
+                content = b"".join(r.iter_bytes()).decode()
+        events = [
+            json.loads(line[6:])
+            for line in content.splitlines()
+            if line.startswith("data: ")
+        ]
+        docker_events = [e for e in events if e.get("source") == "docker"]
+        assert any("hello world" in e["msg"] for e in docker_events)
+        assert any("something failed" in e["msg"] for e in docker_events)
+        assert any(e.get("level") == "error" for e in docker_events)
+
+    def test_es_offline_emits_status_event(self):
+        from unittest.mock import MagicMock
+        from api.auth import create_token
+        token = create_token("admin")
+        with patch("docker.DockerClient") as mock_dc, \
+             patch("httpx.Client") as mock_httpx:
+            mock_dc.return_value.containers.list.return_value = []
+            mock_httpx.return_value.__enter__ = lambda s: s
+            mock_httpx.return_value.__exit__ = MagicMock(return_value=False)
+            mock_httpx.return_value.get.side_effect = Exception("Connection refused")
+            with _tc.stream(
+                "GET",
+                f"/api/dashboard/logs/stream?token={token}",
+            ) as r:
+                assert r.status_code == 200
+                content = b"".join(r.iter_bytes()).decode()
+        events = [
+            json.loads(line[6:])
+            for line in content.splitlines()
+            if line.startswith("data: ")
+        ]
+        status_events = [e for e in events if e.get("source") == "status"]
+        assert any("offline" in e.get("msg", "").lower() for e in status_events)
