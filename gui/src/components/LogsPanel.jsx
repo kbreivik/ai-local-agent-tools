@@ -1,190 +1,229 @@
 /**
  * LogsPanel — unified Logs tab.
  * Sub-tabs: Live Logs | Tool Calls | Operations | Escalations | Stats
- * Live Logs: streams Elasticsearch log events (poll-based).
+ * Live Logs: unified SSE stream — all local Docker containers + Elasticsearch.
  * Other tabs: agent tool-call / operation / escalation / stats tables.
  */
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { ToolCallsView, OpsView, EscView, StatsView } from './LogTable'
+import { createUnifiedLogStream } from '../api'
 
-const BASE    = import.meta.env.VITE_API_BASE ?? ''
-const POLL_MS = 5_000
-
-const LEVEL_STYLE = {
-  debug:    'text-slate-600',
-  info:     'text-slate-300',
-  warn:     'text-yellow-400',
-  warning:  'text-yellow-400',
-  error:    'text-red-400',
-  critical: 'text-red-300 font-bold',
-  fatal:    'text-red-300 font-bold',
-}
-const LEVEL_BG = {
-  error:    'bg-red-950',
-  critical: 'bg-red-950',
-  fatal:    'bg-red-950',
-  warn:     'bg-yellow-950',
-  warning:  'bg-yellow-950',
-}
-function levelStyle(lvl = '') { return LEVEL_STYLE[lvl.toLowerCase()] ?? 'text-slate-400' }
-function levelBg(lvl = '')    { return LEVEL_BG[lvl.toLowerCase()]    ?? '' }
-
-function LogLine({ entry }) {
-  const ts = (() => {
-    if (!entry.timestamp) return 'N/A'
-    const d = new Date(entry.timestamp)
-    return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
-  })()
-  const lvl = (entry.level || 'info').toLowerCase()
-  const svc = entry.service || entry.container || entry.hostname || ''
-
-  return (
-    <div className={`flex gap-2 px-2 py-0.5 font-mono text-xs ${levelBg(lvl)} hover:bg-slate-800`}>
-      <span className="text-slate-600 shrink-0 w-20">{ts}</span>
-      <span className={`shrink-0 w-10 uppercase ${levelStyle(lvl)}`}>{lvl}</span>
-      {svc && (
-        <span className="text-blue-500 shrink-0 truncate max-w-[120px]" title={svc}>
-          {svc.replace(/^.*_stack_/, '')}
-        </span>
-      )}
-      <span className={`flex-1 break-all ${levelStyle(lvl)}`}>{entry.message}</span>
-    </div>
+function matchesKeyword(entry, keyword) {
+  if (!keyword.trim()) return true
+  const text = `${entry.msg ?? ''} ${entry.container ?? ''} ${entry.level ?? ''}`.toLowerCase()
+  return keyword.split(/\bOR\b/i).some(group =>
+    group.split(/\bAND\b/i).map(t => t.trim()).filter(Boolean).every(term =>
+      text.includes(term.toLowerCase())
+    )
   )
 }
 
-function ErrorSummary({ errors }) {
-  if (!errors || Object.keys(errors).length === 0) return null
-  return (
-    <div className="px-3 py-2 border-b border-slate-800 shrink-0">
-      <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Errors (last 30min)</p>
-      <div className="flex flex-wrap gap-1.5">
-        {Object.entries(errors).map(([svc, count]) => (
-          <span key={svc} className="bg-red-900 text-red-300 px-2 py-0.5 rounded text-xs font-mono">
-            {svc.replace(/^.*_stack_/, '') || 'unknown'}: {count}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
+const LEVEL_BADGE = {
+  debug:    'bg-slate-800 text-slate-500',
+  info:     'bg-slate-800 text-slate-300',
+  warn:     'bg-yellow-950 text-yellow-400',
+  warning:  'bg-yellow-950 text-yellow-400',
+  error:    'bg-red-950 text-red-400',
+  critical: 'bg-red-950 text-red-300',
+  fatal:    'bg-red-950 text-red-300',
 }
 
 function LiveLogsView() {
-  const [logs, setLogs]           = useState([])
-  const [errors, setErrors]       = useState({})
-  const [available, setAvailable] = useState(true)
-  const [filter, setFilter]       = useState({ service: '', level: '', q: '' })
-  const [paused, setPaused]       = useState(false)
-  const seenIds                   = useRef(new Set())
+  const [lines, setLines]                         = useState([])
+  const [containers, setContainers]               = useState([])
+  const [checkedContainers, setCheckedContainers] = useState(new Set())
+  const [levelFilter, setLevelFilter]             = useState('all')
+  const [keyword, setKeyword]                     = useState('')
+  const [paused, setPaused]                       = useState(false)
+  const [esStatus, setEsStatus]                   = useState('unknown')
+  const [popoutOpen, setPopoutOpen]               = useState(false)
 
-  const fetchLogs = useCallback(async () => {
-    try {
-      const p = new URLSearchParams({
-        minutes_ago: 1, size: 100,
-        ...(filter.service && { service: filter.service }),
-        ...(filter.level   && { level:   filter.level   }),
-        ...(filter.q       && { q:       filter.q       }),
-      })
-      const r = await fetch(`${BASE}/api/elastic/logs?${p}`)
-      const d = await r.json()
-      if (d.available === false) { setAvailable(false); return }
-      setAvailable(true)
-      const newEntries = (d.logs || []).filter(e => !seenIds.current.has(e.id))
-      newEntries.forEach(e => seenIds.current.add(e.id))
-      if (newEntries.length > 0) {
-        setLogs(prev => [...newEntries, ...prev].slice(0, 500))
+  const pausedRef       = useRef(false)
+  const esRef           = useRef(null)
+  const scrollRef       = useRef(null)
+  const popoutScrollRef = useRef(null)
+  const seenContainers  = useRef(new Set())
+  const checkedRef      = useRef(new Set())
+
+  // Open stream on mount, close on unmount
+  useEffect(() => {
+    esRef.current = createUnifiedLogStream(200, (event) => {
+      if (event.source === 'status') {
+        if (/es.*(offline|lost)/i.test(event.msg ?? '')) setEsStatus('offline')
+        return
       }
-    } catch { /* ES offline */ }
-  }, [filter])
-
-  const fetchErrors = useCallback(async () => {
-    try {
-      const r = await fetch(`${BASE}/api/elastic/errors?minutes_ago=30`)
-      const d = await r.json()
-      if (d.available !== false) setErrors(d.by_service || {})
-    } catch { /* */ }
+      if (event.source === 'es') setEsStatus('online')
+      // Auto-register new containers
+      if (event.container && !seenContainers.current.has(event.container)) {
+        seenContainers.current.add(event.container)
+        checkedRef.current.add(event.container)
+        setContainers(Array.from(seenContainers.current).sort())
+        setCheckedContainers(new Set(checkedRef.current))
+      }
+      if (pausedRef.current) return
+      setLines(prev => [...prev, event].slice(-500))
+    }, () => {
+      esRef.current?.close()
+      esRef.current = null
+    })
+    return () => { esRef.current?.close() }
   }, [])
 
+  // Auto-scroll both inline and popout containers
   useEffect(() => {
-    fetchLogs(); fetchErrors()
-    if (paused) return
-    const id = setInterval(() => { fetchLogs(); fetchErrors() }, POLL_MS)
-    return () => clearInterval(id)
-  }, [fetchLogs, fetchErrors, paused])
+    if (!paused) {
+      if (scrollRef.current)       scrollRef.current.scrollTop       = scrollRef.current.scrollHeight
+      if (popoutScrollRef.current) popoutScrollRef.current.scrollTop = popoutScrollRef.current.scrollHeight
+    }
+  }, [lines, paused])
 
-  const handleFilterChange = (k, v) => {
-    setFilter(prev => ({ ...prev, [k]: v }))
-    seenIds.current.clear()
-    setLogs([])
+  const togglePause = () => {
+    const next = !paused
+    setPaused(next)
+    pausedRef.current = next
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Controls */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-800 shrink-0">
-        <div className="flex gap-2">
-          <input
-            value={filter.service}
-            onChange={e => handleFilterChange('service', e.target.value)}
-            placeholder="service…"
-            className="w-24 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
-          />
-          <select
-            value={filter.level}
-            onChange={e => handleFilterChange('level', e.target.value)}
-            className="bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
-          >
-            <option value="">all levels</option>
-            <option value="debug">debug</option>
-            <option value="info">info</option>
-            <option value="warn">warn</option>
-            <option value="error">error</option>
-            <option value="critical">critical</option>
-          </select>
-          <input
-            value={filter.q}
-            onChange={e => handleFilterChange('q', e.target.value)}
-            placeholder="keyword…"
-            className="w-32 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${available ? 'bg-green-500' : 'bg-red-600 animate-pulse'}`} />
-          <button
-            onClick={() => setPaused(p => !p)}
-            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-              paused ? 'border-yellow-700 text-yellow-400 bg-yellow-950'
-                     : 'border-slate-700 text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            {paused ? '▶ Resume' : '⏸ Pause'}
-          </button>
-          <button
-            onClick={() => { seenIds.current.clear(); setLogs([]); fetchLogs() }}
-            className="text-xs text-slate-500 hover:text-slate-300"
-            title="Clear"
-          >✕</button>
-        </div>
-      </div>
+  const clearLines = () => setLines([])
 
-      <ErrorSummary errors={errors} />
+  const toggleContainer = (name) => {
+    setCheckedContainers(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name); else next.add(name)
+      checkedRef.current = next
+      return next
+    })
+  }
 
-      <div className="flex-1 overflow-y-auto font-mono">
-        {!available && (
-          <p className="text-xs text-slate-500 p-4 text-center">
-            Elasticsearch unavailable — set ELASTIC_URL to enable log streaming
-          </p>
+  // Client-side filter
+  const visible = lines.filter(entry => {
+    if (entry.container && !checkedContainers.has(entry.container)) return false
+    const lvl = (entry.level ?? 'info').toLowerCase()
+    if (levelFilter === 'error' && !['error', 'critical', 'fatal'].includes(lvl)) return false
+    if (levelFilter === 'warn'  && !['warn', 'warning', 'error', 'critical', 'fatal'].includes(lvl)) return false
+    return matchesKeyword(entry, keyword)
+  })
+
+  const renderLine = (entry, i) => {
+    const ts    = (() => { try { return new Date(entry.ts).toLocaleTimeString() } catch { return '' } })()
+    const badge = LEVEL_BADGE[entry.level] ?? 'bg-slate-800 text-slate-400'
+    return (
+      <div key={i} className="flex gap-2 px-2 py-0.5 hover:bg-slate-800/40">
+        <span className="text-slate-700 shrink-0 w-20 font-mono text-[11px]">{ts}</span>
+        <span className={`shrink-0 px-1 rounded text-[10px] uppercase font-mono ${badge}`}>{entry.level}</span>
+        {entry.container && (
+          <span className="text-blue-500 shrink-0 truncate max-w-[140px] font-mono text-[11px]">[{entry.container}]</span>
         )}
-        {available && logs.length === 0 && (
-          <p className="text-xs text-slate-600 p-4 text-center italic">Waiting for log events…</p>
-        )}
-        {logs.map((entry, i) => <LogLine key={entry.id || i} entry={entry} />)}
+        <span className="flex-1 break-all text-slate-300 font-mono text-[11px]">{entry.msg}</span>
       </div>
+    )
+  }
 
-      <div className="px-3 py-1 border-t border-slate-800 shrink-0 flex justify-between">
-        <p className="text-xs text-slate-700">{logs.length} entries buffered</p>
-        {paused && <p className="text-xs text-yellow-600">⏸ Paused</p>}
-      </div>
+  const toolbar = (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-800 shrink-0 flex-wrap">
+      {containers.map(name => (
+        <button
+          key={name}
+          onClick={() => toggleContainer(name)}
+          className={`text-[10px] px-1.5 py-0.5 rounded border font-mono transition-colors ${
+            checkedContainers.has(name)
+              ? 'border-blue-600 text-blue-400 bg-blue-950'
+              : 'border-slate-700 text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          {name}
+        </button>
+      ))}
+      <input
+        value={keyword}
+        onChange={e => setKeyword(e.target.value)}
+        placeholder="error OR timeout…"
+        className="w-40 bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none focus:border-blue-600 placeholder-slate-600"
+      />
+      <select
+        value={levelFilter}
+        onChange={e => setLevelFilter(e.target.value)}
+        className="bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700 focus:outline-none"
+      >
+        <option value="all">all levels</option>
+        <option value="warn">warn+</option>
+        <option value="error">error+</option>
+      </select>
+      <button
+        onClick={togglePause}
+        className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+          paused ? 'border-yellow-700 text-yellow-400 bg-yellow-950'
+                 : 'border-slate-700 text-slate-500 hover:text-slate-300'
+        }`}
+      >
+        {paused ? '▶ Resume' : '⏸ Pause'}
+      </button>
+      <button onClick={clearLines} className="text-xs text-slate-500 hover:text-slate-300">✕ Clear</button>
+      <button onClick={() => setPopoutOpen(true)} className="text-xs text-slate-500 hover:text-slate-300">⤢ Pop out</button>
     </div>
+  )
+
+  const statusBar = (
+    <div className="px-3 py-1 border-t border-slate-800 shrink-0 flex gap-4">
+      <span className="text-xs text-slate-700">{containers.length} containers</span>
+      <span className={`text-xs ${esStatus === 'online' ? 'text-green-700' : esStatus === 'offline' ? 'text-red-700' : 'text-slate-700'}`}>
+        ES {esStatus}
+      </span>
+      <span className="text-xs text-slate-700">{lines.length}/500 lines</span>
+      {paused && <span className="text-xs text-yellow-600">⏸ paused</span>}
+    </div>
+  )
+
+  return (
+    <>
+      <div className="flex flex-col h-full">
+        {toolbar}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
+          {lines.length === 0 && (
+            <p className="text-xs text-slate-600 p-4 text-center italic">Connecting to log stream…</p>
+          )}
+          {visible.map(renderLine)}
+        </div>
+        {statusBar}
+      </div>
+
+      {popoutOpen && (
+        <div
+          className="fixed z-50 rounded border border-slate-700 bg-slate-950 shadow-2xl flex flex-col"
+          style={{ top: '5vh', left: '5vw', width: '90vw', height: '85vh', resize: 'both', overflow: 'auto', minWidth: 600, minHeight: 300 }}
+        >
+          <div className="flex justify-between items-center px-3 py-1.5 border-b border-slate-800 shrink-0">
+            <span className="text-xs text-slate-500 font-mono">live logs — all sources</span>
+            <div className="flex gap-2">
+              <button
+                onClick={togglePause}
+                className={`text-xs px-2 py-0.5 rounded border ${paused ? 'border-yellow-700 text-yellow-400' : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}
+              >
+                {paused ? '▶ Resume' : '⏸ Pause'}
+              </button>
+              <button onClick={clearLines} className="text-xs text-slate-500 hover:text-slate-300">✕ Clear</button>
+              <button onClick={() => setPopoutOpen(false)} className="text-xs text-slate-500 hover:text-slate-300">✕ Close</button>
+            </div>
+          </div>
+          <div ref={popoutScrollRef} className="flex-1 overflow-y-auto font-mono p-2" style={{ minHeight: 0 }}>
+            {visible.length === 0
+              ? <span className="text-xs text-slate-600 italic">No lines match current filters…</span>
+              : visible.map((entry, i) => {
+                  const ts    = (() => { try { return new Date(entry.ts).toLocaleTimeString() } catch { return '' } })()
+                  const badge = LEVEL_BADGE[entry.level] ?? 'bg-slate-800 text-slate-400'
+                  return (
+                    <div key={i} className="flex gap-2 py-0.5">
+                      <span className="text-slate-700 shrink-0 w-20 text-xs">{ts}</span>
+                      <span className={`shrink-0 px-1 rounded text-[10px] uppercase ${badge}`}>{entry.level}</span>
+                      {entry.container && <span className="text-blue-500 shrink-0 text-xs">[{entry.container}]</span>}
+                      <span className="flex-1 whitespace-pre text-slate-300 text-xs">{entry.msg}</span>
+                    </div>
+                  )
+                })
+            }
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 

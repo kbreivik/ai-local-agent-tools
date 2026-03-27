@@ -361,3 +361,16 @@ export function createLogStream(containerId, tail = 200, onLine, onError) {
   es.onerror = onError || (() => es.close())
   return es
 }
+
+// ── Unified log stream (SSE) ──────────────────────────────────────────────────
+
+export function createUnifiedLogStream(tail = 200, onEvent, onError) {
+  const token = getAuthToken()
+  const url = `${BASE}/api/dashboard/logs/stream?tail=${tail}&token=${encodeURIComponent(token)}`
+  const es = new EventSource(url)
+  es.onmessage = (e) => {
+    try { onEvent(JSON.parse(e.data)) } catch { /* skip malformed */ }
+  }
+  es.onerror = onError || (() => es.close())
+  return es
+}
