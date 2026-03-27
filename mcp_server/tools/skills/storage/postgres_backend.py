@@ -164,17 +164,14 @@ class PostgresBackend(StorageBackend):
             ON skills USING gin(to_tsvector('english', description));
         """)
 
-        # Migration: add lifecycle columns (idempotent — safe to run on existing DBs)
+        # Migration: add lifecycle columns — IF NOT EXISTS is silent/idempotent in PG 9.6+
         for _col, _default in [
             ("lifecycle_state", "auto_generated"),
             ("agent_domain",    ""),
         ]:
-            try:
-                self._execute(
-                    f"ALTER TABLE skills ADD COLUMN {_col} TEXT DEFAULT '{_default}'"
-                )
-            except Exception:
-                pass  # Column already exists — safe to ignore
+            self._execute(
+                f"ALTER TABLE skills ADD COLUMN IF NOT EXISTS {_col} TEXT DEFAULT '{_default}'"
+            )
 
     def close(self) -> None:
         if self._pool:
