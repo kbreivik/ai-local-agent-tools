@@ -715,7 +715,8 @@ function ProxmoxCardCollapsed({ vm }) {
 
 // ── Proxmox filter bar ────────────────────────────────────────────────────────
 
-function ProxmoxFilterBar({ items, filters, setFilters }) {
+function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
+  const [dropOpen, setDropOpen] = useState(false)
   const nodes = [...new Set(items.map(v => v.node_api))].sort()
   const pools = [...new Set(items.map(v => v.pool || '').filter(Boolean))].sort()
   const hasLxc = items.some(v => v.type === 'lxc')
@@ -783,6 +784,59 @@ function ProxmoxFilterBar({ items, filters, setFilters }) {
           onClick={() => setFilters({})}
         >clear</button>
       )}
+      {/* Sort chip */}
+      {sort && onSort && (() => {
+        const SORT_FIELDS = [
+          { key: 'vmid',   label: 'vmid'   },
+          { key: 'name',   label: 'Name'   },
+          { key: 'status', label: 'Status' },
+          { key: 'cpu',    label: 'CPU %'  },
+          { key: 'ram',    label: 'RAM %'  },
+        ]
+        const currentLabel = SORT_FIELDS.find(f => f.key === sort.sortBy)?.label ?? sort.sortBy
+        const toggleDir = () => onSort(sort.sortBy, sort.sortDir === 'asc' ? 'desc' : 'asc')
+        const selectField = (key) => {
+          if (key === sort.sortBy) {
+            toggleDir()
+          } else {
+            onSort(key, 'asc')
+          }
+          setDropOpen(false)
+        }
+        return (
+          <div className="relative flex items-center gap-0.5 ml-auto">
+            <button
+              className="text-[9px] px-1.5 py-px rounded-l border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
+              onClick={() => setDropOpen(o => !o)}
+            >
+              Sort: {currentLabel}
+            </button>
+            <button
+              className="text-[9px] px-1 py-px rounded-r border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
+              onClick={toggleDir}
+            >
+              {sort.sortDir === 'asc' ? '↑' : '↓'}
+            </button>
+            {dropOpen && (
+              <div className="absolute top-full right-0 mt-0.5 z-10 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]">
+                {SORT_FIELDS.map(f => (
+                  <button
+                    key={f.key}
+                    className={`block w-full text-left text-[9px] px-2 py-0.5 rounded ${
+                      sort.sortBy === f.key
+                        ? 'bg-violet-600/30 text-violet-300'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-[#111122]'
+                    }`}
+                    onClick={() => selectField(f.key)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -795,6 +849,38 @@ function applyProxmoxFilters(items, filters) {
     if (filters.status && v.status !== filters.status)              return false
     if (filters.name   && !v.name.toLowerCase().includes(filters.name.toLowerCase())) return false
     return true
+  })
+}
+
+function sortProxmoxItems(items, sortBy, sortDir) {
+  const dir = sortDir === 'asc' ? 1 : -1
+  return [...items].sort((a, b) => {
+    switch (sortBy) {
+      case 'vmid':
+        return (a.vmid - b.vmid) * dir
+      case 'name':
+        return (a.name || '').localeCompare(b.name || '') * dir
+      case 'status': {
+        const rank = s => s === 'running' ? 0 : s === 'stopped' ? 1 : 2
+        return (rank(a.status) - rank(b.status)) * dir
+      }
+      case 'cpu': {
+        if (a.cpu_pct == null && b.cpu_pct == null) return 0
+        if (a.cpu_pct == null) return 1
+        if (b.cpu_pct == null) return -1
+        return (a.cpu_pct - b.cpu_pct) * dir
+      }
+      case 'ram': {
+        const aPct = a.maxmem_gb ? (a.mem_used_gb ?? 0) / a.maxmem_gb : null
+        const bPct = b.maxmem_gb ? (b.mem_used_gb ?? 0) / b.maxmem_gb : null
+        if (aPct == null && bPct == null) return 0
+        if (aPct == null) return 1
+        if (bPct == null) return -1
+        return (aPct - bPct) * dir
+      }
+      default:
+        return 0
+    }
   })
 }
 
@@ -916,6 +1002,21 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [proxmoxFilters, setProxmoxFilters] = useState({})
+  const [sortBy, setSortBy] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+      return s.sortBy || 'vmid'
+    } catch { return 'vmid' }
+  })
+  const [sortDir, setSortDir] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+      return s.sortDir || 'asc'
+    } catch { return 'asc' }
+  })
+  useEffect(() => {
+    localStorage.setItem('hp1_proxmox_sort', JSON.stringify({ sortBy, sortDir }))
+  }, [sortBy, sortDir])
   const [knownLatest, setKnownLatest] = useState({})
   const { pending, confirm, resolve } = useConfirm()
 
@@ -1029,21 +1130,30 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
         {show('vms') && (() => {
           const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
           const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+          const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
           const nodeSet = [...new Set(allItems.map(v => v.node))].join(' · ') || 'no data'
           const vmCount = (vms?.vms || []).length
           const lxcCount = (vms?.lxc || []).length
           const metaStr = `${nodeSet} · ${vmCount} VM${vmCount !== 1 ? 's' : ''} · ${lxcCount} LXC`
           return (
             <Section
-              label="Proxmox Cluster"
+              label={`Proxmox Cluster (${sorted.length})`}
               meta={metaStr}
               errorCount={errorCount(allItems)}
-              filterBar={<ProxmoxFilterBar items={allItems} filters={proxmoxFilters} setFilters={setProxmoxFilters} />}
+              filterBar={
+                <ProxmoxFilterBar
+                  items={allItems}
+                  filters={proxmoxFilters}
+                  setFilters={setProxmoxFilters}
+                  sort={{ sortBy, sortDir }}
+                  onSort={(by, dir) => { setSortBy(by); setSortDir(dir) }}
+                />
+              }
             >
-              {filtered.length === 0 && allItems.length > 0 && (
+              {sorted.length === 0 && allItems.length > 0 && (
                 <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
               )}
-              {filtered.map(vm => (
+              {sorted.map(vm => (
                 <InfraCard
                   key={`${vm.type}-${vm.vmid}`}
                   cardKey={`v-${vm.type}-${vm.vmid}`}
