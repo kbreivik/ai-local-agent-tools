@@ -948,6 +948,21 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [proxmoxFilters, setProxmoxFilters] = useState({})
+  const [sortBy, setSortBy] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+      return s.sortBy || 'vmid'
+    } catch { return 'vmid' }
+  })
+  const [sortDir, setSortDir] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+      return s.sortDir || 'asc'
+    } catch { return 'asc' }
+  })
+  useEffect(() => {
+    localStorage.setItem('hp1_proxmox_sort', JSON.stringify({ sortBy, sortDir }))
+  }, [sortBy, sortDir])
   const [knownLatest, setKnownLatest] = useState({})
   const { pending, confirm, resolve } = useConfirm()
 
