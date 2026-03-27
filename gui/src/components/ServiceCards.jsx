@@ -249,15 +249,22 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   const [logsOpen, setLogsOpen] = useState(false)
   const [logLines, setLogLines] = useState([])
   const [logsPaused, setLogsPaused] = useState(false)
+  const [popoutOpen, setPopoutOpen] = useState(false)
   const logsPausedRef = useRef(false)
   const esRef = useRef(null)
-  const logsEndRef = useRef(null)
+  const logsScrollRef = useRef(null)
+  const popoutScrollRef = useRef(null)
 
   useEffect(() => () => { esRef.current?.close() }, [])
 
   useEffect(() => {
-    if (!logsPaused && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    if (!logsPaused) {
+      if (logsScrollRef.current) {
+        logsScrollRef.current.scrollTop = logsScrollRef.current.scrollHeight
+      }
+      if (popoutScrollRef.current) {
+        popoutScrollRef.current.scrollTop = popoutScrollRef.current.scrollHeight
+      }
     }
   }, [logLines, logsPaused])
 
@@ -525,30 +532,73 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
       {logsOpen && (
         <div className="mt-2 rounded border border-[#2a2a4a] bg-[#060610] overflow-hidden">
           <div className="flex justify-between items-center px-2 py-1 border-b border-[#1a1a3a]">
-            <span className="text-[9px] text-gray-600 font-mono">logs — {c.name}</span>
+            <span className="text-[11px] text-gray-600 font-mono">logs — {c.name}</span>
             <div className="flex gap-1">
               <button
-                className={`text-[9px] px-1.5 py-0.5 rounded ${logsPaused ? 'bg-[#7c6af7] text-white' : 'bg-[#1a1a3a] text-gray-400 hover:text-white'}`}
+                className={`text-[11px] px-1.5 py-0.5 rounded ${logsPaused ? 'bg-[#7c6af7] text-white' : 'bg-[#1a1a3a] text-gray-400 hover:text-white'}`}
                 onClick={pauseLogs}
               >
                 {logsPaused ? '▶ Resume' : '⏸ Pause'}
               </button>
               <button
-                className="text-[9px] px-1.5 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
+                className="text-[11px] px-1.5 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
                 onClick={() => { setLogLines([]); setLogsPaused(false); logsPausedRef.current = false }}
               >
                 Clear
               </button>
+              <button
+                className="text-[11px] px-1.5 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
+                onClick={() => setPopoutOpen(true)}
+              >
+                ⤢ Pop out
+              </button>
             </div>
           </div>
-          <div className="overflow-y-auto max-h-48 font-mono p-2">
+          <div ref={logsScrollRef} className="overflow-y-auto max-h-48 font-mono p-2">
             {logLines.length === 0
-              ? <span className="text-[9px] text-gray-700 italic">waiting for log lines…</span>
+              ? <span className="text-[11px] text-gray-700 italic">waiting for log lines…</span>
               : logLines.map((l, i) => (
-                  <div key={i} className="text-[9px] text-green-400 leading-tight whitespace-pre-wrap break-all">{l}</div>
+                  <div key={i} className="text-[11px] text-green-400 leading-tight whitespace-pre break-all">{l}</div>
                 ))
             }
-            <div ref={logsEndRef} />
+          </div>
+        </div>
+      )}
+      {popoutOpen && (
+        <div
+          className="fixed z-50 rounded border border-[#2a2a4a] bg-[#060610] shadow-2xl flex flex-col"
+          style={{ top: '5vh', left: '5vw', width: '90vw', height: '85vh', resize: 'both', overflow: 'auto', minWidth: 600, minHeight: 300 }}
+        >
+          <div className="flex justify-between items-center px-3 py-1.5 border-b border-[#1a1a3a] shrink-0">
+            <span className="text-xs text-gray-500 font-mono">logs — {c.name}</span>
+            <div className="flex gap-1">
+              <button
+                className={`text-xs px-2 py-0.5 rounded ${logsPaused ? 'bg-[#7c6af7] text-white' : 'bg-[#1a1a3a] text-gray-400 hover:text-white'}`}
+                onClick={pauseLogs}
+              >
+                {logsPaused ? '▶ Resume' : '⏸ Pause'}
+              </button>
+              <button
+                className="text-xs px-2 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
+                onClick={() => { setLogLines([]); setLogsPaused(false); logsPausedRef.current = false }}
+              >
+                Clear
+              </button>
+              <button
+                className="text-xs px-2 py-0.5 rounded bg-[#1a1a3a] text-gray-400 hover:text-white"
+                onClick={() => setPopoutOpen(false)}
+              >
+                ✕ Close
+              </button>
+            </div>
+          </div>
+          <div ref={popoutScrollRef} className="flex-1 overflow-y-auto font-mono p-3" style={{ minHeight: 0 }}>
+            {logLines.length === 0
+              ? <span className="text-xs text-gray-700 italic">waiting for log lines…</span>
+              : logLines.map((l, i) => (
+                  <div key={i} className="text-xs text-green-400 leading-snug whitespace-pre">{l}</div>
+                ))
+            }
           </div>
         </div>
       )}
