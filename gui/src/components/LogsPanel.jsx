@@ -85,6 +85,13 @@ function LiveLogsView() {
 
   const clearLines = () => setLines([])
 
+  const toggleAll = () => {
+    const allChecked = containers.every(n => checkedContainers.has(n))
+    const next = allChecked ? new Set() : new Set(containers)
+    checkedRef.current = next
+    setCheckedContainers(next)
+  }
+
   const toggleContainer = (name) => {
     setCheckedContainers(prev => {
       const next = new Set(prev)
@@ -120,6 +127,18 @@ function LiveLogsView() {
 
   const toolbar = (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-800 shrink-0 flex-wrap">
+      {containers.length > 0 && (
+        <button
+          onClick={toggleAll}
+          className={`text-[10px] px-1.5 py-0.5 rounded border font-mono transition-colors ${
+            containers.every(n => checkedContainers.has(n))
+              ? 'border-slate-500 text-slate-400 bg-slate-800'
+              : 'border-slate-700 text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          all
+        </button>
+      )}
       {containers.map(name => (
         <button
           key={name}

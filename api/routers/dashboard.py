@@ -425,17 +425,19 @@ async def _unified_log_generator(tail: int):
                 except _queue.Full:
                     pass
 
-    # ── Discover local Docker containers ──────────────────────────────────────
+    # ── Discover containers from all Docker hosts ─────────────────────────────
     local_host = os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
-    try:
-        dc = _docker.DockerClient(base_url=local_host, timeout=15)
+    swarm_host = os.environ.get("DOCKER_HOST", "")
+    containers: list = []
+    for host in dict.fromkeys(filter(None, [local_host, swarm_host])):  # deduplicate
         try:
-            containers = dc.containers.list()
-        finally:
-            dc.close()
-    except Exception as exc:
-        _emit({"source": "status", "msg": f"Docker unavailable: {exc}"})
-        containers = []
+            dc = _docker.DockerClient(base_url=host, timeout=15)
+            try:
+                containers.extend(dc.containers.list())
+            finally:
+                dc.close()
+        except Exception as exc:
+            _emit({"source": "status", "msg": f"Docker unavailable ({host}): {exc}"})
 
     # ── Docker reader (one per container) ─────────────────────────────────────
     def _docker_reader(container) -> None:
