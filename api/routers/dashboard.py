@@ -1,5 +1,3 @@
-Warning: Permanently added '192.168.222.10' (ED25519) to the list of known hosts.
-Warning: Permanently added '192.168.199.10' (ED25519) to the list of known hosts.
 """
 GET /api/dashboard/* — Dashboard card data from DB snapshots.
 
