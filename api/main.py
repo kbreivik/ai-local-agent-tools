@@ -61,8 +61,8 @@ CORS_ORIGINS = [
     # Allow any LAN IP on common ports
     "http://192.168.0.0/16",
 ]
-# Allow all origins in dev — tighten in production
-CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "true").lower() == "true"
+# CORS_ALLOW_ALL=true enables wildcard origins (dev convenience). Default is false (restrictive).
+CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "false").lower() == "true"
 
 
 @asynccontextmanager
