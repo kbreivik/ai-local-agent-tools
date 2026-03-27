@@ -1,18 +1,19 @@
 # Proxmox Sort + Dashboard Improvements — Design Spec
 
 **Date:** 2026-03-27
-**Status:** Approved
+**Status:** Approved (v2 — post spec-review fixes)
 
 ---
 
 ## Overview
 
-Four small improvements to the Dashboard tab:
+Three improvements to the Dashboard tab:
 
 1. Sort control for the Proxmox VMs·LXC section
 2. Item count in the Proxmox section header
-3. SwarmServicesCard alphabetical sort (no UI)
-4. Remove dead `nodeCardSize` setting
+3. SwarmServicesCard — verify existing alphabetical sort (already implemented with stack-prefix stripping; no code change needed)
+
+Note: `nodeCardSize` is actively used by `NodeMap.jsx` and is NOT dead — removed from scope.
 
 ---
 
@@ -20,18 +21,34 @@ Four small improvements to the Dashboard tab:
 
 ### State
 
-Two new state variables alongside `proxmoxFilters` in the Proxmox section of `ServiceCards.jsx`:
+Two new state variables in the Proxmox section of `ServiceCards.jsx`, alongside the existing `proxmoxFilters` state. Both are initialised from `localStorage` via lazy initialiser:
 
 ```js
-const [sortBy,  setSortBy]  = useState('vmid')   // 'vmid'|'name'|'status'|'cpu'|'ram'
-const [sortDir, setSortDir] = useState('asc')     // 'asc'|'desc'
+const [sortBy, setSortBy] = useState(() => {
+  try {
+    const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+    return s.sortBy || 'vmid'
+  } catch { return 'vmid' }
+})
+const [sortDir, setSortDir] = useState(() => {
+  try {
+    const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
+    return s.sortDir || 'asc'
+  } catch { return 'asc' }
+})
 ```
 
-Persisted to `localStorage` under key `hp1_proxmox_sort` as `{ sortBy, sortDir }`. Loaded on mount, same pattern as `hp1_cardFilter`.
+Write-back on change (mirroring the `hp1_cardFilter` pattern in `App.jsx`):
+
+```js
+useEffect(() => {
+  localStorage.setItem('hp1_proxmox_sort', JSON.stringify({ sortBy, sortDir }))
+}, [sortBy, sortDir])
+```
 
 ### Sort function
 
-Applied after `applyProxmoxFilters()`, before render:
+Defined at module level in `ServiceCards.jsx`, applied after `applyProxmoxFilters()`:
 
 ```js
 function sortProxmoxItems(items, sortBy, sortDir) {
@@ -41,7 +58,7 @@ function sortProxmoxItems(items, sortBy, sortDir) {
       case 'vmid':
         return (a.vmid - b.vmid) * dir
       case 'name':
-        return a.name.localeCompare(b.name) * dir
+        return (a.name || '').localeCompare(b.name || '') * dir
       case 'status': {
         const rank = s => s === 'running' ? 0 : s === 'stopped' ? 1 : 2
         return (rank(a.status) - rank(b.status)) * dir
@@ -56,7 +73,7 @@ function sortProxmoxItems(items, sortBy, sortDir) {
         const aPct = a.maxmem_gb ? (a.mem_used_gb ?? 0) / a.maxmem_gb : null
         const bPct = b.maxmem_gb ? (b.mem_used_gb ?? 0) / b.maxmem_gb : null
         if (aPct == null && bPct == null) return 0
-        if (aPct == null) return 1
+        if (aPct == null) return 1   // nulls always last
         if (bPct == null) return -1
         return (aPct - bPct) * dir
       }
@@ -67,64 +84,71 @@ function sortProxmoxItems(items, sortBy, sortDir) {
 }
 ```
 
+Usage at render time:
+
+```js
+const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
+// render sorted, pass sorted.length to section header
+```
+
 ### UI — sort chip in ProxmoxFilterBar
 
-The `ProxmoxFilterBar` component receives two new props: `sort` (`{ sortBy, sortDir }`) and `onSort` (`(sortBy, sortDir) => void`).
+`ProxmoxFilterBar` receives two new props:
 
-A chip is added at the right end of the filter row:
+```js
+// sort: { sortBy: string, sortDir: 'asc'|'desc' }
+// onSort: (sortBy: string, sortDir: 'asc'|'desc') => void
+```
+
+A sort chip is added at the right end of the filter row:
 
 ```
 [node] [pool] [vm] [lxc] [running] [stopped] [name___]    [Sort: vmid ↑]
 ```
 
-The chip label shows `Sort: <field> ↑/↓`. Behaviour:
-- Clicking the **direction arrow** toggles `sortDir` between `asc`/`desc`.
-- Clicking the **field label** opens a small inline dropdown listing the five fields. Selecting a field sets `sortBy` and closes the dropdown. If the same field is selected, direction toggles instead.
+**Dropdown open/close state** is a local `useState` inside `ProxmoxFilterBar` (not in the parent):
 
-Dropdown fields:
-- `vmid` — "vmid"
-- `name` — "Name"
-- `status` — "Status"
-- `cpu` — "CPU %"
-- `ram` — "RAM %"
+```js
+const [dropOpen, setDropOpen] = useState(false)
+```
 
-Visual style: same chip style as other filter buttons (`text-[9px] px-1.5 py-px rounded border`). Active sort chip uses violet accent (`bg-violet-600/30 text-violet-300 border-violet-500/40`) to distinguish it from filter chips.
+The dropdown closes when a field is selected. Outside-click and Escape handling are deferred — the current filter bar has no such behaviour either.
 
-The dropdown is a small `absolute`-positioned panel below the chip, `z-10`, dark background matching the card theme.
+**Chip behaviour:**
+- Clicking the **field label** part toggles `dropOpen`.
+- Clicking the **arrow** (↑/↓) toggles `sortDir` without opening the dropdown.
+- Selecting a field in the dropdown sets `sortBy` and closes the dropdown. If the same field is selected, `sortDir` toggles instead.
+
+**Dropdown content** (five options):
+
+| Key | Label |
+|-----|-------|
+| `vmid` | vmid |
+| `name` | Name |
+| `status` | Status |
+| `cpu` | CPU % |
+| `ram` | RAM % |
+
+**Visual style:** same chip pattern as filter chips (`text-[9px] px-1.5 py-px rounded border`). Sort chip always uses the violet active style (`bg-violet-600/30 text-violet-300 border-violet-500/40`) to distinguish it from filter chips. Dropdown panel: `absolute` positioned below chip, `z-10`, `bg-[#0a0a15] border border-[#2a2440] rounded-md p-1`.
 
 ---
 
 ## 2. Item Count in Section Header
 
-The `Section` component in `ServiceCards.jsx` accepts a `label` prop. After filtering (and sorting), pass the filtered length into the label:
+After filtering and sorting, pass the count into the section label. The current label string is `"Proxmox Cluster"`:
 
 ```jsx
-<Section label={`VMs·Proxmox (${sorted.length})`} ...>
+<Section label={`Proxmox Cluster (${sorted.length})`} ...>
 ```
 
-This shows the currently-visible count after filters are applied, e.g. `VMs·Proxmox (8)` when 4 are hidden by a filter.
+This reflects the post-filter count — if filters hide 4 of 12, the header shows `Proxmox Cluster (8)`.
 
 ---
 
-## 3. SwarmServicesCard Alphabetical Sort
+## 3. SwarmServicesCard Sort — Verify Only
 
-In `DashboardCards.jsx`, the `SwarmServicesCard` component renders `data?.services`. Add a single sort before render:
-
-```js
-const services = [...(data?.services ?? [])].sort((a, b) =>
-  (a.name || '').localeCompare(b.name || '')
-)
-```
-
-No UI, no state, no persistence needed. Alphabetical ascending, stable across polls.
-
----
-
-## 4. Remove Dead `nodeCardSize` Setting
-
-- **`OptionsContext.jsx`**: remove `nodeCardSize` from `DEFAULTS` and from the `options` object shape.
-- **`OptionsModal.jsx`**: remove the `nodeCardSize` select/input from the Display tab.
-- No other files reference this setting.
+`DashboardCards.jsx` already sorts services alphabetically with stack-prefix stripping (e.g. `hp1-stack_kafka` → sorts as `kafka`). **No code change needed.** Implementer should verify this sort is present and functioning.
 
 ---
 
@@ -132,15 +156,14 @@ No UI, no state, no persistence needed. Alphabetical ascending, stable across po
 
 | File | Change |
 |---|---|
-| `gui/src/components/ServiceCards.jsx` | Add `sortBy`/`sortDir` state, `sortProxmoxItems()`, updated `ProxmoxFilterBar` with sort chip, item count in section label |
-| `gui/src/components/DashboardCards.jsx` | Sort services array in `SwarmServicesCard` |
-| `gui/src/context/OptionsContext.jsx` | Remove `nodeCardSize` from DEFAULTS |
-| `gui/src/components/OptionsModal.jsx` | Remove `nodeCardSize` UI |
+| `gui/src/components/ServiceCards.jsx` | Add `sortBy`/`sortDir` state with localStorage init/write-back, `sortProxmoxItems()` function, updated `ProxmoxFilterBar` call with sort props, item count in section label |
+| `gui/src/components/ServiceCards.jsx` (ProxmoxFilterBar) | Add `sort` + `onSort` props, sort chip with inline dropdown, local `dropOpen` state |
 
 ---
 
 ## Out of Scope
 
-- Sort for Containers·agent-01 section (different scope)
+- `nodeCardSize` removal — setting is actively used by `NodeMap.jsx` (`NodeCard size` prop)
+- Container·agent-01 sort
 - VM/LXC type visual separator
-- Sort for External Services section
+- External Services sort
