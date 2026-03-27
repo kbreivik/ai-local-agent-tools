@@ -120,7 +120,8 @@ export function AgentOutputProvider({ children }) {
 
   useEffect(() => {
     const token = localStorage.getItem('hp1_auth_token')
-    const url = `ws://${location.hostname}:8000/ws/output${token ? `?token=${token}` : ''}`
+    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const url = `${wsProto}://${location.host}/ws/output${token ? `?token=${token}` : ''}`
     _ensureWS(url)
 
     if (_ws) {
