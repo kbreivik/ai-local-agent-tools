@@ -21,3 +21,5 @@ def test_login_rate_limit():
     assert last_status == 429, (
         f"Expected 429 on 11th attempt, got {last_status}"
     )
+    # Cleanup: reset state so subsequent tests can log in normally
+    auth_router_module._login_attempts.clear()
