@@ -1076,21 +1076,30 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
         {show('vms') && (() => {
           const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
           const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+          const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
           const nodeSet = [...new Set(allItems.map(v => v.node))].join(' · ') || 'no data'
           const vmCount = (vms?.vms || []).length
           const lxcCount = (vms?.lxc || []).length
           const metaStr = `${nodeSet} · ${vmCount} VM${vmCount !== 1 ? 's' : ''} · ${lxcCount} LXC`
           return (
             <Section
-              label="Proxmox Cluster"
+              label={`Proxmox Cluster (${sorted.length})`}
               meta={metaStr}
               errorCount={errorCount(allItems)}
-              filterBar={<ProxmoxFilterBar items={allItems} filters={proxmoxFilters} setFilters={setProxmoxFilters} />}
+              filterBar={
+                <ProxmoxFilterBar
+                  items={allItems}
+                  filters={proxmoxFilters}
+                  setFilters={setProxmoxFilters}
+                  sort={{ sortBy, sortDir }}
+                  onSort={(by, dir) => { setSortBy(by); setSortDir(dir) }}
+                />
+              }
             >
-              {filtered.length === 0 && allItems.length > 0 && (
+              {sorted.length === 0 && allItems.length > 0 && (
                 <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
               )}
-              {filtered.map(vm => (
+              {sorted.map(vm => (
                 <InfraCard
                   key={`${vm.type}-${vm.vmid}`}
                   cardKey={`v-${vm.type}-${vm.vmid}`}
