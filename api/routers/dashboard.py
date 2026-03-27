@@ -491,7 +491,7 @@ async def _unified_log_generator(tail: int):
         svc_name = service.name
         try:
             remainder = ""
-            for chunk in service.logs(stream=True, follow=True, stdout=True, stderr=True, tail=tail):
+            for chunk in service.logs(follow=True, stdout=True, stderr=True, tail=tail):
                 if stop.is_set():
                     return
                 text = remainder + chunk.decode("utf-8", errors="replace")
