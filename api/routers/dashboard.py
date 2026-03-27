@@ -425,21 +425,33 @@ async def _unified_log_generator(tail: int):
                 except _queue.Full:
                     pass
 
-    # ── Discover containers from all Docker hosts ─────────────────────────────
+    # ── Discover local containers (AGENT01_DOCKER_HOST) ───────────────────────
     local_host = os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
-    swarm_host = os.environ.get("DOCKER_HOST", "")
     containers: list = []
-    for host in dict.fromkeys(filter(None, [local_host, swarm_host])):  # deduplicate
+    try:
+        dc = _docker.DockerClient(base_url=local_host, timeout=15)
         try:
-            dc = _docker.DockerClient(base_url=host, timeout=15)
-            try:
-                containers.extend(dc.containers.list())
-            finally:
-                dc.close()
-        except Exception as exc:
-            _emit({"source": "status", "msg": f"Docker unavailable ({host}): {exc}"})
+            containers = dc.containers.list()
+        finally:
+            dc.close()
+    except Exception as exc:
+        _emit({"source": "status", "msg": f"Docker unavailable: {exc}"})
 
-    # ── Docker reader (one per container) ─────────────────────────────────────
+    # ── Discover Swarm services (DOCKER_HOST → manager) ────────────────────────
+    # Swarm services run on workers; use service.logs() via the manager API.
+    swarm_host = os.environ.get("DOCKER_HOST", "")
+    swarm_services: list = []
+    if swarm_host and swarm_host != local_host:
+        try:
+            dc_swarm = _docker.DockerClient(base_url=swarm_host, timeout=15)
+            try:
+                swarm_services = dc_swarm.services.list()
+            finally:
+                dc_swarm.close()
+        except Exception as exc:
+            _emit({"source": "status", "msg": f"Swarm unavailable: {exc}"})
+
+    # ── Docker reader (one per local container) ────────────────────────────────
     def _docker_reader(container) -> None:
         try:
             remainder = ""
@@ -471,6 +483,39 @@ async def _unified_log_generator(tail: int):
         except Exception as exc:
             if not stop.is_set():
                 _emit({"source": "status", "msg": f"[{container.name} ended: {exc}]"})
+        finally:
+            _source_done()
+
+    # ── Swarm service reader (one per service, logs via manager) ──────────────
+    def _service_reader(service) -> None:
+        svc_name = service.name
+        try:
+            remainder = ""
+            for chunk in service.logs(stream=True, follow=True, stdout=True, stderr=True, tail=tail):
+                if stop.is_set():
+                    return
+                text = remainder + chunk.decode("utf-8", errors="replace")
+                lns = text.splitlines(keepends=True)
+                remainder = lns.pop() if lns and not lns[-1].endswith("\n") else ""
+                for raw in lns:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    # Strip task prefix: "kafka_broker-1.1.abc@worker-01    | msg"
+                    if " | " in raw:
+                        raw = raw.split(" | ", 1)[1].strip()
+                    if not raw:
+                        continue
+                    _emit({
+                        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "source": "docker",
+                        "container": svc_name,
+                        "level": _detect_level(raw),
+                        "msg": raw,
+                    })
+        except Exception as exc:
+            if not stop.is_set():
+                _emit({"source": "status", "msg": f"[{svc_name} ended: {exc}]"})
         finally:
             _source_done()
 
@@ -545,11 +590,13 @@ async def _unified_log_generator(tail: int):
         _source_done()
 
     # ── Start all threads ──────────────────────────────────────────────────────
-    source_count = len(containers) + 1  # docker containers + ES thread
+    source_count = len(containers) + len(swarm_services) + 1  # local + swarm + ES
     _active[0] = source_count  # set before threads start — no lock needed yet
 
     for c in containers:
         threading.Thread(target=_docker_reader, args=(c,), daemon=True).start()
+    for s in swarm_services:
+        threading.Thread(target=_service_reader, args=(s,), daemon=True).start()
     threading.Thread(target=_es_reader, daemon=True).start()
 
     # ── Fan-in ────────────────────────────────────────────────────────────────
