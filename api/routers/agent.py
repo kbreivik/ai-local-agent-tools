@@ -863,7 +863,7 @@ async def confirm_plan(req: ConfirmRequest, user: str = Depends(get_current_user
 
 
 @router.post("/clarify")
-async def clarify_agent(req: ClarifyRequest):
+async def clarify_agent(req: ClarifyRequest, _: str = Depends(get_current_user)):
     """Resolve a pending clarifying_question() call in the agent loop."""
     from api.clarification import resolve_clarification
     ok = resolve_clarification(req.session_id, req.answer)
@@ -877,7 +877,7 @@ class StopRequest(BaseModel):
 
 
 @router.post("/stop")
-async def stop_agent(req: StopRequest):
+async def stop_agent(req: StopRequest, _: str = Depends(get_current_user)):
     """Signal the running agent loop for a session to cancel after its current step."""
     if not req.session_id:
         return {"status": "error", "message": "session_id required"}
