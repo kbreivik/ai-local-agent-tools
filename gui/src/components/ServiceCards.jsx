@@ -715,7 +715,8 @@ function ProxmoxCardCollapsed({ vm }) {
 
 // ── Proxmox filter bar ────────────────────────────────────────────────────────
 
-function ProxmoxFilterBar({ items, filters, setFilters }) {
+function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
+  const [dropOpen, setDropOpen] = useState(false)
   const nodes = [...new Set(items.map(v => v.node_api))].sort()
   const pools = [...new Set(items.map(v => v.pool || '').filter(Boolean))].sort()
   const hasLxc = items.some(v => v.type === 'lxc')
@@ -783,6 +784,59 @@ function ProxmoxFilterBar({ items, filters, setFilters }) {
           onClick={() => setFilters({})}
         >clear</button>
       )}
+      {/* Sort chip */}
+      {sort && onSort && (() => {
+        const SORT_FIELDS = [
+          { key: 'vmid',   label: 'vmid'   },
+          { key: 'name',   label: 'Name'   },
+          { key: 'status', label: 'Status' },
+          { key: 'cpu',    label: 'CPU %'  },
+          { key: 'ram',    label: 'RAM %'  },
+        ]
+        const currentLabel = SORT_FIELDS.find(f => f.key === sort.sortBy)?.label ?? sort.sortBy
+        const toggleDir = () => onSort(sort.sortBy, sort.sortDir === 'asc' ? 'desc' : 'asc')
+        const selectField = (key) => {
+          if (key === sort.sortBy) {
+            toggleDir()
+          } else {
+            onSort(key, 'asc')
+          }
+          setDropOpen(false)
+        }
+        return (
+          <div className="relative flex items-center gap-0.5 ml-auto">
+            <button
+              className="text-[9px] px-1.5 py-px rounded-l border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
+              onClick={() => setDropOpen(o => !o)}
+            >
+              Sort: {currentLabel}
+            </button>
+            <button
+              className="text-[9px] px-1 py-px rounded-r border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
+              onClick={toggleDir}
+            >
+              {sort.sortDir === 'asc' ? '↑' : '↓'}
+            </button>
+            {dropOpen && (
+              <div className="absolute top-full right-0 mt-0.5 z-10 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]">
+                {SORT_FIELDS.map(f => (
+                  <button
+                    key={f.key}
+                    className={`block w-full text-left text-[9px] px-2 py-0.5 rounded ${
+                      sort.sortBy === f.key
+                        ? 'bg-violet-600/30 text-violet-300'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-[#111122]'
+                    }`}
+                    onClick={() => selectField(f.key)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }
