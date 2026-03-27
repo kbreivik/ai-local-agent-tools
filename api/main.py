@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from api.db import init_db
 from api.logger import ensure_started as _start_logger, flush_now as _flush_logger
 from api.websocket import manager
-from api.auth import get_current_user
+from api.auth import get_current_user, check_secrets
 from api.routers import tools, agent, status, logs, alerts, memory as memory_router, elastic as elastic_router, settings as settings_router
 from api.routers import tests_api as tests_router
 from api.routers import feedback as feedback_router
@@ -68,6 +68,7 @@ CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "true").lower() == "true"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    check_secrets()
     await _start_logger()
     await _start_session_store()
     import logging as _logging

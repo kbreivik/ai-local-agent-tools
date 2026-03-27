@@ -19,6 +19,30 @@ _ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "superduperadmin")
 # Pre-hash the password at module load (or use env-provided hash)
 _STORED_HASH: bytes = bcrypt.hashpw(_ADMIN_PASS.encode(), bcrypt.gensalt())
 
+import logging as _log_module
+_auth_log = _log_module.getLogger(__name__)
+
+_INSECURE_JWT_DEFAULT = "hp1-jwt-secret-change-in-prod-2026"
+_INSECURE_PASS_DEFAULT = "superduperadmin"
+
+
+def check_secrets() -> None:
+    """Log CRITICAL warnings when known insecure defaults are in use.
+
+    Called from the app lifespan — never at module import time.
+    Does NOT raise; homelab may intentionally use defaults on a trusted LAN.
+    """
+    if SECRET_KEY == _INSECURE_JWT_DEFAULT:
+        _auth_log.critical(
+            "SECURITY: JWT_SECRET is set to the insecure default value. "
+            "Set JWT_SECRET env var to a strong random secret before exposing this service."
+        )
+    if _ADMIN_PASS == _INSECURE_PASS_DEFAULT:
+        _auth_log.critical(
+            "SECURITY: ADMIN_PASSWORD is set to the insecure default 'superduperadmin'. "
+            "Set ADMIN_PASSWORD env var to a strong password before exposing this service."
+        )
+
 
 def verify_password(plain: str) -> bool:
     return bcrypt.checkpw(plain.encode(), _STORED_HASH)
