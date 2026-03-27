@@ -105,9 +105,9 @@ function LiveLogsView() {
 
   const renderLine = (entry, i) => {
     const ts    = (() => { try { return new Date(entry.ts).toLocaleTimeString() } catch { return '' } })()
-    const badge = LEVEL_BADGE[entry.level] ?? 'bg-slate-800 text-slate-400'
+    const badge = LEVEL_BADGE[entry.level?.toLowerCase()] ?? 'bg-slate-800 text-slate-400'
     return (
-      <div key={i} className="flex gap-2 px-2 py-0.5 hover:bg-slate-800/40">
+      <div key={`${entry.ts}-${entry.container}-${i}`} className="flex gap-2 px-2 py-0.5 hover:bg-slate-800/40">
         <span className="text-slate-700 shrink-0 w-20 font-mono text-[11px]">{ts}</span>
         <span className={`shrink-0 px-1 rounded text-[10px] uppercase font-mono ${badge}`}>{entry.level}</span>
         {entry.container && (
@@ -209,9 +209,9 @@ function LiveLogsView() {
               ? <span className="text-xs text-slate-600 italic">No lines match current filters…</span>
               : visible.map((entry, i) => {
                   const ts    = (() => { try { return new Date(entry.ts).toLocaleTimeString() } catch { return '' } })()
-                  const badge = LEVEL_BADGE[entry.level] ?? 'bg-slate-800 text-slate-400'
+                  const badge = LEVEL_BADGE[entry.level?.toLowerCase()] ?? 'bg-slate-800 text-slate-400'
                   return (
-                    <div key={i} className="flex gap-2 py-0.5">
+                    <div key={`${entry.ts}-${entry.container}-${i}`} className="flex gap-2 py-0.5">
                       <span className="text-slate-700 shrink-0 w-20 text-xs">{ts}</span>
                       <span className={`shrink-0 px-1 rounded text-[10px] uppercase ${badge}`}>{entry.level}</span>
                       {entry.container && <span className="text-blue-500 shrink-0 text-xs">[{entry.container}]</span>}
