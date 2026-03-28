@@ -99,7 +99,15 @@ async def test_connection(user: str = Depends(get_current_user)):
     try:
         import paramiko
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        _disable_hkc = os.environ.get("DISABLE_HOST_KEY_CHECK", "").lower() == "true"
+        if _disable_hkc:
+            log.warning(
+                "SECURITY: SSH host key checking is disabled (DISABLE_HOST_KEY_CHECK=true). "
+                "Only use this option on isolated lab networks."
+            )
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        else:
+            client.set_missing_host_key_policy(paramiko.WarningPolicy())
         kw = {
             "hostname": host,
             "port": cfg.get("ssh_port", 22),
