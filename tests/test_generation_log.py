@@ -202,3 +202,52 @@ def test_triggered_by_regenerate_is_recorded(tmp_path):
 
     rows = test_backend.get_generation_log()
     assert rows[0]["triggered_by"] == "skill_regenerate"
+
+
+# ── API endpoint tests ──────────────────────────────────────────────────────────
+
+from fastapi.testclient import TestClient
+from api.main import app
+
+_client = TestClient(app)
+_AUTH_CACHE: dict = {}
+
+
+def _auth_headers() -> dict:
+    if "admin" not in _AUTH_CACHE:
+        r = _client.post("/api/auth/login", json={"username": "admin", "password": "superduperadmin"})
+        if r.status_code != 200:
+            pytest.skip("Auth not available")
+        _AUTH_CACHE["admin"] = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return _AUTH_CACHE["admin"]
+
+
+def test_generation_log_endpoint_returns_list():
+    r = _client.get("/api/skills/generation-log", headers=_auth_headers())
+    assert r.status_code == 200
+    data = r.json()
+    assert "log" in data
+    assert "count" in data
+    assert isinstance(data["log"], list)
+
+
+def test_generation_log_endpoint_requires_auth():
+    r = _client.get("/api/skills/generation-log")
+    assert r.status_code == 401
+
+
+def test_skill_generation_log_endpoint_filters_by_name():
+    r = _client.get("/api/skills/proxmox_vm_status/generation-log", headers=_auth_headers())
+    assert r.status_code == 200
+    data = r.json()
+    assert "log" in data
+    for row in data["log"]:
+        assert row["skill_name"] == "proxmox_vm_status"
+
+
+def test_generation_log_not_matched_as_skill_name():
+    """GET /api/skills/generation-log must not be routed to GET /api/skills/{skill_name}."""
+    r = _client.get("/api/skills/generation-log", headers=_auth_headers())
+    # Would return {"skills": ...} if wrongly matched as skill_info("generation-log")
+    assert "log" in r.json()
+    assert "skills" not in r.json()
