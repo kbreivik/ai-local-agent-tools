@@ -58,7 +58,18 @@ DESTRUCTIVE_TOOLS = frozenset({
 })
 
 # Per-session cancellation flags — set by POST /api/agent/stop
-_cancel_flags: dict[str, bool] = {}
+# Values are (flag: bool, inserted_at: float) where inserted_at is time.monotonic().
+# Entries older than _CANCEL_FLAG_TTL_SECONDS are pruned by _cleanup_stale_cancel_flags().
+_CANCEL_FLAG_TTL_SECONDS = 300  # 5 minutes
+_cancel_flags: dict[str, tuple[bool, float]] = {}
+
+
+def _cleanup_stale_cancel_flags() -> None:
+    """Remove cancel flag entries that were inserted more than _CANCEL_FLAG_TTL_SECONDS ago."""
+    cutoff = time.monotonic() - _CANCEL_FLAG_TTL_SECONDS
+    stale = [k for k, (_, ts) in _cancel_flags.items() if ts < cutoff]
+    for k in stale:
+        _cancel_flags.pop(k, None)
 
 # Trigger phrases that must appear before a numbered list for it to be choices.
 # Choices are only valid when the agent explicitly labels them as options/actions.
@@ -189,9 +200,10 @@ async def _run_single_agent_step(
     last_reasoning = ""
 
     try:
+        _cleanup_stale_cancel_flags()
         while step < max_steps:
             # Check cancellation flag before each step
-            if _cancel_flags.pop(session_id, False):
+            if _cancel_flags.pop(session_id, (False, 0.0))[0]:
                 await manager.broadcast({
                     "type":       "error",
                     "session_id": session_id,
@@ -820,6 +832,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             except Exception as _sfa_e:
                 log.debug("set_operation_final_answer failed: %s", _sfa_e)
     finally:
+        _cleanup_stale_cancel_flags()
         # Release plan lock and mark operation complete — both guaranteed to run
         await plan_lock.release(session_id)
         log.info("COMPLETING operation_id=%r status=%r", operation_id, final_status)
@@ -882,9 +895,13 @@ class StopRequest(BaseModel):
 @router.post("/stop")
 async def stop_agent(req: StopRequest, _: str = Depends(get_current_user)):
     """Signal the running agent loop for a session to cancel after its current step."""
-    if not req.session_id:
+    sid = req.session_id.strip()
+    if not sid:
         return {"status": "error", "message": "session_id required"}
-    _cancel_flags[req.session_id] = True
+    if len(sid) > 128:
+        return {"status": "error", "message": "session_id too long"}
+    _cleanup_stale_cancel_flags()
+    _cancel_flags[sid] = (True, time.monotonic())
     try:
         from api.db.base import get_engine
         from api.db import queries as q
