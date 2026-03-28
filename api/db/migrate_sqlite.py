@@ -18,9 +18,10 @@ import aiosqlite
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("migrate")
 
+_PROJECT_ROOT = Path(__file__).parent.parent.parent  # api/db/migrate_sqlite.py → api/db/ → api/ → project root
 _SQLITE_PATH = Path(os.environ.get(
     "SQLITE_PATH",
-    os.environ.get("DB_PATH", "D:/claude_code/FAJK/HP1-AI-Agent-v1/data/hp1_agent.db"),
+    os.environ.get("DB_PATH", str(_PROJECT_ROOT / "data" / "hp1_agent.db")),
 ))
 
 
