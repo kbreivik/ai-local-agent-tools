@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,20 @@ DOCS_DIR = Path(__file__).parent.parent.parent / "data" / "docs"
 # Pending ingest jobs (in-memory, pre-approval)
 _pending_jobs: dict[str, dict] = {}
 
+_JOB_TTL_SECONDS = 600        # 10 minutes
+_MAX_PENDING_JOBS = 20
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MiB
+
+
+def _evict_stale_jobs() -> None:
+    """Remove jobs older than _JOB_TTL_SECONDS from _pending_jobs (in-place)."""
+    cutoff = time.monotonic() - _JOB_TTL_SECONDS
+    stale = [jid for jid, job in _pending_jobs.items() if job.get("ts", 0) < cutoff]
+    for jid in stale:
+        _pending_jobs.pop(jid, None)
+    if stale:
+        log.debug("Evicted %d stale ingest job(s)", len(stale))
+
 
 class IngestUrlRequest(BaseModel):
     url: str
@@ -32,6 +47,10 @@ async def preview_url(req: IngestUrlRequest, user: str = Depends(get_current_use
     Fetch URL and return a preview + diff info (does NOT store yet).
     User must call /url/confirm to actually store.
     """
+    _evict_stale_jobs()
+    if len(_pending_jobs) >= _MAX_PENDING_JOBS:
+        raise HTTPException(429, "Too many pending ingest jobs — confirm or cancel existing jobs first")
+
     from api.memory.ingest_worker import fetch_url, check_if_updated, _url_key, detect_breaking_changes_llm
 
     try:
@@ -49,6 +68,8 @@ async def preview_url(req: IngestUrlRequest, user: str = Depends(get_current_use
 
     job_id = str(uuid.uuid4())
     _pending_jobs[job_id] = {
+        "ts": time.monotonic(),
+        "owner": user,
         "type": "url",
         "url": req.url,
         "tags": req.tags,
@@ -79,6 +100,10 @@ async def confirm_url_ingest(req: ConfirmRequest, user: str = Depends(get_curren
     job = _pending_jobs.pop(req.job_id, None)
     if not job:
         raise HTTPException(404, f"Job '{req.job_id}' not found or expired")
+    if job.get("owner") and job["owner"] != user:
+        # Put the job back so the owner can still act on it
+        _pending_jobs[req.job_id] = job
+        raise HTTPException(403, "You are not the owner of this ingest job")
     if not req.approved:
         return {"status": "cancelled", "message": "Ingest cancelled"}
 
@@ -125,6 +150,10 @@ async def upload_pdf(
     user: str = Depends(get_current_user),
 ):
     """Upload a PDF, parse it, return preview. Confirm with /pdf/confirm."""
+    _evict_stale_jobs()
+    if len(_pending_jobs) >= _MAX_PENDING_JOBS:
+        raise HTTPException(429, "Too many pending ingest jobs — confirm or cancel existing jobs first")
+
     from api.memory.ingest_worker import parse_pdf, check_if_updated, detect_breaking_changes_llm
     import re
 
@@ -134,6 +163,8 @@ async def upload_pdf(
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     dest = DOCS_DIR / file.filename
     content_bytes = await file.read()
+    if len(content_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large (max 50 MB)")
     dest.write_bytes(content_bytes)
 
     try:
@@ -152,6 +183,8 @@ async def upload_pdf(
 
     job_id = str(uuid.uuid4())
     _pending_jobs[job_id] = {
+        "ts": time.monotonic(),
+        "owner": user,
         "type": "pdf",
         "filename": file.filename,
         "local_path": str(dest),
@@ -180,6 +213,9 @@ async def confirm_pdf_ingest(req: ConfirmRequest, user: str = Depends(get_curren
     job = _pending_jobs.pop(req.job_id, None)
     if not job:
         raise HTTPException(404, f"Job '{req.job_id}' not found or expired")
+    if job.get("owner") and job["owner"] != user:
+        _pending_jobs[req.job_id] = job
+        raise HTTPException(403, "You are not the owner of this ingest job")
     if not req.approved:
         return {"status": "cancelled", "message": "Ingest cancelled"}
 
