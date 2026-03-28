@@ -6,6 +6,10 @@ import re
 # Modules that must never appear in skill code
 _BANNED_MODULES = frozenset({
     "subprocess", "shutil", "importlib", "ctypes", "multiprocessing",
+    # Network exfiltration vectors — skills must use httpx (already on allow-list by absence)
+    "socket", "urllib", "http", "ftplib", "ssl",
+    # Note: 'os' is intentionally NOT banned here because starter skills use os.environ.get()
+    # and os.path.*. Dangerous os.* calls are blocked at the call-level via _BANNED_OS_CALLS.
 })
 
 # Names that must never appear in imports
@@ -25,6 +29,19 @@ _BUILTIN_TOOLS = frozenset({
 
 # Write modes for open() that are forbidden
 _WRITE_MODES = frozenset({"w", "a", "x", "wb", "ab", "xb"})
+
+# os.* calls that are never legitimate in a skill
+_BANNED_OS_CALLS = frozenset({
+    "system", "popen",           # already checked — kept here for documentation
+    "remove", "unlink", "rmdir",
+    "makedirs", "mkdir",
+    "rename", "replace",
+    "listdir", "scandir", "walk",
+    "execv", "execve", "execvp", "execvpe",
+    "fork", "kill", "killpg",
+    "chown", "chmod",
+    "symlink", "link",
+})
 
 
 def validate_skill_code(code: str) -> dict:
@@ -85,10 +102,10 @@ def validate_skill_code(code: str) -> dict:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            # os.system, os.popen
+            # os.system, os.popen, and other dangerous os.* calls
             if isinstance(func, ast.Attribute):
                 if isinstance(func.value, ast.Name) and func.value.id == "os":
-                    if func.attr in ("system", "popen"):
+                    if func.attr in _BANNED_OS_CALLS:
                         return {"valid": False, "error": f"Banned call: os.{func.attr}"}
             # eval(), exec(), compile()
             if isinstance(func, ast.Name):
