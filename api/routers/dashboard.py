@@ -171,6 +171,15 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
     token = os.environ.get("GHCR_TOKEN", "")
     if not token:
+        # Fallback: read from settings DB in case sync_env_from_db() missed it
+        try:
+            from mcp_server.tools.skills.storage import get_backend
+            token = get_backend().get_setting("ghcrToken") or ""
+            if token:
+                os.environ["GHCR_TOKEN"] = token  # backfill for subsequent calls
+        except Exception:
+            pass
+    if not token:
         raise RuntimeError("GHCR_TOKEN not configured")
 
     repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
