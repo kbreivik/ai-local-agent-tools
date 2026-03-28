@@ -535,6 +535,9 @@ class PostgresBackend(StorageBackend):
         ))
 
     def get_generation_log(self, skill_name: str = "", outcome: str = "", limit: int = 50) -> list[dict]:
+        # JSONB columns (keywords, docs_retrieved, sources_used, spec_warnings) are
+        # automatically deserialised to Python dicts/lists by psycopg2 RealDictCursor —
+        # no manual json.loads() needed here.
         sql = "SELECT * FROM skill_generation_log WHERE TRUE"
         params: list = []
         if skill_name:

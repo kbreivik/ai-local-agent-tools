@@ -113,7 +113,11 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def write_generation_log(self, row: dict) -> None:
-        """Write one generation trace row. row must have all skill_generation_log columns."""
+        """Write one generation trace row. row must have all skill_generation_log columns.
+
+        Raises sqlite3.IntegrityError (SQLite) or psycopg2.IntegrityError (PostgreSQL) on
+        duplicate id. Callers should generate a fresh UUID per row to avoid this.
+        """
 
     @abstractmethod
     def get_generation_log(self, skill_name: str = "", outcome: str = "", limit: int = 50) -> list[dict]:
