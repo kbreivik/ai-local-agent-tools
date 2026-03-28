@@ -215,6 +215,7 @@ def _write_generation_log(
         import time as _time
         from mcp_server.tools.skills.storage import get_backend
 
+        retrieval_data = retrieval_data or {}
         context_docs = retrieval_data.get("context_docs", [])
         # Strip content field — keep only metadata to avoid blob storage
         docs_for_log = [
@@ -280,6 +281,8 @@ def generate_skill(
     if context_docs is None:
         context_docs, _retrieval_data = _fetch_relevant_docs(description, category=category, api_base=api_base)
     elif isinstance(context_docs, str):
+        # Caller supplied their own context — retrieval was bypassed.
+        # sources_used stays empty; log will show this as "no retrieval" rather than a failure.
         context_docs = [context_docs] if context_docs else []
 
     validated_spec = None
