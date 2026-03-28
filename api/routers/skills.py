@@ -12,6 +12,7 @@ from mcp_server.tools.skills.promoter import (
     purge_skill as _purge_skill,
 )
 from mcp_server.tools.skills.meta_tools import skill_regenerate as _skill_regenerate
+from mcp_server.tools.skills.storage import get_backend
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -49,6 +50,34 @@ def execute_skill(skill_name: str, params: dict = {}, _: str = Depends(get_curre
         return result
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/generation-log")
+def list_generation_log(
+    skill_name: str = Query("", description="Filter by skill name"),
+    outcome: str = Query("", description="Filter by outcome: success | error | export"),
+    limit: int = Query(50, ge=1, le=200, description="Max rows to return"),
+    _: str = Depends(get_current_user),
+):
+    """Return skill generation trace log, newest first."""
+    try:
+        rows = get_backend().get_generation_log(skill_name=skill_name, outcome=outcome, limit=limit)
+        return {"log": rows, "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{skill_name}/generation-log")
+def get_skill_generation_log(
+    skill_name: str,
+    _: str = Depends(get_current_user),
+):
+    """Return generation trace log for a specific skill, newest first."""
+    try:
+        rows = get_backend().get_generation_log(skill_name=skill_name, limit=50)
+        return {"log": rows, "count": len(rows)}
     except Exception as e:
         raise HTTPException(500, str(e))
 
