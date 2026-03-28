@@ -21,6 +21,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
+import DocsTab from './components/DocsTab'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
@@ -53,7 +54,7 @@ const _showLayoutTest = import.meta.env.DEV &&
 const LayoutTest = _showLayoutTest ? lazy(() => import('./dev/LayoutTest.jsx')) : null
 
 const MAIN_TABS = ['Dashboard', 'Cluster', 'Commands', 'Skills', 'Logs', 'Memory', 'Output']
-const TOOLS_TABS = ['Tests', 'Ingest']
+const TOOLS_TABS = ['Tests', 'Ingest', 'Docs']
 
 // ── Row 1: Header — logo + tabs + settings gear only ──────────────────────────
 
@@ -771,6 +772,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 bg-white overflow-hidden">
                 <IngestPanel />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Docs' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 bg-white overflow-hidden">
+                <DocsTab />
               </div>
             </div>
           )}
