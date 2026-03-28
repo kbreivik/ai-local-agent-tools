@@ -119,8 +119,21 @@ services:
     environment:
       # agent-01 is not in the Swarm — manage manager-01 via Docker TCP API.
       # Override here so it applies even if not set in .env.
-      # Port 2375 = plain TCP (ensure dockerd on manager-01 has -H tcp://0.0.0.0:2375).
+      #
+      # DOCKER_HOST default uses plain TCP (port 2375, unauthenticated).
+      # For production TLS migration, configure Docker daemon on manager-01 with:
+      #   --tlsverify --tlscacert=/etc/docker/certs/ca.pem
+      #   --tlscert=/etc/docker/certs/server-cert.pem
+      #   --tlskey=/etc/docker/certs/server-key.pem
+      #   -H tcp://0.0.0.0:2376
+      # Then set in .env (or docker/.env):
+      #   DOCKER_HOST=tcp://192.168.199.21:2376
+      #   DOCKER_TLS_VERIFY=1
+      #   DOCKER_CERT_PATH=/path/to/client/certs
       - DOCKER_HOST=${DOCKER_HOST:-tcp://192.168.199.21:2375}
+      # TLS pass-throughs: set these in .env to enable TLS without editing this file.
+      - DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY:-}
+      - DOCKER_CERT_PATH=${DOCKER_CERT_PATH:-}
       # AGENT01_DOCKER_HOST is the LOCAL socket used only by DockerAgent01Collector to list
       # agent-01's own containers. Kept separate so DOCKER_HOST can still target manager-01.
       - AGENT01_DOCKER_HOST=unix:///var/run/docker.sock
