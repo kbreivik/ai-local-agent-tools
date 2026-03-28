@@ -60,6 +60,27 @@ def get_engine() -> AsyncEngine:
     return _engine
 
 
+_sync_engine = None
+
+
+def get_sync_engine():
+    """Return a plain synchronous SQLAlchemy engine for use in sync collectors/workers.
+
+    Uses sqlite (not aiosqlite) or psycopg2 (not asyncpg) so callers can use
+    engine.begin() from any thread without triggering SQLAlchemy's greenlet machinery.
+    """
+    global _sync_engine
+    if _sync_engine is None:
+        from sqlalchemy import create_engine
+        url = _build_url()
+        sync_url = url.replace("sqlite+aiosqlite", "sqlite").replace(
+            "postgresql+asyncpg", "postgresql+psycopg2"
+        )
+        _sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False}
+                                     if DB_BACKEND == "sqlite" else {})
+    return _sync_engine
+
+
 async def get_connection() -> AsyncGenerator[AsyncConnection, None]:
     """Yield an open AsyncConnection (context-manager usage recommended)."""
     async with get_engine().connect() as conn:

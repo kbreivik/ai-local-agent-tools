@@ -153,9 +153,9 @@ def _load_last_digests() -> dict:
     """Load stored image digests from status_snapshots."""
     import json
     try:
-        from api.db.base import get_engine
+        from api.db.base import get_sync_engine
         from sqlalchemy import text
-        with get_engine().sync_engine.connect() as conn:
+        with get_sync_engine().connect() as conn:
             rows = conn.execute(
                 text("SELECT component, state, timestamp FROM status_snapshots "
                      "WHERE component LIKE 'image_digest:%' "
@@ -183,11 +183,11 @@ def _check_digest(container_id: str, image: str, image_id: str | None, last_dige
     if stored.get("digest") != image_id:
         import json
         from datetime import datetime, timezone
-        from api.db.base import get_engine
+        from api.db.base import get_sync_engine
         from sqlalchemy import text
         now = datetime.now(timezone.utc).isoformat()
         try:
-            with get_engine().sync_engine.begin() as conn:
+            with get_sync_engine().begin() as conn:
                 conn.execute(
                     text("INSERT INTO status_snapshots (component, state, is_healthy, timestamp) "
                          "VALUES (:comp, :state, true, :ts)"),
