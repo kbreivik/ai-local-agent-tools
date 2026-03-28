@@ -49,6 +49,7 @@ def skill_create(
     api_base: str = "",
     auth_type: str = "none",
     backend: str = "",
+    triggered_by: str = "skill_create",
 ) -> dict:
     """Generate, validate, save, and load a new skill."""
     result = generator.generate_skill(
@@ -57,6 +58,7 @@ def skill_create(
         api_base=api_base,
         auth_type=auth_type,
         backend=backend,
+        triggered_by=triggered_by,
     )
 
     if result.get("status") != "ok":
@@ -324,7 +326,7 @@ def skill_regenerate(mcp_server, name: str, backend: str = "") -> dict:
     category = skill.get("category", "general")
     auth_type = skill.get("auth_type", "none")
 
-    result = skill_create(mcp_server, description, category, "", auth_type, backend)
+    result = skill_create(mcp_server, description, category, "", auth_type, backend, triggered_by="skill_regenerate")
 
     if result.get("status") == "ok":
         orchestration.audit_log("skill_regenerate", {"name": name, "backed_up_to": bak_path})
