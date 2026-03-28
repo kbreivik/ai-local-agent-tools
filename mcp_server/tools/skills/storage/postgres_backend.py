@@ -162,6 +162,28 @@ class PostgresBackend(StorageBackend):
 
             CREATE INDEX IF NOT EXISTS idx_skills_fts
             ON skills USING gin(to_tsvector('english', description));
+
+            CREATE TABLE IF NOT EXISTS skill_generation_log (
+                id              TEXT PRIMARY KEY,
+                skill_name      TEXT NOT NULL,
+                triggered_by    TEXT DEFAULT '',
+                backend         TEXT DEFAULT '',
+                description     TEXT DEFAULT '',
+                category        TEXT DEFAULT '',
+                api_base        TEXT DEFAULT '',
+                keywords        JSONB DEFAULT '{}',
+                docs_retrieved  JSONB DEFAULT '[]',
+                total_tokens    INTEGER DEFAULT 0,
+                sources_used    JSONB DEFAULT '[]',
+                spec_used       BOOLEAN DEFAULT FALSE,
+                spec_warnings   JSONB DEFAULT '[]',
+                outcome         TEXT NOT NULL,
+                error_message   TEXT DEFAULT '',
+                created_at      DOUBLE PRECISION NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_genlog_skill    ON skill_generation_log(skill_name);
+            CREATE INDEX IF NOT EXISTS idx_genlog_outcome  ON skill_generation_log(outcome);
+            CREATE INDEX IF NOT EXISTS idx_genlog_ts       ON skill_generation_log(created_at);
         """)
 
         # Migration: add lifecycle columns — IF NOT EXISTS is silent/idempotent in PG 9.6+
@@ -482,3 +504,46 @@ class PostgresBackend(StorageBackend):
             VALUES (%s, %s, NOW())
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
         """, (key, json.dumps(value, default=str)))
+
+    # ── Generation Log ───────────────────────────────────────────────────────
+
+    def write_generation_log(self, row: dict) -> None:
+        # Parse JSON strings to Python objects for JSONB columns
+        pg_row = dict(row)
+        for field in ("keywords", "docs_retrieved", "sources_used", "spec_warnings"):
+            v = pg_row.get(field)
+            if isinstance(v, str):
+                try:
+                    pg_row[field] = json.loads(v)
+                except Exception:
+                    pg_row[field] = {} if field == "keywords" else []
+        self._execute("""
+            INSERT INTO skill_generation_log (
+                id, skill_name, triggered_by, backend, description, category,
+                api_base, keywords, docs_retrieved, total_tokens, sources_used,
+                spec_used, spec_warnings, outcome, error_message, created_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+        """, (
+            pg_row["id"], pg_row["skill_name"], pg_row["triggered_by"], pg_row["backend"],
+            pg_row["description"], pg_row["category"], pg_row["api_base"],
+            json.dumps(pg_row["keywords"]), json.dumps(pg_row["docs_retrieved"]),
+            pg_row["total_tokens"], json.dumps(pg_row["sources_used"]),
+            bool(pg_row["spec_used"]), json.dumps(pg_row["spec_warnings"]),
+            pg_row["outcome"], pg_row["error_message"], pg_row["created_at"],
+        ))
+
+    def get_generation_log(self, skill_name: str = "", outcome: str = "", limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM skill_generation_log WHERE TRUE"
+        params: list = []
+        if skill_name:
+            sql += " AND skill_name = %s"
+            params.append(skill_name)
+        if outcome:
+            sql += " AND outcome = %s"
+            params.append(outcome)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(min(limit, 200))
+        rows = self._execute(sql, tuple(params), fetch="all") or []
+        return [self._row(r) for r in rows]

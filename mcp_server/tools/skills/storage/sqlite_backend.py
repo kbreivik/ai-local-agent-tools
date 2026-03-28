@@ -128,6 +128,28 @@ class SqliteBackend(StorageBackend):
                 value       TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS skill_generation_log (
+                id              TEXT PRIMARY KEY,
+                skill_name      TEXT NOT NULL,
+                triggered_by    TEXT DEFAULT '',
+                backend         TEXT DEFAULT '',
+                description     TEXT DEFAULT '',
+                category        TEXT DEFAULT '',
+                api_base        TEXT DEFAULT '',
+                keywords        TEXT DEFAULT '{}',
+                docs_retrieved  TEXT DEFAULT '[]',
+                total_tokens    INTEGER DEFAULT 0,
+                sources_used    TEXT DEFAULT '[]',
+                spec_used       INTEGER DEFAULT 0,
+                spec_warnings   TEXT DEFAULT '[]',
+                outcome         TEXT NOT NULL,
+                error_message   TEXT DEFAULT '',
+                created_at      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_genlog_skill    ON skill_generation_log(skill_name);
+            CREATE INDEX IF NOT EXISTS idx_genlog_outcome  ON skill_generation_log(outcome);
+            CREATE INDEX IF NOT EXISTS idx_genlog_ts       ON skill_generation_log(created_at);
         """)
         conn.commit()
 
@@ -155,6 +177,48 @@ class SqliteBackend(StorageBackend):
             return {"ok": True, "backend": "sqlite", "details": self.db_path}
         except Exception as e:
             return {"ok": False, "backend": "sqlite", "details": str(e)}
+
+    # ── Generation Log ───────────────────────────────────────────────────────
+
+    def write_generation_log(self, row: dict) -> None:
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO skill_generation_log (
+                id, skill_name, triggered_by, backend, description, category,
+                api_base, keywords, docs_retrieved, total_tokens, sources_used,
+                spec_used, spec_warnings, outcome, error_message, created_at
+            ) VALUES (
+                :id, :skill_name, :triggered_by, :backend, :description, :category,
+                :api_base, :keywords, :docs_retrieved, :total_tokens, :sources_used,
+                :spec_used, :spec_warnings, :outcome, :error_message, :created_at
+            )
+        """, row)
+        conn.commit()
+
+    def get_generation_log(self, skill_name: str = "", outcome: str = "", limit: int = 50) -> list[dict]:
+        conn = self._get_conn()
+        sql = "SELECT * FROM skill_generation_log WHERE 1=1"
+        params: list = []
+        if skill_name:
+            sql += " AND skill_name = ?"
+            params.append(skill_name)
+        if outcome:
+            sql += " AND outcome = ?"
+            params.append(outcome)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(min(limit, 200))
+        rows = conn.execute(sql, params).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            for field in ("keywords", "docs_retrieved", "sources_used", "spec_warnings"):
+                empty = "{}" if field == "keywords" else "[]"
+                try:
+                    d[field] = json.loads(d.get(field) or empty)
+                except Exception:
+                    d[field] = json.loads(empty)
+            result.append(d)
+        return result
 
     # ── Skills Registry ──────────────────────────────────────────────────────
 

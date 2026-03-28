@@ -108,3 +108,13 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def set_setting(self, key: str, value: Any) -> None: ...
+
+    # ── Generation Log ───────────────────────────────────────────────────────
+
+    @abstractmethod
+    def write_generation_log(self, row: dict) -> None:
+        """Write one generation trace row. row must have all skill_generation_log columns."""
+
+    @abstractmethod
+    def get_generation_log(self, skill_name: str = "", outcome: str = "", limit: int = 50) -> list[dict]:
+        """Return log rows, JSON fields pre-parsed to dicts/lists. Ordered by created_at DESC."""
