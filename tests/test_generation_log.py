@@ -91,3 +91,124 @@ def test_zero_docs_retrieved_stored_correctly(backend):
     assert rows[0]["total_tokens"] == 0
     assert rows[0]["docs_retrieved"] == []
     assert rows[0]["sources_used"] == []
+
+
+# ── Generator integration tests ────────────────────────────────────────────────
+
+from unittest.mock import patch, MagicMock
+import importlib
+
+
+def _make_fake_code(name="test_skill"):
+    return f'''
+SKILL_META = {{"name": "{name}", "description": "test", "category": "general",
+              "parameters": {{}}, "compat": {{}}}}
+def execute(**kwargs):
+    return {{"status": "ok", "data": {{}}, "timestamp": "t", "message": "ok"}}
+'''
+
+
+def test_generate_skill_writes_success_log(tmp_path):
+    """After a successful generate_skill(), one 'success' row appears in the log."""
+    from mcp_server.tools.skills.storage.sqlite_backend import SqliteBackend
+
+    test_db = str(tmp_path / "gen_test.db")
+    test_backend = SqliteBackend(db_path=test_db)
+    test_backend.init()
+
+    with patch("mcp_server.tools.skills.storage.get_backend", return_value=test_backend), \
+         patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
+         patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
+               return_value=([], {"keywords": {}, "context_docs": [], "sources_used": [], "total_tokens": 0})):
+        import mcp_server.tools.skills.generator as gen
+        importlib.reload(gen)
+        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+
+    assert result["status"] == "ok"
+    rows = test_backend.get_generation_log()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "success"
+    assert rows[0]["triggered_by"] == "skill_create"
+
+
+def test_generate_skill_writes_error_log_on_llm_failure(tmp_path):
+    """When LLM call raises, an 'error' row is still written to the log."""
+    from mcp_server.tools.skills.storage.sqlite_backend import SqliteBackend
+
+    test_db = str(tmp_path / "gen_err_test.db")
+    test_backend = SqliteBackend(db_path=test_db)
+    test_backend.init()
+
+    with patch("mcp_server.tools.skills.storage.get_backend", return_value=test_backend), \
+         patch("mcp_server.tools.skills.generator._generate_local", side_effect=RuntimeError("LLM timeout")), \
+         patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
+               return_value=([], {"keywords": {}, "context_docs": [], "sources_used": [], "total_tokens": 0})):
+        import mcp_server.tools.skills.generator as gen
+        importlib.reload(gen)
+        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+
+    assert result["status"] == "error"
+    rows = test_backend.get_generation_log()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "error"
+    assert "LLM timeout" in rows[0]["error_message"]
+
+
+def test_generate_skill_writes_error_log_on_validation_failure(tmp_path):
+    """When generated code fails AST validation, an 'error' row is written."""
+    from mcp_server.tools.skills.storage.sqlite_backend import SqliteBackend
+
+    test_db = str(tmp_path / "val_err_test.db")
+    test_backend = SqliteBackend(db_path=test_db)
+    test_backend.init()
+
+    bad_code = "import subprocess\nSKILL_META = {}\ndef execute(**kwargs): pass"
+
+    with patch("mcp_server.tools.skills.storage.get_backend", return_value=test_backend), \
+         patch("mcp_server.tools.skills.generator._generate_local", return_value=bad_code), \
+         patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
+               return_value=([], {})):
+        import mcp_server.tools.skills.generator as gen
+        importlib.reload(gen)
+        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+
+    assert result["status"] == "error"
+    rows = test_backend.get_generation_log()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "error"
+
+
+def test_log_write_failure_does_not_block_generation(tmp_path):
+    """If write_generation_log raises, generate_skill still returns its result."""
+    broken_backend = MagicMock()
+    broken_backend.write_generation_log.side_effect = Exception("DB exploded")
+
+    with patch("mcp_server.tools.skills.storage.get_backend", return_value=broken_backend), \
+         patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
+         patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
+               return_value=([], {})):
+        import mcp_server.tools.skills.generator as gen
+        importlib.reload(gen)
+        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+
+    assert result["status"] == "ok"
+
+
+def test_triggered_by_regenerate_is_recorded(tmp_path):
+    """triggered_by='skill_regenerate' is stored when passed explicitly."""
+    from mcp_server.tools.skills.storage.sqlite_backend import SqliteBackend
+
+    test_db = str(tmp_path / "regen_test.db")
+    test_backend = SqliteBackend(db_path=test_db)
+    test_backend.init()
+
+    with patch("mcp_server.tools.skills.storage.get_backend", return_value=test_backend), \
+         patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
+         patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
+               return_value=([], {})):
+        import mcp_server.tools.skills.generator as gen
+        importlib.reload(gen)
+        gen.generate_skill("test skill", triggered_by="skill_regenerate", skip_spec=True)
+
+    rows = test_backend.get_generation_log()
+    assert rows[0]["triggered_by"] == "skill_regenerate"

@@ -73,19 +73,26 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def _fetch_relevant_docs(description: str, category: str = "general", api_base: str = "") -> list:
+def _fetch_relevant_docs(
+    description: str, category: str = "general", api_base: str = ""
+) -> tuple:
     """
-    Fetch documentation context for skill generation using multi-strategy MuninnDB retrieval.
-    Returns a list with a single formatted string, ready for build_generation_prompt(context_docs=).
-    Falls back gracefully if MuninnDB is unavailable.
+    Fetch documentation context for skill generation.
+
+    Returns:
+        (context_docs_list, raw_retrieval_data)
+        context_docs_list: list[str] for build_generation_prompt(context_docs=)
+        raw_retrieval_data: dict with keys: keywords, context_docs, sources_used,
+                            total_tokens. Empty dict on failure.
     """
     try:
         result = fetch_relevant_docs(description, category=category, api_base=api_base, token_budget=3000)
         formatted = format_docs_for_prompt(result)
-        return [formatted] if formatted else []
+        raw = result.get("data", {})
+        return ([formatted] if formatted else []), raw
     except Exception as e:
         log.debug("doc_retrieval failed: %s", e)
-        return []
+        return [], {}
 
 
 def _generate_local(prompt: str) -> str:
@@ -189,6 +196,55 @@ def _generate_export(prompt: str, description: str) -> dict:
                f"Export saved to data/skill_exports/{filename}")
 
 
+def _write_generation_log(
+    skill_name: str,
+    triggered_by: str,
+    backend: str,
+    description: str,
+    category: str,
+    api_base: str,
+    retrieval_data: dict,
+    spec_used: bool,
+    spec_warnings: list,
+    outcome: str,
+    error_message: str = "",
+) -> None:
+    """Write one generation trace row to skill_generation_log. Failures are swallowed."""
+    try:
+        import uuid as _uuid
+        import time as _time
+        from mcp_server.tools.skills.storage import get_backend
+
+        context_docs = retrieval_data.get("context_docs", [])
+        # Strip content field — keep only metadata to avoid blob storage
+        docs_for_log = [
+            {k: v for k, v in d.items() if k != "content"}
+            for d in context_docs
+        ]
+
+        row = {
+            "id": str(_uuid.uuid4()),
+            "skill_name": skill_name or "unknown",
+            "triggered_by": triggered_by,
+            "backend": backend,
+            "description": description,
+            "category": category,
+            "api_base": api_base or "",
+            "keywords": json.dumps(retrieval_data.get("keywords", {})),
+            "docs_retrieved": json.dumps(docs_for_log),
+            "total_tokens": retrieval_data.get("total_tokens", 0),
+            "sources_used": json.dumps(retrieval_data.get("sources_used", [])),
+            "spec_used": 1 if spec_used else 0,
+            "spec_warnings": json.dumps(spec_warnings),
+            "outcome": outcome,
+            "error_message": error_message,
+            "created_at": _time.time(),
+        }
+        get_backend().write_generation_log(row)
+    except Exception as _e:
+        log.warning("Failed to write generation log: %s", _e)
+
+
 def generate_skill(
     description: str,
     category: str = "general",
@@ -197,6 +253,7 @@ def generate_skill(
     context_docs: list = None,
     backend: str = "",
     skip_spec: bool = False,
+    triggered_by: str = "skill_create",
 ) -> dict:
     """Generate a new skill using spec-first flow.
 
@@ -219,8 +276,9 @@ def generate_skill(
     existing_names = [s["name"] for s in registry.list_skills(enabled_only=False)]
 
     # Fetch context docs — must be a list for build_generation_prompt
+    _retrieval_data: dict = {}
     if context_docs is None:
-        context_docs = _fetch_relevant_docs(description, category=category, api_base=api_base)
+        context_docs, _retrieval_data = _fetch_relevant_docs(description, category=category, api_base=api_base)
     elif isinstance(context_docs, str):
         context_docs = [context_docs] if context_docs else []
 
@@ -246,6 +304,13 @@ def generate_skill(
             probe_data = probe_result.get("data", {})
             if not probe_data.get("valid"):
                 # Hard stop — don't generate code from a bad spec
+                _write_generation_log(
+                    skill_name="unknown", triggered_by=triggered_by, backend=backend,
+                    description=description, category=category, api_base=api_base,
+                    retrieval_data=_retrieval_data, spec_used=False, spec_warnings=[],
+                    outcome="error",
+                    error_message=f"Spec validation failed: {probe_data.get('errors', [])}",
+                )
                 return _err(
                     f"Spec validation failed: endpoints not reachable or returned unexpected responses. "
                     f"Errors: {probe_data.get('errors', [])}. "
@@ -271,7 +336,14 @@ def generate_skill(
             existing_skills=existing_names,
             spec=validated_spec,
         )
-        return _generate_export(doc, description)
+        export_result = _generate_export(doc, description)
+        _write_generation_log(
+            skill_name="export", triggered_by=triggered_by, backend="export",
+            description=description, category=category, api_base=api_base,
+            retrieval_data=_retrieval_data, spec_used=validated_spec is not None,
+            spec_warnings=spec_warnings, outcome="export",
+        )
+        return export_result
 
     # ── Build generation prompt (with spec if available) ──────────────────────
     prompt = prompt_builder.build_generation_prompt(
@@ -292,13 +364,33 @@ def generate_skill(
             code = _generate_local(prompt)
             backend_used = "local"
     except Exception as e:
+        _write_generation_log(
+            skill_name="unknown", triggered_by=triggered_by, backend=backend,
+            description=description, category=category, api_base=api_base,
+            retrieval_data=_retrieval_data, spec_used=validated_spec is not None,
+            spec_warnings=spec_warnings, outcome="error",
+            error_message=f"Generation failed ({backend}): {e}",
+        )
         return _err(f"Generation failed ({backend}): {e}")
 
     # Validate generated code
     result = validator.validate_skill_code(code)
     if not result["valid"]:
+        _write_generation_log(
+            skill_name="unknown", triggered_by=triggered_by, backend=backend_used,
+            description=description, category=category, api_base=api_base,
+            retrieval_data=_retrieval_data, spec_used=validated_spec is not None,
+            spec_warnings=spec_warnings, outcome="error",
+            error_message=f"Generated code failed validation: {result['error']}",
+        )
         return _err(f"Generated code failed validation: {result['error']}", data={"code": code})
 
+    _write_generation_log(
+        skill_name=result["name"], triggered_by=triggered_by, backend=backend_used,
+        description=description, category=category, api_base=api_base,
+        retrieval_data=_retrieval_data, spec_used=validated_spec is not None,
+        spec_warnings=spec_warnings, outcome="success",
+    )
     return _ok({
         "code": code,
         "name": result["name"],
