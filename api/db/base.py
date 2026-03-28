@@ -15,9 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 _DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent  # api/db/base.py → api/db/ → api/ → project root
 _SQLITE_PATH = Path(os.environ.get(
     "SQLITE_PATH",
-    os.environ.get("DB_PATH", "D:/claude_code/FAJK/HP1-AI-Agent-v1/data/hp1_agent.db")
+    os.environ.get("DB_PATH", str(_PROJECT_ROOT / "data" / "hp1_agent.db"))
 ))
 
 DB_BACKEND: str = "postgres" if _DATABASE_URL else "sqlite"
