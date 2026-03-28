@@ -96,7 +96,7 @@ def test_zero_docs_retrieved_stored_correctly(backend):
 # ── Generator integration tests ────────────────────────────────────────────────
 
 from unittest.mock import patch, MagicMock
-import importlib
+import mcp_server.tools.skills.generator as _gen_module
 
 
 def _make_fake_code(name="test_skill"):
@@ -120,9 +120,7 @@ def test_generate_skill_writes_success_log(tmp_path):
          patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
          patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
                return_value=([], {"keywords": {}, "context_docs": [], "sources_used": [], "total_tokens": 0})):
-        import mcp_server.tools.skills.generator as gen
-        importlib.reload(gen)
-        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+        result = _gen_module.generate_skill("test skill", category="general", skip_spec=True)
 
     assert result["status"] == "ok"
     rows = test_backend.get_generation_log()
@@ -143,9 +141,7 @@ def test_generate_skill_writes_error_log_on_llm_failure(tmp_path):
          patch("mcp_server.tools.skills.generator._generate_local", side_effect=RuntimeError("LLM timeout")), \
          patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
                return_value=([], {"keywords": {}, "context_docs": [], "sources_used": [], "total_tokens": 0})):
-        import mcp_server.tools.skills.generator as gen
-        importlib.reload(gen)
-        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+        result = _gen_module.generate_skill("test skill", category="general", skip_spec=True)
 
     assert result["status"] == "error"
     rows = test_backend.get_generation_log()
@@ -168,9 +164,7 @@ def test_generate_skill_writes_error_log_on_validation_failure(tmp_path):
          patch("mcp_server.tools.skills.generator._generate_local", return_value=bad_code), \
          patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
                return_value=([], {})):
-        import mcp_server.tools.skills.generator as gen
-        importlib.reload(gen)
-        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+        result = _gen_module.generate_skill("test skill", category="general", skip_spec=True)
 
     assert result["status"] == "error"
     rows = test_backend.get_generation_log()
@@ -187,9 +181,7 @@ def test_log_write_failure_does_not_block_generation(tmp_path):
          patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
          patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
                return_value=([], {})):
-        import mcp_server.tools.skills.generator as gen
-        importlib.reload(gen)
-        result = gen.generate_skill("test skill", category="general", skip_spec=True)
+        result = _gen_module.generate_skill("test skill", category="general", skip_spec=True)
 
     assert result["status"] == "ok"
 
@@ -206,9 +198,7 @@ def test_triggered_by_regenerate_is_recorded(tmp_path):
          patch("mcp_server.tools.skills.generator._generate_local", return_value=_make_fake_code()), \
          patch("mcp_server.tools.skills.generator._fetch_relevant_docs",
                return_value=([], {})):
-        import mcp_server.tools.skills.generator as gen
-        importlib.reload(gen)
-        gen.generate_skill("test skill", triggered_by="skill_regenerate", skip_spec=True)
+        _gen_module.generate_skill("test skill", triggered_by="skill_regenerate", skip_spec=True)
 
     rows = test_backend.get_generation_log()
     assert rows[0]["triggered_by"] == "skill_regenerate"
