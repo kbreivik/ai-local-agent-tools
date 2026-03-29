@@ -184,12 +184,15 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
     repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
 
+    # trust_env=False: prevents httpx from picking up http_proxy/https_proxy env vars
+    # which can be set to bare hostnames (no scheme) and cause "missing protocol" errors.
+    client = httpx.Client(trust_env=False, timeout=10, follow_redirects=True)
+
     # GHCR v2 API requires OAuth token exchange — PAT cannot be used directly as Bearer.
     try:
-        tok_resp = httpx.get(
+        tok_resp = client.get(
             f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io",
             auth=("token", token),
-            timeout=10,
         )
     except Exception as exc:
         raise IOError(f"GHCR unreachable: {exc}") from exc
@@ -206,7 +209,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
     for _ in range(3):
         try:
-            r = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+            r = client.get(url, headers=headers)
         except Exception as exc:
             raise IOError(f"GHCR unreachable: {exc}") from exc
 
@@ -231,6 +234,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
             break
         url = next_url
 
+    client.close()
     semver_tags = [t for t in all_tags if semver_re.match(t)]
     semver_tags.sort(key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True)
     result = semver_tags[:20]
