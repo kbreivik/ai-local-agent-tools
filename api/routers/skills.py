@@ -45,8 +45,8 @@ def execute_skill(skill_name: str, params: dict = {}, _: str = Depends(get_curre
         if check.get("status") != "ok":
             raise HTTPException(404, f"Skill '{skill_name}' not found")
 
-        kwargs_json = json.dumps(params) if params else ""
-        result = invoke_tool("skill_execute", {"name": skill_name, "kwargs_json": kwargs_json})
+        params_json = json.dumps(params) if params else "{}"
+        result = invoke_tool("skill_execute", {"name": skill_name, "params_json": params_json})
         return result
     except HTTPException:
         raise

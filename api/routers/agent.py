@@ -837,6 +837,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         await plan_lock.release(session_id)
         log.info("COMPLETING operation_id=%r status=%r", operation_id, final_status)
         try:
+            # Flush any queued writes (e.g. final_answer) before marking complete
+            await logger_mod.flush_now()
             await logger_mod.complete_operation(operation_id, final_status)
         except Exception as _comp_e:
             log.error("complete_operation failed for %s: %s", operation_id, _comp_e)
@@ -902,16 +904,17 @@ async def stop_agent(req: StopRequest, _: str = Depends(get_current_user)):
         return {"status": "error", "message": "session_id too long"}
     _cleanup_stale_cancel_flags()
     _cancel_flags[sid] = (True, time.monotonic())
+    # Mark the operation as cancelled immediately in DB
     try:
         from api.db.base import get_engine
         from api.db import queries as q
         async with get_engine().begin() as conn:
-            op = await q.get_operation_by_session(conn, req.session_id)
+            op = await q.get_operation_by_session(conn, sid)
             if op and op.get("status") == "running":
-                await q.complete_operation(conn, op["id"], "stopped")
+                await q.complete_operation(conn, op["id"], "cancelled")
     except Exception as _e:
         log.debug("stop_agent DB update failed: %s", _e)
-    return {"status": "ok", "message": f"Stop signal sent for session '{req.session_id}'"}
+    return {"status": "ok", "message": f"Cancel signal sent for session '{sid}'"}
 
 
 @router.get("/models")

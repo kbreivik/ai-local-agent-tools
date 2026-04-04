@@ -147,13 +147,13 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
 
 # ── Discovery + execution ─────────────────────────────────────────────────────
 
-def discover_environment(hosts_json: str) -> dict:
+def discover_environment(hosts_json: str = "") -> dict:
     """Scan hosts and auto-identify services via deterministic fingerprinting.
-    Returns identified services, skill coverage gaps, and skill_create recommendations.
+    If called with no arguments, scans all HP1 homelab hosts automatically.
 
     Args:
-        hosts_json: JSON array of host objects. Each entry needs an 'address' key and
-            optional 'port'. Example: '[{"address": "192.168.1.10"}, {"address": "192.168.1.20", "port": 8006}]'
+        hosts_json: JSON array of host objects (optional). Each entry needs an 'address' key and
+            optional 'port'. Example: '[{"address": "192.168.1.10"}]'
     """
     hosts = []
     if hosts_json:
@@ -161,17 +161,28 @@ def discover_environment(hosts_json: str) -> dict:
             hosts = json.loads(hosts_json)
         except (json.JSONDecodeError, ValueError):
             pass
+    if not hosts:
+        # Default to HP1 homelab hosts
+        hosts = [
+            {"address": "192.168.199.10"},
+            {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
+            {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
+            {"address": "192.168.199.40"},
+            {"address": "192.168.1.5", "port": 8006},
+            {"address": "192.168.1.6", "port": 8006},
+            {"address": "192.168.1.7", "port": 8006},
+        ]
     return _mt.discover_environment(hosts)
 
 
-def skill_execute(name: str, kwargs_json: str = "") -> dict:
-    """Execute a dynamic skill by name. Call skill_search first to find available skills.
-    Pass skill parameters as a JSON object string in kwargs_json.
-    Example: skill_execute(name='proxmox_vm_status', kwargs_json='{"node": "pve1"}')"""
+def skill_execute(name: str, params_json: str = "{}", kwargs_json: str = "") -> dict:
+    """Execute a skill by name. Pass parameters as JSON string.
+    Example: skill_execute(name='proxmox_vm_status', params_json='{"host": "pve01"}')"""
+    raw = params_json if params_json and params_json != "{}" else kwargs_json
     kwargs = {}
-    if kwargs_json:
+    if raw:
         try:
-            kwargs = json.loads(kwargs_json)
+            kwargs = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             pass
     return _mt.skill_execute(name, **kwargs)

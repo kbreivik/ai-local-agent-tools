@@ -18,7 +18,7 @@ def test_poll_returns_vms_key():
 
     with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
          patch("api.collectors.proxmox_vms.httpx.get", return_value=mock_resp), \
-         patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
+         patch("api.collectors.proxmox_vms._get_vm_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 
     assert "vms" in result
@@ -49,7 +49,7 @@ def test_stopped_vm_returns_red_dot():
 
     with patch.dict(os.environ, {"PROXMOX_HOST": "192.168.1.5"}, clear=False), \
          patch("api.collectors.proxmox_vms.httpx.get", return_value=mock_resp), \
-         patch("api.collectors.proxmox_vms._get_disk_usage", return_value=[]):
+         patch("api.collectors.proxmox_vms._get_vm_disk_usage", return_value=[]):
         result = asyncio.run(collector.poll())
 
     assert result["vms"][0]["dot"] == "red"

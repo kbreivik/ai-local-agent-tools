@@ -88,10 +88,11 @@ def service_rollback(name: str) -> dict:
 @mcp.tool()
 def node_drain(node_id: str) -> dict:
     """Drain a Swarm node before maintenance. Requires plan_action() approval first.
-    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
-    Reverse with: node_activate(node_id=<same hex id>)
-    HP1 node IDs: manager-01=yxm2ust947ch, worker-01=tyimr0p3dsow (swarm_status for others)
-    Example: node_drain(node_id='tyimr0p3dsow')  # drains worker-01
+    node_id accepts: Docker hex ID, hostname, or partial hostname.
+    Reverse with: node_activate(node_id=<same value>)
+    Examples:
+      node_drain(node_id='tyimr0p3dsow')   # by hex ID
+      node_drain(node_id='worker-01')       # by hostname
     """
     return swarm.node_drain(node_id)
 
@@ -99,12 +100,10 @@ def node_drain(node_id: str) -> dict:
 @mcp.tool()
 def node_activate(node_id: str) -> dict:
     """Re-activate a drained Swarm node.
-    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
-    Always call swarm_status() first if unsure: find node where hostname matches → use its 'id' field.
-    HP1 node IDs (use these directly):
-      manager-01=yxm2ust947ch  manager-02=tzrptdzsvggh  manager-03=z7zscpi5dxe9
-      worker-01=tyimr0p3dsow   worker-02=scdz8rfwou0i   worker-03=g7nkt24xs0oq
-    Example: node_activate(node_id='yxm2ust947ch')  # activates manager-01
+    node_id accepts: Docker hex ID, hostname, or partial hostname.
+    Examples:
+      node_activate(node_id='yxm2ust947ch')   # by hex ID
+      node_activate(node_id='manager-01')      # by hostname
     """
     return swarm.node_activate(node_id)
 
@@ -559,14 +558,19 @@ def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
 
 
 @mcp.tool()
-def skill_execute(name: str, **kwargs) -> dict:
-    """Execute a dynamic skill by name. Call skill_search() first to find available skills.
-    Pass skill parameters as direct keyword arguments — do NOT wrap in arguments= or kwargs_json=.
+def skill_execute(name: str, params_json: str = "{}") -> dict:
+    """Execute a skill by name. Pass parameters as JSON string, e.g. params_json='{"host": "pve01"}'.
+    Call skill_search() first to find available skills.
     Examples:
-      skill_execute(name='proxmox_vm_status', host='192.168.1.5')
-      skill_execute(name='http_health_check', url='http://127.0.0.1:8000/api/health')
+      skill_execute(name='proxmox_vm_status', params_json='{"host": "192.168.1.5"}')
+      skill_execute(name='http_health_check', params_json='{"url": "http://127.0.0.1:8000/api/health"}')
       skill_execute(name='kafka_broker_status')
     """
+    import json as _json
+    try:
+        kwargs = _json.loads(params_json) if params_json else {}
+    except (ValueError, TypeError):
+        kwargs = {}
     return skill_tools.skill_execute(name, **kwargs)
 
 
