@@ -239,9 +239,12 @@ async def chunk_and_store(
     tags: list[str],
     source_key: str,
     local_path: str,
+    platform: str = "",
+    doc_type: str = "admin_guide",
 ) -> list[str]:
     """
     Chunk content and store each chunk as a MuninnDB engram.
+    Also writes to pgvector doc_chunks table (parallel store).
     Returns list of engram IDs (or empty list if MuninnDB unavailable).
     """
     from api.memory.client import get_client
@@ -261,6 +264,20 @@ async def chunk_and_store(
                 engram_ids.append(str(engram_id))
         except Exception as e:
             log.warning("Failed to store chunk %d for %s: %s", i, source_key, e)
+
+    # Parallel write to pgvector (sync, best-effort)
+    if platform and chunks:
+        try:
+            from api.rag.ingest import ingest_chunks
+            ingest_chunks(
+                chunks=chunks,
+                platform=platform,
+                doc_type=doc_type,
+                source_url=source,
+                source_label=source_key,
+            )
+        except Exception as e:
+            log.debug("pgvector ingest skipped for %s: %s", source_key, e)
 
     return engram_ids
 

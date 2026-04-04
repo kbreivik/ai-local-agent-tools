@@ -87,6 +87,12 @@ async def lifespan(app: FastAPI):
         _sync_env()
     except Exception as e:
         _log.warning("Settings seed/sync skipped: %s", e)
+    # Initialize pgvector RAG schema (no-op if pgvector unavailable)
+    try:
+        from api.rag.schema import init_doc_chunks
+        init_doc_chunks()
+    except Exception as e:
+        _log.debug("RAG schema init skipped: %s", e)
     collector_manager.start_all()
     # Load dynamic skills from modules/ into memory so skill_execute works after restart
     try:

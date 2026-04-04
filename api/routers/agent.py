@@ -663,21 +663,49 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
 
     system_prompt = get_prompt(first_intent)
 
-    # ── Inject past outcomes + relevant doc chunks into system prompt ─────────
+    # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
     try:
         from api.memory.feedback import get_past_outcomes, build_outcome_prompt_section
         from api.memory.client import get_client as _get_mem_client
 
         injected_sections: list = []
         doc_chunks: list = []
+        rag_doc_count = 0
 
-        # Past outcomes (all agent types)
+        # Past outcomes (all agent types — OPERATIONAL MEMORY)
         past_outcomes = await get_past_outcomes(task, max_results=4)
         outcome_section = build_outcome_prompt_section(past_outcomes)
         if outcome_section:
             injected_sections.append(outcome_section)
 
-        # Doc chunks (research/investigate agent — activate on task keywords + component names)
+        # pgvector documentation (tiered by agent type — DOCUMENTATION)
+        _RAG_BUDGETS = {
+            "research": (3000, None),           # full budget, all doc_types
+            "investigate": (3000, None),
+            "execute": (1500, ["api_reference", "cli_reference"]),
+            "action": (1500, ["api_reference", "cli_reference"]),
+        }
+        rag_cfg = _RAG_BUDGETS.get(first_intent)
+        if rag_cfg:
+            try:
+                from api.rag.doc_search import search_docs, format_doc_results
+                rag_budget, rag_type_filter = rag_cfg
+                rag_results = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: search_docs(
+                        query=task,
+                        doc_type_filter=rag_type_filter,
+                        token_budget=rag_budget,
+                    )
+                )
+                if rag_results:
+                    rag_section = format_doc_results(rag_results)
+                    if rag_section:
+                        injected_sections.insert(0, rag_section)
+                        rag_doc_count = len(rag_results)
+            except Exception as _rag_e:
+                log.debug("RAG injection skipped: %s", _rag_e)
+
+        # MuninnDB doc chunks (research/investigate — Hebbian activation)
         if first_intent in ("research", "investigate"):
             _mem = _get_mem_client()
             doc_context_terms = [w for w in task.lower().split() if len(w) > 3][:6] + ["documentation"]
@@ -688,7 +716,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                    a.get("concept", "").startswith("docs:")
             ]
             if doc_chunks:
-                doc_lines = ["RELEVANT DOCUMENTATION:"]
+                doc_lines = ["OPERATIONAL MEMORY:"]
                 for dc in doc_chunks:
                     content = dc.get("content", "")
                     body = re.sub(r'^\[source:[^\]]+\]\n\n', '', content).strip()
@@ -700,10 +728,17 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         if injected_sections:
             injection = "\n\n".join(injected_sections) + "\n\n"
             system_prompt = injection + system_prompt
-            total_injected = len(past_outcomes) + (len(doc_chunks) if first_intent in ("research", "investigate") else 0)
+            total_injected = rag_doc_count + len(past_outcomes) + len(doc_chunks)
+            parts = []
+            if rag_doc_count:
+                parts.append(f"{rag_doc_count} doc(s)")
+            if past_outcomes:
+                parts.append(f"{len(past_outcomes)} outcome(s)")
+            if doc_chunks:
+                parts.append(f"{len(doc_chunks)} memory chunk(s)")
             await manager.send_line(
                 "memory",
-                f"[memory] {total_injected} context item(s) injected into prompt",
+                f"[context] {' + '.join(parts)} injected into prompt",
                 status="ok", session_id=session_id,
             )
     except Exception:
