@@ -181,6 +181,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
         return cached[0]
 
     token = os.environ.get("GHCR_TOKEN", "")
+    token_source = "env" if token else "none"
     if not token:
         # Fallback: read from settings DB in case sync_env_from_db() missed it
         try:
@@ -188,10 +189,13 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
             token = get_backend().get_setting("ghcrToken") or ""
             if token:
                 os.environ["GHCR_TOKEN"] = token  # backfill for subsequent calls
-        except Exception:
-            pass
+                token_source = "db"
+        except Exception as db_err:
+            log.debug("GHCR token DB fallback failed: %s", db_err)
     if not token:
+        log.warning("GHCR tag fetch skipped: no token (checked env GHCR_TOKEN and DB ghcrToken)")
         raise RuntimeError("GHCR_TOKEN not configured")
+    log.debug("GHCR token found via %s (length=%d)", token_source, len(token))
 
     repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
 
@@ -200,16 +204,18 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     client = httpx.Client(trust_env=False, timeout=10, follow_redirects=True)
 
     # GHCR v2 API requires OAuth token exchange — PAT cannot be used directly as Bearer.
+    tok_url = f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io"
     try:
-        tok_resp = client.get(
-            f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io",
-            auth=("token", token),
-        )
+        tok_resp = client.get(tok_url, auth=("token", token))
     except Exception as exc:
+        log.error("GHCR token exchange failed (network): %s", exc)
         raise IOError(f"GHCR unreachable: {exc}") from exc
+    log.debug("GHCR token exchange: HTTP %d", tok_resp.status_code)
     if tok_resp.status_code in (401, 403):
+        log.warning("GHCR auth failed: HTTP %d — token may be expired or lack read:packages scope", tok_resp.status_code)
         raise RuntimeError(f"GHCR auth failed: HTTP {tok_resp.status_code}")
     if not tok_resp.is_success:
+        log.warning("GHCR token exchange error: HTTP %d", tok_resp.status_code)
         raise IOError(f"GHCR token error: HTTP {tok_resp.status_code}")
     bearer = tok_resp.json().get("token", "")
 
@@ -246,6 +252,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
         url = next_url
 
     client.close()
+    log.debug("GHCR tags fetched: %d total, filtering semver", len(all_tags))
     semver_tags = [t for t in all_tags if semver_re.match(t)]
     semver_tags.sort(key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True)
     result = semver_tags[:20]
