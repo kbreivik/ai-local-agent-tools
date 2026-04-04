@@ -67,10 +67,10 @@ def detect_platform(task: str, conn) -> str:
 _HYBRID_SQL = """
 WITH vec AS (
     SELECT id, content, platform, doc_type, source_label, version,
-           ROW_NUMBER() OVER (ORDER BY embedding <=> %(emb)s::vector) AS rank_v
+           ROW_NUMBER() OVER (ORDER BY embedding <=> %(emb)s) AS rank_v
     FROM doc_chunks
     WHERE TRUE {where}
-    ORDER BY embedding <=> %(emb)s::vector
+    ORDER BY embedding <=> %(emb)s
     LIMIT 20
 ),
 txt AS (
@@ -114,8 +114,13 @@ def search_docs(
 
     try:
         import psycopg2
+        from pgvector.psycopg2 import register_vector as _register_vector
         dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
         conn = psycopg2.connect(dsn)
+        _register_vector(conn)
+    except ImportError as e:
+        log.warning("RAG search: missing dependency: %s", e)
+        return []
     except Exception as e:
         log.warning("RAG search: DB connection failed: %s", e)
         return []
@@ -141,8 +146,9 @@ def search_docs(
         sql = _HYBRID_SQL.format(where=where_clause)
 
         # Embed query
-        query_embedding = embed(query)
-        params["emb"] = str(query_embedding)
+        import numpy as np
+        query_embedding = np.array(embed(query), dtype=np.float32)
+        params["emb"] = query_embedding
 
         cur = conn.cursor()
         cur.execute(sql, params)

@@ -48,7 +48,7 @@ def detect_platform_from_url(url: str) -> tuple[str, str]:
 
 _UPSERT_SQL = """
 INSERT INTO doc_chunks (content, embedding, platform, doc_type, source_url, source_label, version, chunk_index)
-VALUES (%(content)s, %(embedding)s::vector, %(platform)s, %(doc_type)s, %(source_url)s, %(source_label)s, %(version)s, %(chunk_index)s)
+VALUES (%(content)s, %(embedding)s, %(platform)s, %(doc_type)s, %(source_url)s, %(source_label)s, %(version)s, %(chunk_index)s)
 ON CONFLICT (platform, source_url, chunk_index) DO UPDATE SET
     content = EXCLUDED.content,
     embedding = EXCLUDED.embedding,
@@ -80,8 +80,16 @@ def ingest_chunks(
 
     try:
         import psycopg2
+        import numpy as np
+        from pgvector.psycopg2 import register_vector as _register_vector
+    except ImportError as e:
+        log.warning("RAG ingest: missing dependency: %s", e)
+        return 0
+
+    try:
         dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
         conn = psycopg2.connect(dsn)
+        _register_vector(conn)
         conn.autocommit = False
         cur = conn.cursor()
 
@@ -91,10 +99,10 @@ def ingest_chunks(
             if not chunk:
                 continue
             try:
-                vec = embed(chunk)
+                vec = np.array(embed(chunk), dtype=np.float32)
                 cur.execute(_UPSERT_SQL, {
                     "content": chunk,
-                    "embedding": str(vec),
+                    "embedding": vec,
                     "platform": platform,
                     "doc_type": doc_type,
                     "source_url": source_url,
