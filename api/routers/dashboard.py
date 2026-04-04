@@ -249,6 +249,9 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
                 break
         if not next_url:
             break
+        # GHCR Link headers may return relative paths — ensure absolute URL
+        if next_url.startswith("/"):
+            next_url = f"https://ghcr.io{next_url}"
         url = next_url
 
     client.close()
