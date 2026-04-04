@@ -59,10 +59,17 @@ operations = Table(
     Column("owner_user", Text),
 )
 
+def _fk_uuid_col(name: str, fk: str, **kw):
+    """UUID foreign key column — matches _uuid_col type on both backends."""
+    if _IS_POSTGRES:
+        return Column(name, PG_UUID(as_uuid=True), ForeignKey(fk, ondelete="SET NULL"), **kw)
+    return Column(name, Text, ForeignKey(fk, ondelete="SET NULL"), **kw)
+
+
 tool_calls = Table(
     "tool_calls", metadata,
     _uuid_col("id", primary_key=True),
-    Column("operation_id", Text, ForeignKey("operations.id", ondelete="SET NULL"), nullable=True),
+    _fk_uuid_col("operation_id", "operations.id", nullable=True),
     Column("tool_name", Text, nullable=False),
     _json_col("params"),
     _json_col("result"),
@@ -85,7 +92,7 @@ status_snapshots = Table(
 escalations = Table(
     "escalations", metadata,
     _uuid_col("id", primary_key=True),
-    Column("operation_id", Text, ForeignKey("operations.id", ondelete="SET NULL"), nullable=True),
+    _fk_uuid_col("operation_id", "operations.id", nullable=True),
     Column("tool_call_id", Text, nullable=True),
     Column("reason", Text, nullable=False),
     _json_col("context"),
