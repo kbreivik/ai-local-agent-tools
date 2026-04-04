@@ -96,18 +96,29 @@ def checkpoint_restore(label: str) -> dict:
         return _err(f"checkpoint_restore error: {e}")
 
 
-def audit_log(action: str, result: Any) -> dict:
-    """Structured log of every agent decision."""
+def audit_log(action: str, result: Any, target: str = "", details: str = "") -> dict:
+    """Log an agent action to the audit table.
+    action: what happened — upgrade | drain | restart | create | check | rollback
+    result: outcome — ok | failed | escalated | skipped | error
+    target: what was acted on — kafka | manager-01 | proxmox_vm_status (optional)
+    details: extra context (optional)
+    """
     try:
+        full_result = str(result)
+        if target:
+            full_result += f" | target={target}"
+        if details:
+            full_result += f" | {details}"
+
         # Primary: write to DB (queryable, concurrent-safe with PostgreSQL)
         try:
             from mcp_server.tools.skills.storage import get_backend
-            get_backend().append_audit(action, result)
+            get_backend().append_audit(action, full_result)
         except Exception:
             pass
 
         # Secondary: append to JSONL file (for tail -f and portability)
-        entry = {"timestamp": _ts(), "action": action, "result": result}
+        entry = {"timestamp": _ts(), "action": action, "result": full_result, "target": target}
         try:
             audit_path = _audit_path()
             with open(audit_path, "a", encoding="utf-8") as f:
@@ -115,7 +126,7 @@ def audit_log(action: str, result: Any) -> dict:
         except Exception:
             pass
 
-        return _ok({"action": action}, f"Audit entry logged: {action}")
+        return _ok({"action": action, "target": target}, f"Audit entry logged: {action}")
     except Exception as e:
         return _err(f"audit_log error: {e}")
 

@@ -223,12 +223,7 @@ def audit_log(action: str, result: str, target: str = "", details: str = "") -> 
       audit_log(action="drain", result="failed", target="worker-01", details="node unreachable")
     Note: only logged once per run — subsequent calls skipped automatically.
     """
-    full_result = result
-    if target:
-        full_result += f" | target={target}"
-    if details:
-        full_result += f" | {details}"
-    return orchestration.audit_log(action, full_result)
+    return orchestration.audit_log(action, result, target=target, details=details)
 
 
 @mcp.tool()
