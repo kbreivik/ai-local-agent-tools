@@ -89,6 +89,7 @@ def ingest_chunks(
     try:
         dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
         conn = psycopg2.connect(dsn)
+        conn.autocommit = True
         _register_vector(conn)
         conn.autocommit = False
         cur = conn.cursor()

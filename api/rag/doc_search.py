@@ -117,7 +117,9 @@ def search_docs(
         from pgvector.psycopg2 import register_vector as _register_vector
         dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
         conn = psycopg2.connect(dsn)
+        conn.autocommit = True
         _register_vector(conn)
+        conn.autocommit = False
     except ImportError as e:
         log.warning("RAG search: missing dependency: %s", e)
         return []
