@@ -267,6 +267,7 @@ async def chunk_and_store(
 
     # Parallel write to pgvector (sync, best-effort)
     if platform and chunks:
+        log.info("pgvector parallel write: %d chunks for platform=%s", len(chunks), platform)
         try:
             from api.rag.ingest import ingest_chunks
             ingest_chunks(
@@ -323,13 +324,26 @@ async def ingest(
     # Save locally
     local_path = _save_local(source_key, content, suffix)
 
-    # Store in MuninnDB
+    # Detect platform/doc_type for pgvector parallel write
+    _rag_platform, _rag_doc_type = "", "admin_guide"
+    if source_url:
+        try:
+            from api.rag.ingest import detect_platform_from_url
+            _rag_platform, _rag_doc_type = detect_platform_from_url(source_url)
+        except Exception:
+            pass
+    log.info("pgvector ingest: platform=%s doc_type=%s source=%s",
+             _rag_platform or "(none)", _rag_doc_type, (source_url or local_file_path or "")[:80])
+
+    # Store in MuninnDB + pgvector
     engram_ids = await chunk_and_store(
         content=content,
         source=source_label,
         tags=tags + (["url"] if source_url else ["pdf"]),
         source_key=source_key,
         local_path=local_path,
+        platform=_rag_platform,
+        doc_type=_rag_doc_type,
     )
 
     # Update manifest
