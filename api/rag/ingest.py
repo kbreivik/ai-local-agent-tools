@@ -35,9 +35,12 @@ DOMAIN_PLATFORM_MAP = {
     "demo.bookstackapp.com": ("bookstack", "api_reference"),
 }
 
-# GitHub repos → platform (matched by path prefix, not just domain)
+# GitHub/raw repos → platform (matched by path prefix, not just domain)
 _GITHUB_PATH_MAP = {
     "/TechnitiumSoftware": ("technitium", "api_reference"),
+    "/caddyserver": ("caddy", "admin_guide"),
+    "/traefik": ("traefik", "admin_guide"),
+    "/Telmate": ("terraform", "api_reference"),
 }
 
 
