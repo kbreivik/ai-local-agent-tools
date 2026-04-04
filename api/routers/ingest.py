@@ -113,12 +113,24 @@ async def confirm_url_ingest(req: ConfirmRequest, user: str = Depends(get_curren
     content = job["content"]
     local_path = _save_local(source_key, content, ".txt")
 
+    # Detect platform for pgvector parallel write
+    _rag_platform, _rag_doc_type = "unclassified", "admin_guide"
+    try:
+        from api.rag.ingest import detect_platform_from_url
+        _p, _d = detect_platform_from_url(job["url"])
+        if _p:
+            _rag_platform, _rag_doc_type = _p, _d
+    except Exception:
+        pass
+
     engram_ids = await chunk_and_store(
         content=content,
         source=job["label"],
         tags=job["tags"] + ["url", "documentation"],
         source_key=source_key,
         local_path=local_path,
+        platform=_rag_platform,
+        doc_type=_rag_doc_type,
     )
 
     manifest = _load_manifest()
@@ -227,6 +239,8 @@ async def confirm_pdf_ingest(req: ConfirmRequest, user: str = Depends(get_curren
         tags=job["tags"] + ["pdf", "documentation"],
         source_key=job["source_key"],
         local_path=job["local_path"],
+        platform="unclassified",
+        doc_type="admin_guide",
     )
 
     manifest = _load_manifest()

@@ -278,7 +278,7 @@ async def chunk_and_store(
                 source_label=source_key,
             )
         except Exception as e:
-            log.debug("pgvector ingest skipped for %s: %s", source_key, e)
+            log.error("RAG WRITE FAILED for %s: %s", source_key, e, exc_info=True)
 
     return engram_ids
 
