@@ -2,9 +2,10 @@
  * OptionsModal — 4-tab settings modal.
  * Reads/writes via OptionsContext → localStorage + POST /api/settings.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Settings, X } from 'lucide-react'
 import { useOptions } from '../context/OptionsContext'
+import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -159,6 +160,7 @@ function InfrastructureTab({ draft, update }) {
             />
             <span className="text-xs text-gray-300">Enable automatic updates</span>
           </label>
+          <UpdateStatus />
         </Field>
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
@@ -460,6 +462,35 @@ function DisplayTab({ draft, update }) {
           ))}
         </div>
       </Field>
+    </div>
+  )
+}
+
+// ── Update status display ────────────────────────────────────────────────────
+
+function UpdateStatus() {
+  const [info, setInfo] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d) setInfo(d) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  if (!info) return null
+
+  return (
+    <div className="mt-1.5 text-[10px] text-gray-500 space-y-0.5">
+      <div>Current: <span className="text-gray-400 font-mono">{info.current_version || '—'}</span></div>
+      {info.latest_available && (
+        <div>Latest: <span className="text-gray-400 font-mono">{info.latest_available}</span></div>
+      )}
+      {info.last_checked && (
+        <div>Last checked: <span className="text-gray-400">{new Date(info.last_checked).toLocaleString()}</span></div>
+      )}
     </div>
   )
 }

@@ -983,12 +983,25 @@ def _check_and_update() -> None:
         result = _pull_image(image)
         if result.get("ok"):
             log.info("auto-update: pull complete, restarting")
+            _audit("auto_update", f"ok | target=hp1_agent | {APP_VERSION} -> {latest}")
             _restart_self_container()
         else:
-            log.error("auto-update: pull failed: %s", result.get("error"))
+            err = result.get("error", "unknown")
+            log.error("auto-update: pull failed: %s", err)
+            _audit("auto_update", f"failed | target=hp1_agent | pull error: {err}")
 
     except Exception as e:
         log.warning("auto-update check failed: %s", e)
+        _audit("auto_update", f"error | {e}")
+
+
+def _audit(action: str, result: str) -> None:
+    """Write to skill audit log (sync, best-effort)."""
+    try:
+        from mcp_server.tools.orchestration import audit_log
+        audit_log(action, result)
+    except Exception:
+        pass
 
 
 async def _auto_update_loop() -> None:
