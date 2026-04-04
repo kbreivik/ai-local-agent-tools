@@ -15,8 +15,10 @@ log = logging.getLogger(__name__)
 
 DOMAIN_PLATFORM_MAP = {
     "pve.proxmox.com": ("proxmox", "admin_guide"),
+    "pbs.proxmox.com": ("pbs", "admin_guide"),
     "docs.fortinet.com": ("fortigate", "admin_guide"),
     "docs.truenas.com": ("truenas", "admin_guide"),
+    "www.truenas.com": ("truenas", "admin_guide"),
     "docs.pi-hole.net": ("pihole", "admin_guide"),
     "documentation.wazuh.com": ("wazuh", "admin_guide"),
     "docs.securityonion.net": ("security_onion", "admin_guide"),
@@ -28,19 +30,34 @@ DOMAIN_PLATFORM_MAP = {
     "nginx.org": ("nginx", "admin_guide"),
     "docs.syncthing.net": ("syncthing", "admin_guide"),
     "technitium.com": ("technitium", "admin_guide"),
+    "help.ui.com": ("unifi", "admin_guide"),
+    "www.bookstackapp.com": ("bookstack", "admin_guide"),
+    "demo.bookstackapp.com": ("bookstack", "api_reference"),
+}
+
+# GitHub repos → platform (matched by path prefix, not just domain)
+_GITHUB_PATH_MAP = {
+    "/TechnitiumSoftware": ("technitium", "api_reference"),
 }
 
 
 def detect_platform_from_url(url: str) -> tuple[str, str]:
     """Return (platform, doc_type) from URL domain, or ("", "") if unknown."""
     try:
-        host = urlparse(url).hostname or ""
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        path = parsed.path or ""
     except Exception:
         return ("", "")
-    # Try exact match first, then suffix match
+    # Domain match first
     for domain, result in DOMAIN_PLATFORM_MAP.items():
         if host == domain or host.endswith("." + domain):
             return result
+    # GitHub special case: match by repo path prefix
+    if host in ("github.com", "raw.githubusercontent.com"):
+        for prefix, result in _GITHUB_PATH_MAP.items():
+            if path.startswith(prefix):
+                return result
     return ("", "")
 
 
