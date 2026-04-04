@@ -508,9 +508,9 @@ def pre_upgrade_check() -> dict:
 def postgres_health() -> dict:
     """Check PostgreSQL database health."""
     try:
-        from api.db.base import get_engine
+        from api.db.base import get_sync_engine
         from sqlalchemy import text as _text
-        engine = get_engine()
+        engine = get_sync_engine()
         with engine.connect() as conn:
             db_size = conn.execute(_text(
                 "SELECT pg_size_pretty(pg_database_size(current_database()))"
