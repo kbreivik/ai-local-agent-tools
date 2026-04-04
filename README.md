@@ -408,6 +408,12 @@ Every tool returns a consistent structured dict:
 | `POSTGRES_PASSWORD` | *(required)* | Database password |
 | `REDIS_URL` | *(optional)* | Redis connection URL |
 
+### Memory
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MUNINN_URL` | `http://muninndb:9475` | MuninnDB REST endpoint |
+| `MUNINNDB_URL` | *(alias)* | Alternative env var name (both accepted) |
+
 ### Operations
 | Variable | Default | Description |
 |----------|---------|-------------|
