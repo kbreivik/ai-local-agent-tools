@@ -325,15 +325,20 @@ async def ingest(
     local_path = _save_local(source_key, content, suffix)
 
     # Detect platform/doc_type for pgvector parallel write
+    # TODO: When platform is unclassified, agent should analyze content and suggest platform classification
     _rag_platform, _rag_doc_type = "", "admin_guide"
+    _rag_unclassified = False
     if source_url:
         try:
             from api.rag.ingest import detect_platform_from_url
             _rag_platform, _rag_doc_type = detect_platform_from_url(source_url)
         except Exception:
             pass
+    if not _rag_platform:
+        _rag_platform = "unclassified"
+        _rag_unclassified = True
     log.info("pgvector ingest: platform=%s doc_type=%s source=%s",
-             _rag_platform or "(none)", _rag_doc_type, (source_url or local_file_path or "")[:80])
+             _rag_platform, _rag_doc_type, (source_url or local_file_path or "")[:80])
 
     # Store in MuninnDB + pgvector
     engram_ids = await chunk_and_store(
@@ -381,9 +386,12 @@ async def ingest(
         "preview": content[:600],
         "breaking_changes_diff": breaking_changes,
         "breaking_changes_llm": llm_analysis,
+        "rag_platform": _rag_platform,
+        "rag_doc_type": _rag_doc_type,
         "message": (
             f"Ingested {len(engram_ids)} chunk(s) from {source_label}"
             + (" [NEW]" if update_info["is_new"] else " [UPDATED]" if update_info["is_updated"] else " [UNCHANGED]")
+            + (". Platform not auto-detected. Stored as unclassified. Use search_docs or the API to reclassify." if _rag_unclassified else f" [platform={_rag_platform}]")
         ),
     }
 
