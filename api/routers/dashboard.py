@@ -28,6 +28,17 @@ log = logging.getLogger(__name__)
 _GHCR_TAG_CACHE: dict = {}   # { image_bare: (tags, fetched_at) }
 _GHCR_TAG_TTL = 600          # 10 minutes
 
+# ── Auto-update state ────────────────────────────────────────────────────────
+
+_AUTO_UPDATE_INTERVAL = 300   # 5 minutes
+_auto_update_task: asyncio.Task | None = None
+_update_status: dict = {
+    "auto_update": False,
+    "current_version": "",
+    "latest_available": "",
+    "last_checked": "",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -917,3 +928,99 @@ def _restart_self_container() -> None:
         container.restart()
     except Exception as e:
         log.error("self-restart failed: %s", e)
+
+
+# ── Auto-update background loop ──────────────────────────────────────────────
+
+_HP1_IMAGE = "ghcr.io/kbreivik/hp1-ai-agent"
+
+
+def _is_auto_update_enabled() -> bool:
+    """Check the autoUpdate setting from DB."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        val = get_backend().get_setting("autoUpdate")
+        if val is None:
+            return False
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "1", "yes")
+    except Exception:
+        return False
+
+
+def _check_and_update() -> None:
+    """Check GHCR for newer version. If found and autoUpdate is on, pull + restart."""
+    from api.constants import APP_VERSION
+
+    _update_status["current_version"] = APP_VERSION
+    _update_status["auto_update"] = _is_auto_update_enabled()
+
+    if not _update_status["auto_update"]:
+        return
+
+    try:
+        tags = _fetch_ghcr_tags(_HP1_IMAGE)
+        _update_status["last_checked"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        latest = tags[0] if tags else ""
+        _update_status["latest_available"] = latest
+
+        if not latest or latest == APP_VERSION:
+            return
+
+        # Compare semver: only update if latest > current
+        def _ver(v: str) -> tuple:
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except (ValueError, AttributeError):
+                return (0,)
+
+        if _ver(latest) <= _ver(APP_VERSION):
+            return
+
+        log.info("auto-update: newer version %s available (current: %s), pulling", latest, APP_VERSION)
+        image = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
+        result = _pull_image(image)
+        if result.get("ok"):
+            log.info("auto-update: pull complete, restarting")
+            _restart_self_container()
+        else:
+            log.error("auto-update: pull failed: %s", result.get("error"))
+
+    except Exception as e:
+        log.warning("auto-update check failed: %s", e)
+
+
+async def _auto_update_loop() -> None:
+    """Background loop: check for updates every 5 minutes."""
+    while True:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _check_and_update)
+        except Exception as e:
+            log.warning("auto-update loop error: %s", e)
+        await asyncio.sleep(_AUTO_UPDATE_INTERVAL)
+
+
+def start_auto_update() -> None:
+    """Start the auto-update background task. Called from lifespan."""
+    global _auto_update_task
+    if _auto_update_task is None or _auto_update_task.done():
+        _auto_update_task = asyncio.create_task(_auto_update_loop())
+        log.info("auto-update: background task started (interval=%ds)", _AUTO_UPDATE_INTERVAL)
+
+
+def stop_auto_update() -> None:
+    """Cancel the auto-update background task."""
+    global _auto_update_task
+    if _auto_update_task and not _auto_update_task.done():
+        _auto_update_task.cancel()
+        _auto_update_task = None
+
+
+@router.get("/update-status")
+def get_update_status(_: str = Depends(get_current_user)):
+    """Current auto-update state: enabled, current version, latest available, last check time."""
+    from api.constants import APP_VERSION
+    _update_status["current_version"] = APP_VERSION
+    _update_status["auto_update"] = _is_auto_update_enabled()
+    return _update_status

@@ -103,7 +103,17 @@ async def lifespan(app: FastAPI):
         await ingest_runbooks()
     except Exception as e:
         _log.warning("Memory ingest skipped: %s", e)
+    # Start auto-update background check
+    try:
+        from api.routers.dashboard import start_auto_update, stop_auto_update
+        start_auto_update()
+    except Exception as e:
+        _log.warning("Auto-update start skipped: %s", e)
     yield
+    try:
+        stop_auto_update()
+    except Exception:
+        pass
     collector_manager.stop_all()
     await _close_memory()
     await _flush_logger()

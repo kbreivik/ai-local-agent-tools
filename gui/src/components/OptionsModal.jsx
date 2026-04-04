@@ -149,6 +149,17 @@ function InfrastructureTab({ draft, update }) {
         <Field label="GHCR Token" hint="GitHub PAT with read:packages scope — enables version checking">
           <TextInput type="password" value={draft.ghcrToken} onChange={v => update('ghcrToken', v)} placeholder="ghp_..." />
         </Field>
+        <Field label="Auto-Update" hint="Check GHCR every 5 min and auto-pull + restart when a newer version is available">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.autoUpdate === true || draft.autoUpdate === 'true'}
+              onChange={e => update('autoUpdate', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Enable automatic updates</span>
+          </label>
+        </Field>
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
         </Field>
