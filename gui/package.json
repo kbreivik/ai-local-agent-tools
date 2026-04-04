@@ -1,6 +1,7 @@
 {
   "name": "gui",
   "private": true,
+  "license": "MIT",
   "version": "1.10.8",
   "type": "module",
   "scripts": {

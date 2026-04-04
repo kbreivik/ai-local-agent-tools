@@ -1,6 +1,8 @@
 # HP1-AI-Agent-v1
 
-Local AI Infrastructure Orchestration Agent — a Python MCP server + FastAPI backend + React GUI that enables a local LLM (Qwen3-Coder-30B) to autonomously manage, inspect, upgrade, and orchestrate a Docker Swarm + Kafka cluster with enforced checks and balances at every step.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Open-source local AI infrastructure orchestration agent — a Python MCP server + FastAPI backend + React GUI that enables a local LLM (Qwen3-Coder-30B) to autonomously manage, inspect, upgrade, and orchestrate a Docker Swarm + Kafka cluster with enforced checks and balances at every step.
 
 **Current version: v1.9.0**
 
@@ -380,3 +382,9 @@ HP1-AI-Agent-v1/
 | v1.7 | 3-agent routing, plan guards, integration tests, feedback loop |
 | v1.8 | Auth+JWT, session replay, global lock, Docker Engine SSH, Ansible/Proxmox, URL/PDF ingestion |
 | v1.9 | Docker containerization, auto-detecting storage layer (SQLite→PG+Redis), skill system v3 |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
