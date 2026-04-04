@@ -149,12 +149,13 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
 
 def discover_environment(hosts_json: str = "") -> dict:
     """Scan hosts and auto-identify services via deterministic fingerprinting.
-    If called with no arguments, scans all HP1 homelab hosts automatically.
+    If called with no arguments, scans hosts from DISCOVER_DEFAULT_HOSTS env var.
 
     Args:
         hosts_json: JSON array of host objects (optional). Each entry needs an 'address' key and
-            optional 'port'. Example: '[{"address": "192.168.1.10"}]'
+            optional 'port'. Example: '[{"address": "10.0.0.1"}]'
     """
+    import os
     hosts = []
     if hosts_json:
         try:
@@ -162,16 +163,15 @@ def discover_environment(hosts_json: str = "") -> dict:
         except (json.JSONDecodeError, ValueError):
             pass
     if not hosts:
-        # Default to HP1 homelab hosts
-        hosts = [
-            {"address": "192.168.199.10"},
-            {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
-            {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
-            {"address": "192.168.199.40"},
-            {"address": "192.168.1.5", "port": 8006},
-            {"address": "192.168.1.6", "port": 8006},
-            {"address": "192.168.1.7", "port": 8006},
-        ]
+        raw = os.environ.get("DISCOVER_DEFAULT_HOSTS", "")
+        if raw:
+            try:
+                hosts = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                pass
+    if not hosts:
+        return {"status": "error", "data": None,
+                "timestamp": "", "message": "No hosts provided. Set DISCOVER_DEFAULT_HOSTS env var or pass hosts_json."}
     return _mt.discover_environment(hosts)
 
 

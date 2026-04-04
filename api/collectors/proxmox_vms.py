@@ -27,16 +27,19 @@ NODE_DISPLAY = {
     "Pmox3": "Pmox3",
 }
 
-VM_IP_MAP = {
-    9200: "192.168.199.10",
-    9211: "192.168.199.21",
-    9212: "192.168.199.22",
-    9213: "192.168.199.23",
-    9221: "192.168.199.31",
-    9222: "192.168.199.32",
-    9223: "192.168.199.33",
-    9230: "192.168.199.40",
-}
+def _load_vm_ip_map() -> dict:
+    """Load VMID→IP mapping from PROXMOX_VM_IP_MAP env var (JSON object with string keys)."""
+    import json
+    raw = os.environ.get("PROXMOX_VM_IP_MAP", "")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            return {int(k): v for k, v in parsed.items()}
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return {}
+
+VM_IP_MAP = _load_vm_ip_map()
 
 
 class ProxmoxVMsCollector(BaseCollector):

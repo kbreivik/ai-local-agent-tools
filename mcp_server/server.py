@@ -144,7 +144,7 @@ def kafka_broker_status(broker_id: int = None, broker_name: str = "") -> dict:
     Call with no args to check all 3 brokers (most common usage).
     broker_id and broker_name params are accepted but ignored — always returns all brokers.
     Key field to check: controller_id (None = no controller elected = broken cluster).
-    HP1 brokers: id=1 on 192.168.199.31:9092, id=2 on 192.168.199.32:9093, id=3 on 192.168.199.33:9094
+    Broker addresses come from KAFKA_BOOTSTRAP_SERVERS env var.
     Example: kafka_broker_status()
     """
     return kafka.kafka_broker_status()
@@ -528,25 +528,28 @@ def skill_regenerate(name: str, backend: str = "") -> dict:
 
 # ── Skill v3: Discovery, dispatcher, live validation ─────────────────────────
 
-_HP1_HOSTS = [
-    {"address": "192.168.199.10"},
-    {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
-    {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
-    {"address": "192.168.199.40"},
-    {"address": "192.168.1.5", "port": 8006},
-    {"address": "192.168.1.6", "port": 8006},
-    {"address": "192.168.1.7", "port": 8006},
-]
+def _load_default_hosts() -> list:
+    """Load discovery hosts from DISCOVER_DEFAULT_HOSTS env var (JSON array) or empty list."""
+    import json as _json
+    raw = os.environ.get("DISCOVER_DEFAULT_HOSTS", "")
+    if raw:
+        try:
+            return _json.loads(raw)
+        except (ValueError, TypeError):
+            pass
+    return []
+
+_HP1_HOSTS = _load_default_hosts()
 
 @mcp.tool()
 def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
     """Scan hosts for services via deterministic fingerprinting. No LLM calls.
-    If called with no arguments, scans all HP1 homelab hosts automatically.
+    If called with no arguments, scans hosts from DISCOVER_DEFAULT_HOSTS env var.
     hosts: list of {"address": "...", "port": N} dicts (optional)
     hosts_json: JSON string alternative to hosts param (optional)
     Examples:
       discover_environment()
-      discover_environment(hosts=[{"address": "192.168.199.40"}])
+      discover_environment(hosts=[{"address": "10.0.0.1"}])
     """
     import json as _json
     if hosts_json:
@@ -554,7 +557,11 @@ def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
             hosts = _json.loads(hosts_json)
         except Exception:
             pass
-    return skill_tools.discover_environment(hosts or _HP1_HOSTS)
+    resolved = hosts or _HP1_HOSTS
+    if not resolved:
+        from mcp_server.tools.skills.discovery import _err
+        return _err("No hosts provided. Set DISCOVER_DEFAULT_HOSTS env var or pass hosts/hosts_json.")
+    return skill_tools.discover_environment(resolved)
 
 
 @mcp.tool()
@@ -562,7 +569,7 @@ def skill_execute(name: str, params_json: str = "{}") -> dict:
     """Execute a skill by name. Pass parameters as JSON string, e.g. params_json='{"host": "pve01"}'.
     Call skill_search() first to find available skills.
     Examples:
-      skill_execute(name='proxmox_vm_status', params_json='{"host": "192.168.1.5"}')
+      skill_execute(name='proxmox_vm_status', params_json='{"host": "pve01"}')
       skill_execute(name='http_health_check', params_json='{"url": "http://127.0.0.1:8000/api/health"}')
       skill_execute(name='kafka_broker_status')
     """
