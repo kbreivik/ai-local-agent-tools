@@ -121,7 +121,7 @@ services:
   # ── Optional: PostgreSQL ──────────────────────────────────────────────────
   # Start with: docker compose --profile postgres -f docker/agent-compose.yml up -d
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     profiles: ["postgres"]
     container_name: hp1-postgres
     restart: unless-stopped
