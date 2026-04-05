@@ -336,14 +336,22 @@ Modules: `api/memory/client.py` (REST client), `hooks.py` (tool call hooks), `fe
 | Portainer | Compute | Skill | `portainer_status` — environments, containers, stacks |
 | Pi-hole | Networking | Plugin | `pihole_dns_stats` — queries, blocked domains |
 | Technitium | Networking | Plugin | `technitium_dns_zones` — DNS zones, DNSSEC |
-| OPNsense | Networking | Fingerprinted | Port 443 |
-| Synology NAS | Storage | Fingerprinted | Port 5001 |
-| AdGuard Home | Networking | Fingerprinted | Port 3000 |
-| Kibana | Monitoring | Fingerprinted | Port 5601 |
-| NGINX | Networking | Fingerprinted | HTTP probe |
-| Traefik | Networking | Fingerprinted | `/api/version` |
+| NetBox | Networking | Plugin | `netbox_inventory` — devices, prefixes, VLANs, search |
+| Synology NAS | Storage | Plugin | `synology_dsm_status` — system, volumes, shares |
+| Security Onion | Monitoring | Plugin | `security_onion_status` — grid, alerts, nodes |
+| Syncthing | Storage | Plugin | `syncthing_status` — folders, devices, sync state |
+| Caddy | Networking | Plugin | `caddy_status` — config, reverse proxies, TLS |
+| Traefik | Networking | Plugin | `traefik_status` — routers, services, entrypoints |
+| OPNsense | Networking | Skill | `opnsense_status` — system, interfaces, firewall |
+| AdGuard Home | Monitoring | Skill | `adguard_status` — protection, stats, filters |
+| Kibana | Monitoring | Skill | `kibana_status` — health, spaces, dashboards |
+| BookStack | General | Skill | `bookstack_search` — search, books, recent pages |
+| Trilium | General | Skill | `trilium_notes` — search, recent edits, note tree |
+| Ansible | Compute | Skill | `ansible_inventory` — inventory, playbooks, facts |
+| Terraform | Compute | Skill | `terraform_state` — workspaces, resources, outputs |
+| NGINX | Networking | Fingerprinted | HTTP probe (use Caddy/Traefik plugins for reverse proxy) |
 
-Additional services listed but not yet fingerprinted: NetBox, Security Onion, Syncthing, Trilium, BookStack, Ansible, Terraform.
+All listed platforms have tools except NGINX (use fingerprint detection + Caddy/Traefik for reverse proxy management).
 
 The `discover_environment()` tool scans hosts automatically and recommends `skill_create()` calls for uncovered services.
 
