@@ -222,7 +222,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     headers = {"Authorization": f"Bearer {bearer}"}
     semver_re = re.compile(r"^\d+\.\d+\.\d+$")
     all_tags: list[str] = []
-    url = f"https://ghcr.io/v2/{repo}/tags/list?n=100"
+    url = f"https://ghcr.io/v2/{repo}/tags/list?n=500"
 
     for _ in range(3):
         try:
