@@ -702,6 +702,13 @@ async def pull_container(
     return await asyncio.to_thread(_do_pull, container_id, tag)
 
 
+def _is_self_container(container) -> bool:
+    """Check if a container is the agent itself (hp1_agent)."""
+    import re as _re
+    name = _re.sub(r'^[0-9a-f]{12}_', '', container.name)
+    return name == "hp1_agent" or container.name == "hp1_agent"
+
+
 def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
         client, container = _resolve_container(container_id)
@@ -714,8 +721,6 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
                 auth_config = {"username": "token", "password": token}
 
         if tag:
-            # Pull the versioned image, then re-tag it as the container's current image
-            # so container.restart() uses the new version.
             bare = image_name.split("@")[0].split(":")[0]
             versioned = f"{bare}:{tag}"
             pulled = client.images.pull(versioned, auth_config=auth_config)
@@ -724,7 +729,12 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
         else:
             client.images.pull(image_name, auth_config=auth_config)
 
-        container.restart()
+        # For the agent's own container, use sidecar recreate (restart reuses old image)
+        if _is_self_container(container):
+            log.info("_do_pull: agent self-pull detected, using sidecar recreate")
+            _restart_self_container()
+        else:
+            container.restart()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
