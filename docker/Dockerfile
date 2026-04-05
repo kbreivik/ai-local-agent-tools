@@ -17,7 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+# Install transformers without deps to prevent PyTorch from being pulled in.
+# Only tokenizers, numpy, huggingface-hub, safetensors are needed at runtime.
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt && \
+    pip wheel --no-cache-dir --wheel-dir /wheels transformers --no-deps
 
 # ── Stage 2: Runtime ────────────────────────────────────────────────────────
 FROM python:3.13-slim
@@ -39,7 +42,8 @@ RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true && \
 
 # Install Python wheels from builder (all deps, no pip at runtime)
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels && \
+    python -c "import torch" 2>/dev/null && echo "ERROR: torch installed" && exit 1 || true
 
 # Copy application code
 WORKDIR /app

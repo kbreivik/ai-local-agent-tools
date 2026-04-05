@@ -9,33 +9,38 @@ import time
 
 log = logging.getLogger(__name__)
 
-# ── Embedding model (lazy singleton, ONNX Runtime) ──────────────────────────
+# ── Embedding model (lazy singleton, raw ONNX Runtime — no PyTorch) ──────────
 
+_session = None
 _tokenizer = None
-_model = None
 
 
 def _get_model():
-    """Load bge-small-en-v1.5 ONNX on first use, cache for process lifetime."""
-    global _tokenizer, _model
-    if _model is None:
-        from optimum.onnxruntime import ORTModelForFeatureExtraction
+    """Load bge-small-en-v1.5 ONNX on first use, cache for process lifetime.
+
+    Uses onnxruntime directly with the pre-exported ONNX model from HuggingFace.
+    No PyTorch, no optimum, no sentence-transformers dependency.
+    """
+    global _session, _tokenizer
+    if _session is None:
+        import onnxruntime as ort
         from transformers import AutoTokenizer
+        from huggingface_hub import hf_hub_download
+        model_path = hf_hub_download("BAAI/bge-small-en-v1.5", "onnx/model.onnx")
+        _session = ort.InferenceSession(model_path)
         _tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-small-en-v1.5")
-        _model = ORTModelForFeatureExtraction.from_pretrained(
-            "BAAI/bge-small-en-v1.5", export=True
-        )
         log.info("RAG embedding model loaded: bge-small-en-v1.5 ONNX (384 dims)")
-    return _tokenizer, _model
+    return _session, _tokenizer
 
 
 def embed(text: str) -> list[float]:
     """Embed a single text string. Returns 384-dim normalized float list."""
     import numpy as np
-    tokenizer, model = _get_model()
-    inputs = tokenizer(text, return_tensors="np", truncation=True, max_length=512)
-    outputs = model(**inputs)
-    emb = outputs.last_hidden_state.mean(axis=1).squeeze()
+    session, tokenizer = _get_model()
+    inputs = tokenizer(text, return_tensors="np", truncation=True, max_length=512, padding=True)
+    outputs = session.run(None, {k: v for k, v in inputs.items()})
+    # outputs[0] is last_hidden_state: (1, seq_len, 384) — mean pool + L2 normalize
+    emb = outputs[0].mean(axis=1).squeeze()
     emb = emb / np.linalg.norm(emb)
     return emb.tolist()
 
