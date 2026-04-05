@@ -287,7 +287,16 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
           setTagsError(data.error)
           return
         }
-        const t = data.tags || []
+        // Filter out versions before 1.12.2 (broken self-update, no sidecar recreate)
+        const MIN_SAFE = [1, 12, 2]
+        const t = (data.tags || []).filter(v => {
+          const parts = v.split('.').map(Number)
+          for (let i = 0; i < 3; i++) {
+            if ((parts[i] || 0) < MIN_SAFE[i]) return false
+            if ((parts[i] || 0) > MIN_SAFE[i]) return true
+          }
+          return true  // equal is ok
+        })
         setTags(t)
         setTagsError(null)
         if (t[0]) {
@@ -1044,7 +1053,9 @@ function AutoUpdateToggle() {
       <span className="text-gray-600">
         {info.auto_update
           ? info.update_available
-            ? `will update to ${info.latest_available} within 5 min`
+            ? info.latest_version && info.latest_version !== info.current_version
+              ? `will update to ${info.latest_version} within 5 min`
+              : 'new build available — will apply within 5 min'
             : info.last_checked
               ? `checked ${new Date(info.last_checked).toLocaleTimeString()}`
               : 'checking...'
