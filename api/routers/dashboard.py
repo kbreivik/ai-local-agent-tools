@@ -969,13 +969,22 @@ def _restart_self_container() -> None:
         container_name = container.name
         image = container.image.tags[0] if container.image.tags else container.attrs["Config"]["Image"]
 
-        # Try sidecar approach: spawn a host-level container that recreates us
+        # Sidecar approach: spawn a host-level container that recreates us.
+        # Mounts: Docker socket, compose files + .env, compose CLI plugin from host.
         try:
+            # Remove stale recreator if it exists from a previous attempt
+            try:
+                old = client.containers.get("hp1_agent_recreator")
+                old.remove(force=True)
+            except Exception:
+                pass
+
             recreate_script = (
-                f"sleep 3 && "
+                "sleep 3 && "
                 f"docker stop {container_name} && "
                 f"docker rm {container_name} && "
-                f"docker compose -f /opt/hp1-agent/docker/docker-compose.yml up -d hp1_agent"
+                "docker compose -f /compose/docker-compose.yml --env-file /compose/.env "
+                "up -d hp1_agent"
             )
             log.info("self-restart: spawning sidecar to recreate %s with image %s", container_name, image)
             client.containers.run(
@@ -984,9 +993,13 @@ def _restart_self_container() -> None:
                 detach=True,
                 remove=True,
                 name="hp1_agent_recreator",
-                volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
-                # Mount compose file directory so docker compose can read it
-                # The host path /opt/hp1-agent is where Ansible deploys the project
+                volumes={
+                    "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+                    "/opt/hp1-agent/docker": {"bind": "/compose", "mode": "ro"},
+                    "/usr/local/lib/docker/cli-plugins": {
+                        "bind": "/usr/local/lib/docker/cli-plugins", "mode": "ro",
+                    },
+                },
                 network_mode="host",
             )
             log.info("self-restart: sidecar spawned — agent will be recreated in ~5s")
