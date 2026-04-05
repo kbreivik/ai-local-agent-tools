@@ -9,24 +9,35 @@ import time
 
 log = logging.getLogger(__name__)
 
-# ── Embedding model (lazy singleton) ─────────────────────────────────────────
+# ── Embedding model (lazy singleton, ONNX Runtime) ──────────────────────────
 
+_tokenizer = None
 _model = None
 
 
 def _get_model():
-    """Load bge-small-en-v1.5 on first use, cache for process lifetime."""
-    global _model
+    """Load bge-small-en-v1.5 ONNX on first use, cache for process lifetime."""
+    global _tokenizer, _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-        log.info("RAG embedding model loaded: bge-small-en-v1.5 (384 dims)")
-    return _model
+        from optimum.onnxruntime import ORTModelForFeatureExtraction
+        from transformers import AutoTokenizer
+        _tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-small-en-v1.5")
+        _model = ORTModelForFeatureExtraction.from_pretrained(
+            "BAAI/bge-small-en-v1.5", export=True
+        )
+        log.info("RAG embedding model loaded: bge-small-en-v1.5 ONNX (384 dims)")
+    return _tokenizer, _model
 
 
 def embed(text: str) -> list[float]:
-    """Embed a single text string. Returns 384-dim float list."""
-    return _get_model().encode(text, normalize_embeddings=True).tolist()
+    """Embed a single text string. Returns 384-dim normalized float list."""
+    import numpy as np
+    tokenizer, model = _get_model()
+    inputs = tokenizer(text, return_tensors="np", truncation=True, max_length=512)
+    outputs = model(**inputs)
+    emb = outputs.last_hidden_state.mean(axis=1).squeeze()
+    emb = emb / np.linalg.norm(emb)
+    return emb.tolist()
 
 
 # ── Platform detection cache ─────────────────────────────────────────────────
