@@ -93,6 +93,14 @@ async def lifespan(app: FastAPI):
         init_doc_chunks()
     except Exception as e:
         _log.debug("RAG schema init skipped: %s", e)
+    # Scan and load plugins (Tier 2 tools)
+    try:
+        from api.plugin_loader import scan_plugins
+        from api.agents.router import _load_plugins_into_allowlists
+        scan_plugins()
+        _load_plugins_into_allowlists()
+    except Exception as e:
+        _log.debug("Plugin load skipped: %s", e)
     collector_manager.start_all()
     # Load dynamic skills from modules/ into memory so skill_execute works after restart
     try:
