@@ -1004,6 +1004,9 @@ def _restart_self_container() -> None:
 # ── Auto-update background loop ──────────────────────────────────────────────
 
 _HP1_IMAGE = "ghcr.io/kbreivik/hp1-ai-agent"
+_STARTUP_DELAY = 60          # seconds before first auto-update check
+_COOLDOWN_AFTER_UPDATE = 600  # 10 min cooldown after any update attempt
+_last_update_attempt: float = 0.0
 
 
 def _is_auto_update_enabled() -> bool:
@@ -1082,9 +1085,32 @@ def _get_remote_digest(image_bare: str) -> str:
     return ""
 
 
+def _get_local_latest_digest() -> str:
+    """Get the local image ID of the :latest tag (what we'd run if container were recreated)."""
+    try:
+        import docker
+        client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        image_name = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
+        img = client.images.get(image_name)
+        digest = img.id or ""
+        client.close()
+        return digest
+    except Exception as e:
+        log.debug("_get_local_latest_digest failed: %s", e)
+    return ""
+
+
 def _check_and_update() -> None:
-    """Check GHCR for newer image digest. If different and autoUpdate is on, pull + restart."""
-    import threading
+    """Check for newer image. Pull if remote differs, recreate only if local image changed.
+
+    Comparison strategy (avoids infinite loop):
+    1. Pull :latest from GHCR (always, to get the newest image locally)
+    2. Compare LOCAL pulled image ID vs RUNNING container image ID
+    3. If they match → already up to date, skip recreate
+    4. If they differ → new image pulled, trigger sidecar recreate
+    This avoids the registry-manifest-vs-local-id format mismatch.
+    """
+    global _last_update_attempt
     from api.constants import APP_VERSION
 
     _update_status["current_version"] = APP_VERSION
@@ -1094,46 +1120,64 @@ def _check_and_update() -> None:
         _schedule_next_check()
         return
 
+    # Cooldown guard: don't check again within 10 min of last update attempt
+    now = _time.monotonic()
+    if _last_update_attempt and (now - _last_update_attempt) < _COOLDOWN_AFTER_UPDATE:
+        log.debug("auto-update: in cooldown (%ds remaining), skipping",
+                  int(_COOLDOWN_AFTER_UPDATE - (now - _last_update_attempt)))
+        _schedule_next_check()
+        return
+
     try:
-        # Digest-based detection
         running_digest = _get_running_digest()
-        remote_digest = _get_remote_digest(_HP1_IMAGE)
         _update_status["current_digest"] = running_digest
-        _update_status["latest_digest"] = remote_digest
         _update_status["last_checked"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        # Also fetch tags for version info
+        # Fetch tags for version info
         try:
             tags = _fetch_ghcr_tags(_HP1_IMAGE)
             _update_status["latest_version"] = tags[0] if tags else ""
         except Exception:
             pass
 
-        if not remote_digest or not running_digest:
+        # Pull the latest image (cheap if already up to date — Docker layer caching)
+        image = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
+        pull_result = _pull_image(image)
+        if not pull_result.get("ok"):
+            err = pull_result.get("error", "unknown")
+            log.warning("auto-update: pull failed: %s", err)
             _update_status["update_available"] = False
             _schedule_next_check()
             return
 
-        if running_digest == remote_digest or remote_digest in running_digest or running_digest in remote_digest:
+        # Compare LOCAL pulled image ID vs RUNNING container image ID
+        local_digest = _get_local_latest_digest()
+        _update_status["latest_digest"] = local_digest
+
+        if not running_digest or not local_digest:
+            log.debug("auto-update: missing digest (running=%s, local=%s), skipping",
+                      running_digest[:20] if running_digest else "none",
+                      local_digest[:20] if local_digest else "none")
+            _update_status["update_available"] = False
+            _schedule_next_check()
+            return
+
+        if running_digest == local_digest:
+            log.info("auto-update: local digest %s matches running, skipping recreate",
+                     local_digest[:20])
             _update_status["update_available"] = False
             _audit("auto_update_check", "up_to_date")
             _schedule_next_check()
             return
 
-        # Digests differ — update available
+        # Local image differs from running → new image available, trigger recreate
         _update_status["update_available"] = True
+        _last_update_attempt = _time.monotonic()
         latest_ver = _update_status.get("latest_version", "")
-        log.info("auto-update: new image detected (digest changed), pulling. version=%s", latest_ver)
-        image = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
-        result = _pull_image(image)
-        if result.get("ok"):
-            log.info("auto-update: pull complete, restarting")
-            _audit("auto_update_check", f"update_applied | target=hp1_agent | {APP_VERSION} -> {latest_ver}")
-            _restart_self_container()
-        else:
-            err = result.get("error", "unknown")
-            log.error("auto-update: pull failed: %s", err)
-            _audit("auto_update_check", f"failed | target=hp1_agent | pull error: {err}")
+        log.info("auto-update: new image detected (local=%s, running=%s), triggering recreate. version=%s",
+                 local_digest[:20], running_digest[:20], latest_ver)
+        _audit("auto_update_check", f"update_applied | target=hp1_agent | {APP_VERSION} -> {latest_ver}")
+        _restart_self_container()
 
     except Exception as e:
         log.warning("auto-update check failed: %s", e)
@@ -1163,14 +1207,17 @@ def _schedule_next_check() -> None:
 
 
 def start_auto_update() -> None:
-    """Start the auto-update timer. Called from lifespan on startup."""
-    if _is_auto_update_enabled():
-        import threading
-        threading.Thread(target=_check_and_update, daemon=True).start()
-        log.info("auto-update: started (interval=%ds)", _AUTO_UPDATE_INTERVAL)
-    else:
-        _schedule_next_check()  # schedule the first tick to check if setting changes
-        log.info("auto-update: disabled, timer scheduled to re-check")
+    """Start the auto-update timer. Called from lifespan on startup.
+
+    Delays the first check by _STARTUP_DELAY seconds to let the container
+    fully initialize (DB, collectors, skills) before checking for updates.
+    """
+    import threading
+    global _auto_update_timer
+    _auto_update_timer = threading.Timer(_STARTUP_DELAY, _check_and_update)
+    _auto_update_timer.daemon = True
+    _auto_update_timer.start()
+    log.info("auto-update: first check in %ds (enabled=%s)", _STARTUP_DELAY, _is_auto_update_enabled())
 
 
 def stop_auto_update() -> None:
