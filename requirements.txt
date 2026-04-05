@@ -23,5 +23,6 @@ psycopg2-binary>=2.9.0
 asyncpg>=0.29.0
 redis>=5.0.0
 onnxruntime>=1.17.0
+cryptography>=42.0.0
 tokenizers>=0.15.0
 pgvector>=0.3.0

@@ -87,6 +87,13 @@ async def lifespan(app: FastAPI):
         _sync_env()
     except Exception as e:
         _log.warning("Settings seed/sync skipped: %s", e)
+    # Encrypt any plaintext secrets in settings table (one-time migration)
+    try:
+        from api.settings_manager import migrate_plaintext_secrets
+        from api.routers.settings import SETTINGS_KEYS
+        migrate_plaintext_secrets(SETTINGS_KEYS)
+    except Exception as e:
+        _log.debug("Secret encryption migration skipped: %s", e)
     # Initialize pgvector RAG schema (no-op if pgvector unavailable)
     try:
         from api.rag.schema import init_doc_chunks
