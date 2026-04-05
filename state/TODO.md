@@ -34,6 +34,14 @@ Updated: 2026-04-04
 - [ ] Fine-tuning dataset preparation from agent operation logs
 - [ ] DISCOVER_DEFAULT_HOSTS needs more hosts (Proxmox nodes on port 8006, Kibana, Grafana)
 
+## Airgapped Deployment
+- [ ] Add image-manifest.txt listing all required Docker images
+- [ ] Add scripts/export-images.sh — pulls and saves all manifest images to tar files
+- [ ] Add scripts/import-images.sh — loads all tar files into local Docker
+- [ ] Ansible role for local Docker registry (registry:2) on airgapped network
+- [ ] GUI "Re-pull Image" should support configurable registry URL (GHCR or local)
+- [ ] Pre-pull docker:cli image via Ansible (needed for self-update sidecar)
+
 ## Architecture
 
 - [ ] Settings priority: DB wins after first seed, .env is seed-only. Document this clearly. Consider: should `.env` changes on restart override DB? Currently they don't.
