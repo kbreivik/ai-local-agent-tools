@@ -484,12 +484,21 @@ function UpdateStatus() {
 
   return (
     <div className="mt-1.5 text-[10px] text-gray-500 space-y-0.5">
-      <div>Current: <span className="text-gray-400 font-mono">{info.current_version || '—'}</span></div>
+      <div>Current: <span className="text-gray-400 font-mono">{info.current_version || '—'}</span>
+        {info.update_available && (
+          <span className="ml-2 px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">
+            update available
+          </span>
+        )}
+      </div>
       {info.latest_available && (
         <div>Latest: <span className="text-gray-400 font-mono">{info.latest_available}</span></div>
       )}
       {info.last_checked && (
         <div>Last checked: <span className="text-gray-400">{new Date(info.last_checked).toLocaleString()}</span></div>
+      )}
+      {info.auto_update && !info.update_available && info.last_checked && (
+        <div className="text-green-600">Auto-update enabled — checking every 5 min</div>
       )}
     </div>
   )

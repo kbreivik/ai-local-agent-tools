@@ -1087,4 +1087,32 @@ def get_update_status(_: str = Depends(get_current_user)):
     from api.constants import APP_VERSION
     _update_status["current_version"] = APP_VERSION
     _update_status["auto_update"] = _is_auto_update_enabled()
+    latest = _update_status.get("latest_available", "")
+    if latest and APP_VERSION:
+        try:
+            cur = tuple(int(x) for x in APP_VERSION.split("."))
+            lat = tuple(int(x) for x in latest.split("."))
+            _update_status["update_available"] = lat > cur
+        except (ValueError, AttributeError):
+            _update_status["update_available"] = False
+    else:
+        _update_status["update_available"] = False
     return _update_status
+
+
+class AutoUpdateRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/auto-update")
+def toggle_auto_update(req: AutoUpdateRequest, _: str = Depends(get_current_user)):
+    """Enable or disable the auto-update background check."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        get_backend().set_setting("autoUpdate", req.enabled)
+        _update_status["auto_update"] = req.enabled
+        log.info("auto-update toggled: %s", req.enabled)
+        return {"status": "ok", "auto_update": req.enabled,
+                "message": f"Auto-update {'enabled' if req.enabled else 'disabled'}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
