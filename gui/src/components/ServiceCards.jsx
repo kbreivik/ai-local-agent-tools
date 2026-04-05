@@ -8,7 +8,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   fetchDashboardContainers, fetchDashboardSwarm,
   fetchDashboardVMs, fetchDashboardExternal,
-  dashboardAction, fetchContainerTags, createLogStream
+  dashboardAction, fetchContainerTags, createLogStream,
+  authHeaders,
 } from '../api'
 import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
@@ -403,6 +404,11 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                   : <span className="text-gray-700">—</span>
                 }
               </div>
+            )}
+
+            {/* Auto-update toggle — only for agent container */}
+            {c.name?.includes('hp1_agent') && c.image?.startsWith('ghcr.io/') && (
+              <AutoUpdateToggle />
             )}
 
             {/* Update drawer trigger — only when update available */}
@@ -988,6 +994,64 @@ function _computeContainerSub(c, knownLatest) {
   if (severity === 'major') return { text: `${imageName}: not latest`, cls: 'text-[#b04020]' }
   if (severity === 'minor' || severity === 'patch') return { text: `${imageName}: not latest`, cls: 'text-[#92601a]' }
   return c.image
+}
+
+// ── Auto-update toggle (agent container only) ────────────────────────────────
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+function AutoUpdateToggle() {
+  const [info, setInfo] = useState(null)
+  const [toggling, setToggling] = useState(false)
+
+  const fetchStatus = () => {
+    fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setInfo(d) })
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchStatus() }, [])
+
+  const toggle = async () => {
+    if (!info) return
+    setToggling(true)
+    try {
+      const r = await fetch(`${BASE}/api/dashboard/auto-update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ enabled: !info.auto_update }),
+      })
+      if (r.ok) fetchStatus()
+    } catch (_) {}
+    setToggling(false)
+  }
+
+  if (!info) return null
+
+  return (
+    <div className="flex items-center justify-between text-[9px] mb-1.5">
+      <label className="flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!info.auto_update}
+          onChange={toggle}
+          disabled={toggling}
+          className="accent-blue-500"
+        />
+        <span className="text-gray-500">Auto-update</span>
+      </label>
+      <span className="text-gray-600">
+        {info.auto_update
+          ? info.update_available
+            ? `will update to ${info.latest_available} within 5 min`
+            : info.last_checked
+              ? `checked ${new Date(info.last_checked).toLocaleTimeString()}`
+              : 'checking...'
+          : 'off'}
+      </span>
+    </div>
+  )
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────

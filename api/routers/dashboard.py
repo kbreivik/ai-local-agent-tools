@@ -1122,6 +1122,10 @@ def toggle_auto_update(req: AutoUpdateRequest, _: str = Depends(get_current_user
         get_backend().set_setting("autoUpdate", req.enabled)
         _update_status["auto_update"] = req.enabled
         log.info("auto-update toggled: %s", req.enabled)
+        # Trigger immediate check when enabling (runs in background thread)
+        if req.enabled:
+            import threading
+            threading.Thread(target=_check_and_update, daemon=True).start()
         return {"status": "ok", "auto_update": req.enabled,
                 "message": f"Auto-update {'enabled' if req.enabled else 'disabled'}"}
     except Exception as e:
