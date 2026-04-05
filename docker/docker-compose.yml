@@ -23,6 +23,7 @@ volumes:
     external: true
   agent-data:
   agent-logs:
+  agent-plugins:
 
 services:
   # ── Dev-only PostgreSQL ───────────────────────────────────────────────────────
@@ -148,6 +149,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - agent-data:/app/data
       - agent-logs:/app/logs
+      - agent-plugins:/app/plugins
     depends_on:
       muninndb:
         condition: service_healthy

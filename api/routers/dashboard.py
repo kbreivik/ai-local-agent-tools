@@ -31,11 +31,16 @@ _GHCR_TAG_TTL = 600          # 10 minutes
 # ── Auto-update state ────────────────────────────────────────────────────────
 
 _AUTO_UPDATE_INTERVAL = 300   # 5 minutes
-_auto_update_task: asyncio.Task | None = None
+_auto_update_timer: "threading.Timer | None" = None
+# Versions before 1.12.2 have broken self-update (no sidecar recreate)
+MIN_SAFE_VERSION = (1, 12, 2)
 _update_status: dict = {
     "auto_update": False,
     "current_version": "",
-    "latest_available": "",
+    "current_digest": "",
+    "latest_digest": "",
+    "latest_version": "",
+    "update_available": False,
     "last_checked": "",
 }
 
@@ -222,7 +227,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     headers = {"Authorization": f"Bearer {bearer}"}
     semver_re = re.compile(r"^\d+\.\d+\.\d+$")
     all_tags: list[str] = []
-    url = f"https://ghcr.io/v2/{repo}/tags/list?n=100"
+    url = f"https://ghcr.io/v2/{repo}/tags/list?n=500"
 
     for _ in range(3):
         try:
@@ -257,6 +262,11 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     client.close()
     log.debug("GHCR tags fetched: %d total, filtering semver", len(all_tags))
     semver_tags = [t for t in all_tags if semver_re.match(t)]
+    # Filter out versions before MIN_SAFE_VERSION (broken self-update, no sidecar recreate)
+    semver_tags = [
+        t for t in semver_tags
+        if tuple(int(x) for x in t.split(".")) >= MIN_SAFE_VERSION
+    ]
     semver_tags.sort(key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True)
     result = semver_tags[:20]
     _GHCR_TAG_CACHE[image_bare] = (result, _time.monotonic())
@@ -702,6 +712,13 @@ async def pull_container(
     return await asyncio.to_thread(_do_pull, container_id, tag)
 
 
+def _is_self_container(container) -> bool:
+    """Check if a container is the agent itself (hp1_agent)."""
+    import re as _re
+    name = _re.sub(r'^[0-9a-f]{12}_', '', container.name)
+    return name == "hp1_agent" or container.name == "hp1_agent"
+
+
 def _do_pull(container_id: str, tag: str | None = None) -> dict:
     try:
         client, container = _resolve_container(container_id)
@@ -714,8 +731,6 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
                 auth_config = {"username": "token", "password": token}
 
         if tag:
-            # Pull the versioned image, then re-tag it as the container's current image
-            # so container.restart() uses the new version.
             bare = image_name.split("@")[0].split(":")[0]
             versioned = f"{bare}:{tag}"
             pulled = client.images.pull(versioned, auth_config=auth_config)
@@ -724,7 +739,12 @@ def _do_pull(container_id: str, tag: str | None = None) -> dict:
         else:
             client.images.pull(image_name, auth_config=auth_config)
 
-        container.restart()
+        # For the agent's own container, use sidecar recreate (restart reuses old image)
+        if _is_self_container(container):
+            log.info("_do_pull: agent self-pull detected, using sidecar recreate")
+            _restart_self_container()
+        else:
+            container.restart()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -899,9 +919,9 @@ async def self_update(user: str = Depends(get_current_user)):
 
 @router.post("/self-restart")
 async def self_restart(user: str = Depends(get_current_user)):
-    """Restart the hp1_agent container. Fire-and-forget — agent will go down ~5s after response."""
+    """Recreate hp1_agent container with current image. Fire-and-forget — agent will go down ~5s after response."""
     asyncio.get_running_loop().run_in_executor(None, _restart_self_container)
-    return {"ok": True, "message": "Restart triggered — agent will be back in ~15s"}
+    return {"ok": True, "message": "Recreate triggered — agent will be back in ~20s"}
 
 
 def _pull_image(image: str) -> dict:
@@ -919,9 +939,20 @@ def _pull_image(image: str) -> dict:
 
 
 def _restart_self_container() -> None:
-    """Find the hp1_agent container by partial name match and restart it."""
+    """Recreate hp1_agent container with the newly pulled image.
+
+    A plain container.restart() reuses the old image. Instead, we spawn a
+    short-lived sidecar container on the Docker host that waits 3 seconds
+    (for the HTTP response to reach the client), then stops the agent
+    container, removes it, and recreates it from the new image using the
+    same config. The sidecar runs on the host via the mounted Docker socket
+    and outlives the agent container.
+
+    Falls back to container.restart() if sidecar creation fails.
+    """
     import re
     import docker
+    import time as _t
     log.info("self-restart: finding hp1_agent container")
     try:
         client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
@@ -934,7 +965,37 @@ def _restart_self_container() -> None:
         if not container:
             log.error("self-restart: hp1_agent container not found")
             return
-        log.info("self-restart: restarting %s", container.name)
+
+        container_name = container.name
+        image = container.image.tags[0] if container.image.tags else container.attrs["Config"]["Image"]
+
+        # Try sidecar approach: spawn a host-level container that recreates us
+        try:
+            recreate_script = (
+                f"sleep 3 && "
+                f"docker stop {container_name} && "
+                f"docker rm {container_name} && "
+                f"docker compose -f /opt/hp1-agent/docker/docker-compose.yml up -d hp1_agent"
+            )
+            log.info("self-restart: spawning sidecar to recreate %s with image %s", container_name, image)
+            client.containers.run(
+                "docker:cli",
+                command=["sh", "-c", recreate_script],
+                detach=True,
+                remove=True,
+                name="hp1_agent_recreator",
+                volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+                # Mount compose file directory so docker compose can read it
+                # The host path /opt/hp1-agent is where Ansible deploys the project
+                network_mode="host",
+            )
+            log.info("self-restart: sidecar spawned — agent will be recreated in ~5s")
+            return
+        except Exception as sidecar_err:
+            log.warning("self-restart: sidecar failed (%s), falling back to restart", sidecar_err)
+
+        # Fallback: plain restart (reuses old image but at least brings the agent back)
+        log.info("self-restart: falling back to container.restart() for %s", container_name)
         container.restart()
     except Exception as e:
         log.error("self-restart failed: %s", e)
@@ -959,50 +1020,126 @@ def _is_auto_update_enabled() -> bool:
         return False
 
 
+def _get_running_digest() -> str:
+    """Get the image digest of the running hp1_agent container."""
+    import re as _re
+    try:
+        import docker
+        client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        for c in client.containers.list():
+            name = _re.sub(r'^[0-9a-f]{12}_', '', c.name)
+            if name == "hp1_agent" or c.name == "hp1_agent":
+                # .image.id is the local image digest (sha256:...)
+                digest = c.image.id or ""
+                client.close()
+                return digest
+        client.close()
+    except Exception as e:
+        log.debug("_get_running_digest failed: %s", e)
+    return ""
+
+
+def _get_remote_digest(image_bare: str) -> str:
+    """Get the remote digest for :latest tag from GHCR via HEAD on manifest."""
+    import httpx
+    token = os.environ.get("GHCR_TOKEN", "")
+    if not token:
+        try:
+            from mcp_server.tools.skills.storage import get_backend
+            token = get_backend().get_setting("ghcrToken") or ""
+        except Exception:
+            pass
+    if not token:
+        return ""
+
+    repo = image_bare[len("ghcr.io/"):]
+    client = httpx.Client(trust_env=False, timeout=10, follow_redirects=False)
+    try:
+        # OAuth token exchange
+        client.headers["User-Agent"] = "hp1-agent"
+        tok_resp = client.get(
+            f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io",
+            auth=("token", token),
+        )
+        if not tok_resp.is_success:
+            return ""
+        bearer = tok_resp.json().get("token", "")
+
+        # HEAD on manifest to get digest without pulling
+        r = client.head(
+            f"https://ghcr.io/v2/{repo}/manifests/latest",
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+            },
+        )
+        if r.is_success:
+            return r.headers.get("docker-content-digest", "")
+    except Exception as e:
+        log.debug("_get_remote_digest failed: %s", e)
+    finally:
+        client.close()
+    return ""
+
+
 def _check_and_update() -> None:
-    """Check GHCR for newer version. If found and autoUpdate is on, pull + restart."""
+    """Check GHCR for newer image digest. If different and autoUpdate is on, pull + restart."""
+    import threading
     from api.constants import APP_VERSION
 
     _update_status["current_version"] = APP_VERSION
     _update_status["auto_update"] = _is_auto_update_enabled()
 
     if not _update_status["auto_update"]:
+        _schedule_next_check()
         return
 
     try:
-        tags = _fetch_ghcr_tags(_HP1_IMAGE)
+        # Digest-based detection
+        running_digest = _get_running_digest()
+        remote_digest = _get_remote_digest(_HP1_IMAGE)
+        _update_status["current_digest"] = running_digest
+        _update_status["latest_digest"] = remote_digest
         _update_status["last_checked"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        latest = tags[0] if tags else ""
-        _update_status["latest_available"] = latest
 
-        if not latest or latest == APP_VERSION:
+        # Also fetch tags for version info
+        try:
+            tags = _fetch_ghcr_tags(_HP1_IMAGE)
+            _update_status["latest_version"] = tags[0] if tags else ""
+        except Exception:
+            pass
+
+        if not remote_digest or not running_digest:
+            _update_status["update_available"] = False
+            _schedule_next_check()
             return
 
-        # Compare semver: only update if latest > current
-        def _ver(v: str) -> tuple:
-            try:
-                return tuple(int(x) for x in v.split("."))
-            except (ValueError, AttributeError):
-                return (0,)
-
-        if _ver(latest) <= _ver(APP_VERSION):
+        if running_digest == remote_digest or remote_digest in running_digest or running_digest in remote_digest:
+            _update_status["update_available"] = False
+            _audit("auto_update_check", "up_to_date")
+            _schedule_next_check()
             return
 
-        log.info("auto-update: newer version %s available (current: %s), pulling", latest, APP_VERSION)
+        # Digests differ — update available
+        _update_status["update_available"] = True
+        latest_ver = _update_status.get("latest_version", "")
+        log.info("auto-update: new image detected (digest changed), pulling. version=%s", latest_ver)
         image = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
         result = _pull_image(image)
         if result.get("ok"):
             log.info("auto-update: pull complete, restarting")
-            _audit("auto_update", f"ok | target=hp1_agent | {APP_VERSION} -> {latest}")
+            _audit("auto_update_check", f"update_applied | target=hp1_agent | {APP_VERSION} -> {latest_ver}")
             _restart_self_container()
         else:
             err = result.get("error", "unknown")
             log.error("auto-update: pull failed: %s", err)
-            _audit("auto_update", f"failed | target=hp1_agent | pull error: {err}")
+            _audit("auto_update_check", f"failed | target=hp1_agent | pull error: {err}")
 
     except Exception as e:
         log.warning("auto-update check failed: %s", e)
-        _audit("auto_update", f"error | {e}")
+        _audit("auto_update_check", f"error | {e}")
+
+    _schedule_next_check()
 
 
 def _audit(action: str, result: str) -> None:
@@ -1014,36 +1151,64 @@ def _audit(action: str, result: str) -> None:
         pass
 
 
-async def _auto_update_loop() -> None:
-    """Background loop: check for updates every 5 minutes."""
-    while True:
-        try:
-            await asyncio.get_running_loop().run_in_executor(None, _check_and_update)
-        except Exception as e:
-            log.warning("auto-update loop error: %s", e)
-        await asyncio.sleep(_AUTO_UPDATE_INTERVAL)
+def _schedule_next_check() -> None:
+    """Schedule the next auto-update check using threading.Timer."""
+    import threading
+    global _auto_update_timer
+    if _auto_update_timer is not None:
+        _auto_update_timer.cancel()
+    _auto_update_timer = threading.Timer(_AUTO_UPDATE_INTERVAL, _check_and_update)
+    _auto_update_timer.daemon = True
+    _auto_update_timer.start()
 
 
 def start_auto_update() -> None:
-    """Start the auto-update background task. Called from lifespan."""
-    global _auto_update_task
-    if _auto_update_task is None or _auto_update_task.done():
-        _auto_update_task = asyncio.create_task(_auto_update_loop())
-        log.info("auto-update: background task started (interval=%ds)", _AUTO_UPDATE_INTERVAL)
+    """Start the auto-update timer. Called from lifespan on startup."""
+    if _is_auto_update_enabled():
+        import threading
+        threading.Thread(target=_check_and_update, daemon=True).start()
+        log.info("auto-update: started (interval=%ds)", _AUTO_UPDATE_INTERVAL)
+    else:
+        _schedule_next_check()  # schedule the first tick to check if setting changes
+        log.info("auto-update: disabled, timer scheduled to re-check")
 
 
 def stop_auto_update() -> None:
-    """Cancel the auto-update background task."""
-    global _auto_update_task
-    if _auto_update_task and not _auto_update_task.done():
-        _auto_update_task.cancel()
-        _auto_update_task = None
+    """Cancel the auto-update timer."""
+    global _auto_update_timer
+    if _auto_update_timer is not None:
+        _auto_update_timer.cancel()
+        _auto_update_timer = None
 
 
 @router.get("/update-status")
 def get_update_status(_: str = Depends(get_current_user)):
-    """Current auto-update state: enabled, current version, latest available, last check time."""
+    """Current auto-update state with digest-based detection."""
     from api.constants import APP_VERSION
     _update_status["current_version"] = APP_VERSION
     _update_status["auto_update"] = _is_auto_update_enabled()
     return _update_status
+
+
+class AutoUpdateRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/auto-update")
+def toggle_auto_update(req: AutoUpdateRequest, _: str = Depends(get_current_user)):
+    """Enable or disable the auto-update background check."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        get_backend().set_setting("autoUpdate", req.enabled)
+        _update_status["auto_update"] = req.enabled
+        log.info("auto-update toggled: %s", req.enabled)
+        if req.enabled:
+            # Trigger immediate check + schedule recurring timer
+            import threading
+            threading.Thread(target=_check_and_update, daemon=True).start()
+        else:
+            stop_auto_update()
+        return {"status": "ok", "auto_update": req.enabled,
+                "message": f"Auto-update {'enabled' if req.enabled else 'disabled'}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

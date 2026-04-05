@@ -92,7 +92,7 @@ def _python_type_to_json(t: str) -> str:
 
 
 def load_registry() -> list[dict]:
-    """Return list of tool descriptors for every public function in tools/."""
+    """Return tool descriptors from all three tiers: core tools, plugins, skills."""
     registry = []
 
     # Ensure project root is importable
@@ -100,13 +100,14 @@ def load_registry() -> list[dict]:
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
+    # ── Tier 1: Core tools (mcp_server/tools/*.py via AST) ───────────────────
     for py_file in sorted(TOOLS_DIR.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
         module_name = f"mcp_server.tools.{py_file.stem}"
         try:
             mod = importlib.import_module(module_name)
-        except Exception as e:
+        except Exception:
             continue
 
         for name, obj in inspect.getmembers(mod, inspect.isfunction):
@@ -137,17 +138,54 @@ def load_registry() -> list[dict]:
                 "params": raw_params,
                 "schema": params_schema,
                 "category": _CATEGORY_MAP.get(py_file.stem, py_file.stem),
+                "tier": "core",
             })
+
+    # ── Tier 2: Plugins (plugins/*.py via PLUGIN_META) ───────────────────────
+    try:
+        from api.plugin_loader import get_plugins
+        for plugin in get_plugins():
+            props = {}
+            required = []
+            for pname, pinfo in plugin.params.items():
+                props[pname] = {
+                    "type": _python_type_to_json(pinfo.get("type", "string")),
+                    "description": pinfo.get("description", pname),
+                }
+                if pinfo.get("default") is not None:
+                    props[pname]["default"] = str(pinfo["default"])
+                if pinfo.get("required", False):
+                    required.append(pname)
+            registry.append({
+                "name": plugin.name,
+                "module": f"plugin:{plugin.platform}",
+                "description": plugin.description,
+                "params": [
+                    {"name": k, "type": v.get("type", "string"),
+                     "required": v.get("required", False),
+                     "default": str(v["default"]) if "default" in v else None}
+                    for k, v in plugin.params.items()
+                ],
+                "schema": {"type": "object", "properties": props, "required": required},
+                "category": plugin.category,
+                "tier": "plugin",
+            })
+    except Exception:
+        pass  # plugins not loaded yet or import error
 
     return registry
 
 
 def invoke_tool(name: str, params: dict[str, Any]) -> Any:
-    """Dynamically invoke a tool by name with given params."""
+    """Dynamically invoke a tool by name with given params.
+
+    Searches in order: Tier 1 (core tools), Tier 2 (plugins).
+    """
     project_root = str(TOOLS_DIR.parent.parent)
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
+    # Tier 1: core tools
     for py_file in TOOLS_DIR.glob("*.py"):
         if py_file.name.startswith("_"):
             continue
@@ -159,6 +197,14 @@ def invoke_tool(name: str, params: dict[str, Any]) -> Any:
         fn = getattr(mod, name, None)
         if fn and callable(fn) and name not in _SKIP:
             return fn(**params)
+
+    # Tier 2: plugins
+    try:
+        from api.plugin_loader import invoke_plugin, get_plugin
+        if get_plugin(name):
+            return invoke_plugin(name, params)
+    except Exception:
+        pass
 
     raise ValueError(f"Tool '{name}' not found in registry")
 

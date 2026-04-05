@@ -172,6 +172,41 @@ def _load_promoted_into_allowlists() -> None:
         print(f"[router] _load_promoted_into_allowlists skipped: {_e}", file=_sys.stderr)
 
 
+def _load_plugins_into_allowlists() -> None:
+    """Inject plugins into agent allowlists and DESTRUCTIVE_TOOLS based on PLUGIN_META."""
+    global OBSERVE_AGENT_TOOLS, INVESTIGATE_AGENT_TOOLS, BUILD_AGENT_TOOLS
+    global EXECUTE_KAFKA_TOOLS, EXECUTE_SWARM_TOOLS, EXECUTE_PROXMOX_TOOLS, EXECUTE_GENERAL_TOOLS
+    try:
+        from api.plugin_loader import get_plugins
+        from api.routers.agent import DESTRUCTIVE_TOOLS as _DT
+        for plugin in get_plugins():
+            name = plugin.name
+            for agent_type in plugin.agent_types:
+                if agent_type in ("observe", "status"):
+                    OBSERVE_AGENT_TOOLS = OBSERVE_AGENT_TOOLS | {name}
+                elif agent_type in ("investigate", "research"):
+                    INVESTIGATE_AGENT_TOOLS = INVESTIGATE_AGENT_TOOLS | {name}
+                elif agent_type in ("execute", "action"):
+                    # Add to the platform-specific set if platform matches, else general
+                    platform = plugin.platform.lower()
+                    if platform == "kafka":
+                        EXECUTE_KAFKA_TOOLS = EXECUTE_KAFKA_TOOLS | {name}
+                    elif platform in ("swarm", "docker"):
+                        EXECUTE_SWARM_TOOLS = EXECUTE_SWARM_TOOLS | {name}
+                    elif platform == "proxmox":
+                        EXECUTE_PROXMOX_TOOLS = EXECUTE_PROXMOX_TOOLS | {name}
+                    else:
+                        EXECUTE_GENERAL_TOOLS = EXECUTE_GENERAL_TOOLS | {name}
+                elif agent_type == "build":
+                    BUILD_AGENT_TOOLS = BUILD_AGENT_TOOLS | {name}
+            if plugin.requires_plan:
+                # Can't mutate frozenset — handled at check time in agent.py
+                pass
+    except Exception as _e:
+        import sys as _sys
+        print(f"[router] _load_plugins_into_allowlists skipped: {_e}", file=_sys.stderr)
+
+
 _load_promoted_into_allowlists()
 
 # ── System prompts ────────────────────────────────────────────────────────────
