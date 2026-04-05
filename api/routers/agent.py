@@ -125,6 +125,50 @@ def _extract_choices(text: str) -> list[str] | None:
     return choices[:5] if len(choices) >= 2 else None
 
 
+_MAX_TOOL_RESULT_TOKENS = 800  # ~3200 chars in LLM context per tool result
+
+
+def _summarize_tool_result(tool_name: str, result: dict, status: str, message: str) -> str:
+    """Summarize a tool result for LLM conversation history.
+
+    Full result is stored in DB (audit trail). LLM gets a compact summary
+    to preserve context window space.
+    """
+    if not isinstance(result, dict):
+        return str(result)[:_MAX_TOOL_RESULT_TOKENS * 4]
+
+    # For errors, the message is usually enough
+    if status in ("error", "blocked", "locked"):
+        return json.dumps({"status": status, "message": message[:200]})
+
+    # For small results, pass through as-is
+    full = json.dumps(result, default=str)
+    if len(full) <= _MAX_TOOL_RESULT_TOKENS * 4:
+        return full
+
+    # Large results: keep status + message + truncated data
+    summary = {
+        "status": status,
+        "message": message[:200],
+    }
+    data = result.get("data")
+    if isinstance(data, dict):
+        # Keep scalar values, truncate lists/dicts
+        compact = {}
+        for k, v in data.items():
+            if isinstance(v, (str, int, float, bool, type(None))):
+                compact[k] = v
+            elif isinstance(v, list):
+                compact[k] = f"[{len(v)} items]"
+            elif isinstance(v, dict):
+                compact[k] = f"{{{len(v)} keys}}"
+        summary["data"] = compact
+    elif isinstance(data, list):
+        summary["data"] = f"[{len(data)} items]"
+
+    return json.dumps(summary, default=str)
+
+
 class RunRequest(BaseModel):
     task: str = Field(
         default="Perform a full infrastructure health check and report status.",
@@ -542,10 +586,13 @@ async def _run_single_agent_step(
                     tool=fn_name, status=result_status, session_id=session_id,
                 )
 
+                # Summarize tool result for LLM context (full result in DB audit trail)
+                tool_content = _summarize_tool_result(fn_name, result, result_status, result_msg)
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": json.dumps(result),
+                    "content": tool_content,
                 })
 
                 if result_status in ("degraded", "failed", "escalated") or (fn_name == "escalate" and result_status != "blocked"):
@@ -697,6 +744,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
                         token_budget=rag_budget,
                     )
                 )
+                # Filter low-confidence results (RRF score < 0.02 means poor match)
+                rag_results = [r for r in rag_results if r.get("rrf_score", 0) >= 0.02]
                 if rag_results:
                     rag_section = format_doc_results(rag_results)
                     if rag_section:
