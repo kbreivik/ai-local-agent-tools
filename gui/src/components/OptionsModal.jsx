@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-const TABS = ['General', 'Infrastructure', 'AI Services', 'Display']
+const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Display']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -466,6 +466,129 @@ function DisplayTab({ draft, update }) {
   )
 }
 
+// ── Connections tab ──────────────────────────────────────────────────────────
+
+const PLATFORMS = [
+  'proxmox', 'fortigate', 'fortiswitch', 'truenas', 'pbs', 'unifi',
+  'wazuh', 'grafana', 'portainer', 'kibana', 'netbox', 'synology',
+  'security_onion', 'syncthing', 'caddy', 'traefik', 'opnsense',
+  'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
+]
+
+function ConnectionsTab() {
+  const [conns, setConns] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 443, auth_type: 'token', credentials: '' })
+  const [testing, setTesting] = useState({})
+
+  const fetchConns = () => {
+    fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : { data: [] })
+      .then(d => { setConns(d.data || []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  useEffect(() => { fetchConns() }, [])
+
+  const addConn = async () => {
+    const r = await fetch(`${BASE}/api/connections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(form),
+    })
+    if (r.ok) { setShowAdd(false); fetchConns() }
+  }
+
+  const deleteConn = async (id) => {
+    await fetch(`${BASE}/api/connections/${id}`, { method: 'DELETE', headers: { ...authHeaders() } })
+    fetchConns()
+  }
+
+  const testConn = async (id) => {
+    setTesting(t => ({ ...t, [id]: 'testing' }))
+    const r = await fetch(`${BASE}/api/connections/${id}/test`, { method: 'POST', headers: { ...authHeaders() } })
+    const d = await r.json()
+    setTesting(t => ({ ...t, [id]: d.status === 'ok' ? 'ok' : 'fail' }))
+    setTimeout(() => setTesting(t => ({ ...t, [id]: null })), 3000)
+    fetchConns()
+  }
+
+  if (loading) return <div className="text-gray-500 text-xs p-4">Loading connections...</div>
+
+  // Group by platform
+  const grouped = {}
+  conns.forEach(c => { (grouped[c.platform] = grouped[c.platform] || []).push(c) })
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center">
+        <span className="text-xs text-gray-400">{conns.length} connection(s)</span>
+        <button className="text-[10px] px-2 py-1 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
+                onClick={() => setShowAdd(!showAdd)}>
+          {showAdd ? '✕ Cancel' : '+ Add Connection'}
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="bg-[#0a0a15] border border-[#2a2440] rounded-md p-3 space-y-2">
+          <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
+                  value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value }))}>
+            {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <input className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
+                 placeholder="Label (e.g. Pmox1, Main FortiGate)" value={form.label}
+                 onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+          <div className="flex gap-2">
+            <input className="flex-1 bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
+                   placeholder="Host" value={form.host}
+                   onChange={e => setForm(f => ({ ...f, host: e.target.value }))} />
+            <input className="w-16 bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
+                   type="number" placeholder="Port" value={form.port}
+                   onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value) || 443 }))} />
+          </div>
+          <button className="w-full text-[10px] px-2 py-1 bg-blue-600/30 text-blue-400 rounded hover:bg-blue-600/40"
+                  onClick={addConn}>Save Connection</button>
+        </div>
+      )}
+
+      {Object.entries(grouped).map(([platform, items]) => (
+        <div key={platform} className="space-y-1">
+          <div className="text-[10px] text-gray-600 uppercase tracking-wider">{platform}</div>
+          {items.map(c => (
+            <div key={c.id} className="flex items-center justify-between bg-[#0d0d1a] rounded px-2 py-1.5 text-[10px]">
+              <div>
+                <span className="text-gray-300 font-medium">{c.label}</span>
+                <span className="text-gray-600 ml-2">{c.host}:{c.port}</span>
+                {c.verified && <span className="ml-2 text-green-500">✓</span>}
+                {c.verified === false && c.last_seen && <span className="ml-2 text-red-400">✕</span>}
+              </div>
+              <div className="flex gap-1">
+                <button className={`px-1.5 py-0.5 rounded text-[9px] ${
+                  testing[c.id] === 'ok' ? 'bg-green-900/30 text-green-400' :
+                  testing[c.id] === 'fail' ? 'bg-red-900/30 text-red-400' :
+                  testing[c.id] === 'testing' ? 'bg-yellow-900/30 text-yellow-400' :
+                  'bg-[#1e1e3a] text-gray-400 hover:text-white'}`}
+                  onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing'}>
+                  {testing[c.id] === 'testing' ? '...' : testing[c.id] === 'ok' ? '✓' : testing[c.id] === 'fail' ? '✕' : 'Test'}
+                </button>
+                <button className="px-1.5 py-0.5 rounded text-[9px] bg-red-900/20 text-red-400 hover:bg-red-900/30"
+                        onClick={() => deleteConn(c.id)}>✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {conns.length === 0 && !showAdd && (
+        <div className="text-gray-600 text-[10px] text-center py-4">
+          No connections configured. Click "Add Connection" to connect to your infrastructure.
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Update status display ────────────────────────────────────────────────────
 
 function UpdateStatus() {
@@ -621,6 +744,7 @@ export default function OptionsModal() {
                 {tab === 'General'        && <GeneralTab        draft={draft} update={update} />}
                 {tab === 'Infrastructure' && <InfrastructureTab draft={draft} update={update} />}
                 {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
+                {tab === 'Connections'    && <ConnectionsTab />}
                 {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
               </>
             )}
