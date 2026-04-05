@@ -145,6 +145,36 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
     return _mt.knowledge_export_request(service_id, request_type)
 
 
+# ── Documentation search ─────────────────────────────────────────────────────
+
+def search_docs(query: str, platform: str = "", doc_type: str = "") -> dict:
+    """Search ingested documentation by semantic + keyword match.
+    Returns ranked chunks from vendor docs, admin guides, API references.
+    Examples:
+      search_docs(query="add disk to VM", platform="proxmox")
+      search_docs(query="OSPF configuration", platform="fortigate")
+    """
+    from datetime import datetime, timezone
+    from api.rag.doc_search import search_docs as _search
+    doc_type_filter = [doc_type] if doc_type else None
+    results = _search(query=query, platform=platform, doc_type_filter=doc_type_filter)
+    return {
+        "status": "ok",
+        "data": {
+            "chunks": [
+                {"content": r["content"], "platform": r["platform"],
+                 "doc_type": r["doc_type"], "source_label": r.get("source_label", ""),
+                 "score": r.get("rrf_score", 0)}
+                for r in results
+            ],
+            "count": len(results),
+            "platform": platform or "(auto)",
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": f"{len(results)} doc chunk(s) found" + (f" for {platform}" if platform else ""),
+    }
+
+
 # ── Discovery + execution ─────────────────────────────────────────────────────
 
 def discover_environment(hosts_json: str = "") -> dict:

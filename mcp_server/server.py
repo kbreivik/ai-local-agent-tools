@@ -577,6 +577,37 @@ def skill_execute(name: str, params_json: str = "{}") -> dict:
 
 
 @mcp.tool()
+def search_docs(query: str, platform: str = "", doc_type: str = "") -> dict:
+    """Search ingested documentation by semantic + keyword match.
+    Returns ranked chunks from vendor docs, admin guides, API references.
+    Use when you need specific CLI syntax, config examples, or API details.
+    Examples:
+      search_docs(query="add disk to VM", platform="proxmox")
+      search_docs(query="OSPF configuration", platform="fortigate")
+      search_docs(query="backup schedule", platform="pbs")
+    """
+    from datetime import datetime, timezone
+    from api.rag.doc_search import search_docs as _search, format_doc_results
+    doc_type_filter = [doc_type] if doc_type else None
+    results = _search(query=query, platform=platform, doc_type_filter=doc_type_filter)
+    return {
+        "status": "ok",
+        "data": {
+            "chunks": [
+                {"content": r["content"], "platform": r["platform"],
+                 "doc_type": r["doc_type"], "source_label": r.get("source_label", ""),
+                 "score": r.get("rrf_score", 0)}
+                for r in results
+            ],
+            "count": len(results),
+            "platform": platform or "(auto)",
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": f"{len(results)} doc chunk(s) found" + (f" for {platform}" if platform else ""),
+    }
+
+
+@mcp.tool()
 def validate_skill_live(name: str) -> dict:
     """Run 3-layer validation on a skill: deterministic AST checks (Layer 1),
     live endpoint probing (Layer 2, if api_base available), and LLM critic review
