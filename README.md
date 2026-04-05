@@ -327,20 +327,23 @@ Modules: `api/memory/client.py` (REST client), `hooks.py` (tool call hooks), `fe
 | Elasticsearch | Monitoring | 7 tools + collector | Log search, correlation, anomaly detection |
 | Proxmox VE | Compute | Skill + collector | `proxmox_vm_status` module |
 | FortiGate | Networking | Skill + collector | `fortigate_system_status` module |
-| TrueNAS SCALE | Storage | Collector only | Fingerprinted, no skill module yet |
-| UniFi Controller | Networking | Fingerprinted | Port 8443 |
+| TrueNAS SCALE | Storage | Plugin + collector | `truenas_pool_status` — ZFS pools, health, capacity |
+| PBS | Storage | Plugin | `pbs_backup_status` — datastores, tasks, GC status |
+| UniFi Controller | Networking | Plugin | `unifi_network_status` — devices, clients, alerts |
+| FortiSwitch | Networking | Plugin | `fortiswitch_status` — ports, VLANs, PoE |
+| Wazuh | Monitoring | Skill | `wazuh_agent_status` — agents, security alerts |
+| Grafana | Monitoring | Skill | `grafana_health` — dashboards, firing alerts |
+| Portainer | Compute | Skill | `portainer_status` — environments, containers, stacks |
+| Pi-hole | Networking | Plugin | `pihole_dns_stats` — queries, blocked domains |
+| Technitium | Networking | Plugin | `technitium_dns_zones` — DNS zones, DNSSEC |
 | OPNsense | Networking | Fingerprinted | Port 443 |
 | Synology NAS | Storage | Fingerprinted | Port 5001 |
-| Pi-hole | Networking | Fingerprinted | `/admin/api.php` |
 | AdGuard Home | Networking | Fingerprinted | Port 3000 |
-| Grafana | Monitoring | Fingerprinted | Port 3000 |
-| Portainer | Compute | Fingerprinted | Port 9443 |
 | Kibana | Monitoring | Fingerprinted | Port 5601 |
 | NGINX | Networking | Fingerprinted | HTTP probe |
 | Traefik | Networking | Fingerprinted | `/api/version` |
-| FortiSwitch | Networking | Fingerprinted | Port 443 |
 
-Additional services listed but not yet fingerprinted: NetBox, Wazuh, Security Onion, PBS, Technitium, Syncthing, Trilium, BookStack, Ansible, Terraform.
+Additional services listed but not yet fingerprinted: NetBox, Security Onion, Syncthing, Trilium, BookStack, Ansible, Terraform.
 
 The `discover_environment()` tool scans hosts automatically and recommends `skill_create()` calls for uncovered services.
 
