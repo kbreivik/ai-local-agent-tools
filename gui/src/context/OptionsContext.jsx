@@ -62,7 +62,7 @@ const SERVER_KEYS = new Set([
   'autoEscalate', 'requireConfirmation',
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',
-  'dashboardRefreshInterval',
+  'autoUpdate', 'dashboardRefreshInterval',
   'proxmoxHost', 'proxmoxTokenId', 'proxmoxTokenSecret', 'proxmoxUser', 'proxmoxNodes',
   'fortigateHost', 'fortigateApiKey',
   'truenasHost', 'truenasApiKey',

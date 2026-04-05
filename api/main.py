@@ -54,13 +54,14 @@ _BUILD_INFO = _load_build_info()
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", str(DEFAULT_API_PORT)))
 
-CORS_ORIGINS = [
+_DEFAULT_CORS = [
     f"http://localhost:{DEFAULT_GUI_PORT}",
     f"http://127.0.0.1:{DEFAULT_GUI_PORT}",
-    f"http://0.0.0.0:{DEFAULT_GUI_PORT}",
-    # Allow any LAN IP on common ports
-    "http://192.168.0.0/16",
 ]
+# CORS_ORIGINS env var: comma-separated list of additional allowed origins.
+# Example: CORS_ORIGINS=http://192.168.1.10:8000,http://myhost:8000
+_extra = os.environ.get("CORS_ORIGINS", "")
+CORS_ORIGINS = _DEFAULT_CORS + [o.strip() for o in _extra.split(",") if o.strip()]
 # CORS_ALLOW_ALL=true enables wildcard origins (dev convenience). Default is false (restrictive).
 CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "false").lower() == "true"
 
@@ -86,6 +87,12 @@ async def lifespan(app: FastAPI):
         _sync_env()
     except Exception as e:
         _log.warning("Settings seed/sync skipped: %s", e)
+    # Initialize pgvector RAG schema (no-op if pgvector unavailable)
+    try:
+        from api.rag.schema import init_doc_chunks
+        init_doc_chunks()
+    except Exception as e:
+        _log.debug("RAG schema init skipped: %s", e)
     collector_manager.start_all()
     # Load dynamic skills from modules/ into memory so skill_execute works after restart
     try:
@@ -102,7 +109,17 @@ async def lifespan(app: FastAPI):
         await ingest_runbooks()
     except Exception as e:
         _log.warning("Memory ingest skipped: %s", e)
+    # Start auto-update background check
+    try:
+        from api.routers.dashboard import start_auto_update, stop_auto_update
+        start_auto_update()
+    except Exception as e:
+        _log.warning("Auto-update start skipped: %s", e)
     yield
+    try:
+        stop_auto_update()
+    except Exception:
+        pass
     collector_manager.stop_all()
     await _close_memory()
     await _flush_logger()

@@ -28,6 +28,17 @@ log = logging.getLogger(__name__)
 _GHCR_TAG_CACHE: dict = {}   # { image_bare: (tags, fetched_at) }
 _GHCR_TAG_TTL = 600          # 10 minutes
 
+# ── Auto-update state ────────────────────────────────────────────────────────
+
+_AUTO_UPDATE_INTERVAL = 300   # 5 minutes
+_auto_update_task: asyncio.Task | None = None
+_update_status: dict = {
+    "auto_update": False,
+    "current_version": "",
+    "latest_available": "",
+    "last_checked": "",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -170,6 +181,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
         return cached[0]
 
     token = os.environ.get("GHCR_TOKEN", "")
+    token_source = "env" if token else "none"
     if not token:
         # Fallback: read from settings DB in case sync_env_from_db() missed it
         try:
@@ -177,10 +189,13 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
             token = get_backend().get_setting("ghcrToken") or ""
             if token:
                 os.environ["GHCR_TOKEN"] = token  # backfill for subsequent calls
-        except Exception:
-            pass
+                token_source = "db"
+        except Exception as db_err:
+            log.debug("GHCR token DB fallback failed: %s", db_err)
     if not token:
+        log.warning("GHCR tag fetch skipped: no token (checked env GHCR_TOKEN and DB ghcrToken)")
         raise RuntimeError("GHCR_TOKEN not configured")
+    log.debug("GHCR token found via %s (length=%d)", token_source, len(token))
 
     repo = image_bare[len("ghcr.io/"):]   # kbreivik/hp1-ai-agent
 
@@ -189,16 +204,18 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     client = httpx.Client(trust_env=False, timeout=10, follow_redirects=True)
 
     # GHCR v2 API requires OAuth token exchange — PAT cannot be used directly as Bearer.
+    tok_url = f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io"
     try:
-        tok_resp = client.get(
-            f"https://ghcr.io/token?scope=repository:{repo}:pull&service=ghcr.io",
-            auth=("token", token),
-        )
+        tok_resp = client.get(tok_url, auth=("token", token))
     except Exception as exc:
+        log.error("GHCR token exchange failed (network): %s", exc)
         raise IOError(f"GHCR unreachable: {exc}") from exc
+    log.debug("GHCR token exchange: HTTP %d", tok_resp.status_code)
     if tok_resp.status_code in (401, 403):
+        log.warning("GHCR auth failed: HTTP %d — token may be expired or lack read:packages scope", tok_resp.status_code)
         raise RuntimeError(f"GHCR auth failed: HTTP {tok_resp.status_code}")
     if not tok_resp.is_success:
+        log.warning("GHCR token exchange error: HTTP %d", tok_resp.status_code)
         raise IOError(f"GHCR token error: HTTP {tok_resp.status_code}")
     bearer = tok_resp.json().get("token", "")
 
@@ -232,9 +249,13 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
                 break
         if not next_url:
             break
+        # GHCR Link headers may return relative paths — ensure absolute URL
+        if next_url.startswith("/"):
+            next_url = f"https://ghcr.io{next_url}"
         url = next_url
 
     client.close()
+    log.debug("GHCR tags fetched: %d total, filtering semver", len(all_tags))
     semver_tags = [t for t in all_tags if semver_re.match(t)]
     semver_tags.sort(key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True)
     result = semver_tags[:20]
@@ -917,3 +938,112 @@ def _restart_self_container() -> None:
         container.restart()
     except Exception as e:
         log.error("self-restart failed: %s", e)
+
+
+# ── Auto-update background loop ──────────────────────────────────────────────
+
+_HP1_IMAGE = "ghcr.io/kbreivik/hp1-ai-agent"
+
+
+def _is_auto_update_enabled() -> bool:
+    """Check the autoUpdate setting from DB."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        val = get_backend().get_setting("autoUpdate")
+        if val is None:
+            return False
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "1", "yes")
+    except Exception:
+        return False
+
+
+def _check_and_update() -> None:
+    """Check GHCR for newer version. If found and autoUpdate is on, pull + restart."""
+    from api.constants import APP_VERSION
+
+    _update_status["current_version"] = APP_VERSION
+    _update_status["auto_update"] = _is_auto_update_enabled()
+
+    if not _update_status["auto_update"]:
+        return
+
+    try:
+        tags = _fetch_ghcr_tags(_HP1_IMAGE)
+        _update_status["last_checked"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        latest = tags[0] if tags else ""
+        _update_status["latest_available"] = latest
+
+        if not latest or latest == APP_VERSION:
+            return
+
+        # Compare semver: only update if latest > current
+        def _ver(v: str) -> tuple:
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except (ValueError, AttributeError):
+                return (0,)
+
+        if _ver(latest) <= _ver(APP_VERSION):
+            return
+
+        log.info("auto-update: newer version %s available (current: %s), pulling", latest, APP_VERSION)
+        image = os.environ.get("HP1_IMAGE", f"{_HP1_IMAGE}:latest")
+        result = _pull_image(image)
+        if result.get("ok"):
+            log.info("auto-update: pull complete, restarting")
+            _audit("auto_update", f"ok | target=hp1_agent | {APP_VERSION} -> {latest}")
+            _restart_self_container()
+        else:
+            err = result.get("error", "unknown")
+            log.error("auto-update: pull failed: %s", err)
+            _audit("auto_update", f"failed | target=hp1_agent | pull error: {err}")
+
+    except Exception as e:
+        log.warning("auto-update check failed: %s", e)
+        _audit("auto_update", f"error | {e}")
+
+
+def _audit(action: str, result: str) -> None:
+    """Write to skill audit log (sync, best-effort)."""
+    try:
+        from mcp_server.tools.orchestration import audit_log
+        audit_log(action, result)
+    except Exception:
+        pass
+
+
+async def _auto_update_loop() -> None:
+    """Background loop: check for updates every 5 minutes."""
+    while True:
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _check_and_update)
+        except Exception as e:
+            log.warning("auto-update loop error: %s", e)
+        await asyncio.sleep(_AUTO_UPDATE_INTERVAL)
+
+
+def start_auto_update() -> None:
+    """Start the auto-update background task. Called from lifespan."""
+    global _auto_update_task
+    if _auto_update_task is None or _auto_update_task.done():
+        _auto_update_task = asyncio.create_task(_auto_update_loop())
+        log.info("auto-update: background task started (interval=%ds)", _AUTO_UPDATE_INTERVAL)
+
+
+def stop_auto_update() -> None:
+    """Cancel the auto-update background task."""
+    global _auto_update_task
+    if _auto_update_task and not _auto_update_task.done():
+        _auto_update_task.cancel()
+        _auto_update_task = None
+
+
+@router.get("/update-status")
+def get_update_status(_: str = Depends(get_current_user)):
+    """Current auto-update state: enabled, current version, latest available, last check time."""
+    from api.constants import APP_VERSION
+    _update_status["current_version"] = APP_VERSION
+    _update_status["auto_update"] = _is_auto_update_enabled()
+    return _update_status

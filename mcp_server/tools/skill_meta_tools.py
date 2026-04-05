@@ -145,33 +145,74 @@ def knowledge_export_request(service_id: str, request_type: str = "changelog") -
     return _mt.knowledge_export_request(service_id, request_type)
 
 
+# ── Documentation search ─────────────────────────────────────────────────────
+
+def search_docs(query: str, platform: str = "", doc_type: str = "") -> dict:
+    """Search ingested documentation by semantic + keyword match.
+    Returns ranked chunks from vendor docs, admin guides, API references.
+    Examples:
+      search_docs(query="add disk to VM", platform="proxmox")
+      search_docs(query="OSPF configuration", platform="fortigate")
+    """
+    from datetime import datetime, timezone
+    from api.rag.doc_search import search_docs as _search
+    doc_type_filter = [doc_type] if doc_type else None
+    results = _search(query=query, platform=platform, doc_type_filter=doc_type_filter)
+    return {
+        "status": "ok",
+        "data": {
+            "chunks": [
+                {"content": r["content"], "platform": r["platform"],
+                 "doc_type": r["doc_type"], "source_label": r.get("source_label", ""),
+                 "score": r.get("rrf_score", 0)}
+                for r in results
+            ],
+            "count": len(results),
+            "platform": platform or "(auto)",
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": f"{len(results)} doc chunk(s) found" + (f" for {platform}" if platform else ""),
+    }
+
+
 # ── Discovery + execution ─────────────────────────────────────────────────────
 
-def discover_environment(hosts_json: str) -> dict:
+def discover_environment(hosts_json: str = "") -> dict:
     """Scan hosts and auto-identify services via deterministic fingerprinting.
-    Returns identified services, skill coverage gaps, and skill_create recommendations.
+    If called with no arguments, scans hosts from DISCOVER_DEFAULT_HOSTS env var.
 
     Args:
-        hosts_json: JSON array of host objects. Each entry needs an 'address' key and
-            optional 'port'. Example: '[{"address": "192.168.1.10"}, {"address": "192.168.1.20", "port": 8006}]'
+        hosts_json: JSON array of host objects (optional). Each entry needs an 'address' key and
+            optional 'port'. Example: '[{"address": "10.0.0.1"}]'
     """
+    import os
     hosts = []
     if hosts_json:
         try:
             hosts = json.loads(hosts_json)
         except (json.JSONDecodeError, ValueError):
             pass
+    if not hosts:
+        raw = os.environ.get("DISCOVER_DEFAULT_HOSTS", "")
+        if raw:
+            try:
+                hosts = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                pass
+    if not hosts:
+        return {"status": "error", "data": None,
+                "timestamp": "", "message": "No hosts provided. Set DISCOVER_DEFAULT_HOSTS env var or pass hosts_json."}
     return _mt.discover_environment(hosts)
 
 
-def skill_execute(name: str, kwargs_json: str = "") -> dict:
-    """Execute a dynamic skill by name. Call skill_search first to find available skills.
-    Pass skill parameters as a JSON object string in kwargs_json.
-    Example: skill_execute(name='proxmox_vm_status', kwargs_json='{"node": "pve1"}')"""
+def skill_execute(name: str, params_json: str = "{}", kwargs_json: str = "") -> dict:
+    """Execute a skill by name. Pass parameters as JSON string.
+    Example: skill_execute(name='proxmox_vm_status', params_json='{"host": "pve01"}')"""
+    raw = params_json if params_json and params_json != "{}" else kwargs_json
     kwargs = {}
-    if kwargs_json:
+    if raw:
         try:
-            kwargs = json.loads(kwargs_json)
+            kwargs = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             pass
     return _mt.skill_execute(name, **kwargs)

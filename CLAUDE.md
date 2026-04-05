@@ -1,10 +1,10 @@
 # HP1-AI-Agent — Claude Code Guide
 
 ## Project
-Self-improving AI infrastructure agent with MCP server, FastAPI backend, Vue GUI, and Docker Swarm deployment. Manages homelab services (Proxmox, FortiGate, TrueNAS, Docker, Elasticsearch, Kafka) through auto-generated skills.
+Self-improving AI infrastructure agent with MCP server, FastAPI backend, React GUI, and Docker Swarm deployment. Manages homelab services (Proxmox, FortiGate, TrueNAS, Docker, Elasticsearch, Kafka) through auto-generated skills.
 
 - **Repo**: github.com/kbreivik/ai-local-agent-tools
-- **Runtime**: Python 3.13, FastMCP, FastAPI, Vue 3
+- **Runtime**: Python 3.13, FastMCP, FastAPI, React (JSX)
 - **Deployed**: Single container on hp1-prod-agent-01 (192.168.199.10:8000) — standalone mode
 - **LLM**: LM Studio (Qwen3-Coder-30B) at 192.168.199.51:1234
 - **Swarm cluster**: 3 managers (199.21-23) + 3 workers (199.31-33) — SERVICE TEST cluster
@@ -55,7 +55,7 @@ ai-local-agent-tools/
 │           ├── fortigate_system_status.py
 │           └── http_health_check.py
 ├── agent/                      ← Agent loop (LLM-driven task execution)
-├── gui/                        ← Vue 3 (src/ → built to dist/ by Docker)
+├── gui/                        ← React (JSX) (src/ → built to dist/ by Docker)
 ├── docker/
 │   ├── Dockerfile              ← Multi-stage: node (GUI) → python → slim runtime
 │   ├── swarm-stack.yml         ← Swarm deployment (upgrade testing)

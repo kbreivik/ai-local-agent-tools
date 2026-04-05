@@ -2,9 +2,10 @@
  * OptionsModal — 4-tab settings modal.
  * Reads/writes via OptionsContext → localStorage + POST /api/settings.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Settings, X } from 'lucide-react'
 import { useOptions } from '../context/OptionsContext'
+import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -148,6 +149,18 @@ function InfrastructureTab({ draft, update }) {
         </Field>
         <Field label="GHCR Token" hint="GitHub PAT with read:packages scope — enables version checking">
           <TextInput type="password" value={draft.ghcrToken} onChange={v => update('ghcrToken', v)} placeholder="ghp_..." />
+        </Field>
+        <Field label="Auto-Update" hint="Check GHCR every 5 min and auto-pull + restart when a newer version is available">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.autoUpdate === true || draft.autoUpdate === 'true'}
+              onChange={e => update('autoUpdate', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Enable automatic updates</span>
+          </label>
+          <UpdateStatus />
         </Field>
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
@@ -449,6 +462,35 @@ function DisplayTab({ draft, update }) {
           ))}
         </div>
       </Field>
+    </div>
+  )
+}
+
+// ── Update status display ────────────────────────────────────────────────────
+
+function UpdateStatus() {
+  const [info, setInfo] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d) setInfo(d) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  if (!info) return null
+
+  return (
+    <div className="mt-1.5 text-[10px] text-gray-500 space-y-0.5">
+      <div>Current: <span className="text-gray-400 font-mono">{info.current_version || '—'}</span></div>
+      {info.latest_available && (
+        <div>Latest: <span className="text-gray-400 font-mono">{info.latest_available}</span></div>
+      )}
+      {info.last_checked && (
+        <div>Last checked: <span className="text-gray-400">{new Date(info.last_checked).toLocaleString()}</span></div>
+      )}
     </div>
   )
 }

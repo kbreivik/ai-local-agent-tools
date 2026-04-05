@@ -49,6 +49,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Infrastructure — TrueNAS
     "truenasHost":           {"env": "TRUENAS_HOST",            "sens": False, "default": ""},
     "truenasApiKey":         {"env": "TRUENAS_API_KEY",         "sens": True,  "default": ""},
+    # Auto-update
+    "autoUpdate":               {"env": None,                   "sens": False, "default": False},
     # UI (stored server-side so they survive browser clears)
     "dashboardRefreshInterval": {"env": None,                   "sens": False, "default": 15000},
 }

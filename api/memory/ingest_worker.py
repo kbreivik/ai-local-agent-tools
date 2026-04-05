@@ -239,9 +239,12 @@ async def chunk_and_store(
     tags: list[str],
     source_key: str,
     local_path: str,
+    platform: str = "",
+    doc_type: str = "admin_guide",
 ) -> list[str]:
     """
     Chunk content and store each chunk as a MuninnDB engram.
+    Also writes to pgvector doc_chunks table (parallel store).
     Returns list of engram IDs (or empty list if MuninnDB unavailable).
     """
     from api.memory.client import get_client
@@ -261,6 +264,21 @@ async def chunk_and_store(
                 engram_ids.append(str(engram_id))
         except Exception as e:
             log.warning("Failed to store chunk %d for %s: %s", i, source_key, e)
+
+    # Parallel write to pgvector (sync, best-effort)
+    if platform and chunks:
+        log.info("pgvector parallel write: %d chunks for platform=%s", len(chunks), platform)
+        try:
+            from api.rag.ingest import ingest_chunks
+            ingest_chunks(
+                chunks=chunks,
+                platform=platform,
+                doc_type=doc_type,
+                source_url=source,
+                source_label=source_key,
+            )
+        except Exception as e:
+            log.error("RAG WRITE FAILED for %s: %s", source_key, e, exc_info=True)
 
     return engram_ids
 
@@ -306,13 +324,31 @@ async def ingest(
     # Save locally
     local_path = _save_local(source_key, content, suffix)
 
-    # Store in MuninnDB
+    # Detect platform/doc_type for pgvector parallel write
+    # TODO: When platform is unclassified, agent should analyze content and suggest platform classification
+    _rag_platform, _rag_doc_type = "", "admin_guide"
+    _rag_unclassified = False
+    if source_url:
+        try:
+            from api.rag.ingest import detect_platform_from_url
+            _rag_platform, _rag_doc_type = detect_platform_from_url(source_url)
+        except Exception:
+            pass
+    if not _rag_platform:
+        _rag_platform = "unclassified"
+        _rag_unclassified = True
+    log.info("pgvector ingest: platform=%s doc_type=%s source=%s",
+             _rag_platform, _rag_doc_type, (source_url or local_file_path or "")[:80])
+
+    # Store in MuninnDB + pgvector
     engram_ids = await chunk_and_store(
         content=content,
         source=source_label,
         tags=tags + (["url"] if source_url else ["pdf"]),
         source_key=source_key,
         local_path=local_path,
+        platform=_rag_platform,
+        doc_type=_rag_doc_type,
     )
 
     # Update manifest
@@ -350,9 +386,12 @@ async def ingest(
         "preview": content[:600],
         "breaking_changes_diff": breaking_changes,
         "breaking_changes_llm": llm_analysis,
+        "rag_platform": _rag_platform,
+        "rag_doc_type": _rag_doc_type,
         "message": (
             f"Ingested {len(engram_ids)} chunk(s) from {source_label}"
             + (" [NEW]" if update_info["is_new"] else " [UPDATED]" if update_info["is_updated"] else " [UNCHANGED]")
+            + (". Platform not auto-detected. Stored as unclassified. Use search_docs or the API to reclassify." if _rag_unclassified else f" [platform={_rag_platform}]")
         ),
     }
 

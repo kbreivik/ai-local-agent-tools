@@ -425,25 +425,45 @@ def service_rollback(name: str) -> dict:
 
 
 def _node_set_availability(node_id: str, availability: str) -> dict:
-    """Internal helper — set a node's availability to drain/active/pause."""
+    """Internal helper — set a node's availability to drain/active/pause.
+
+    Accepts Docker hex ID (or prefix), exact hostname, or partial hostname.
+    """
     try:
         client = _client()
         nodes = client.nodes.list()
         target = None
+        node_id_lower = node_id.lower()
         for n in nodes:
-            if n.attrs.get("ID", "").startswith(node_id) or \
-               n.attrs.get("Description", {}).get("Hostname", "") == node_id:
+            nid = n.attrs.get("ID", "")
+            hostname = n.attrs.get("Description", {}).get("Hostname", "")
+            if (nid.startswith(node_id) or nid[:12].startswith(node_id)
+                    or hostname == node_id
+                    or hostname.lower() == node_id_lower
+                    or node_id_lower in hostname.lower()):
                 target = n
                 break
         if not target:
+            available = [
+                f"  {n.attrs.get('Description', {}).get('Hostname', '?')} "
+                f"(id={n.attrs.get('ID', '')[:12]})"
+                for n in nodes
+            ]
             client.close()
-            return _err(f"Node '{node_id}' not found")
+            return _err(
+                f"Node '{node_id}' not found. Available nodes:\n"
+                + "\n".join(available)
+            )
+        resolved_hostname = target.attrs.get("Description", {}).get("Hostname", node_id)
+        resolved_id = target.attrs.get("ID", "")[:12]
         spec = target.attrs.get("Spec", {})
         spec["Availability"] = availability
         target.update(spec)
         client.close()
-        return _ok({"node_id": node_id, "availability": availability},
-                   f"Node '{node_id}' set to {availability}")
+        return _ok(
+            {"node_id": resolved_id, "hostname": resolved_hostname, "availability": availability},
+            f"Node '{resolved_hostname}' ({resolved_id}) set to {availability}",
+        )
     except DockerException as e:
         return _err(f"Docker connection failed: {e}")
     except Exception as e:
@@ -488,9 +508,9 @@ def pre_upgrade_check() -> dict:
 def postgres_health() -> dict:
     """Check PostgreSQL database health."""
     try:
-        from api.db.base import get_engine
+        from api.db.base import get_sync_engine
         from sqlalchemy import text as _text
-        engine = get_engine()
+        engine = get_sync_engine()
         with engine.connect() as conn:
             db_size = conn.execute(_text(
                 "SELECT pg_size_pretty(pg_database_size(current_database()))"

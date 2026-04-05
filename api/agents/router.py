@@ -98,6 +98,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
+    "search_docs",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -108,6 +109,7 @@ _EXECUTE_BASE = frozenset({
 
 _DIAGNOSTICS = frozenset({
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
+    "search_docs",
 })
 
 EXECUTE_KAFKA_TOOLS = frozenset({

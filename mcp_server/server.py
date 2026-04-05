@@ -88,10 +88,11 @@ def service_rollback(name: str) -> dict:
 @mcp.tool()
 def node_drain(node_id: str) -> dict:
     """Drain a Swarm node before maintenance. Requires plan_action() approval first.
-    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
-    Reverse with: node_activate(node_id=<same hex id>)
-    HP1 node IDs: manager-01=yxm2ust947ch, worker-01=tyimr0p3dsow (swarm_status for others)
-    Example: node_drain(node_id='tyimr0p3dsow')  # drains worker-01
+    node_id accepts: Docker hex ID, hostname, or partial hostname.
+    Reverse with: node_activate(node_id=<same value>)
+    Examples:
+      node_drain(node_id='tyimr0p3dsow')   # by hex ID
+      node_drain(node_id='worker-01')       # by hostname
     """
     return swarm.node_drain(node_id)
 
@@ -99,12 +100,10 @@ def node_drain(node_id: str) -> dict:
 @mcp.tool()
 def node_activate(node_id: str) -> dict:
     """Re-activate a drained Swarm node.
-    IMPORTANT: node_id must be the Docker Swarm hex ID — NOT the hostname.
-    Always call swarm_status() first if unsure: find node where hostname matches → use its 'id' field.
-    HP1 node IDs (use these directly):
-      manager-01=yxm2ust947ch  manager-02=tzrptdzsvggh  manager-03=z7zscpi5dxe9
-      worker-01=tyimr0p3dsow   worker-02=scdz8rfwou0i   worker-03=g7nkt24xs0oq
-    Example: node_activate(node_id='yxm2ust947ch')  # activates manager-01
+    node_id accepts: Docker hex ID, hostname, or partial hostname.
+    Examples:
+      node_activate(node_id='yxm2ust947ch')   # by hex ID
+      node_activate(node_id='manager-01')      # by hostname
     """
     return swarm.node_activate(node_id)
 
@@ -145,7 +144,7 @@ def kafka_broker_status(broker_id: int = None, broker_name: str = "") -> dict:
     Call with no args to check all 3 brokers (most common usage).
     broker_id and broker_name params are accepted but ignored — always returns all brokers.
     Key field to check: controller_id (None = no controller elected = broken cluster).
-    HP1 brokers: id=1 on 192.168.199.31:9092, id=2 on 192.168.199.32:9093, id=3 on 192.168.199.33:9094
+    Broker addresses come from KAFKA_BOOTSTRAP_SERVERS env var.
     Example: kafka_broker_status()
     """
     return kafka.kafka_broker_status()
@@ -224,12 +223,7 @@ def audit_log(action: str, result: str, target: str = "", details: str = "") -> 
       audit_log(action="drain", result="failed", target="worker-01", details="node unreachable")
     Note: only logged once per run — subsequent calls skipped automatically.
     """
-    full_result = result
-    if target:
-        full_result += f" | target={target}"
-    if details:
-        full_result += f" | {details}"
-    return orchestration.audit_log(action, full_result)
+    return orchestration.audit_log(action, result, target=target, details=details)
 
 
 @mcp.tool()
@@ -529,25 +523,28 @@ def skill_regenerate(name: str, backend: str = "") -> dict:
 
 # ── Skill v3: Discovery, dispatcher, live validation ─────────────────────────
 
-_HP1_HOSTS = [
-    {"address": "192.168.199.10"},
-    {"address": "192.168.199.21"}, {"address": "192.168.199.22"}, {"address": "192.168.199.23"},
-    {"address": "192.168.199.31"}, {"address": "192.168.199.32"}, {"address": "192.168.199.33"},
-    {"address": "192.168.199.40"},
-    {"address": "192.168.1.5", "port": 8006},
-    {"address": "192.168.1.6", "port": 8006},
-    {"address": "192.168.1.7", "port": 8006},
-]
+def _load_default_hosts() -> list:
+    """Load discovery hosts from DISCOVER_DEFAULT_HOSTS env var (JSON array) or empty list."""
+    import json as _json
+    raw = os.environ.get("DISCOVER_DEFAULT_HOSTS", "")
+    if raw:
+        try:
+            return _json.loads(raw)
+        except (ValueError, TypeError):
+            pass
+    return []
+
+_HP1_HOSTS = _load_default_hosts()
 
 @mcp.tool()
 def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
     """Scan hosts for services via deterministic fingerprinting. No LLM calls.
-    If called with no arguments, scans all HP1 homelab hosts automatically.
+    If called with no arguments, scans hosts from DISCOVER_DEFAULT_HOSTS env var.
     hosts: list of {"address": "...", "port": N} dicts (optional)
     hosts_json: JSON string alternative to hosts param (optional)
     Examples:
       discover_environment()
-      discover_environment(hosts=[{"address": "192.168.199.40"}])
+      discover_environment(hosts=[{"address": "10.0.0.1"}])
     """
     import json as _json
     if hosts_json:
@@ -555,19 +552,59 @@ def discover_environment(hosts: list = None, hosts_json: str = "") -> dict:
             hosts = _json.loads(hosts_json)
         except Exception:
             pass
-    return skill_tools.discover_environment(hosts or _HP1_HOSTS)
+    resolved = hosts or _HP1_HOSTS
+    if not resolved:
+        from mcp_server.tools.skills.discovery import _err
+        return _err("No hosts provided. Set DISCOVER_DEFAULT_HOSTS env var or pass hosts/hosts_json.")
+    return skill_tools.discover_environment(resolved)
 
 
 @mcp.tool()
-def skill_execute(name: str, **kwargs) -> dict:
-    """Execute a dynamic skill by name. Call skill_search() first to find available skills.
-    Pass skill parameters as direct keyword arguments — do NOT wrap in arguments= or kwargs_json=.
+def skill_execute(name: str, params_json: str = "{}") -> dict:
+    """Execute a skill by name. Pass parameters as JSON string, e.g. params_json='{"host": "pve01"}'.
+    Call skill_search() first to find available skills.
     Examples:
-      skill_execute(name='proxmox_vm_status', host='192.168.1.5')
-      skill_execute(name='http_health_check', url='http://127.0.0.1:8000/api/health')
+      skill_execute(name='proxmox_vm_status', params_json='{"host": "pve01"}')
+      skill_execute(name='http_health_check', params_json='{"url": "http://127.0.0.1:8000/api/health"}')
       skill_execute(name='kafka_broker_status')
     """
+    import json as _json
+    try:
+        kwargs = _json.loads(params_json) if params_json else {}
+    except (ValueError, TypeError):
+        kwargs = {}
     return skill_tools.skill_execute(name, **kwargs)
+
+
+@mcp.tool()
+def search_docs(query: str, platform: str = "", doc_type: str = "") -> dict:
+    """Search ingested documentation by semantic + keyword match.
+    Returns ranked chunks from vendor docs, admin guides, API references.
+    Use when you need specific CLI syntax, config examples, or API details.
+    Examples:
+      search_docs(query="add disk to VM", platform="proxmox")
+      search_docs(query="OSPF configuration", platform="fortigate")
+      search_docs(query="backup schedule", platform="pbs")
+    """
+    from datetime import datetime, timezone
+    from api.rag.doc_search import search_docs as _search, format_doc_results
+    doc_type_filter = [doc_type] if doc_type else None
+    results = _search(query=query, platform=platform, doc_type_filter=doc_type_filter)
+    return {
+        "status": "ok",
+        "data": {
+            "chunks": [
+                {"content": r["content"], "platform": r["platform"],
+                 "doc_type": r["doc_type"], "source_label": r.get("source_label", ""),
+                 "score": r.get("rrf_score", 0)}
+                for r in results
+            ],
+            "count": len(results),
+            "platform": platform or "(auto)",
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": f"{len(results)} doc chunk(s) found" + (f" for {platform}" if platform else ""),
+    }
 
 
 @mcp.tool()

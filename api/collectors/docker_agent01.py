@@ -14,7 +14,7 @@ from api.collectors.base import BaseCollector
 
 log = logging.getLogger(__name__)
 
-VM_IP = "192.168.199.10"
+VM_IP = os.environ.get("AGENT01_IP", "127.0.0.1")
 
 
 class DockerAgent01Collector(BaseCollector):
