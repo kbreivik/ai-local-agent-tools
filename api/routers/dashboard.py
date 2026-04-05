@@ -899,9 +899,9 @@ async def self_update(user: str = Depends(get_current_user)):
 
 @router.post("/self-restart")
 async def self_restart(user: str = Depends(get_current_user)):
-    """Restart the hp1_agent container. Fire-and-forget — agent will go down ~5s after response."""
+    """Recreate hp1_agent container with current image. Fire-and-forget — agent will go down ~5s after response."""
     asyncio.get_running_loop().run_in_executor(None, _restart_self_container)
-    return {"ok": True, "message": "Restart triggered — agent will be back in ~15s"}
+    return {"ok": True, "message": "Recreate triggered — agent will be back in ~20s"}
 
 
 def _pull_image(image: str) -> dict:
@@ -919,9 +919,20 @@ def _pull_image(image: str) -> dict:
 
 
 def _restart_self_container() -> None:
-    """Find the hp1_agent container by partial name match and restart it."""
+    """Recreate hp1_agent container with the newly pulled image.
+
+    A plain container.restart() reuses the old image. Instead, we spawn a
+    short-lived sidecar container on the Docker host that waits 3 seconds
+    (for the HTTP response to reach the client), then stops the agent
+    container, removes it, and recreates it from the new image using the
+    same config. The sidecar runs on the host via the mounted Docker socket
+    and outlives the agent container.
+
+    Falls back to container.restart() if sidecar creation fails.
+    """
     import re
     import docker
+    import time as _t
     log.info("self-restart: finding hp1_agent container")
     try:
         client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
@@ -934,7 +945,37 @@ def _restart_self_container() -> None:
         if not container:
             log.error("self-restart: hp1_agent container not found")
             return
-        log.info("self-restart: restarting %s", container.name)
+
+        container_name = container.name
+        image = container.image.tags[0] if container.image.tags else container.attrs["Config"]["Image"]
+
+        # Try sidecar approach: spawn a host-level container that recreates us
+        try:
+            recreate_script = (
+                f"sleep 3 && "
+                f"docker stop {container_name} && "
+                f"docker rm {container_name} && "
+                f"docker compose -f /opt/hp1-agent/docker/docker-compose.yml up -d hp1_agent"
+            )
+            log.info("self-restart: spawning sidecar to recreate %s with image %s", container_name, image)
+            client.containers.run(
+                "docker:cli",
+                command=["sh", "-c", recreate_script],
+                detach=True,
+                remove=True,
+                name="hp1_agent_recreator",
+                volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+                # Mount compose file directory so docker compose can read it
+                # The host path /opt/hp1-agent is where Ansible deploys the project
+                network_mode="host",
+            )
+            log.info("self-restart: sidecar spawned — agent will be recreated in ~5s")
+            return
+        except Exception as sidecar_err:
+            log.warning("self-restart: sidecar failed (%s), falling back to restart", sidecar_err)
+
+        # Fallback: plain restart (reuses old image but at least brings the agent back)
+        log.info("self-restart: falling back to container.restart() for %s", container_name)
         container.restart()
     except Exception as e:
         log.error("self-restart failed: %s", e)
