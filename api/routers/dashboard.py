@@ -983,8 +983,9 @@ def _restart_self_container() -> None:
                 "sleep 3 && "
                 f"docker stop {container_name} && "
                 f"docker rm {container_name} && "
-                "docker compose -f /compose/docker-compose.yml --env-file /compose/.env "
-                "up -d hp1_agent"
+                "docker compose --project-name docker "
+                "-f /compose/docker-compose.yml --env-file /compose/.env "
+                "up -d --force-recreate hp1_agent"
             )
             log.info("self-restart: spawning sidecar to recreate %s with image %s", container_name, image)
             client.containers.run(
