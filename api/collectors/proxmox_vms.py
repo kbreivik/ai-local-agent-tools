@@ -53,9 +53,22 @@ class ProxmoxVMsCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
-        host = os.environ.get("PROXMOX_HOST", "")
-        token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
-        token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+        # Try connections DB first, fall back to env vars
+        host, token_id, token_secret = "", "", ""
+        try:
+            from api.connections import get_connection_for_platform
+            conn = get_connection_for_platform("proxmox")
+            if conn:
+                host = conn.get("host", "")
+                creds = conn.get("credentials", {})
+                if isinstance(creds, dict):
+                    token_id = creds.get("token_id", "")
+                    token_secret = creds.get("secret", "")
+        except Exception:
+            pass
+        host = host or os.environ.get("PROXMOX_HOST", "")
+        token_id = token_id or os.environ.get("PROXMOX_TOKEN_ID", "")
+        token_secret = token_secret or os.environ.get("PROXMOX_TOKEN_SECRET", "")
 
         if not host:
             return {"health": "unconfigured", "vms": [], "lxc": [], "message": "PROXMOX_HOST not set"}
