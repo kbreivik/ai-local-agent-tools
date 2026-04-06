@@ -725,12 +725,13 @@ export default function OptionsModal() {
   return (
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/60 z-40" onClick={closeModal} />
+      <div className="fixed inset-0 bg-black/60 z-40" />
 
-      {/* Modal */}
-      <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none">
+      {/* Modal — click on backdrop area (outside card) closes */}
+      <div className="fixed inset-0 flex items-center justify-center z-50"
+           onClick={e => { if (e.target === e.currentTarget) closeModal() }}>
         <div
-          className="bg-[color:var(--bg-1)] border border-[color:var(--border)] rounded-xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col pointer-events-auto"
+          className="bg-[color:var(--bg-1)] border border-[color:var(--border)] rounded-xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col"
           onClick={e => e.stopPropagation()}
         >
           {/* Header */}
