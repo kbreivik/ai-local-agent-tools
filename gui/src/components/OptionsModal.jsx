@@ -475,12 +475,32 @@ const PLATFORMS = [
   'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
 ]
 
-const AUTH_FIELDS = {
-  token:   [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Secret', type: 'password' }],
-  basic:   [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }],
-  session: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }],
-  apikey:  [{ key: 'api_key', label: 'API Key', type: 'password' }],
+const PLATFORM_AUTH = {
+  proxmox:         { auth_type: 'token',  fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  fortigate:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  fortiswitch:     { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  truenas:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  pbs:             { auth_type: 'token',  fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  unifi:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  wazuh:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
+  grafana:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  portainer:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  kibana:          { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
+  netbox:          { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Token', type: 'password' }] },
+  synology:        { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  security_onion:  { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
+  syncthing:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  caddy:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  traefik:         { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  opnsense:        { auth_type: 'token',  fields: [{ key: 'token_id', label: 'API Key' }, { key: 'secret', label: 'API Secret', type: 'password' }] },
+  adguard:         { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  bookstack:       { auth_type: 'token',  fields: [{ key: 'token_id', label: 'Token ID' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  trilium:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'ETAPI Token', type: 'password' }] },
+  nginx:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  pihole:          { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key / Password', type: 'password' }] },
+  technitium:      { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
 }
+const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{txt}</label>
 
 function ConnectionsTab() {
   const [conns, setConns] = useState([])
@@ -492,6 +512,10 @@ function ConnectionsTab() {
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
   const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
+  const setPlatform = (p) => {
+    const pa = PLATFORM_AUTH[p] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
+    setForm(f => ({ ...f, platform: p, auth_type: pa.auth_type, credentials: {} }))
+  }
 
   const fetchConns = () => {
     fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
@@ -535,6 +559,7 @@ function ConnectionsTab() {
 
   const grouped = {}
   conns.forEach(c => { (grouped[c.platform] = grouped[c.platform] || []).push(c) })
+  const platAuth = PLATFORM_AUTH[form.platform] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
 
   return (
     <div className="space-y-3" onClick={e => e.stopPropagation()}>
@@ -548,25 +573,32 @@ function ConnectionsTab() {
 
       {showAdd && (
         <div className="card p-3 space-y-2" onClick={e => e.stopPropagation()}>
-          <select className="input text-[10px]"
-                  value={form.platform} onChange={e => updateForm('platform', e.target.value)}>
-            {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <input className="input text-[10px]" placeholder="Label (e.g. Pmox1, Main FortiGate)"
-                 value={form.label} onChange={e => updateForm('label', e.target.value)} />
-          <div className="flex gap-2">
-            <input className="input text-[10px] flex-1" placeholder="Host"
-                   value={form.host} onChange={e => updateForm('host', e.target.value)} />
-            <input className="input text-[10px] w-16" type="number" placeholder="Port"
-                   value={form.port} onChange={e => updateForm('port', parseInt(e.target.value) || 443)} />
+          <div>
+            {_FL('Platform')}
+            <select className="input text-[10px]" value={form.platform} onChange={e => setPlatform(e.target.value)}>
+              {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
           </div>
-          <select className="input text-[10px]"
-                  value={form.auth_type} onChange={e => { updateForm('auth_type', e.target.value); updateForm('credentials', {}) }}>
-            {Object.keys(AUTH_FIELDS).map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-          {(AUTH_FIELDS[form.auth_type] ?? AUTH_FIELDS.apikey).map(f => (
+          <div>
+            {_FL('Label')}
+            <input className="input text-[10px]" placeholder="e.g. Pmox1, Main FortiGate"
+                   value={form.label} onChange={e => updateForm('label', e.target.value)} />
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              {_FL('Host')}
+              <input className="input text-[10px]" placeholder="192.168.1.5 or hostname"
+                     value={form.host} onChange={e => updateForm('host', e.target.value)} />
+            </div>
+            <div className="w-20">
+              {_FL('Port')}
+              <input className="input text-[10px]" type="number" placeholder="443"
+                     value={form.port} onChange={e => updateForm('port', parseInt(e.target.value) || 443)} />
+            </div>
+          </div>
+          {platAuth.fields.map(f => (
             <div key={f.key}>
-              <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{f.label}</label>
+              {_FL(f.label)}
               <input className="input text-[10px] w-full" type={f.type ?? 'text'}
                 placeholder={f.placeholder ?? ''}
                 value={form.credentials[f.key] ?? ''}
