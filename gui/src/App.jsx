@@ -609,13 +609,18 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
       {/* Page header with stats pills */}
       <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
         <h1 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Dashboard</h1>
-        {stats && (
-          <div className="flex gap-2 ml-auto">
-            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Runs</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.total_operations ?? '—'}</span></span>
-            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Calls</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.total_tool_calls ?? '—'}</span></span>
-            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Success</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.success_rate != null ? `${stats.success_rate}%` : '—'}</span></span>
-          </div>
-        )}
+        <div className="flex gap-2 ml-auto">
+          {[
+            ['Runs',    stats?.total_operations],
+            ['Calls',   stats?.total_tool_calls],
+            ['Success', stats?.success_rate != null ? `${stats.success_rate}%` : null],
+          ].map(([label, val]) => (
+            <span key={label} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] border"
+                  style={{ background: 'var(--bg-3)', color: 'var(--text-2)', borderColor: 'var(--border)' }}>
+              {label} <span className="mono" style={{ color: 'var(--text-1)' }}>{val ?? '—'}</span>
+            </span>
+          ))}
+        </div>
       </div>
       <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
       {/* Single unified scroll area — one scrollbar for both sections */}
