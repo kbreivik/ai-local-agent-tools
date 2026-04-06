@@ -475,12 +475,23 @@ const PLATFORMS = [
   'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
 ]
 
+const AUTH_FIELDS = {
+  token:   [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Secret', type: 'password' }],
+  basic:   [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }],
+  session: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }],
+  apikey:  [{ key: 'api_key', label: 'API Key', type: 'password' }],
+}
+
 function ConnectionsTab() {
   const [conns, setConns] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 443, auth_type: 'token', credentials: '' })
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 443, auth_type: 'token', credentials: {} })
   const [testing, setTesting] = useState({})
+
+  const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
+  const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
 
   const fetchConns = () => {
     fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
@@ -491,13 +502,19 @@ function ConnectionsTab() {
 
   useEffect(() => { fetchConns() }, [])
 
-  const addConn = async () => {
-    const r = await fetch(`${BASE}/api/connections`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify(form),
-    })
-    if (r.ok) { setShowAdd(false); fetchConns() }
+  const addConn = async (e) => {
+    e.stopPropagation()
+    setSaving(true)
+    try {
+      const r = await fetch(`${BASE}/api/connections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(form),
+      })
+      if (r.ok) { setShowAdd(false); fetchConns() }
+    } finally {
+      setSaving(false)
+    }
   }
 
   const deleteConn = async (id) => {
@@ -520,29 +537,45 @@ function ConnectionsTab() {
   conns.forEach(c => { (grouped[c.platform] = grouped[c.platform] || []).push(c) })
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" onClick={e => e.stopPropagation()}>
       <div className="flex justify-between items-center">
         <span className="text-xs" style={{ color: 'var(--text-3)' }}>{conns.length} connection(s)</span>
-        <button className="btn btn-primary text-[10px] px-2 py-1" onClick={() => setShowAdd(!showAdd)}>
+        <button className="btn btn-primary text-[10px] px-2 py-1"
+                onClick={e => { e.stopPropagation(); setShowAdd(s => !s) }}>
           {showAdd ? '✕ Cancel' : '+ Add Connection'}
         </button>
       </div>
 
       {showAdd && (
-        <div className="card p-3 space-y-2">
+        <div className="card p-3 space-y-2" onClick={e => e.stopPropagation()}>
           <select className="input text-[10px]"
-                  value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value }))}>
+                  value={form.platform} onChange={e => updateForm('platform', e.target.value)}>
             {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <input className="input text-[10px]" placeholder="Label (e.g. Pmox1, Main FortiGate)"
-                 value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+                 value={form.label} onChange={e => updateForm('label', e.target.value)} />
           <div className="flex gap-2">
             <input className="input text-[10px] flex-1" placeholder="Host"
-                   value={form.host} onChange={e => setForm(f => ({ ...f, host: e.target.value }))} />
+                   value={form.host} onChange={e => updateForm('host', e.target.value)} />
             <input className="input text-[10px] w-16" type="number" placeholder="Port"
-                   value={form.port} onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value) || 443 }))} />
+                   value={form.port} onChange={e => updateForm('port', parseInt(e.target.value) || 443)} />
           </div>
-          <button className="btn btn-primary w-full text-[10px]" onClick={addConn}>Save Connection</button>
+          <select className="input text-[10px]"
+                  value={form.auth_type} onChange={e => { updateForm('auth_type', e.target.value); updateForm('credentials', {}) }}>
+            {Object.keys(AUTH_FIELDS).map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          {(AUTH_FIELDS[form.auth_type] ?? AUTH_FIELDS.apikey).map(f => (
+            <div key={f.key}>
+              <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{f.label}</label>
+              <input className="input text-[10px] w-full" type={f.type ?? 'text'}
+                placeholder={f.placeholder ?? ''}
+                value={form.credentials[f.key] ?? ''}
+                onChange={e => updateCred(f.key, e.target.value)} />
+            </div>
+          ))}
+          <button className="btn btn-primary w-full text-[10px]" onClick={addConn} disabled={saving}>
+            {saving ? 'Saving…' : 'Save Connection'}
+          </button>
         </div>
       )}
 
@@ -552,8 +585,8 @@ function ConnectionsTab() {
           {items.map(c => (
             <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]">
               <div>
-                <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label}</span>
-                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port}</span>
+                <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label || c.host}</span>
+                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.auth_type}</span>
                 {c.verified && <span className="ml-2" style={{ color: 'var(--green)' }}>✓</span>}
                 {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
               </div>
@@ -563,9 +596,9 @@ function ConnectionsTab() {
                   testing[c.id] === 'fail' ? 'pill-red' :
                   testing[c.id] === 'testing' ? 'pill-amber' : ''}`}
                   onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing'}>
-                  {testing[c.id] === 'testing' ? '...' : testing[c.id] === 'ok' ? '✓' : testing[c.id] === 'fail' ? '✕' : 'Test'}
+                  {testing[c.id] === 'testing' ? '…' : testing[c.id] === 'ok' ? '✓' : testing[c.id] === 'fail' ? '✕' : 'Test'}
                 </button>
-                <button className="btn text-[9px] px-1.5 py-0.5" style={{ color: 'var(--red)' }}
+                <button className="btn text-[9px] px-1.5 py-0.5 text-red-400"
                         onClick={() => deleteConn(c.id)}>✕</button>
               </div>
             </div>
@@ -575,7 +608,7 @@ function ConnectionsTab() {
 
       {conns.length === 0 && !showAdd && (
         <div className="text-[10px] text-center py-4" style={{ color: 'var(--text-3)' }}>
-          No connections configured. Click "Add Connection" to connect to your infrastructure.
+          No connections configured. Click "+ Add Connection" to connect to your infrastructure.
         </div>
       )}
     </div>
