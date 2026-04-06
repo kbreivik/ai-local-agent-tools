@@ -597,8 +597,26 @@ function AlertsPanel() {
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
+  const [stats, setStats] = useState(null)
+  useEffect(() => {
+    fetchStats().then(setStats).catch(() => {})
+    const id = setInterval(() => fetchStats().then(setStats).catch(() => {}), 30000)
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+      {/* Page header with stats pills */}
+      <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
+        <h1 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Dashboard</h1>
+        {stats && (
+          <div className="flex gap-2 ml-auto">
+            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Runs</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.total_operations ?? '—'}</span></span>
+            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Calls</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.total_tool_calls ?? '—'}</span></span>
+            <span className="pill pill-gray"><span style={{ color: 'var(--text-3)' }}>Success</span> <span className="mono" style={{ color: 'var(--text-1)' }}>{stats.success_rate != null ? `${stats.success_rate}%` : '—'}</span></span>
+          </div>
+        )}
+      </div>
       <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
       {/* Single unified scroll area — one scrollbar for both sections */}
       <div className="flex-1 overflow-auto min-h-0">

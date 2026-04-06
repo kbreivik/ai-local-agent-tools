@@ -25,17 +25,17 @@ const DOT_CLS = {
 }
 
 const STATUS_TEXT = {
-  healthy:      'text-green-700',
-  ok:           'text-green-700',
-  green:        'text-green-700',
-  active:       'text-green-700',
-  degraded:     'text-yellow-700',
-  yellow:       'text-yellow-700',
-  critical:     'text-red-700',
-  red:          'text-red-700',
-  error:        'text-red-700',
-  unconfigured: 'text-gray-400',
-  unknown:      'text-gray-400',
+  healthy:      'pill pill-green',
+  ok:           'pill pill-green',
+  green:        'pill pill-green',
+  active:       'pill pill-green',
+  degraded:     'pill pill-amber',
+  yellow:       'pill pill-amber',
+  critical:     'pill pill-red',
+  red:          'pill pill-red',
+  error:        'pill pill-red',
+  unconfigured: 'pill pill-gray',
+  unknown:      'pill pill-gray',
 }
 
 function Dot({ health }) {
@@ -79,7 +79,14 @@ const S = {
 
 // ── Card shell ─────────────────────────────────────────────────────────────────
 
+const ACCENT_CLASS = {
+  healthy: 'card-accent-green', ok: 'card-accent-green', green: 'card-accent-green', active: 'card-accent-green',
+  degraded: 'card-accent-amber', yellow: 'card-accent-amber',
+  critical: 'card-accent-red', red: 'card-accent-red', error: 'card-accent-red',
+}
+
 function Card({ title, health, lastUpdated, onRefresh, loading, minHeight, maxHeight, minWidth, maxWidth, children }) {
+  const accentCls = ACCENT_CLASS[health] || ''
   const cardRootStyle = {
     height:        '100%',
     margin:        0,
@@ -99,7 +106,7 @@ function Card({ title, health, lastUpdated, onRefresh, loading, minHeight, maxHe
     overflowY: 'auto',
   }
   return (
-    <div className="card" style={cardRootStyle}>
+    <div className={`card ${accentCls}`} style={cardRootStyle}>
       {/* Header — always visible */}
       <div className="flex items-center justify-between border-b" style={{ ...S.header, flexShrink: 0 }}>
         <div className="flex items-center gap-2">

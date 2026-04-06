@@ -564,10 +564,11 @@ export default function OptionsModal() {
     return (
       <button
         onClick={openModal}
-        className="flex items-center gap-1.5 text-[color:var(--text-2)] hover:text-[color:var(--text-1)] transition-colors"
+        className="sidebar-link w-full"
         title="Options"
       >
-        <Settings size={16} />
+        <span className="text-sm w-5 text-center shrink-0">⚙</span>
+        <span>Options</span>
       </button>
     )
   }

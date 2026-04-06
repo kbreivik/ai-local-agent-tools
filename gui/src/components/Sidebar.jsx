@@ -3,7 +3,6 @@
  * Replaces the horizontal header nav bar from the old design.
  */
 import { useState, useEffect } from 'react'
-import { Terminal } from 'lucide-react'
 import { useAgentOutput } from '../context/AgentOutputContext'
 import { fetchHealth } from '../api'
 import OptionsModal from './OptionsModal'
@@ -66,11 +65,16 @@ export default function Sidebar({ activeTab, onTab }) {
             ))}
           </div>
         ))}
+
+        {/* Settings section */}
+        <div className="sidebar-section">Settings</div>
+        <div className="mx-2">
+          <OptionsModal />
+        </div>
       </nav>
 
-      {/* Footer — status + settings */}
+      {/* Footer — status indicators */}
       <div className="border-t px-3 py-2 space-y-1.5" style={{ borderColor: 'var(--border)' }}>
-        {/* Status indicators */}
         <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-3)' }}>
           <div className="flex items-center gap-1.5">
             <span className={`dot ${health?.status === 'ok' ? 'dot-green' : 'dot-gray'}`} />
@@ -80,14 +84,10 @@ export default function Sidebar({ activeTab, onTab }) {
             <span className={`dot ${wsState === 'connected' ? 'dot-green' : wsState === 'connecting' ? 'dot-amber' : 'dot-gray'}`} />
             <span>WS</span>
           </div>
+          <LockBadge />
           {health?.version && (
             <span className="mono" style={{ color: 'var(--text-3)' }}>v{health.version}</span>
           )}
-        </div>
-
-        <div className="flex items-center justify-between">
-          <LockBadge />
-          <OptionsModal />
         </div>
       </div>
     </div>
