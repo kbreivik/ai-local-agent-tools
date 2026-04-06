@@ -1,5 +1,7 @@
 """JWT authentication — single admin user, bcrypt hashed."""
+import logging as _log_module
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -8,8 +10,22 @@ import jwt as _pyjwt  # PyJWT — already installed
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+_auth_log = _log_module.getLogger(__name__)
+
 # ── Config ────────────────────────────────────────────────────────────────────
-SECRET_KEY = os.environ.get("JWT_SECRET", "hp1-jwt-secret-change-in-prod-2026")
+_INSECURE_JWT_DEFAULT = "hp1-jwt-secret-change-in-prod-2026"
+_INSECURE_PASS_DEFAULT = "superduperadmin"
+
+_raw_jwt = os.environ.get("JWT_SECRET", "")
+if not _raw_jwt or _raw_jwt == _INSECURE_JWT_DEFAULT:
+    SECRET_KEY = secrets.token_hex(32)
+    _auth_log.warning(
+        "JWT_SECRET not set or using insecure default — generated ephemeral secret. "
+        "Sessions will not survive restart. Set JWT_SECRET env var for persistence."
+    )
+else:
+    SECRET_KEY = _raw_jwt
+
 ALGORITHM  = "HS256"
 EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 
@@ -19,12 +35,6 @@ _ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "superduperadmin")
 # Pre-hash the password at module load (or use env-provided hash)
 _STORED_HASH: bytes = bcrypt.hashpw(_ADMIN_PASS.encode(), bcrypt.gensalt())
 
-import logging as _log_module
-_auth_log = _log_module.getLogger(__name__)
-
-_INSECURE_JWT_DEFAULT = "hp1-jwt-secret-change-in-prod-2026"
-_INSECURE_PASS_DEFAULT = "superduperadmin"
-
 
 def check_secrets() -> None:
     """Log CRITICAL warnings when known insecure defaults are in use.
@@ -32,11 +42,6 @@ def check_secrets() -> None:
     Called from the app lifespan — never at module import time.
     Does NOT raise; homelab may intentionally use defaults on a trusted LAN.
     """
-    if SECRET_KEY == _INSECURE_JWT_DEFAULT:
-        _auth_log.critical(
-            "SECURITY: JWT_SECRET is set to the insecure default value. "
-            "Set JWT_SECRET env var to a strong random secret before exposing this service."
-        )
     if _ADMIN_PASS == _INSECURE_PASS_DEFAULT:
         _auth_log.critical(
             "SECURITY: ADMIN_PASSWORD is set to the insecure default 'superduperadmin'. "
