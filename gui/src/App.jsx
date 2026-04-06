@@ -537,59 +537,48 @@ function AlertsPanel() {
     fetch('/api/alerts/dismiss-all', { method: 'POST' }).then(fetchAlerts)
   }
 
-  const severityColor = (s) =>
-    s === 'error' || s === 'critical' ? '#ff4444' :
-    s === 'warning' ? '#ffaa00' : '#4488ff'
+  const sevStyle = (s) => {
+    if (s === 'error' || s === 'critical') return { dot: 'var(--red)', bg: 'var(--red-dim)', color: 'var(--red)' }
+    if (s === 'warning') return { dot: 'var(--amber)', bg: 'var(--amber-dim)', color: 'var(--amber)' }
+    return { dot: 'var(--accent)', bg: 'var(--accent-dim)', color: 'var(--accent)' }
+  }
 
   if (alerts.length === 0) {
     return (
-      <div style={{padding:'6px 12px', color:'#4caf50', fontSize:'12px',
-                   borderBottom:'1px solid #1e2a3a', marginBottom:'8px'}}>
-        ✓ No active alerts
+      <div className="flex items-center gap-1.5 px-4 py-2">
+        <span className="dot dot-green" />
+        <span className="text-[11px]" style={{ color: 'var(--text-3)' }}>No active alerts</span>
       </div>
     )
   }
 
   return (
-    <div style={{marginBottom:'12px', borderBottom:'1px solid #1e2a3a', paddingBottom:'8px'}}>
-      <div style={{display:'flex', justifyContent:'space-between',
-                   alignItems:'center', padding:'4px 12px 6px'}}>
-        <span style={{fontSize:'11px', fontWeight:600, letterSpacing:'0.08em',
-                      color:'#8899aa', textTransform:'uppercase'}}>
-          ALERTS — {alerts.length} active
+    <div className="px-4 py-2 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
+          Alerts — {alerts.length} active
         </span>
-        <button onClick={dismissAll}
-          style={{fontSize:'10px', background:'transparent', border:'1px solid #444',
-                  color:'#8899aa', borderRadius:'3px', padding:'1px 6px', cursor:'pointer'}}>
-          Dismiss all
-        </button>
+        <button onClick={dismissAll} className="btn text-[9px] px-1.5 py-0.5">Dismiss all</button>
       </div>
-      {alerts.map(a => (
-        <div key={a.id}
-          style={{display:'flex', alignItems:'flex-start', padding:'4px 12px',
-                  borderLeft:`2px solid ${severityColor(a.severity)}`,
-                  marginBottom:'2px', background:'rgba(255,255,255,0.02)'}}>
-          <div style={{flex:1, minWidth:0}}>
-            <span style={{fontSize:'10px', color:severityColor(a.severity),
-                          fontWeight:600, marginRight:'6px', textTransform:'uppercase'}}>
+      {alerts.map(a => {
+        const sv = sevStyle(a.severity)
+        return (
+          <div key={a.id} className="flex items-center gap-2 rounded-md px-3 py-2"
+               style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}>
+            <span className="dot dot-pulse shrink-0" style={{ background: sv.dot }} />
+            <div className="flex-1 min-w-0">
+              <span className="text-[11px]" style={{ color: 'var(--text-1)' }}>
+                {a.component}{a.message ? ` — ${a.message}` : ''}
+              </span>
+            </div>
+            <span className="pill shrink-0" style={{ background: sv.bg, color: sv.color }}>
               {a.severity}
             </span>
-            <span style={{fontSize:'11px', color:'#ccd6e0'}}>
-              {a.component}
-            </span>
-            <div style={{fontSize:'11px', color:'#7a8899', marginTop:'1px',
-                         overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
-              {a.message}
-            </div>
+            <button onClick={() => dismiss(a.id)} className="text-[10px] shrink-0"
+                    style={{ color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none' }}>✕</button>
           </div>
-          <button onClick={() => dismiss(a.id)}
-            style={{fontSize:'10px', background:'transparent', border:'none',
-                    color:'#556677', cursor:'pointer', padding:'0 0 0 8px',
-                    flexShrink:0}}>
-            ✕
-          </button>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
