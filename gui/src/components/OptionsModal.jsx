@@ -16,8 +16,8 @@ const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Displa
 function Field({ label, hint, children }) {
   return (
     <div className="mb-4">
-      <label className="block text-xs font-semibold text-slate-300 mb-1">{label}</label>
-      {hint && <p className="text-xs text-slate-500 mb-1">{hint}</p>}
+      <label className="block text-xs font-semibold text-[color:var(--text-1)] mb-1">{label}</label>
+      {hint && <p className="text-xs text-[color:var(--text-3)] mb-1">{hint}</p>}
       {children}
     </div>
   )
@@ -31,7 +31,7 @@ function TextInput({ value, onChange, placeholder, type = 'text' }) {
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       autoComplete="off"
-      className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+      className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none focus:border-blue-500"
     />
   )
 }
@@ -43,14 +43,14 @@ function Textarea({ value, onChange, placeholder, rows = 3 }) {
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       rows={rows}
-      className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-xs text-slate-200 resize-none focus:outline-none focus:border-blue-500"
+      className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs text-[color:var(--text-1)] resize-none focus:outline-none focus:border-blue-500"
     />
   )
 }
 
 function Radio({ name, value, current, onChange, label }) {
   return (
-    <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 hover:text-slate-100">
+    <label className="flex items-center gap-2 cursor-pointer text-xs text-[color:var(--text-1)] hover:text-[color:var(--text-1)]">
       <input
         type="radio"
         name={name}
@@ -70,12 +70,12 @@ function Toggle({ value, onChange, label }) {
       <div
         onClick={() => onChange(!value)}
         className={`w-9 h-5 rounded-full transition-colors flex items-center px-0.5 cursor-pointer ${
-          value ? 'bg-blue-600' : 'bg-slate-600'
+          value ? 'bg-blue-600' : 'bg-[color:var(--bg-3)]'
         }`}
       >
         <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${value ? 'translate-x-4' : ''}`} />
       </div>
-      <span className="text-xs text-slate-300">{label}</span>
+      <span className="text-xs text-[color:var(--text-1)]">{label}</span>
     </label>
   )
 }
@@ -85,7 +85,7 @@ function Select({ value, onChange, options }) {
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+      className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none focus:border-blue-500"
     >
       {options.map(([v, label]) => (
         <option key={v} value={v}>{label}</option>
@@ -126,7 +126,7 @@ function GeneralTab({ draft, update }) {
 
 function SectionHeader({ label }) {
   return (
-    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+    <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
       {label}
     </h3>
   )
@@ -284,7 +284,7 @@ function AIServicesTab({ draft, update }) {
     <div>
       {/* Local AI */}
       <div className="mb-5">
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           Local AI
         </h3>
         <Field label="LM Studio URL">
@@ -299,7 +299,7 @@ function AIServicesTab({ draft, update }) {
         <button
           onClick={testLocal}
           disabled={testing === 'local'}
-          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 bg-[color:var(--bg-3)] hover:bg-[color:var(--bg-3)] text-xs text-[color:var(--text-1)] rounded transition-colors disabled:opacity-50"
         >
           {testing === 'local' ? 'Testing…' : 'Test Connection'}
         </button>
@@ -312,7 +312,7 @@ function AIServicesTab({ draft, update }) {
 
       {/* External AI */}
       <div className="mb-5">
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           External AI (Escalation)
         </h3>
         <Field label="Provider">
@@ -333,7 +333,7 @@ function AIServicesTab({ draft, update }) {
         <button
           onClick={testExternal}
           disabled={testing === 'ext'}
-          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 bg-[color:var(--bg-3)] hover:bg-[color:var(--bg-3)] text-xs text-[color:var(--text-1)] rounded transition-colors disabled:opacity-50"
         >
           {testing === 'ext' ? 'Testing…' : 'Test Connection'}
         </button>
@@ -346,7 +346,7 @@ function AIServicesTab({ draft, update }) {
 
       {/* Escalation Policy */}
       <div>
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           Escalation Policy
         </h3>
         <Field label="Auto-escalate on">
@@ -410,7 +410,7 @@ function DisplayTab({ draft, update }) {
     <div>
       {/* Dashboard Cards */}
       <div className="mb-5">
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-700 pb-1">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           Dashboard Cards
         </h3>
         <DimRow label="Min Height" fieldKey="cardMinHeight" value={draft.cardMinHeight} defaultVal={70}  min={50}  max={200}  invalid={heightInvalid} update={update} />
@@ -514,65 +514,58 @@ function ConnectionsTab() {
     fetchConns()
   }
 
-  if (loading) return <div className="text-gray-500 text-xs p-4">Loading connections...</div>
+  if (loading) return <div style={{ color: 'var(--text-3)', fontSize: '12px', padding: '16px' }}>Loading connections...</div>
 
-  // Group by platform
   const grouped = {}
   conns.forEach(c => { (grouped[c.platform] = grouped[c.platform] || []).push(c) })
 
   return (
     <div className="space-y-3">
       <div className="flex justify-between items-center">
-        <span className="text-xs text-gray-400">{conns.length} connection(s)</span>
-        <button className="text-[10px] px-2 py-1 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
-                onClick={() => setShowAdd(!showAdd)}>
+        <span className="text-xs" style={{ color: 'var(--text-3)' }}>{conns.length} connection(s)</span>
+        <button className="btn btn-primary text-[10px] px-2 py-1" onClick={() => setShowAdd(!showAdd)}>
           {showAdd ? '✕ Cancel' : '+ Add Connection'}
         </button>
       </div>
 
       {showAdd && (
-        <div className="bg-[#0a0a15] border border-[#2a2440] rounded-md p-3 space-y-2">
-          <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
+        <div className="card p-3 space-y-2">
+          <select className="input text-[10px]"
                   value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value }))}>
             {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-          <input className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
-                 placeholder="Label (e.g. Pmox1, Main FortiGate)" value={form.label}
-                 onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+          <input className="input text-[10px]" placeholder="Label (e.g. Pmox1, Main FortiGate)"
+                 value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
           <div className="flex gap-2">
-            <input className="flex-1 bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
-                   placeholder="Host" value={form.host}
-                   onChange={e => setForm(f => ({ ...f, host: e.target.value }))} />
-            <input className="w-16 bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-2 py-1"
-                   type="number" placeholder="Port" value={form.port}
-                   onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value) || 443 }))} />
+            <input className="input text-[10px] flex-1" placeholder="Host"
+                   value={form.host} onChange={e => setForm(f => ({ ...f, host: e.target.value }))} />
+            <input className="input text-[10px] w-16" type="number" placeholder="Port"
+                   value={form.port} onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value) || 443 }))} />
           </div>
-          <button className="w-full text-[10px] px-2 py-1 bg-blue-600/30 text-blue-400 rounded hover:bg-blue-600/40"
-                  onClick={addConn}>Save Connection</button>
+          <button className="btn btn-primary w-full text-[10px]" onClick={addConn}>Save Connection</button>
         </div>
       )}
 
       {Object.entries(grouped).map(([platform, items]) => (
         <div key={platform} className="space-y-1">
-          <div className="text-[10px] text-gray-600 uppercase tracking-wider">{platform}</div>
+          <div className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>{platform}</div>
           {items.map(c => (
-            <div key={c.id} className="flex items-center justify-between bg-[#0d0d1a] rounded px-2 py-1.5 text-[10px]">
+            <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]">
               <div>
-                <span className="text-gray-300 font-medium">{c.label}</span>
-                <span className="text-gray-600 ml-2">{c.host}:{c.port}</span>
-                {c.verified && <span className="ml-2 text-green-500">✓</span>}
-                {c.verified === false && c.last_seen && <span className="ml-2 text-red-400">✕</span>}
+                <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label}</span>
+                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port}</span>
+                {c.verified && <span className="ml-2" style={{ color: 'var(--green)' }}>✓</span>}
+                {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
               </div>
               <div className="flex gap-1">
-                <button className={`px-1.5 py-0.5 rounded text-[9px] ${
-                  testing[c.id] === 'ok' ? 'bg-green-900/30 text-green-400' :
-                  testing[c.id] === 'fail' ? 'bg-red-900/30 text-red-400' :
-                  testing[c.id] === 'testing' ? 'bg-yellow-900/30 text-yellow-400' :
-                  'bg-[#1e1e3a] text-gray-400 hover:text-white'}`}
+                <button className={`btn text-[9px] px-1.5 py-0.5 ${
+                  testing[c.id] === 'ok' ? 'pill-green' :
+                  testing[c.id] === 'fail' ? 'pill-red' :
+                  testing[c.id] === 'testing' ? 'pill-amber' : ''}`}
                   onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing'}>
                   {testing[c.id] === 'testing' ? '...' : testing[c.id] === 'ok' ? '✓' : testing[c.id] === 'fail' ? '✕' : 'Test'}
                 </button>
-                <button className="px-1.5 py-0.5 rounded text-[9px] bg-red-900/20 text-red-400 hover:bg-red-900/30"
+                <button className="btn text-[9px] px-1.5 py-0.5" style={{ color: 'var(--red)' }}
                         onClick={() => deleteConn(c.id)}>✕</button>
               </div>
             </div>
@@ -581,7 +574,7 @@ function ConnectionsTab() {
       ))}
 
       {conns.length === 0 && !showAdd && (
-        <div className="text-gray-600 text-[10px] text-center py-4">
+        <div className="text-[10px] text-center py-4" style={{ color: 'var(--text-3)' }}>
           No connections configured. Click "Add Connection" to connect to your infrastructure.
         </div>
       )}
@@ -687,10 +680,11 @@ export default function OptionsModal() {
     return (
       <button
         onClick={openModal}
-        className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors"
+        className="sidebar-link w-full"
         title="Options"
       >
-        <Settings size={16} />
+        <span className="text-sm w-5 text-center shrink-0">⚙</span>
+        <span>Options</span>
       </button>
     )
   }
@@ -703,22 +697,22 @@ export default function OptionsModal() {
       {/* Modal */}
       <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none">
         <div
-          className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col pointer-events-auto"
+          className="bg-[color:var(--bg-1)] border border-[color:var(--border)] rounded-xl shadow-2xl w-[600px] max-h-[85vh] flex flex-col pointer-events-auto"
           onClick={e => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700 shrink-0">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[color:var(--border)] shrink-0">
             <div className="flex items-center gap-2">
-              <Settings size={16} className="text-slate-400" />
-              <span className="text-sm font-semibold text-slate-200">Options</span>
+              <Settings size={16} className="text-[color:var(--text-2)]" />
+              <span className="text-sm font-semibold text-[color:var(--text-1)]">Options</span>
             </div>
-            <button onClick={closeModal} className="text-slate-500 hover:text-slate-300 transition-colors">
+            <button onClick={closeModal} className="text-[color:var(--text-3)] hover:text-[color:var(--text-1)] transition-colors">
               <X size={16} />
             </button>
           </div>
 
           {/* Tab bar */}
-          <div className="flex border-b border-slate-700 shrink-0">
+          <div className="flex border-b border-[color:var(--border)] shrink-0">
             {TABS.map(t => (
               <button
                 key={t}
@@ -726,7 +720,7 @@ export default function OptionsModal() {
                 className={`px-4 py-2.5 text-xs font-medium transition-colors border-b-2 ${
                   tab === t
                     ? 'border-blue-500 text-blue-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-300'
+                    : 'border-transparent text-[color:var(--text-3)] hover:text-[color:var(--text-1)]'
                 }`}
               >
                 {t}
@@ -737,7 +731,7 @@ export default function OptionsModal() {
           {/* Tab content */}
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {!serverLoaded && (tab === 'Infrastructure' || tab === 'AI Services') && (
-              <p className="text-xs text-slate-500 animate-pulse mb-3">Loading from server…</p>
+              <p className="text-xs text-[color:var(--text-3)] animate-pulse mb-3">Loading from server…</p>
             )}
             {draft && (
               <>
@@ -751,13 +745,13 @@ export default function OptionsModal() {
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-slate-700 shrink-0">
+          <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-[color:var(--border)] shrink-0">
             {saveError && (
               <span className="text-xs text-red-400 mr-auto">{saveError}</span>
             )}
             <button
               onClick={closeModal}
-              className="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+              className="px-4 py-1.5 text-xs text-[color:var(--text-2)] hover:text-[color:var(--text-1)] transition-colors"
             >
               Cancel
             </button>
