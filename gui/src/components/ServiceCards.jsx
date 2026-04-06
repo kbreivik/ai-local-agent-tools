@@ -167,26 +167,36 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapse
   const { cardMinHeight } = useOptions()
   return (
     <div
-      className={`${cs.bg} border ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : cs.border} rounded-lg px-2.5 py-2.5 cursor-pointer transition-colors`}
-      style={isOpen ? undefined : { minHeight: cardMinHeight }}
+      className={`border rounded-lg cursor-pointer transition-colors ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
+      style={{
+        background: 'var(--bg-2)',
+        borderColor: isOpen ? undefined : 'var(--border)',
+        minHeight: isOpen ? undefined : undefined,
+        padding: isOpen ? '10px' : '6px 12px',
+      }}
       onClick={() => setOpenKey(isOpen ? null : cardKey)}
     >
-      <div className="flex items-center gap-1.5 mb-0.5">
-        <Dot color={dot} />
-        <span className={`text-[12px] font-semibold truncate ${cs.nameCls}`}>{name}</span>
-      </div>
-      {sub && (
-        typeof sub === 'object'
-          ? <div className={`text-[10px] font-mono truncate mb-0.5 ${sub.cls}`}>{sub.text}</div>
-          : <div className="text-[10px] text-[#3a3a5a] font-mono truncate mb-0.5">{sub}</div>
-      )}
-      <div className="text-[10px] text-[#4a5a7a] font-mono mb-1">{net || '—'}</div>
       {isOpen ? (
-        <div onClick={e => e.stopPropagation()}>
-          {expanded}
-          <button className="mt-1.5 w-full text-[9px] text-gray-700 hover:text-gray-500" onClick={() => setOpenKey(null)}>✕ close</button>
+        <>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Dot color={dot} />
+            <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
+            {sub && <span className="text-[10px] mono truncate" style={{ color: 'var(--text-3)' }}>{typeof sub === 'object' ? sub.text : sub}</span>}
+          </div>
+          {net && <div className="text-[10px] mono mb-1" style={{ color: 'var(--text-3)' }}>{net}</div>}
+          <div onClick={e => e.stopPropagation()}>
+            {expanded}
+            <button className="mt-1.5 w-full text-[9px]" style={{ color: 'var(--text-3)' }} onClick={() => setOpenKey(null)}>✕ close</button>
+          </div>
+        </>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Dot color={dot} />
+          <span className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
+          {sub && <span className="text-[10px] mono truncate" style={{ color: 'var(--text-3)' }}>{typeof sub === 'object' ? sub.text : sub}</span>}
+          {collapsed}
         </div>
-      ) : collapsed}
+      )}
     </div>
   )
 }
@@ -621,46 +631,12 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   )
 }
 
-function ContainerCardCollapsed({ c, latestTag }) {
-  const severity = (c.running_version && latestTag)
-    ? compareSemver(c.running_version, latestTag)
-    : null
-  const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
-  return (
-    <>
-      <div className="text-[10px] text-[#383850] mb-1">{c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired} replicas` : '')}</div>
-      {c.problem && (
-        <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-red-950/50 text-red-400 border border-red-900/40 mb-1">⚠ {c.problem}</div>
-      )}
-      {(c.running_version || c.built_at) && (
-        <div className="border-t border-[#1a1a30] pt-1 mt-0.5">
-          {c.running_version && (
-            <div className="flex justify-between text-[9px] mb-0.5">
-              <span className="text-gray-700">Running</span>
-              <span className="text-gray-500 font-mono">{c.running_version}</span>
-            </div>
-          )}
-          {c.built_at && (
-            <div className="flex justify-between text-[9px] mb-0.5">
-              <span className="text-gray-700">Built</span>
-              <span className="text-gray-500 font-mono">{c.built_at.slice(0, 10)}</span>
-            </div>
-          )}
-          {c.running_version && (
-            <div className="flex justify-between text-[9px]">
-              <span className="text-gray-700">Status</span>
-              {severity === 'current'
-                ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
-                : hasUpdate
-                ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>↑ {latestTag}</span>
-                : <span className="text-gray-700">—</span>
-              }
-            </div>
-          )}
-        </div>
-      )}
-    </>
-  )
+function ContainerCardCollapsed({ c }) {
+  // Compact pill — detail rows removed; InfraCard header shows dot + name + version
+  if (c.problem) {
+    return <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>
+  }
+  return null
 }
 
 // ── VM / LXC card ─────────────────────────────────────────────────────────────
