@@ -17,7 +17,7 @@ class CreateConnectionRequest(BaseModel):
     host: str
     port: int = 443
     auth_type: str = "token"
-    credentials: dict | str = ""
+    credentials: dict = Field(default_factory=dict)
     config: dict = Field(default_factory=dict)
     enabled: bool = True
 
@@ -27,7 +27,7 @@ class UpdateConnectionRequest(BaseModel):
     host: str | None = None
     port: int | None = None
     auth_type: str | None = None
-    credentials: dict | str | None = None
+    credentials: dict | None = None
     config: dict | None = None
     enabled: bool | None = None
 
