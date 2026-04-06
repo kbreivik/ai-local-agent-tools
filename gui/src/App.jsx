@@ -595,10 +595,10 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      {/* Page header with stats pills */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
+      {/* Page header + stats pills */}
+      <div className="px-5 py-3 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
         <h1 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Dashboard</h1>
-        <div className="flex gap-2 ml-auto">
+        <div className="flex gap-2 mt-1">
           {[
             ['Runs',    stats?.total_operations],
             ['Calls',   stats?.total_tool_calls],
@@ -606,7 +606,8 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
           ].map(([label, val]) => (
             <span key={label} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] border"
                   style={{ background: 'var(--bg-3)', color: 'var(--text-2)', borderColor: 'var(--border)' }}>
-              {label} <span className="mono" style={{ color: 'var(--text-1)' }}>{val ?? '—'}</span>
+              <span style={{ color: 'var(--text-3)' }}>{label}</span>
+              <span className="mono" style={{ color: 'var(--text-1)' }}>{val ?? '—'}</span>
             </span>
           ))}
         </div>
