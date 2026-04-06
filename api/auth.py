@@ -18,10 +18,14 @@ _INSECURE_PASS_DEFAULT = "superduperadmin"
 
 _raw_jwt = os.environ.get("JWT_SECRET", "")
 if not _raw_jwt or _raw_jwt == _INSECURE_JWT_DEFAULT:
-    SECRET_KEY = secrets.token_hex(32)
+    import hashlib
+    import socket
+    _hostname = socket.gethostname()
+    SECRET_KEY = hashlib.sha256(f"hp1-agent-{_hostname}".encode()).hexdigest()
     _auth_log.warning(
-        "JWT_SECRET not set or using insecure default — generated ephemeral secret. "
-        "Sessions will not survive restart. Set JWT_SECRET env var for persistence."
+        "JWT_SECRET not set — using hostname-derived fallback. "
+        "Sessions survive restart but are not cryptographically random. "
+        "Set JWT_SECRET env var for production security."
     )
 else:
     SECRET_KEY = _raw_jwt
