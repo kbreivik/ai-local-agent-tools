@@ -821,13 +821,15 @@ export default function OptionsModal() {
             >
               Cancel
             </button>
-            <button
-              onClick={save}
-              disabled={saving}
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
+            {tab !== 'Connections' && (
+              <button
+                onClick={save}
+                disabled={saving}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            )}
           </div>
         </div>
       </div>
