@@ -218,3 +218,22 @@ def get_registry(refresh: bool = False) -> list[dict]:
     if _CACHE is None or refresh:
         _CACHE = load_registry()
     return _CACHE
+
+
+def build_tools_spec(refresh: bool = False) -> list[dict]:
+    """Build OpenAI-compatible tools spec from the registry.
+
+    Single source of truth for LLM tool manifests — used by both
+    the FastAPI agent loop and the standalone CLI agent.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["schema"],
+            },
+        }
+        for t in get_registry(refresh=refresh)
+    ]

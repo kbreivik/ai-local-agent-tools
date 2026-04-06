@@ -60,17 +60,8 @@ def _build_tools_spec() -> list:
 
     Called per-run (not at module level) so the registry is always fully populated.
     """
-    spec = [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["schema"],
-            },
-        }
-        for t in get_registry(refresh=True)
-    ]
+    from api.tool_registry import build_tools_spec
+    spec = build_tools_spec(refresh=True)
     log.info("Tool manifest: %d tools — %s", len(spec), [t["function"]["name"] for t in spec])
     return spec
 

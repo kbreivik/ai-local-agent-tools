@@ -33,18 +33,8 @@ from api.lock import plan_lock
 
 
 def _build_tools_spec() -> list[dict]:
-    registry = get_registry()
-    spec = [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["schema"],
-            },
-        }
-        for t in registry
-    ]
+    from api.tool_registry import build_tools_spec
+    spec = build_tools_spec()
     log.info("Sending %d tools to LLM: %s", len(spec), [t["function"]["name"] for t in spec])
     return spec
 
