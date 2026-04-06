@@ -24,6 +24,7 @@ import IngestPanel from './components/IngestPanel'
 import DocsTab from './components/DocsTab'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
+import Sidebar from './components/Sidebar'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 
 const FILTER_KEY = 'hp1_cardFilter'
@@ -701,31 +702,22 @@ function AppShell() {
     : '0px 1fr'
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100 overflow-hidden">
-      {/* Row 1: logo + tabs + gear */}
-      <Header activeTab={activeTab} onTab={setActiveTab} />
+    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-0)' }}>
+      {/* Sidebar navigation */}
+      <Sidebar activeTab={activeTab} onTab={setActiveTab} />
 
-      {/* Row 2: commands toggle + stats + API status */}
-      <SubBar onTab={setActiveTab} onAlertNavigate={onAlertNavigate} />
+      {/* Main content area */}
+      <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">
+        {/* Commands side panel (when open and not on Commands tab) */}
+        {panelOpen && activeTab !== 'Commands' && (
+          <div className="w-[360px] shrink-0 overflow-hidden" style={{ borderRight: '1px solid var(--border)' }}>
+            <CommandSidePanel />
+          </div>
+        )}
 
-      {/* Main content — CSS Grid controls panel vs content widths */}
-      <div
-        className="flex-1 overflow-hidden min-h-0"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: gridCols,
-          transition: 'grid-template-columns 200ms ease-in-out',
-        }}
-      >
-        {/* ── Column 1: Commands side panel (0px when closed or Commands tab) ── */}
-        <div className="overflow-hidden" data-testid="commands-panel-col">
-          {/* Unmount panel content when Commands tab is active to avoid duplicate render */}
-          {activeTab !== 'Commands' && <CommandSidePanel />}
-        </div>
-
-        {/* ── Column 2: Main content ── */}
+        {/* Page content */}
         <div
-          className="flex flex-col overflow-hidden min-w-0 min-h-0"
+          className="flex flex-col flex-1 overflow-hidden min-w-0 min-h-0"
           data-testid="main-content"
         >
           {activeTab === 'Dashboard' && (
