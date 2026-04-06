@@ -113,18 +113,18 @@ def sync_env_from_db() -> int:
 
 @router.get("")
 def get_settings(_: str = Depends(get_current_user)):
-    """Return all server-managed settings. Sensitive values are masked."""
+    """Return all settings with source badges, categories, and encryption status."""
     try:
-        backend = get_backend()
-        result = {}
-        for key, meta in SETTINGS_KEYS.items():
-            val = backend.get_setting(key)
-            if val is None:
-                # Fall back to env var then hardcoded default
-                env_var = meta["env"]
-                val = os.environ.get(env_var, meta["default"]) if env_var else meta["default"]
-            result[key] = _mask(val) if (meta["sens"] and val) else val
-        return {"status": "ok", "data": {"settings": result}, "timestamp": _ts(), "message": "OK"}
+        from api.settings_manager import list_settings
+        settings = list_settings(SETTINGS_KEYS)
+        # Also return flat dict for backward compat with existing GUI
+        flat = {s["key"]: s["value"] for s in settings}
+        return {
+            "status": "ok",
+            "data": {"settings": flat, "detailed": settings},
+            "timestamp": _ts(),
+            "message": "OK",
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -136,20 +136,18 @@ def update_settings(
     body: dict[str, Any] = Body(...),
     _: str = Depends(get_current_user),
 ):
-    """Persist settings to DB. Only recognised keys are saved. Returns updated values (masked)."""
+    """Persist settings to DB. Sensitive keys are auto-encrypted. Returns updated values (masked)."""
     try:
-        backend = get_backend()
+        from api.settings_manager import set_setting as _set, SENSITIVE_KEYS
         updated = {}
         for key, value in body.items():
             if key not in SETTINGS_KEYS:
                 continue
-            backend.set_setting(key, value)
-            meta = SETTINGS_KEYS[key]
-            # Mirror to os.environ so collectors and probes see the new value
-            # immediately without requiring a process restart.
-            if meta["env"] and value is not None:
-                os.environ[meta["env"]] = str(value)
-            updated[key] = _mask(value) if (meta["sens"] and value) else value
+            # Don't overwrite real values with masked placeholders
+            if isinstance(value, str) and "***" in value:
+                continue
+            _set(key, value, registry=SETTINGS_KEYS)
+            updated[key] = _mask(value) if (key in SENSITIVE_KEYS and value) else value
         return {"status": "ok", "data": {"updated": updated}, "timestamp": _ts(), "message": f"Updated {len(updated)} setting(s)"}
     except HTTPException:
         raise

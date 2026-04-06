@@ -26,6 +26,7 @@ from api.routers.ansible import router as ansible_router
 from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
+from api.routers.connections import router as connections_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
@@ -87,12 +88,25 @@ async def lifespan(app: FastAPI):
         _sync_env()
     except Exception as e:
         _log.warning("Settings seed/sync skipped: %s", e)
+    # Encrypt any plaintext secrets in settings table (one-time migration)
+    try:
+        from api.settings_manager import migrate_plaintext_secrets
+        from api.routers.settings import SETTINGS_KEYS
+        migrate_plaintext_secrets(SETTINGS_KEYS)
+    except Exception as e:
+        _log.debug("Secret encryption migration skipped: %s", e)
     # Initialize pgvector RAG schema (no-op if pgvector unavailable)
     try:
         from api.rag.schema import init_doc_chunks
         init_doc_chunks()
     except Exception as e:
         _log.debug("RAG schema init skipped: %s", e)
+    # Initialize connections table
+    try:
+        from api.connections import init_connections
+        init_connections()
+    except Exception as e:
+        _log.debug("Connections table init skipped: %s", e)
     # Scan and load plugins (Tier 2 tools)
     try:
         from api.plugin_loader import scan_plugins
@@ -165,6 +179,7 @@ app.include_router(ansible_router)
 app.include_router(ingest_router)
 app.include_router(skills_router)
 app.include_router(dashboard_router)
+app.include_router(connections_router)
 
 
 def _get_host_ips() -> dict:
