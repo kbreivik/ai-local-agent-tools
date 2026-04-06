@@ -324,7 +324,7 @@ async def _run_single_agent_step(
                         "type":       "done",
                         "session_id": session_id,
                         "agent_type": agent_type,
-                        "content":    f"Agent finished after {step} steps.",
+                        "content":    last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
                         "status":     "ok",
                         "choices":    choices or [],
                         "timestamp":  datetime.now(timezone.utc).isoformat(),
@@ -650,7 +650,7 @@ async def _run_single_agent_step(
                 if is_final_step:
                     await manager.broadcast({
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
-                        "content": f"Agent finished after {step} steps.",
+                        "content": last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
                         "status": "ok", "choices": choices or [],
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
@@ -660,7 +660,7 @@ async def _run_single_agent_step(
             if is_final_step:
                 await manager.broadcast({
                     "type": "done", "session_id": session_id, "agent_type": agent_type,
-                    "content": f"Agent reached max steps ({max_steps}).",
+                    "content": last_reasoning if last_reasoning else f"Agent reached max steps ({max_steps}).",
                     "status": "ok", "choices": [],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
