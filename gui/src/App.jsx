@@ -487,15 +487,16 @@ function CommandSidePanel() {
   const { closePanel } = useCommandPanel()
 
   return (
-    <div className="w-full h-full flex flex-col bg-white border-r border-gray-200 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50 shrink-0">
+    <div className="w-full h-full flex flex-col overflow-hidden" style={{ background: 'var(--bg-1)' }}>
+      <div className="flex items-center justify-between px-4 py-2 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-2">
-          <Terminal size={13} className="text-gray-500" />
-          <span className="text-xs font-bold uppercase tracking-wider text-gray-600">Commands</span>
+          <Terminal size={13} style={{ color: 'var(--text-3)' }} />
+          <span className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--text-2)' }}>Commands</span>
         </div>
         <button
           onClick={closePanel}
-          className="text-gray-400 hover:text-gray-700 transition-colors text-sm leading-none"
+          className="transition-colors text-sm leading-none"
+          style={{ color: 'var(--text-3)' }}
           title="Close panel"
         >
           ✕
@@ -603,7 +604,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
       <div className="flex-1 overflow-auto min-h-0">
         <AlertsPanel />
         <DashboardCards activeFilters={activeFilters} />
-        <div className="border-t border-gray-200 px-5 py-4">
+        <div className="border-t px-5 py-4" style={{ borderColor: 'var(--border)' }}>
           <ServiceCardsErrorBoundary>
             <ServiceCards activeFilters={activeFilters} onTab={onTab} />
           </ServiceCardsErrorBoundary>
@@ -617,11 +618,11 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
 
 function ClusterView() {
   return (
-    <div className="flex flex-1 overflow-auto p-4 gap-4 min-h-0 bg-gray-100">
-      <div className="flex-1 bg-white border border-gray-200 shadow-sm rounded-lg overflow-auto">
-        <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-          <h2 className="text-sm font-semibold text-gray-900">Cluster Node Map</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+    <div className="flex flex-1 overflow-auto p-4 gap-4 min-h-0" style={{ background: 'var(--bg-0)' }}>
+      <div className="flex-1 card overflow-auto">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Cluster Node Map</h2>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
             Click a node to see details. ★ = leader/controller. Brokers shown on worker nodes.
           </p>
         </div>
@@ -629,9 +630,9 @@ function ClusterView() {
       </div>
 
       <div className="w-72 shrink-0 flex flex-col gap-3">
-        <div className="bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden">
-          <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
-            <h3 className="text-xs font-semibold text-gray-600 uppercase">Live Status</h3>
+        <div className="card overflow-hidden">
+          <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
+            <h3 className="text-xs font-semibold uppercase" style={{ color: 'var(--text-2)' }}>Live Status</h3>
           </div>
           <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
             <StatusPanel />
@@ -754,7 +755,7 @@ function AppShell() {
 
           {activeTab === 'Memory' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
-              <div className="flex-1 bg-white overflow-hidden">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <MemoryPanel />
               </div>
             </div>
@@ -762,7 +763,7 @@ function AppShell() {
 
           {activeTab === 'Ingest' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
-              <div className="flex-1 bg-white overflow-hidden">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <IngestPanel />
               </div>
             </div>
@@ -770,7 +771,7 @@ function AppShell() {
 
           {activeTab === 'Docs' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
-              <div className="flex-1 bg-white overflow-hidden">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <DocsTab />
               </div>
             </div>

@@ -55,26 +55,26 @@ function RowDot({ ok, degraded }) {
 
 const S = {
   header:      { padding: '8px 12px', lineHeight: 1 },
-  headerTitle: { fontSize: '0.8rem', fontWeight: 600, color: '#111827', lineHeight: 1 },
-  headerMeta:  { fontSize: '0.7rem', color: '#9ca3af' },
+  headerTitle: { fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-1)', lineHeight: 1 },
+  headerMeta:  { fontSize: '0.7rem', color: 'var(--text-3)' },
   body:        { padding: '8px 12px' },
   countRow:    { display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 },
-  bigNum:      { fontSize: '1.1rem', fontWeight: 600, color: '#111827', lineHeight: 1.2, margin: 0 },
-  countLabel:  { fontSize: '0.8rem', color: '#6b7280' },
-  countStatus: { marginLeft: 'auto', fontSize: '0.75rem', fontWeight: 600, fontFamily: 'monospace' },
+  bigNum:      { fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-1)', lineHeight: 1.2, margin: 0 },
+  countLabel:  { fontSize: '0.8rem', color: 'var(--text-2)' },
+  countStatus: { marginLeft: 'auto', fontSize: '0.75rem', fontWeight: 600, fontFamily: 'var(--font-mono)' },
   row:         { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                 paddingTop: 3, paddingBottom: 3, borderTop: '1px solid #f9fafb',
+                 paddingTop: 3, paddingBottom: 3, borderTop: '1px solid var(--border)',
                  fontSize: '0.8rem', lineHeight: 1.4 },
   rowInner:    { display: 'flex', alignItems: 'center', gap: 6 },
-  rowMono:     { fontFamily: 'monospace', color: '#374151' },
-  rowFaint:    { fontFamily: 'monospace', color: '#9ca3af', flexShrink: 0 },
-  summary:     { fontSize: '0.75rem', color: '#6b7280', marginTop: 4,
-                 paddingTop: 6, borderTop: '1px solid #f3f4f6', lineHeight: 1.3 },
+  rowMono:     { fontFamily: 'var(--font-mono)', color: 'var(--text-1)' },
+  rowFaint:    { fontFamily: 'var(--font-mono)', color: 'var(--text-3)', flexShrink: 0 },
+  summary:     { fontSize: '0.75rem', color: 'var(--text-2)', marginTop: 4,
+                 paddingTop: 6, borderTop: '1px solid var(--border)', lineHeight: 1.3 },
   sectionLabel:{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase',
-                 color: '#9ca3af', letterSpacing: '0.04em', marginBottom: 2, marginTop: 4 },
+                 color: 'var(--text-3)', letterSpacing: '0.04em', marginBottom: 2, marginTop: 4 },
   collectorRow:{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                  paddingTop: 3, paddingBottom: 3, fontSize: '0.8rem', lineHeight: 1.4,
-                 borderTop: '1px solid #f9fafb' },
+                 borderTop: '1px solid var(--border)' },
 }
 
 // ── Card shell ─────────────────────────────────────────────────────────────────
@@ -99,9 +99,9 @@ function Card({ title, health, lastUpdated, onRefresh, loading, minHeight, maxHe
     overflowY: 'auto',
   }
   return (
-    <div className="bg-white border border-gray-200 shadow-sm rounded-lg" style={cardRootStyle}>
+    <div className="card" style={cardRootStyle}>
       {/* Header — always visible */}
-      <div className="flex items-center justify-between bg-gray-50 border-b border-gray-200" style={{ ...S.header, flexShrink: 0 }}>
+      <div className="flex items-center justify-between border-b" style={{ ...S.header, flexShrink: 0 }}>
         <div className="flex items-center gap-2">
           <Dot health={health} />
           <span style={S.headerTitle}>{title}</span>
