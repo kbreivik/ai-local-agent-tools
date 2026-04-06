@@ -143,7 +143,7 @@ class SwarmCollector(BaseCollector):
                 )
             elif failed_services:
                 health = "critical"
-                message = f"Services with 0 replicas: {failed_services}"
+                message = f"Services with 0 replicas: {', '.join(failed_services)}"
             elif degraded_nodes or degraded_services:
                 health = "degraded"
                 parts = []
