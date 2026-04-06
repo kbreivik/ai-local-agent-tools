@@ -109,6 +109,16 @@ export function OptionsProvider({ children }) {
 
   useEffect(() => { loadFromServer() }, [loadFromServer])
 
+  // Sync data-theme attribute on <html> for CSS custom properties
+  useEffect(() => {
+    const theme = options.theme || 'dark'
+    if (theme === 'system') {
+      document.documentElement.removeAttribute('data-theme')
+    } else {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+  }, [options.theme])
+
   const setOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }))
   }
