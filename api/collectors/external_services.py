@@ -80,9 +80,31 @@ class ExternalServicesCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
+        # Pre-load all connections from DB (one query, cached for loop)
+        db_conns = {}
+        try:
+            from api.connections import get_connection_for_platform
+            for slug in ("proxmox", "truenas", "fortigate"):
+                c = get_connection_for_platform(slug)
+                if c:
+                    db_conns[slug] = c
+        except Exception:
+            pass
+
         cards = []
         for cfg in SERVICES_CONFIG:
-            host_raw = os.environ.get(cfg["host_env"], "")
+            # Try connections DB first, then env vars
+            db_conn = db_conns.get(cfg["slug"])
+            if db_conn:
+                db_host = db_conn.get("host", "")
+                db_creds = db_conn.get("credentials", {})
+                if not isinstance(db_creds, dict):
+                    db_creds = {}
+            else:
+                db_host = ""
+                db_creds = {}
+
+            host_raw = db_host or os.environ.get(cfg["host_env"], "")
             if host_raw.startswith("http"):
                 base_url = host_raw.rstrip("/")
                 strip = cfg.get("strip_suffix", "")
@@ -115,12 +137,12 @@ class ExternalServicesCollector(BaseCollector):
 
             headers = {}
             if cfg.get("auth_type") == "pve_token":
-                token_id = os.environ.get(cfg.get("auth_token_id_env", ""), "")
-                token_secret = os.environ.get(cfg.get("auth_token_secret_env", ""), "")
+                token_id = db_creds.get("token_id") or os.environ.get(cfg.get("auth_token_id_env", ""), "")
+                token_secret = db_creds.get("secret") or os.environ.get(cfg.get("auth_token_secret_env", ""), "")
                 if token_id and token_secret:
                     headers["Authorization"] = f"PVEAPIToken={token_id}={token_secret}"
             else:
-                auth_key = os.environ.get(cfg.get("auth_env", ""), "")
+                auth_key = db_creds.get("api_key") or os.environ.get(cfg.get("auth_env", ""), "")
                 if auth_key and "auth_header" in cfg:
                     headers[cfg["auth_header"]] = cfg.get("auth_prefix", "") + auth_key
 
