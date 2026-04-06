@@ -476,11 +476,11 @@ const PLATFORMS = [
 ]
 
 const PLATFORM_AUTH = {
-  proxmox:         { auth_type: 'token',  fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  proxmox:         { auth_type: 'token',  defaultPort: 8006, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   fortigate:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   fortiswitch:     { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   truenas:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
-  pbs:             { auth_type: 'token',  fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  pbs:             { auth_type: 'token',  defaultPort: 8007, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   unifi:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
   wazuh:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
   grafana:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
@@ -507,14 +507,16 @@ function ConnectionsTab() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 443, auth_type: 'token', credentials: {} })
+  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {} })
+  const [formError, setFormError] = useState('')
   const [testing, setTesting] = useState({})
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
   const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
   const setPlatform = (p) => {
     const pa = PLATFORM_AUTH[p] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
-    setForm(f => ({ ...f, platform: p, auth_type: pa.auth_type, credentials: {} }))
+    setForm(f => ({ ...f, platform: p, port: pa.defaultPort || 443, auth_type: pa.auth_type, credentials: {} }))
+    setFormError('')
   }
 
   const fetchConns = () => {
@@ -528,6 +530,11 @@ function ConnectionsTab() {
 
   const addConn = async (e) => {
     e.stopPropagation()
+    if (!form.host.trim()) {
+      setFormError('Host is required')
+      return
+    }
+    setFormError('')
     setSaving(true)
     try {
       const r = await fetch(`${BASE}/api/connections`, {
@@ -536,6 +543,7 @@ function ConnectionsTab() {
         body: JSON.stringify(form),
       })
       if (r.ok) { setShowAdd(false); fetchConns() }
+      else { setFormError('Failed to save connection') }
     } finally {
       setSaving(false)
     }
@@ -605,6 +613,7 @@ function ConnectionsTab() {
                 onChange={e => updateCred(f.key, e.target.value)} />
             </div>
           ))}
+          {formError && <div className="text-[10px]" style={{ color: 'var(--red)' }}>{formError}</div>}
           <button className="btn btn-primary w-full text-[10px]" onClick={addConn} disabled={saving}>
             {saving ? 'Saving…' : 'Save Connection'}
           </button>

@@ -285,7 +285,7 @@ def get_connection_for_platform(platform: str) -> dict | None:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM connections WHERE platform = %s AND enabled = true ORDER BY created_at LIMIT 1",
+            "SELECT * FROM connections WHERE platform = %s AND enabled = true AND host != '' ORDER BY created_at LIMIT 1",
             (platform,),
         )
         cols = [desc[0] for desc in cur.description]

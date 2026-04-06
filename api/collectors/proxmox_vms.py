@@ -74,8 +74,27 @@ class ProxmoxVMsCollector(BaseCollector):
             return {"health": "unconfigured", "vms": [], "lxc": [], "message": "PROXMOX_HOST not set"}
 
         headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
-        base = f"https://{host}:8006/api2/json"
-        nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", ",".join(NODES)).split(",") if n.strip()]
+        # Use connection port if available, default 8006 for Proxmox API
+        try:
+            conn_port = conn.get("port", 8006) if conn else 8006
+        except Exception:
+            conn_port = 8006
+        pve_port = conn_port if conn_port not in (0, None, 443) else 8006
+        base = f"https://{host}:{pve_port}/api2/json"
+
+        # Auto-discover nodes from cluster, fall back to env var
+        nodes = []
+        try:
+            r_nodes = httpx.get(f"{base}/nodes", headers=headers, verify=False, timeout=8)
+            if r_nodes.status_code == 200:
+                nodes = [n["node"] for n in r_nodes.json().get("data", []) if n.get("node")]
+        except Exception:
+            pass
+        if not nodes:
+            nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
+        if not nodes:
+            return {"health": "error", "vms": [], "lxc": [],
+                    "message": "Could not discover Proxmox nodes and PROXMOX_NODES not set"}
 
         vms = []
         lxc_list = []
