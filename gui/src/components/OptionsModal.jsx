@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Display']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -692,6 +692,117 @@ function ConnectionsTab() {
   )
 }
 
+// ── Tab: Permissions (placeholder) ───────────────────────────────────────────
+
+function PermissionsTab() {
+  const _th = { fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', padding: '6px 12px', textAlign: 'left', borderBottom: '1px solid var(--border)', letterSpacing: 1 }
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>Permissions management coming soon</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={_th}>PERMISSION</th>
+            <th style={_th}>SITH LORD</th>
+            <th style={_th}>IMPERIAL OFFICER</th>
+            <th style={_th}>STORMTROOPER</th>
+            <th style={_th}>DROID</th>
+          </tr>
+        </thead>
+        <tbody>
+          {['Execute tasks', 'View logs', 'Manage connections', 'Manage skills', 'System admin'].map(p => (
+            <tr key={p}>
+              <td style={{ fontSize: 10, padding: '4px 12px', color: 'var(--text-2)', borderBottom: '1px solid var(--bg-3)' }}>{p}</td>
+              {[true, true, p !== 'System admin', p === 'View logs'].map((v, i) => (
+                <td key={i} style={{ fontSize: 10, padding: '4px 12px', textAlign: 'center', borderBottom: '1px solid var(--bg-3)', color: v ? 'var(--green)' : 'var(--text-3)' }}>{v ? '✓' : '—'}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Tab: Access (placeholder) ────────────────────────────────────────────────
+
+function AccessTab() {
+  const [subTab, setSubTab] = useState('users')
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>User and API token management coming soon</div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+        {['users', 'tokens'].map(t => (
+          <button key={t} onClick={() => setSubTab(t)} style={{
+            fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
+            background: subTab === t ? 'var(--accent-dim)' : 'transparent',
+            color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
+            border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
+          }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--text-3)', padding: 16, textAlign: 'center', background: 'var(--bg-2)', borderRadius: 2 }}>
+        {subTab === 'users' ? 'User management will be available in a future release.' : 'API token generation and rotation will be available in a future release.'}
+      </div>
+    </div>
+  )
+}
+
+// ── Tab: Naming ─────────────────────────────────────────────────────────────
+
+function NamingTab({ draft, update }) {
+  const name = draft?.namingPlatform || 'DEATHSTAR'
+  const short = draft?.namingShort || 'DS'
+  const agentPat = draft?.namingAgentPattern || '{short}-agent-{n:02d}'
+  const dbName = draft?.namingDatabase || '{short}-postgres'
+  const memName = draft?.namingMemory || '{short}-muninndb'
+  const tagline = draft?.namingTagline || 'IMPERIAL OPS'
+
+  const resolve = (pat) => pat.replace(/\{short\}/g, short).replace(/\{n:02d\}/g, '01')
+
+  return (
+    <div>
+      <Field label="Platform Name">
+        <TextInput value={name} onChange={v => update('namingPlatform', v)} placeholder="DEATHSTAR" />
+      </Field>
+      <Field label="Short Code">
+        <TextInput value={short} onChange={v => update('namingShort', v)} placeholder="DS" />
+      </Field>
+      <Field label="Agent Pattern">
+        <TextInput value={agentPat} onChange={v => update('namingAgentPattern', v)} placeholder="{short}-agent-{n:02d}" />
+      </Field>
+      <Field label="Database Name">
+        <TextInput value={dbName} onChange={v => update('namingDatabase', v)} placeholder="{short}-postgres" />
+      </Field>
+      <Field label="Memory Store Name">
+        <TextInput value={memName} onChange={v => update('namingMemory', v)} placeholder="{short}-muninndb" />
+      </Field>
+      <Field label="Tagline">
+        <TextInput value={tagline} onChange={v => update('namingTagline', v)} placeholder="IMPERIAL OPS" />
+      </Field>
+
+      {/* Live preview */}
+      <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2 }}>
+        <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', letterSpacing: 1, marginBottom: 6 }}>LIVE PREVIEW</div>
+        {[
+          ['Platform name', name],
+          ['Agent #1', resolve(agentPat)],
+          ['Agent #2', resolve(agentPat).replace('01', '02')],
+          ['Database', resolve(dbName)],
+          ['Memory store', resolve(memName)],
+          ['Tagline', tagline],
+        ].map(([label, val]) => (
+          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 10 }}>
+            <span style={{ color: 'var(--text-3)' }}>{label}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--cyan, var(--accent))' }}>{val}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Update status display ────────────────────────────────────────────────────
 
 function UpdateStatus() {
@@ -850,6 +961,9 @@ export default function OptionsModal() {
                 {tab === 'Infrastructure' && <InfrastructureTab draft={draft} update={update} />}
                 {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
                 {tab === 'Connections'    && <ConnectionsTab />}
+                {tab === 'Permissions'    && <PermissionsTab />}
+                {tab === 'Access'        && <AccessTab />}
+                {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
                 {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
               </>
             )}
@@ -883,4 +997,4 @@ export default function OptionsModal() {
 }
 
 // Named exports for SettingsPage
-export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, DisplayTab, UpdateStatus }
+export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, UpdateStatus }

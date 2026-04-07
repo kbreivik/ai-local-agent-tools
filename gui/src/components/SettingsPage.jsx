@@ -8,7 +8,8 @@ import { authHeaders } from '../api'
 // Import tab components — they are defined in OptionsModal.jsx but we re-export them
 import {
   GeneralTab, InfrastructureTab, AIServicesTab,
-  ConnectionsTab, DisplayTab, UpdateStatus, TABS,
+  ConnectionsTab, PermissionsTab, AccessTab, NamingTab,
+  DisplayTab, UpdateStatus, TABS,
 } from './OptionsModal'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -89,13 +90,16 @@ export default function SettingsPage({ initialTab }) {
             {tab === 'Infrastructure' && <InfrastructureTab draft={draft} update={update} />}
             {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
             {tab === 'Connections'    && <ConnectionsTab />}
+            {tab === 'Permissions'    && <PermissionsTab />}
+            {tab === 'Access'        && <AccessTab />}
+            {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
           </>
         )}
       </div>
 
       {/* Footer — save button (hidden on Connections tab) */}
-      {tab !== 'Connections' && (
+      {!['Connections', 'Permissions', 'Access'].includes(tab) && (
         <div className="flex items-center justify-end gap-3 px-5 py-3 border-t shrink-0" style={{ borderColor: 'var(--border)' }}>
           {saveMsg && (
             <span className={`text-xs mr-auto ${saveMsg.includes('saved') ? 'text-green-400' : 'text-red-400'}`}>{saveMsg}</span>
