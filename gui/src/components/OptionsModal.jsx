@@ -527,6 +527,7 @@ function ConnectionsTab() {
     setFormError('')
     setSaving(true)
     try {
+      let savedId = editingId
       if (editingId) {
         // PUT — only send fields that changed; omit empty credential fields
         const body = { label: form.label, host: form.host, port: form.port, auth_type: form.auth_type }
@@ -541,7 +542,7 @@ function ConnectionsTab() {
           body: JSON.stringify(body),
         })
         if (r.ok) { resetForm(); fetchConns() }
-        else { setFormError('Failed to update connection') }
+        else { setFormError('Failed to update connection'); savedId = null }
       } else {
         // POST — full body
         const r = await fetch(`${BASE}/api/connections`, {
@@ -549,8 +550,25 @@ function ConnectionsTab() {
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(form),
         })
-        if (r.ok) { resetForm(); fetchConns() }
-        else { setFormError('Failed to save connection') }
+        if (r.ok) {
+          const d = await r.json()
+          savedId = d.id || null
+          resetForm()
+          fetchConns()
+        } else { setFormError('Failed to save connection'); savedId = null }
+      }
+      // Auto-test the saved connection and show result
+      if (savedId) {
+        setTesting(t => ({ ...t, [savedId]: 'testing' }))
+        try {
+          const tr = await fetch(`${BASE}/api/connections/${savedId}/test`, { method: 'POST', headers: { ...authHeaders() } })
+          const td = await tr.json()
+          setTesting(t => ({ ...t, [savedId]: td.status === 'ok' ? 'ok' : 'fail' }))
+          setTimeout(() => { setTesting(t => ({ ...t, [savedId]: null })); fetchConns() }, 3000)
+        } catch (_) {
+          setTesting(t => ({ ...t, [savedId]: 'fail' }))
+          setTimeout(() => setTesting(t => ({ ...t, [savedId]: null })), 3000)
+        }
       }
     } finally {
       setSaving(false)
