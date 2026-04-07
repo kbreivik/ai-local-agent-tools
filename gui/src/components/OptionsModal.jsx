@@ -505,7 +505,8 @@ const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block m
 function ConnectionsTab() {
   const [conns, setConns] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {} })
   const [formError, setFormError] = useState('')
@@ -513,10 +514,34 @@ function ConnectionsTab() {
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
   const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
+  const resetForm = () => {
+    setForm({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {} })
+    setEditingId(null)
+    setShowForm(false)
+    setFormError('')
+  }
   const setPlatform = (p) => {
     const pa = PLATFORM_AUTH[p] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
     setForm(f => ({ ...f, platform: p, port: pa.defaultPort || 443, auth_type: pa.auth_type, credentials: {} }))
     setFormError('')
+  }
+  const startEdit = (c) => {
+    const pa = PLATFORM_AUTH[c.platform] || { auth_type: 'apikey', defaultPort: 443 }
+    setForm({
+      platform: c.platform,
+      label: c.label || '',
+      host: c.host || '',
+      port: c.port || pa.defaultPort || 443,
+      auth_type: c.auth_type || pa.auth_type || 'token',
+      credentials: {},
+    })
+    setEditingId(c.id)
+    setShowForm(true)
+    setFormError('')
+  }
+  const startAdd = () => {
+    resetForm()
+    setShowForm(true)
   }
 
   const fetchConns = () => {
@@ -528,24 +553,37 @@ function ConnectionsTab() {
 
   useEffect(() => { fetchConns() }, [])
 
-  const addConn = async (e) => {
+  const saveConn = async (e) => {
     e.stopPropagation()
-    if (!form.host.trim()) {
-      setFormError('Host is required')
-      return
-    }
+    if (!form.host.trim()) { setFormError('Host is required'); return }
     setFormError('')
     setSaving(true)
-    const payload = { ...form }
-    console.log('[ConnectionsTab] POST /api/connections payload:', JSON.stringify(payload, null, 2))
     try {
-      const r = await fetch(`${BASE}/api/connections`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(payload),
-      })
-      if (r.ok) { setShowAdd(false); fetchConns() }
-      else { setFormError('Failed to save connection') }
+      if (editingId) {
+        // PUT — only send fields that changed; omit empty credential fields
+        const body = { label: form.label, host: form.host, port: form.port, auth_type: form.auth_type }
+        const creds = {}
+        for (const [k, v] of Object.entries(form.credentials)) {
+          if (v && v.trim()) creds[k] = v
+        }
+        if (Object.keys(creds).length > 0) body.credentials = creds
+        const r = await fetch(`${BASE}/api/connections/${editingId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body),
+        })
+        if (r.ok) { resetForm(); fetchConns() }
+        else { setFormError('Failed to update connection') }
+      } else {
+        // POST — full body
+        const r = await fetch(`${BASE}/api/connections`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(form),
+        })
+        if (r.ok) { resetForm(); fetchConns() }
+        else { setFormError('Failed to save connection') }
+      }
     } finally {
       setSaving(false)
     }
@@ -553,6 +591,7 @@ function ConnectionsTab() {
 
   const deleteConn = async (id) => {
     await fetch(`${BASE}/api/connections/${id}`, { method: 'DELETE', headers: { ...authHeaders() } })
+    if (editingId === id) resetForm()
     fetchConns()
   }
 
@@ -576,16 +615,20 @@ function ConnectionsTab() {
       <div className="flex justify-between items-center">
         <span className="text-xs" style={{ color: 'var(--text-3)' }}>{conns.length} connection(s)</span>
         <button className="btn btn-primary text-[10px] px-2 py-1"
-                onClick={e => { e.stopPropagation(); setShowAdd(s => !s) }}>
-          {showAdd ? '✕ Cancel' : '+ Add Connection'}
+                onClick={e => { e.stopPropagation(); showForm ? resetForm() : startAdd() }}>
+          {showForm ? '✕ Cancel' : '+ Add Connection'}
         </button>
       </div>
 
-      {showAdd && (
+      {showForm && (
         <div className="card p-3 space-y-2" onClick={e => e.stopPropagation()}>
+          <div className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-2)' }}>
+            {editingId ? 'Edit Connection' : 'New Connection'}
+          </div>
           <div>
             {_FL('Platform')}
-            <select className="input text-[10px]" value={form.platform} onChange={e => setPlatform(e.target.value)}>
+            <select className="input text-[10px]" value={form.platform}
+                    onChange={e => setPlatform(e.target.value)} disabled={!!editingId}>
               {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
@@ -610,14 +653,14 @@ function ConnectionsTab() {
             <div key={f.key}>
               {_FL(f.label)}
               <input className="input text-[10px] w-full" type={f.type ?? 'text'}
-                placeholder={f.placeholder ?? ''}
+                placeholder={editingId ? '••••••• (saved)' : (f.placeholder ?? '')}
                 value={form.credentials[f.key] ?? ''}
                 onChange={e => updateCred(f.key, e.target.value)} />
             </div>
           ))}
           {formError && <div className="text-[10px]" style={{ color: 'var(--red)' }}>{formError}</div>}
-          <button className="btn btn-primary w-full text-[10px]" onClick={addConn} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Connection'}
+          <button className="btn btn-primary w-full text-[10px]" onClick={saveConn} disabled={saving}>
+            {saving ? 'Saving…' : editingId ? 'Update Connection' : 'Save Connection'}
           </button>
         </div>
       )}
@@ -634,6 +677,8 @@ function ConnectionsTab() {
                 {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
               </div>
               <div className="flex gap-1">
+                <button className="btn text-[9px] px-1.5 py-0.5"
+                        onClick={() => startEdit(c)}>Edit</button>
                 <button className={`btn text-[9px] px-1.5 py-0.5 ${
                   testing[c.id] === 'ok' ? 'pill-green' :
                   testing[c.id] === 'fail' ? 'pill-red' :
@@ -649,7 +694,7 @@ function ConnectionsTab() {
         </div>
       ))}
 
-      {conns.length === 0 && !showAdd && (
+      {conns.length === 0 && !showForm && (
         <div className="text-[10px] text-center py-4" style={{ color: 'var(--text-3)' }}>
           No connections configured. Click "+ Add Connection" to connect to your infrastructure.
         </div>
