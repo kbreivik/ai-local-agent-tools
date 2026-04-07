@@ -56,6 +56,8 @@ const DEFAULTS = {
 }
 
 // Keys managed by the server. Only these are sent to / fetched from the API.
+// Keys persisted to POST /api/settings.
+// Service connections (proxmox, fortigate, truenas) are managed via Connections tab → /api/connections.
 const SERVER_KEYS = new Set([
   'lmStudioUrl', 'lmStudioApiKey', 'modelName',
   'externalProvider', 'externalApiKey', 'externalModel',
@@ -63,9 +65,6 @@ const SERVER_KEYS = new Set([
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',
   'autoUpdate', 'dashboardRefreshInterval',
-  'proxmoxHost', 'proxmoxTokenId', 'proxmoxTokenSecret', 'proxmoxUser', 'proxmoxNodes',
-  'fortigateHost', 'fortigateApiKey',
-  'truenasHost', 'truenasApiKey',
 ])
 
 function isMasked(v) {

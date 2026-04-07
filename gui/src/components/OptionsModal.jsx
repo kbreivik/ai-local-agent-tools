@@ -133,31 +133,6 @@ function SectionHeader({ label }) {
 }
 
 function InfrastructureTab({ draft, update }) {
-  // Pre-fill platform fields from connections DB on mount
-  const [connLoaded, setConnLoaded] = useState(false)
-  useEffect(() => {
-    if (connLoaded) return
-    const platforms = [
-      { platform: 'proxmox', hostKey: 'proxmoxHost', credKeys: { token_id: 'proxmoxTokenId', secret: 'proxmoxTokenSecret' } },
-      { platform: 'fortigate', hostKey: 'fortigateHost', credKeys: { api_key: 'fortigateApiKey' } },
-      { platform: 'truenas', hostKey: 'truenasHost', credKeys: { api_key: 'truenasApiKey' } },
-    ]
-    fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
-      .then(r => r.ok ? r.json() : { data: [] })
-      .then(d => {
-        const conns = d.data || []
-        for (const { platform, hostKey, credKeys } of platforms) {
-          const conn = conns.find(c => c.platform === platform && c.host)
-          if (conn && !draft[hostKey]) {
-            update(hostKey, conn.host)
-          }
-          // Don't pre-fill secrets — they're masked ("***") in the connections list
-        }
-        setConnLoaded(true)
-      })
-      .catch(() => setConnLoaded(true))
-  }, [connLoaded, draft, update])
-
   return (
     <div>
       {/* Docker / Swarm */}
@@ -190,6 +165,11 @@ function InfrastructureTab({ draft, update }) {
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
         </Field>
+      </div>
+
+      {/* Messaging / Observability */}
+      <div className="mb-5">
+        <SectionHeader label="Messaging / Observability" />
         <Field label="Kafka Bootstrap Servers" hint="Comma-separated host:port pairs">
           <TextInput value={draft.kafkaBootstrapServers} onChange={v => update('kafkaBootstrapServers', v)} placeholder="192.168.199.31:9092,192.168.199.32:9093" />
         </Field>
@@ -204,46 +184,9 @@ function InfrastructureTab({ draft, update }) {
         </Field>
       </div>
 
-      {/* Proxmox */}
-      <div className="mb-5">
-        <SectionHeader label="Proxmox" />
-        <Field label="Host" hint="IP or hostname only — https:// and port 8006 are added automatically. e.g. 192.168.1.5 or proxmox.local">
-          <TextInput value={draft.proxmoxHost} onChange={v => update('proxmoxHost', v)} placeholder="192.168.1.5" />
-        </Field>
-        <Field label="Token ID" hint="Format: user@realm!tokenname — e.g. terraform@pve!terraform-token">
-          <TextInput value={draft.proxmoxTokenId} onChange={v => update('proxmoxTokenId', v)} placeholder="terraform@pve!terraform-token" />
-        </Field>
-        <Field label="Token Secret" hint="UUID from Proxmox → Datacenter → API Tokens">
-          <TextInput type="password" value={draft.proxmoxTokenSecret} onChange={v => update('proxmoxTokenSecret', v)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-        </Field>
-        <Field label="User">
-          <TextInput value={draft.proxmoxUser} onChange={v => update('proxmoxUser', v)} placeholder="root@pam" />
-        </Field>
-        <Field label="Nodes" hint="Comma-separated node hostnames">
-          <TextInput value={draft.proxmoxNodes} onChange={v => update('proxmoxNodes', v)} placeholder="pve,pve2,pve3" />
-        </Field>
-      </div>
-
-      {/* FortiGate */}
-      <div className="mb-5">
-        <SectionHeader label="FortiGate" />
-        <Field label="Host" hint="IP or hostname only — https:// is added automatically. e.g. 192.168.1.1 or fortigate.local">
-          <TextInput value={draft.fortigateHost} onChange={v => update('fortigateHost', v)} placeholder="192.168.1.1" />
-        </Field>
-        <Field label="API Key" hint="REST API key from FortiGate → System → Administrators → REST API Admin">
-          <TextInput type="password" value={draft.fortigateApiKey} onChange={v => update('fortigateApiKey', v)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-        </Field>
-      </div>
-
-      {/* TrueNAS */}
-      <div className="mb-5">
-        <SectionHeader label="TrueNAS" />
-        <Field label="Host" hint="IP or hostname only — https:// is added automatically. e.g. 192.168.1.10 or truenas.local">
-          <TextInput value={draft.truenasHost} onChange={v => update('truenasHost', v)} placeholder="192.168.1.10" />
-        </Field>
-        <Field label="API Key" hint="API key from TrueNAS → Credentials → API Keys">
-          <TextInput type="password" value={draft.truenasApiKey} onChange={v => update('truenasApiKey', v)} placeholder="1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-        </Field>
+      {/* Service connections note */}
+      <div className="text-[11px] p-3 rounded-md" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+        Proxmox, FortiGate, TrueNAS, and other service connections are managed in the <strong>Connections</strong> tab.
       </div>
     </div>
   )
