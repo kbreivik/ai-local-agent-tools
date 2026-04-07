@@ -445,11 +445,11 @@ const PLATFORMS = [
 ]
 
 const PLATFORM_AUTH = {
-  proxmox:         { auth_type: 'token',  defaultPort: 8006, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  proxmox:         { auth_type: 'token',  defaultPort: 8006, fields: [{ key: 'user', label: 'PVE User', placeholder: 'terraform@pve' }, { key: 'token_name', label: 'Token Name', placeholder: 'terraform-token' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   fortigate:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   fortiswitch:     { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'fortinet' }] },
   truenas:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
-  pbs:             { auth_type: 'token',  defaultPort: 8007, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
+  pbs:             { auth_type: 'token',  defaultPort: 8007, fields: [{ key: 'user', label: 'PBS User', placeholder: 'root@pam' }, { key: 'token_name', label: 'Token Name', placeholder: 'automation-token' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   unifi:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
   wazuh:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
   grafana:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },

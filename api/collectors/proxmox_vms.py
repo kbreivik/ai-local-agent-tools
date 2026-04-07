@@ -54,13 +54,15 @@ class ProxmoxVMsCollector(BaseCollector):
         if conn:
             host = conn.get("host", "")
             creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
-            token_id = creds.get("token_id", "")
+            pve_user = creds.get("user", "")
+            pve_token_name = creds.get("token_name", "")
             token_secret = creds.get("secret", "")
             conn_port = conn.get("port") or 8006
             port = conn_port if conn_port not in (0, None, 443) else 8006
         else:
             host = os.environ.get("PROXMOX_HOST", "")
-            token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
+            pve_user = os.environ.get("PROXMOX_USER", "")
+            pve_token_name = os.environ.get("PROXMOX_TOKEN_NAME", "")
             token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
             port = int(os.environ.get("PROXMOX_PORT", "8006"))
 
@@ -71,7 +73,8 @@ class ProxmoxVMsCollector(BaseCollector):
             from proxmoxer import ProxmoxAPI
             prox = ProxmoxAPI(
                 host, port=port,
-                token_name=token_id,
+                user=pve_user,
+                token_name=pve_token_name,
                 token_value=token_secret,
                 verify_ssl=False,
                 timeout=10,
