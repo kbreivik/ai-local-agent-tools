@@ -15,7 +15,7 @@ from api.crypto import encrypt_value, decrypt_value
 
 log = logging.getLogger(__name__)
 
-_CONNECTIONS_DDL = """
+_CONNECTIONS_DDL_PG = """
 CREATE TABLE IF NOT EXISTS connections (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     platform    TEXT NOT NULL,
@@ -33,6 +33,24 @@ CREATE TABLE IF NOT EXISTS connections (
 );
 """
 
+_CONNECTIONS_DDL_SQLITE = """
+CREATE TABLE IF NOT EXISTS connections (
+    id          TEXT PRIMARY KEY,
+    platform    TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    host        TEXT NOT NULL,
+    port        INTEGER DEFAULT 443,
+    auth_type   TEXT DEFAULT 'token',
+    credentials TEXT DEFAULT '',
+    enabled     INTEGER DEFAULT 1,
+    verified    INTEGER DEFAULT 0,
+    last_seen   TEXT,
+    config      TEXT DEFAULT '{}',
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(platform, label)
+);
+"""
+
 _initialized = False
 
 
@@ -40,18 +58,31 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_postgres() -> bool:
+    return bool(os.environ.get("DATABASE_URL", ""))
+
+
 def _get_conn():
-    """Get a psycopg2 connection for direct SQL."""
+    """Get a psycopg2 connection for direct SQL. Returns None if not PostgreSQL."""
+    if not _is_postgres():
+        return None
     import psycopg2
     dsn = os.environ.get("DATABASE_URL", "")
-    if not dsn:
-        return None
     dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
     return psycopg2.connect(dsn)
 
 
+def _get_sa_conn():
+    """Get a SQLAlchemy sync connection (works with both PG and SQLite)."""
+    try:
+        from api.db.base import get_sync_engine
+        return get_sync_engine().connect()
+    except Exception:
+        return None
+
+
 def init_connections() -> bool:
-    """Create the connections table if PostgreSQL is available.
+    """Create the connections table. Works with both PostgreSQL and SQLite.
 
     Returns True if table is ready, False otherwise. Safe to call multiple times.
     """
@@ -59,23 +90,41 @@ def init_connections() -> bool:
     if _initialized:
         return True
 
+    # Try PostgreSQL first
     conn = _get_conn()
-    if not conn:
-        return False
+    if conn:
+        try:
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute(_CONNECTIONS_DDL_PG)
+            cur.close()
+            conn.close()
+            _initialized = True
+            log.info("Connections table ready (PostgreSQL)")
+            return True
+        except Exception as e:
+            log.warning("Connections table init failed (PG): %s", e)
+            try:
+                conn.close()
+            except Exception:
+                pass
 
+    # SQLite fallback via SQLAlchemy
+    sa_conn = _get_sa_conn()
+    if not sa_conn:
+        return False
     try:
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute(_CONNECTIONS_DDL)
-        cur.close()
-        conn.close()
+        from sqlalchemy import text as _text
+        sa_conn.execute(_text(_CONNECTIONS_DDL_SQLITE))
+        sa_conn.commit()
+        sa_conn.close()
         _initialized = True
-        log.info("Connections table ready")
+        log.info("Connections table ready (SQLite)")
         return True
     except Exception as e:
-        log.warning("Connections table init failed: %s", e)
+        log.warning("Connections table init failed (SQLite): %s", e)
         try:
-            conn.close()
+            sa_conn.close()
         except Exception:
             pass
         return False
@@ -84,30 +133,49 @@ def init_connections() -> bool:
 def list_connections(platform: str = "") -> list[dict]:
     """List all connections, optionally filtered by platform. Credentials masked."""
     conn = _get_conn()
-    if not conn:
-        return []
-    try:
-        cur = conn.cursor()
-        if platform:
-            cur.execute("SELECT * FROM connections WHERE platform = %s ORDER BY platform, label", (platform,))
-        else:
-            cur.execute("SELECT * FROM connections ORDER BY platform, label")
-        cols = [desc[0] for desc in cur.description]
-        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-        cur.close()
-        conn.close()
-        # Mask credentials in list view
-        for r in rows:
-            r["credentials"] = "***" if r.get("credentials") else ""
-            if r.get("last_seen"):
+    if conn:
+        try:
+            cur = conn.cursor()
+            if platform:
+                cur.execute("SELECT * FROM connections WHERE platform = %s ORDER BY platform, label", (platform,))
+            else:
+                cur.execute("SELECT * FROM connections ORDER BY platform, label")
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+        except Exception as e:
+            log.warning("list_connections (PG) failed: %s", e)
+            rows = []
+    else:
+        # SQLite fallback
+        try:
+            from sqlalchemy import text as _text
+            sa = _get_sa_conn()
+            if not sa:
+                return []
+            q = "SELECT * FROM connections WHERE platform=:p ORDER BY platform, label" if platform else "SELECT * FROM connections ORDER BY platform, label"
+            params = {"p": platform} if platform else {}
+            rows = [dict(r) for r in sa.execute(_text(q), params).mappings().fetchall()]
+            sa.close()
+        except Exception:
+            return []
+
+    # Mask credentials in list view
+    for r in rows:
+        r["credentials"] = "***" if r.get("credentials") else ""
+        if r.get("last_seen"):
+            try:
                 r["last_seen"] = r["last_seen"].isoformat()
-            if r.get("created_at"):
+            except AttributeError:
+                pass  # already a string (SQLite)
+        if r.get("created_at"):
+            try:
                 r["created_at"] = r["created_at"].isoformat()
-            r["id"] = str(r["id"])
-        return rows
-    except Exception as e:
-        log.warning("list_connections failed: %s", e)
-        return []
+            except AttributeError:
+                pass
+        r["id"] = str(r["id"])
+    return rows
 
 
 def get_connection(id_or_label: str) -> dict | None:
@@ -274,35 +342,57 @@ def test_connection(connection_id: str) -> dict:
         return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
 
 
+def _decode_creds(result: dict) -> dict:
+    """Decrypt and parse credentials field in a connection row."""
+    raw_creds = result.get("credentials", "")
+    if raw_creds:
+        decrypted = decrypt_value(raw_creds)
+        try:
+            result["credentials"] = json.loads(decrypted)
+        except (json.JSONDecodeError, TypeError):
+            result["credentials"] = decrypted
+    result["id"] = str(result.get("id", ""))
+    return result
+
+
 def get_connection_for_platform(platform: str) -> dict | None:
     """Get the first enabled connection for a platform. Decrypted credentials included.
 
     Used by plugins/skills to resolve connection details instead of env vars.
+    Works with both PostgreSQL (psycopg2) and SQLite (SQLAlchemy).
     """
+    # Try PostgreSQL first
     conn = _get_conn()
-    if not conn:
-        return None
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM connections WHERE platform = %s AND enabled = true AND host != '' ORDER BY created_at LIMIT 1",
+                (platform,),
+            )
+            cols = [desc[0] for desc in cur.description]
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if not row:
+                return None
+            return _decode_creds(dict(zip(cols, row)))
+        except Exception:
+            return None
+
+    # SQLite fallback via SQLAlchemy
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT * FROM connections WHERE platform = %s AND enabled = true AND host != '' ORDER BY created_at LIMIT 1",
-            (platform,),
-        )
-        cols = [desc[0] for desc in cur.description]
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
+        from sqlalchemy import text as _text
+        sa = _get_sa_conn()
+        if not sa:
+            return None
+        row = sa.execute(
+            _text("SELECT * FROM connections WHERE platform=:p AND enabled=1 AND host!='' ORDER BY created_at LIMIT 1"),
+            {"p": platform},
+        ).mappings().fetchone()
+        sa.close()
         if not row:
             return None
-        result = dict(zip(cols, row))
-        raw_creds = result.get("credentials", "")
-        if raw_creds:
-            decrypted = decrypt_value(raw_creds)
-            try:
-                result["credentials"] = json.loads(decrypted)
-            except (json.JSONDecodeError, TypeError):
-                result["credentials"] = decrypted
-        result["id"] = str(result["id"])
-        return result
+        return _decode_creds(dict(row))
     except Exception:
         return None
