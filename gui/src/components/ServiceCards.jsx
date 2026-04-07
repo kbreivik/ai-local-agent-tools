@@ -15,6 +15,26 @@ import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+// Platform slug → connection test helper
+async function testConnectionByPlatform(platformSlug) {
+  // Map external service slugs to connection platform names
+  const SLUG_TO_PLATFORM = { proxmox: 'proxmox', fortigate: 'fortigate', truenas: 'truenas', lm_studio: null }
+  const platform = SLUG_TO_PLATFORM[platformSlug] ?? platformSlug
+  if (!platform) return { status: 'error', message: 'No connection for this service' }
+  try {
+    const lr = await fetch(`${BASE}/api/connections?platform=${platform}`, { headers: { ...authHeaders() } })
+    if (!lr.ok) return { status: 'error', message: 'Failed to fetch connections' }
+    const conns = (await lr.json()).data || []
+    const conn = conns.find(c => c.host && c.enabled !== false)
+    if (!conn) return { status: 'error', message: 'No connection configured for this platform' }
+    const tr = await fetch(`${BASE}/api/connections/${conn.id}/test`, { method: 'POST', headers: { ...authHeaders() } })
+    return await tr.json()
+  } catch (e) {
+    return { status: 'error', message: String(e) }
+  }
+}
 
 // ── Toast system ───────────────────────────────────────────────────────────────
 
@@ -888,16 +908,23 @@ function sortProxmoxItems(items, sortBy, sortDir) {
 
 function ExternalCardExpanded({ svc, onAction }) {
   const [probeLoading, setProbeLoading] = useState(false)
+  const [probeResult, setProbeResult] = useState(null)
   const [liveLatency, setLiveLatency] = useState(null)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
 
   const probe = async () => {
     setProbeLoading(true)
-    const r = await dashboardAction(`external/${svc.slug}/probe`)
+    setProbeResult(null)
+    const r = await testConnectionByPlatform(svc.slug)
     if (!mounted.current) return
     setProbeLoading(false)
-    if (r.latency_ms != null) setLiveLatency(r.latency_ms)
+    setProbeResult(r.status === 'ok' ? 'ok' : 'fail')
+    // Also try the dashboard probe for latency
+    const dr = await dashboardAction(`external/${svc.slug}/probe`)
+    if (!mounted.current) return
+    if (dr.latency_ms != null) setLiveLatency(dr.latency_ms)
+    setTimeout(() => { if (mounted.current) { setProbeResult(null); onAction() } }, 2000)
   }
 
   const latency = liveLatency ?? svc.latency_ms
@@ -907,6 +934,11 @@ function ExternalCardExpanded({ svc, onAction }) {
         { v: latency != null ? `${latency} ms` : '—', l: 'Latency', color: !svc.reachable ? 'text-red-400' : latency > 100 ? 'text-amber-400' : 'text-green-400' },
         { v: svc.reachable ? 'online' : 'offline', l: 'Status', color: svc.reachable ? 'text-gray-300' : 'text-red-400' },
       ]} />
+      {probeResult && (
+        <div className={`text-[10px] mb-1 ${probeResult === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+          {probeResult === 'ok' ? '✓ Connection verified' : '✕ Connection failed'}
+        </div>
+      )}
       {svc.storage && <><VolBar vol={{ name: svc.storage.name, used_bytes: svc.storage.used_bytes, total_bytes: svc.storage.total_bytes }} /><Divider /></>}
       <Actions buttons={[
         <ActionBtn key="probe" label="Test Connection" loading={probeLoading} onClick={probe} />,
@@ -917,13 +949,32 @@ function ExternalCardExpanded({ svc, onAction }) {
 }
 
 function ExternalCardCollapsed({ svc }) {
+  const [reconnecting, setReconnecting] = useState(false)
+  const [reconnectResult, setReconnectResult] = useState(null)
   const latencyColor = !svc.reachable ? 'text-red-400' : svc.latency_ms > 100 ? 'text-amber-400' : 'text-green-400'
+  const showReconnect = svc.dot === 'red' || svc.dot === 'grey' || svc.problem === 'not configured'
+
+  const reconnect = async (e) => {
+    e.stopPropagation()
+    setReconnecting(true)
+    const r = await testConnectionByPlatform(svc.slug)
+    setReconnecting(false)
+    setReconnectResult(r.status === 'ok' ? 'ok' : 'fail')
+    setTimeout(() => setReconnectResult(null), 3000)
+  }
+
   return (
     <>
-      <div className="text-[10px] text-[#383850] mb-1 truncate">{svc.summary}</div>
       {svc.problem
-        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex gap-1 bg-red-950/50 text-red-400 border border-red-900/40">⚠ {svc.problem}</div>
+        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {svc.problem}</div>
         : <span className={`text-[10px] font-mono ${latencyColor}`}>● {svc.latency_ms != null ? `${svc.latency_ms} ms` : '—'}</span>}
+      {showReconnect && (
+        <button className="text-[9px] px-1.5 py-0.5 rounded ml-1"
+                style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}
+                onClick={reconnect} disabled={reconnecting}>
+          {reconnecting ? '…' : reconnectResult === 'ok' ? '✓' : reconnectResult === 'fail' ? '✕' : 'Reconnect'}
+        </button>
+      )}
     </>
   )
 }
