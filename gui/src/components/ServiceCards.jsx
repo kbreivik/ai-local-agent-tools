@@ -1043,8 +1043,6 @@ function _computeContainerSub(c, knownLatest) {
 
 // ── Auto-update toggle (agent container only) ────────────────────────────────
 
-const BASE = import.meta.env.VITE_API_BASE ?? ''
-
 function AutoUpdateToggle() {
   const [info, setInfo] = useState(null)
   const [toggling, setToggling] = useState(false)
