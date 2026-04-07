@@ -584,43 +584,56 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DrillDownBar({ search, setSearch, showFilter, setShowFilter, stats }) {
-  const filters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats }) {
+  const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
+  const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
+  const _btn = (active) => ({
+    padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
+    background: active ? 'var(--accent-dim)' : 'transparent',
+    color: active ? 'var(--accent)' : 'var(--text-3)',
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    borderRadius: 2, cursor: 'pointer', letterSpacing: 0.5,
+  })
   return (
     <div className="flex items-center gap-2 px-3 shrink-0" style={{
       height: 38, background: 'var(--bg-1)', borderBottom: '1px solid var(--border)',
-      fontFamily: 'var(--font-mono)', fontSize: 10,
+      fontFamily: 'var(--font-mono)', fontSize: 10, overflowX: 'auto',
     }}>
-      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1 }}>DRILL:</span>
+      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1, flexShrink: 0 }}>DRILL:</span>
       <input
         value={search} onChange={e => setSearch(e.target.value)}
         placeholder="search name / host / IP..."
         style={{
-          width: 180, padding: '3px 8px', background: 'var(--bg-2)', border: '1px solid var(--border)',
+          width: 160, padding: '3px 8px', background: 'var(--bg-2)', border: '1px solid var(--border)',
           borderRadius: 2, color: 'var(--text-1)', fontSize: 10, fontFamily: 'var(--font-mono)',
-          outline: 'none',
+          outline: 'none', flexShrink: 0,
         }}
       />
-      <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
-      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1 }}>SHOW:</span>
-      {filters.map(f => (
-        <button key={f} onClick={() => setShowFilter(f)}
-          style={{
-            padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
-            background: showFilter === f ? 'var(--accent-dim)' : 'transparent',
-            color: showFilter === f ? 'var(--accent)' : 'var(--text-3)',
-            border: showFilter === f ? '1px solid var(--accent)' : '1px solid var(--border)',
-            borderRadius: 2, cursor: 'pointer', letterSpacing: 0.5,
-          }}>{f}</button>
+      <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1, flexShrink: 0 }}>SHOW:</span>
+      {showFilters.map(f => (
+        <button key={f} onClick={() => setShowFilter(f)} style={_btn(showFilter === f)}>{f}</button>
       ))}
+      <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1, flexShrink: 0 }}>TYPE:</span>
+      {typeFilters.map(f => (
+        <button key={f} onClick={() => setTypeFilter(f)} style={_btn(typeFilter === f)}>{f}</button>
+      ))}
+      <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+      <button onClick={() => setGlobalMaint(!globalMaint)} title="Order 66"
+        style={{
+          padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+          background: globalMaint ? 'var(--amber-dim)' : 'transparent',
+          color: globalMaint ? 'var(--amber)' : 'var(--text-3)',
+          border: `1px solid ${globalMaint ? 'var(--amber)' : 'var(--border)'}`,
+          borderRadius: 2, cursor: 'pointer',
+        }}>⚑ GLOBAL MAINT</button>
       <div style={{ flex: 1 }} />
-      {stats && (
-        <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)' }}>
-          <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats.total_operations ?? '—'}</span></span>
-          <span>CALLS <span style={{ color: 'var(--text-2)' }}>{stats.total_tool_calls ?? '—'}</span></span>
-          <span>SUCCESS <span style={{ color: 'var(--text-2)' }}>{stats.success_rate != null ? `${stats.success_rate}%` : '—'}</span></span>
-        </div>
-      )}
+      <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)', flexShrink: 0 }}>
+        <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats?.total_operations ?? '—'}</span></span>
+        <span>CALLS <span style={{ color: 'var(--text-2)' }}>{stats?.total_tool_calls ?? '—'}</span></span>
+        <span>SUCCESS <span style={{ color: 'var(--text-2)' }}>{stats?.success_rate != null ? `${stats.success_rate}%` : '—'}</span></span>
+      </div>
     </div>
   )
 }
@@ -649,37 +662,57 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
+  const [typeFilter, setTypeFilter] = useState('ALL')
+  const [globalMaint, setGlobalMaint] = useState(false)
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
     const id = setInterval(() => fetchStats().then(setStats).catch(() => {}), 30000)
     return () => clearInterval(id)
   }, [])
 
+  const showSection = (type) => typeFilter === 'ALL' || typeFilter === type
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      <DrillDownBar search={search} setSearch={setSearch} showFilter={showFilter} setShowFilter={setShowFilter} stats={stats} />
+      <DrillDownBar
+        search={search} setSearch={setSearch}
+        showFilter={showFilter} setShowFilter={setShowFilter}
+        typeFilter={typeFilter} setTypeFilter={setTypeFilter}
+        globalMaint={globalMaint} setGlobalMaint={setGlobalMaint}
+        stats={stats}
+      />
+
+      {globalMaint && (
+        <div style={{ padding: '6px 12px', background: 'var(--amber-dim)', borderBottom: '1px solid var(--amber)', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--amber)' }}>
+          ⚑ GLOBAL MAINTENANCE MODE — ALL ALERTS SUPPRESSED
+        </div>
+      )}
+
       <div className="flex-1 overflow-auto min-h-0">
         <AlertsPanel />
 
-        <SectionAccordion icon="⬡" title="DEATHSTAR PLATFORM" badge="INTERNAL" statusText="" defaultOpen={true}>
-          <DashboardCards activeFilters={activeFilters} />
-        </SectionAccordion>
+        {showSection('PLATFORM') && (
+          <SectionAccordion icon="⬡" title="DEATHSTAR PLATFORM" badge="INTERNAL" statusText="" defaultOpen={true}>
+            {/* Only show System Summary card — old wide cards removed */}
+            <DashboardCards activeFilters={['system_summary']} />
+          </SectionAccordion>
+        )}
 
-        <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
-          <div style={{ borderTop: '1px solid var(--border)' }}>
+        {showSection('COMPUTE') && (
+          <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={activeFilters.filter(k => k.includes('vm'))} onTab={onTab} />
+              <ServiceCards activeFilters={['vms']} onTab={onTab} />
             </ServiceCardsErrorBoundary>
-          </div>
-        </SectionAccordion>
+          </SectionAccordion>
+        )}
 
-        <SectionAccordion icon="◉" title="NETWORK · STORAGE · SECURITY" badge="EXTERNAL" statusText="" defaultOpen={true}>
-          <div style={{ borderTop: '1px solid var(--border)' }}>
+        {(showSection('NETWORK') || showSection('STORAGE') || showSection('SECURITY')) && (
+          <SectionAccordion icon="◉" title="NETWORK · STORAGE · SECURITY" badge="EXTERNAL" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={activeFilters.filter(k => k.includes('external') || k.includes('containers'))} onTab={onTab} />
+              <ServiceCards activeFilters={['external_services', 'containers_local', 'containers_swarm']} onTab={onTab} />
             </ServiceCardsErrorBoundary>
-          </div>
-        </SectionAccordion>
+          </SectionAccordion>
+        )}
       </div>
     </div>
   )
