@@ -1,4 +1,5 @@
 """CRUD endpoints for infrastructure connections."""
+import asyncio
 import logging
 from typing import Any
 
@@ -9,6 +10,18 @@ from api.auth import get_current_user
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 log = logging.getLogger(__name__)
+
+
+def _trigger_collector_repoll() -> None:
+    """Trigger immediate repoll for collectors that read from connections DB."""
+    try:
+        from api.collectors.manager import manager
+        loop = asyncio.get_event_loop()
+        for component in ("proxmox_vms", "external_services"):
+            if manager.get(component):
+                loop.create_task(manager.trigger_poll(component))
+    except Exception as e:
+        log.debug("Collector repoll trigger skipped: %s", e)
 
 
 class CreateConnectionRequest(BaseModel):
@@ -63,6 +76,7 @@ def create(req: CreateConnectionRequest, _: str = Depends(get_current_user)):
     )
     if result["status"] != "ok":
         raise HTTPException(400, result["message"])
+    _trigger_collector_repoll()
     return result
 
 
@@ -74,6 +88,7 @@ def update(connection_id: str, req: UpdateConnectionRequest, _: str = Depends(ge
     result = update_connection(connection_id, **kwargs)
     if result["status"] != "ok":
         raise HTTPException(400, result["message"])
+    _trigger_collector_repoll()
     return result
 
 

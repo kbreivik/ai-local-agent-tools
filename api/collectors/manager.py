@@ -68,6 +68,16 @@ class CollectorManager:
     def get(self, component: str) -> BaseCollector | None:
         return self._collectors.get(component)
 
+    async def trigger_poll(self, component: str) -> None:
+        """Trigger an immediate poll for a specific collector."""
+        collector = self._collectors.get(component)
+        if collector:
+            try:
+                await collector._safe_poll()
+                log.info("trigger_poll: %s polled successfully", component)
+            except Exception as e:
+                log.warning("trigger_poll %s failed: %s", component, e)
+
     @property
     def components(self) -> list[str]:
         return list(self._collectors.keys())
