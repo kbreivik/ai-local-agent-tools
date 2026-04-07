@@ -161,40 +161,49 @@ function useConfirm() {
 
 // ── Generic card shell ──────────────────────────────────────────────────────────
 
-function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, collapsed, expanded }) {
+function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, collapsed, expanded }) {
   const isOpen = openKey === cardKey
-  const cs = cardState(dot)
-  const { cardMinHeight } = useOptions()
+  const anyOpen = openKey != null
+  const dimmed = anyOpen && !isOpen
+  const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
+
   return (
     <div
-      className={`border rounded-lg cursor-pointer transition-colors ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
+      className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
       style={{
         background: 'var(--bg-2)',
         borderColor: isOpen ? undefined : 'var(--border)',
-        minHeight: isOpen ? undefined : undefined,
-        padding: isOpen ? '10px' : '6px 12px',
+        padding: isOpen ? '10px' : '8px 12px',
+        opacity: dimmed ? 0.4 : 1,
+        transition: 'opacity 0.15s ease, border-color 0.15s ease, padding 0.15s ease',
       }}
       onClick={() => setOpenKey(isOpen ? null : cardKey)}
     >
-      {isOpen ? (
-        <>
-          <div className="flex items-center gap-1.5 mb-1">
-            <Dot color={dot} />
-            <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
-            {sub && <span className="text-[10px] mono truncate" style={{ color: 'var(--text-3)' }}>{typeof sub === 'object' ? sub.text : sub}</span>}
-          </div>
-          {net && <div className="text-[10px] mono mb-1" style={{ color: 'var(--text-3)' }}>{net}</div>}
-          <div onClick={e => e.stopPropagation()}>
-            {expanded}
-            <button className="mt-1.5 w-full text-[9px]" style={{ color: 'var(--text-3)' }} onClick={() => setOpenKey(null)}>✕ close</button>
-          </div>
-        </>
-      ) : (
-        <div className="flex items-center gap-2">
+      {/* Header row — always visible, click to toggle */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 min-w-0">
           <Dot color={dot} />
-          <span className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
-          {sub && <span className="text-[10px] mono truncate" style={{ color: 'var(--text-3)' }}>{typeof sub === 'object' ? sub.text : sub}</span>}
-          {collapsed}
+          <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{isOpen ? '▾' : '▸'}</span>
+        </div>
+        {subText && <span className="text-[10px] mono shrink-0 ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+      </div>
+
+      {/* Row 2 — IP + uptime (collapsed only) */}
+      {!isOpen && (net || uptime) && (
+        <div className="flex items-center justify-between mt-0.5">
+          {net ? <span className="text-[10px] mono" style={{ color: 'var(--text-3)' }}>{net}</span> : <span />}
+          {uptime && <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>↑ {uptime}</span>}
+        </div>
+      )}
+
+      {/* Collapsed problem badge */}
+      {!isOpen && collapsed}
+
+      {/* Expanded content */}
+      {isOpen && (
+        <div className="mt-1" onClick={e => e.stopPropagation()}>
+          {expanded}
         </div>
       )}
     </div>
@@ -1148,8 +1157,8 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
             {(containers?.containers || []).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port}
-                collapsed={<ContainerCardCollapsed c={c} latestTag={knownLatest[c.id]} />}
+                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port} uptime={c.uptime}
+                collapsed={<ContainerCardCollapsed c={c} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
                   onTagsLoaded={onTagsLoaded} onTab={onTab}
@@ -1170,7 +1179,8 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
-                collapsed={<ContainerCardCollapsed c={{ ...s, uptime: `${s.replicas_running}/${s.replicas_desired} replicas · since ${_relativeTime(s.created_at)}`, last_pull_at: s.last_pull_at }} />}
+                uptime={s.replicas_running != null ? `${s.replicas_running}/${s.replicas_desired} replicas` : ''}
+                collapsed={<ContainerCardCollapsed c={s} />}
                 expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
               />
             ))}
@@ -1212,7 +1222,7 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
                   dot={vm.dot}
                   name={vm.name}
                   sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
-                  net={vm.ip || ''}
+                  net={vm.ip || ''} uptime={vm.uptime || ''}
                   collapsed={<ProxmoxCardCollapsed vm={vm} />}
                   expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
                 />
@@ -1232,6 +1242,7 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
               <InfraCard
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
+                uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
                 collapsed={<ExternalCardCollapsed svc={svc} />}
                 expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
               />
