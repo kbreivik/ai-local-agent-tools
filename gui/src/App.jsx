@@ -16,7 +16,7 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats, fetchStatus, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, authHeaders } from './api'
+import { fetchHealth, fetchStats, fetchStatus, fetchMemoryHealth, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, authHeaders } from './api'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
@@ -666,10 +666,12 @@ function ProxmoxAuthRows() {
 function PlatformCoreCards() {
   const [health, setHealth] = useState(null)
   const [statusData, setStatusData] = useState(null)
+  const [memHealth, setMemHealth] = useState(null)
   useEffect(() => {
     const load = () => {
       fetchHealth().then(setHealth).catch(() => {})
       fetchStatus().then(setStatusData).catch(() => {})
+      fetchMemoryHealth().then(setMemHealth).catch(() => {})
     }
     load()
     const id = setInterval(load, 30000)
@@ -709,7 +711,10 @@ function PlatformCoreCards() {
   const kafkaBrokers = statusData?.kafka?.data?.brokers?.length ?? statusData?.kafka?.data?.count ?? ''
   const esHealth = statusData?.elasticsearch?.health || 'unknown'
   const esNodes = statusData?.elasticsearch?.data?.node_count ?? statusData?.elasticsearch?.data?.nodes ?? ''
-  const muninnEngrams = statusData?.muninndb?.data?.engram_count ?? statusData?.muninndb?.data?.count ?? ''
+  // MuninnDB: use dedicated memory health endpoint
+  const muninnOk = memHealth?.status === 'ok' || memHealth?.healthy === true
+  const muninnHealth = muninnOk ? 'healthy' : memHealth ? 'error' : 'unknown'
+  const muninnEngrams = memHealth?.engram_count ?? memHealth?.count ?? memHealth?.data?.count ?? ''
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -718,7 +723,7 @@ function PlatformCoreCards() {
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>PLATFORM CORE</div>
         {_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
         {_row('var(--green)', 'DS-postgres', 'HEALTHY', 'green', 'pg16')}
-        {_row(_healthDot(statusData?.muninndb?.health), 'DS-muninndb', (statusData?.muninndb?.health || 'unknown').toUpperCase(), _healthTag(statusData?.muninndb?.health), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
+        {_row(_healthDot(muninnHealth), 'DS-muninndb', muninnHealth.toUpperCase(), _healthTag(muninnHealth), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
         {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
         {_row(_healthDot(esHealth), 'Elasticsearch', esHealth.toUpperCase(), _healthTag(esHealth), esNodes ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '')}
       </div>
