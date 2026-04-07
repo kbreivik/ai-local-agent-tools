@@ -259,8 +259,18 @@ def update_connection(connection_id: str, **kwargs) -> dict:
                 sets.append(f"{field} = %s")
                 params.append(kwargs[field])
         if "credentials" in kwargs:
-            creds = kwargs["credentials"]
-            creds_str = json.dumps(creds if isinstance(creds, dict) else {})
+            new_creds = kwargs["credentials"]
+            if isinstance(new_creds, dict) and new_creds:
+                # Merge with existing credentials — don't wipe keys the user didn't send
+                existing = get_connection(connection_id)
+                existing_creds = existing.get("credentials", {}) if existing else {}
+                if isinstance(existing_creds, dict):
+                    merged = {**existing_creds, **new_creds}
+                else:
+                    merged = new_creds
+                creds_str = json.dumps(merged)
+            else:
+                creds_str = json.dumps(new_creds if isinstance(new_creds, dict) else {})
             sets.append("credentials = %s")
             params.append(encrypt_value(creds_str) if creds_str else "")
         if "config" in kwargs:
