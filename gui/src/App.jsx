@@ -659,6 +659,7 @@ function ClusterView() {
 
 function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
+  const [settingsTab, setSettingsTab] = useState('Connections')
   const { panelOpen } = useCommandPanel()
 
   // Filter state (lifted here so SubBar can set it via onAlertNavigate)
@@ -717,7 +718,7 @@ function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-0)' }}>
       {/* Sidebar navigation */}
-      <Sidebar activeTab={activeTab} onTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} onTab={setActiveTab} onSettingsTab={setSettingsTab} />
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">
@@ -808,7 +809,7 @@ function AppShell() {
           {activeTab === 'Settings' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: 'var(--bg-0)' }}>
-                <SettingsPage />
+                <SettingsPage initialTab={settingsTab} />
               </div>
             </div>
           )}

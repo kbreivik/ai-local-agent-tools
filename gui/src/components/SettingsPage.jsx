@@ -13,10 +13,15 @@ import {
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export default function SettingsPage() {
+export default function SettingsPage({ initialTab }) {
   const options = useOptions()
   const { serverLoaded } = options
-  const [tab, setTab] = useState('General')
+  const [tab, setTab] = useState(initialTab || 'General')
+
+  // Sync tab when sidebar changes the initialTab prop
+  useEffect(() => {
+    if (initialTab) setTab(initialTab)
+  }, [initialTab])
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
