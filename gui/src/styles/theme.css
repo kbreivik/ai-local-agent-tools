@@ -1,80 +1,47 @@
-/* HP1 Agent Theme — Design C: Modern Soft
-   CSS custom properties for dark/light mode.
-   Dark mode is default. Light follows prefers-color-scheme or data-theme="light".
+/* HP1 Agent Theme — V3a: Imperial Ops (Star Wars)
+   Dark-only theme. Crimson accent, sharp corners, monospace everywhere.
 */
 
-/* ── Geist font (Inter fallback) ─────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* ── Fonts ───────────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&display=swap');
 
-/* ── Dark mode (default) ─────────────────────────────────────────────────── */
+/* ── Variables ───────────────────────────────────────────────────────────── */
 :root {
-  --font-sans: 'Inter', -apple-system, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
+  --font-sans: 'Rajdhani', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
 
-  --bg-0: #09090b;
-  --bg-1: #111113;
-  --bg-2: #191a1f;
-  --bg-3: #22232a;
-  --border: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.12);
-  --text-1: #fafafa;
-  --text-2: #a1a1aa;
-  --text-3: #52525b;
-  --accent: #3b82f6;
-  --accent-dim: rgba(59, 130, 246, 0.1);
-  --green: #34d399;
-  --green-dim: rgba(52, 211, 153, 0.1);
-  --amber: #fbbf24;
-  --amber-dim: rgba(251, 191, 36, 0.08);
-  --red: #fb7185;
-  --red-dim: rgba(251, 113, 133, 0.08);
+  --bg-0: #05060a;
+  --bg-1: #09090f;
+  --bg-2: #0d0f1a;
+  --bg-3: #131524;
+  --bg-4: #191c2e;
 
-  --radius-card: 12px;
-  --radius-btn: 8px;
-  --radius-pill: 100px;
-  --transition: 0.15s ease;
-}
+  --border: #1a1e35;
+  --border-hi: #252b45;
+  --border-hover: #2d3450;
 
-/* ── Light mode ──────────────────────────────────────────────────────────── */
-[data-theme="light"],
-:root:not([data-theme="dark"]) {
-  /* Only apply light when explicitly set or when system prefers light */
-}
+  --text-1: #d8dcea;
+  --text-2: #828aa0;
+  --text-3: #3c4258;
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg-0: #ffffff;
-    --bg-1: #f9fafb;
-    --bg-2: #f3f4f6;
-    --bg-3: #e5e7eb;
-    --border: rgba(0, 0, 0, 0.06);
-    --border-hover: rgba(0, 0, 0, 0.12);
-    --text-1: #111827;
-    --text-2: #6b7280;
-    --text-3: #9ca3af;
-    --accent: #2563eb;
-    --accent-dim: rgba(37, 99, 235, 0.08);
-    --green-dim: rgba(52, 211, 153, 0.08);
-    --amber-dim: rgba(251, 191, 36, 0.06);
-    --red-dim: rgba(251, 113, 133, 0.06);
-  }
-}
+  --accent: #a01828;
+  --accent-dim: rgba(160, 24, 40, 0.12);
 
-[data-theme="light"] {
-  --bg-0: #ffffff;
-  --bg-1: #f9fafb;
-  --bg-2: #f3f4f6;
-  --bg-3: #e5e7eb;
-  --border: rgba(0, 0, 0, 0.06);
-  --border-hover: rgba(0, 0, 0, 0.12);
-  --text-1: #111827;
-  --text-2: #6b7280;
-  --text-3: #9ca3af;
-  --accent: #2563eb;
-  --accent-dim: rgba(37, 99, 235, 0.08);
-  --green-dim: rgba(52, 211, 153, 0.08);
-  --amber-dim: rgba(251, 191, 36, 0.06);
-  --red-dim: rgba(251, 113, 133, 0.06);
+  --green: #00aa44;
+  --green-dim: rgba(0, 170, 68, 0.15);
+  --amber: #cc8800;
+  --amber-dim: rgba(204, 136, 0, 0.15);
+  --red: #cc2828;
+  --red-dim: rgba(204, 40, 40, 0.15);
+  --cyan: #00c8ee;
+  --cyan-dim: rgba(0, 200, 238, 0.10);
+  --maint: #cc6600;
+  --maint-dim: rgba(204, 102, 0, 0.12);
+
+  --radius-card: 2px;
+  --radius-btn: 2px;
+  --radius-pill: 2px;
+  --transition: 0.1s ease;
 }
 
 /* ── Base styles ─────────────────────────────────────────────────────────── */
@@ -86,13 +53,15 @@ html, body {
   overflow: hidden;
   background: var(--bg-0);
   color: var(--text-1);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Mono font class — use for IPs, hostnames, versions, hashes, code, ports */
+/* Font utility classes */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
 .mono { font-family: var(--font-mono); }
 
 /* ── Card base ───────────────────────────────────────────────────────────── */
