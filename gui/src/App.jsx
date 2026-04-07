@@ -16,7 +16,7 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats, fetchStatus, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal } from './api'
+import { fetchHealth, fetchStats, fetchStatus, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, authHeaders } from './api'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
@@ -638,6 +638,83 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
   )
 }
 
+function ProxmoxAuthRows() {
+  const [conn, setConn] = useState(null)
+  useEffect(() => {
+    fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections?platform=proxmox`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : { data: [] })
+      .then(d => { const c = (d.data || []).find(x => x.host); if (c) setConn(c) })
+      .catch(() => {})
+  }, [])
+  if (!conn) return null
+  const _label = { fontSize: 7, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', width: 36, flexShrink: 0, letterSpacing: 1 }
+  const _val = { fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--cyan, #00c8ee)' }
+  return (
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2, padding: '6px 10px', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+        <span style={_label}>AUTH</span>
+        <span style={_val}>{conn.auth_type === 'token' ? 'TOKEN' : conn.auth_type?.toUpperCase() || '—'}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={_label}>HOST</span>
+        <span style={_val}>{conn.host}:{conn.port || 8006}</span>
+      </div>
+    </div>
+  )
+}
+
+function PlatformCoreCards() {
+  const [health, setHealth] = useState(null)
+  const [statusData, setStatusData] = useState(null)
+  useEffect(() => {
+    const load = () => {
+      fetchHealth().then(setHealth).catch(() => {})
+      fetchStatus().then(setStatusData).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const collectors = statusData?.collectors ?? {}
+  const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
+  const apiOk = health?.status === 'ok'
+
+  const _row = (dot, label, tag, tagColor, value) => (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6 }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+      <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
+      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: tagColor === 'green' ? 'var(--green-dim)' : tagColor === 'red' ? 'var(--red-dim)' : 'var(--bg-3)', color: tagColor === 'green' ? 'var(--green)' : tagColor === 'red' ? 'var(--red)' : 'var(--text-3)', borderRadius: 2 }}>{tag}</span>}
+      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+      {/* PLATFORM CORE */}
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${apiOk ? 'var(--green)' : 'var(--red)'}`, borderRadius: 2, padding: '8px 10px' }}>
+        <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>PLATFORM CORE</div>
+        {_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
+        {_row('var(--green)', 'DS-postgres', 'HEALTHY', 'green', '')}
+        {_row('var(--green)', 'DS-muninndb', 'HEALTHY', 'green', '')}
+        {_row(statusData?.kafka?.health === 'healthy' ? 'var(--green)' : 'var(--amber)', 'Kafka', statusData?.kafka?.health === 'healthy' ? 'HEALTHY' : 'DEGRADED', statusData?.kafka?.health === 'healthy' ? 'green' : 'red', '')}
+        {_row(statusData?.elasticsearch?.health === 'healthy' ? 'var(--green)' : 'var(--amber)', 'Elasticsearch', statusData?.elasticsearch?.health === 'healthy' ? 'HEALTHY' : 'DEGRADED', statusData?.elasticsearch?.health === 'healthy' ? 'green' : 'red', '')}
+      </div>
+
+      {/* COLLECTORS */}
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--green)', borderRadius: 2, padding: '8px 10px' }}>
+        <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>COLLECTORS</div>
+        {sortedCollectors.map(([name, c]) => (
+          _row(c.running ? 'var(--green)' : 'var(--red)', name, c.last_health || 'unknown', c.running ? 'green' : 'red', c.running ? '' : 'stopped')
+        ))}
+        {sortedCollectors.length === 0 && (
+          <div style={{ fontSize: 9, color: 'var(--text-3)', padding: '4px 0' }}>Loading collectors...</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function SectionAccordion({ icon, title, badge, statusText, statusColor, defaultOpen, children }) {
   const [open, setOpen] = useState(defaultOpen ?? true)
   return (
@@ -693,13 +770,13 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
 
         {showSection('PLATFORM') && (
           <SectionAccordion icon="⬡" title="DEATHSTAR PLATFORM" badge="INTERNAL" statusText="" defaultOpen={true}>
-            {/* Only show System Summary card — old wide cards removed */}
-            <DashboardCards activeFilters={['system_summary']} />
+            <PlatformCoreCards />
           </SectionAccordion>
         )}
 
         {showSection('COMPUTE') && (
           <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
+            <ProxmoxAuthRows />
             <ServiceCardsErrorBoundary>
               <ServiceCards activeFilters={['vms']} onTab={onTab} />
             </ServiceCardsErrorBoundary>
