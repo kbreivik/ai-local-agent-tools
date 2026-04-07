@@ -1,31 +1,19 @@
 """
 ProxmoxVMsCollector — polls all VMs and LXC containers across all Proxmox nodes every 30s.
 
-Env vars: PROXMOX_HOST, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET, PROXMOX_NODES
+Uses proxmoxer library for native PVE API access with token auth.
+Credentials: connections DB (platform=proxmox) or env vars (PROXMOX_HOST, etc.)
 Writes component="proxmox_vms" to status_snapshots.
 State shape: { health, vms: [VMCard], lxc: [LXCCard] }
-Each item carries: type ("vm"|"lxc"), node, node_api, pool, status, dot, problem, ...
 """
 import asyncio
 import logging
 import os
 
-import httpx
-
 from api.collectors.base import BaseCollector
 
 log = logging.getLogger(__name__)
 
-# Proxmox API node hostnames — override all three via PROXMOX_NODES env (comma-separated)
-# These must match what `pvesh get /nodes` returns (the "node" field).
-NODES = ["Pmox1", "Pmox2", "Pmox3"]
-
-# Display label for each node API name — shown in the GUI header and VM cards.
-NODE_DISPLAY = {
-    "Pmox1": "Pmox1",
-    "Pmox2": "Pmox2",
-    "Pmox3": "Pmox3",
-}
 
 def _load_vm_ip_map() -> dict:
     """Load VMID→IP mapping from PROXMOX_VM_IP_MAP env var (JSON object with string keys)."""
@@ -38,6 +26,7 @@ def _load_vm_ip_map() -> dict:
         except (ValueError, TypeError, AttributeError):
             pass
     return {}
+
 
 VM_IP_MAP = _load_vm_ip_map()
 
@@ -53,81 +42,69 @@ class ProxmoxVMsCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
-        # Try connections DB first, fall back to env vars
-        host, token_id, token_secret = "", "", ""
+        # Resolve credentials: connections DB first, env vars fallback
+        host, token_id, token_secret, port = "", "", "", 8006
+        conn = None
         try:
             from api.connections import get_connection_for_platform
             conn = get_connection_for_platform("proxmox")
-            if conn:
-                host = conn.get("host", "")
-                creds = conn.get("credentials", {})
-                if isinstance(creds, dict):
-                    token_id = creds.get("token_id", "")
-                    token_secret = creds.get("secret", "")
         except Exception:
             pass
-        host = host or os.environ.get("PROXMOX_HOST", "")
-        token_id = token_id or os.environ.get("PROXMOX_TOKEN_ID", "")
-        token_secret = token_secret or os.environ.get("PROXMOX_TOKEN_SECRET", "")
+
+        if conn:
+            host = conn.get("host", "")
+            creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
+            token_id = creds.get("token_id", "")
+            token_secret = creds.get("secret", "")
+            conn_port = conn.get("port") or 8006
+            port = conn_port if conn_port not in (0, None, 443) else 8006
+        else:
+            host = os.environ.get("PROXMOX_HOST", "")
+            token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
+            token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+            port = int(os.environ.get("PROXMOX_PORT", "8006"))
 
         if not host:
-            return {"health": "unconfigured", "vms": [], "lxc": [], "message": "PROXMOX_HOST not set"}
+            return {"health": "unconfigured", "vms": [], "lxc": [], "message": "No Proxmox connection configured"}
 
-        headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
-        # Use connection port if available, default 8006 for Proxmox API
         try:
-            conn_port = conn.get("port", 8006) if conn else 8006
-        except Exception:
-            conn_port = 8006
-        pve_port = conn_port if conn_port not in (0, None, 443) else 8006
-        base = f"https://{host}:{pve_port}/api2/json"
+            from proxmoxer import ProxmoxAPI
+            prox = ProxmoxAPI(
+                host, port=port,
+                token_name=token_id,
+                token_value=token_secret,
+                verify_ssl=False,
+                timeout=10,
+            )
 
-        # Auto-discover nodes from cluster, fall back to env var
-        nodes = []
-        try:
-            r_nodes = httpx.get(f"{base}/nodes", headers=headers, verify=False, timeout=8)
-            if r_nodes.status_code == 200:
-                nodes = [n["node"] for n in r_nodes.json().get("data", []) if n.get("node")]
-        except Exception:
-            pass
-        if not nodes:
-            nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
-        if not nodes:
-            return {"health": "error", "vms": [], "lxc": [],
-                    "message": "Could not discover Proxmox nodes and PROXMOX_NODES not set"}
+            # Auto-discover nodes from cluster
+            nodes = [n["node"] for n in prox.nodes.get() if n.get("node")]
+            if not nodes:
+                # Fallback to env var
+                nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
+            if not nodes:
+                return {"health": "error", "vms": [], "lxc": [], "error": "No nodes returned from cluster"}
 
-        vms = []
-        lxc_list = []
-        nodes_ok = 0
-        try:
+            vms = []
+            lxc_list = []
+            nodes_ok = 0
+
             for node in nodes:
                 try:
-                    # ── QEMU VMs ──────────────────────────────────────────────
-                    r = httpx.get(f"{base}/nodes/{node}/qemu",
-                                  headers=headers, verify=False, timeout=8)
-                    if r.status_code == 200:
-                        nodes_ok += 1
-                        for vm in r.json().get("data", []):
-                            vms.append(_build_vm_card(base, headers, node, vm))
-                    else:
-                        log.warning("Proxmox node %s /qemu returned HTTP %s", node, r.status_code)
-
-                    # ── LXC containers ────────────────────────────────────────
-                    r2 = httpx.get(f"{base}/nodes/{node}/lxc",
-                                   headers=headers, verify=False, timeout=8)
-                    if r2.status_code == 200:
-                        for ct in r2.json().get("data", []):
-                            lxc_list.append(_build_lxc_card(node, ct))
-                    else:
-                        log.warning("Proxmox node %s /lxc returned HTTP %s", node, r2.status_code)
-
+                    # QEMU VMs
+                    for vm in prox.nodes(node).qemu.get():
+                        vms.append(_build_vm_card_proxmoxer(prox, node, vm))
+                    # LXC containers
+                    for ct in prox.nodes(node).lxc.get():
+                        lxc_list.append(_build_lxc_card(node, ct))
+                    nodes_ok += 1
                 except Exception as e:
                     log.warning("Proxmox node %s error: %s", node, e)
 
-            all_items = vms + lxc_list
-            if nodes_ok == 0 and not all_items:
+            if nodes_ok == 0:
                 return {"health": "error", "vms": [], "lxc": [], "error": "No Proxmox nodes responded"}
 
+            all_items = vms + lxc_list
             if not all_items or all(v["dot"] == "green" for v in all_items):
                 overall = "healthy"
             elif all(v["dot"] == "red" for v in all_items):
@@ -138,10 +115,12 @@ class ProxmoxVMsCollector(BaseCollector):
             return {"health": overall, "vms": vms, "lxc": lxc_list}
 
         except Exception as e:
-            return {"health": "error", "error": str(e), "vms": [], "lxc": []}
+            log.error("ProxmoxVMsCollector error: %s", e)
+            return {"health": "error", "vms": [], "lxc": [], "error": str(e)}
 
 
-def _build_vm_card(base: str, headers: dict, node: str, vm: dict) -> dict:
+def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:
+    """Build a VM card dict from proxmoxer data. Matches _build_vm_card output shape."""
     vmid = vm["vmid"]
     status = vm.get("status", "unknown")
     cpu_pct = round(vm.get("cpu", 0) * 100, 1) if status == "running" else None
@@ -150,17 +129,32 @@ def _build_vm_card(base: str, headers: dict, node: str, vm: dict) -> dict:
     mem_used_gb = round(mem_used / 1e9, 1) if mem_used else None
     maxmem_gb = round(maxmem / 1e9, 1) if maxmem else None
 
-    disks = _get_vm_disk_usage(base, headers, node, vmid) if status == "running" else []
-    # Fallback: use list-level disk info when guest agent is unavailable or VM stopped
+    # Disk usage via guest agent (if running)
+    disks = []
+    if status == "running":
+        try:
+            fs_data = prox.nodes(node).qemu(vmid).agent("get-fsinfo").get()
+            result_data = fs_data.get("result", []) if isinstance(fs_data, dict) else []
+            for fs in result_data:
+                total = fs.get("total-bytes", 0)
+                used = fs.get("used-bytes", 0)
+                mp = fs.get("mountpoint", "")
+                if total and mp:
+                    disks.append({"mountpoint": mp, "used_bytes": used, "total_bytes": total})
+        except Exception:
+            pass
+
+    # Fallback: use list-level disk info when guest agent unavailable
     if not disks and vm.get("maxdisk"):
         disks = [{"mountpoint": "/", "used_bytes": vm.get("disk") or 0, "total_bytes": vm["maxdisk"]}]
+
     dot, problem = _classify(status, disks)
 
     return {
         "type": "vm",
         "vmid": vmid,
         "name": vm.get("name", f"vm-{vmid}"),
-        "node": NODE_DISPLAY.get(node, node),
+        "node": node,
         "node_api": node,
         "pool": vm.get("pool", ""),
         "status": status,
@@ -184,7 +178,6 @@ def _build_lxc_card(node: str, ct: dict) -> dict:
     mem_used_gb = round(mem_used / 1e9, 1) if mem_used else None
     maxmem_gb = round(maxmem / 1e9, 1) if maxmem else None
 
-    # LXC disk usage comes directly from the list response (no guest agent needed)
     disk_used = ct.get("disk")
     disk_max = ct.get("maxdisk")
     disk_used_gb = round(disk_used / 1e9, 1) if disk_used else None
@@ -199,7 +192,7 @@ def _build_lxc_card(node: str, ct: dict) -> dict:
         "type": "lxc",
         "vmid": vmid,
         "name": ct.get("name", f"ct-{vmid}"),
-        "node": NODE_DISPLAY.get(node, node),
+        "node": node,
         "node_api": node,
         "pool": ct.get("pool", ""),
         "status": status,
@@ -214,26 +207,6 @@ def _build_lxc_card(node: str, ct: dict) -> dict:
         "dot": dot,
         "problem": problem,
     }
-
-
-def _get_vm_disk_usage(base: str, headers: dict, node: str, vmid: int) -> list:
-    try:
-        r = httpx.get(f"{base}/nodes/{node}/qemu/{vmid}/agent/get-fsinfo",
-                      headers=headers, verify=False, timeout=5)
-        if r.status_code != 200:
-            return []
-        data = r.json().get("data", {})
-        result_data = data.get("result", []) if isinstance(data, dict) else []
-        disks = []
-        for fs in result_data:
-            total = fs.get("total-bytes", 0)
-            used = fs.get("used-bytes", 0)
-            mp = fs.get("mountpoint", "")
-            if total and mp:
-                disks.append({"mountpoint": mp, "used_bytes": used, "total_bytes": total})
-        return disks
-    except Exception:
-        return []
 
 
 def _classify(status: str, disks: list) -> tuple[str, str | None]:
