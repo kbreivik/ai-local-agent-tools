@@ -536,11 +536,13 @@ function ConnectionsTab() {
     }
     setFormError('')
     setSaving(true)
+    const payload = { ...form }
+    console.log('[ConnectionsTab] POST /api/connections payload:', JSON.stringify(payload, null, 2))
     try {
       const r = await fetch(`${BASE}/api/connections`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
       if (r.ok) { setShowAdd(false); fetchConns() }
       else { setFormError('Failed to save connection') }

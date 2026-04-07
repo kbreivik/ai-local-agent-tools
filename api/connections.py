@@ -151,7 +151,7 @@ def get_connection(id_or_label: str) -> dict | None:
 
 def create_connection(
     platform: str, label: str, host: str, port: int = 443,
-    auth_type: str = "token", credentials: dict | str = "",
+    auth_type: str = "token", credentials: dict = None,
     config: dict = None, enabled: bool = True,
 ) -> dict:
     """Create a new connection. Credentials are encrypted."""
@@ -159,7 +159,7 @@ def create_connection(
     if not conn:
         return {"status": "error", "message": "No database connection"}
     try:
-        creds_str = json.dumps(credentials) if isinstance(credentials, dict) else str(credentials)
+        creds_str = json.dumps(credentials or {})
         encrypted_creds = encrypt_value(creds_str) if creds_str else ""
         config_json = json.dumps(config or {})
         cid = str(uuid.uuid4())
@@ -192,7 +192,7 @@ def update_connection(connection_id: str, **kwargs) -> dict:
                 params.append(kwargs[field])
         if "credentials" in kwargs:
             creds = kwargs["credentials"]
-            creds_str = json.dumps(creds) if isinstance(creds, dict) else str(creds)
+            creds_str = json.dumps(creds if isinstance(creds, dict) else {})
             sets.append("credentials = %s")
             params.append(encrypt_value(creds_str) if creds_str else "")
         if "config" in kwargs:
