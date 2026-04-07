@@ -441,12 +441,13 @@ const PLATFORMS = [
   'wazuh', 'grafana', 'portainer', 'kibana', 'netbox', 'synology',
   'security_onion', 'syncthing', 'caddy', 'traefik', 'opnsense',
   'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
+  'cisco', 'juniper',
 ]
 
 const PLATFORM_AUTH = {
   proxmox:         { auth_type: 'token',  defaultPort: 8006, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   fortigate:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
-  fortiswitch:     { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  fortiswitch:     { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'fortinet' }] },
   truenas:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   pbs:             { auth_type: 'token',  defaultPort: 8007, fields: [{ key: 'token_id', label: 'Token ID', placeholder: 'user@realm!tokenname' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   unifi:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
@@ -467,6 +468,8 @@ const PLATFORM_AUTH = {
   nginx:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
   pihole:          { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key / Password', type: 'password' }] },
   technitium:      { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
+  cisco:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'cisco_ios' }] },
+  juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }] },
 }
 const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{txt}</label>
 
