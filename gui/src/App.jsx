@@ -584,8 +584,71 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, stats }) {
+  const filters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
+  return (
+    <div className="flex items-center gap-2 px-3 shrink-0" style={{
+      height: 38, background: 'var(--bg-1)', borderBottom: '1px solid var(--border)',
+      fontFamily: 'var(--font-mono)', fontSize: 10,
+    }}>
+      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1 }}>DRILL:</span>
+      <input
+        value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="search name / host / IP..."
+        style={{
+          width: 180, padding: '3px 8px', background: 'var(--bg-2)', border: '1px solid var(--border)',
+          borderRadius: 2, color: 'var(--text-1)', fontSize: 10, fontFamily: 'var(--font-mono)',
+          outline: 'none',
+        }}
+      />
+      <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+      <span style={{ fontSize: 7, color: 'var(--text-3)', letterSpacing: 1 }}>SHOW:</span>
+      {filters.map(f => (
+        <button key={f} onClick={() => setShowFilter(f)}
+          style={{
+            padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
+            background: showFilter === f ? 'var(--accent-dim)' : 'transparent',
+            color: showFilter === f ? 'var(--accent)' : 'var(--text-3)',
+            border: showFilter === f ? '1px solid var(--accent)' : '1px solid var(--border)',
+            borderRadius: 2, cursor: 'pointer', letterSpacing: 0.5,
+          }}>{f}</button>
+      ))}
+      <div style={{ flex: 1 }} />
+      {stats && (
+        <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)' }}>
+          <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats.total_operations ?? '—'}</span></span>
+          <span>CALLS <span style={{ color: 'var(--text-2)' }}>{stats.total_tool_calls ?? '—'}</span></span>
+          <span>SUCCESS <span style={{ color: 'var(--text-2)' }}>{stats.success_rate != null ? `${stats.success_rate}%` : '—'}</span></span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SectionAccordion({ icon, title, badge, statusText, statusColor, defaultOpen, children }) {
+  const [open, setOpen] = useState(defaultOpen ?? true)
+  return (
+    <div>
+      <div onClick={() => setOpen(!open)} style={{
+        display: 'flex', alignItems: 'center', padding: '8px 12px', cursor: 'pointer',
+        background: 'var(--bg-1)', borderBottom: '1px solid var(--border)',
+        userSelect: 'none',
+      }}>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', marginRight: 6, transition: 'transform 0.1s', transform: open ? 'rotate(90deg)' : 'none' }}>▶</span>
+        <span style={{ fontSize: 11, marginRight: 6 }}>{icon}</span>
+        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 12, color: 'var(--text-1)', letterSpacing: 0.5 }}>{title}</span>
+        {badge && <span style={{ marginLeft: 8, fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>{badge}</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 9, fontFamily: 'var(--font-mono)', color: statusColor || 'var(--text-3)' }}>{statusText}</span>
+      </div>
+      {open && <div style={{ padding: '8px 12px' }}>{children}</div>}
+    </div>
+  )
+}
+
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
   const [stats, setStats] = useState(null)
+  const [search, setSearch] = useState('')
+  const [showFilter, setShowFilter] = useState('ALL')
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
     const id = setInterval(() => fetchStats().then(setStats).catch(() => {}), 30000)
@@ -594,33 +657,29 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      {/* Page header + stats pills */}
-      <div className="px-5 py-3 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
-        <h1 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Dashboard</h1>
-        <div className="flex gap-2 mt-1">
-          {[
-            ['Runs',    stats?.total_operations],
-            ['Calls',   stats?.total_tool_calls],
-            ['Success', stats?.success_rate != null ? `${stats.success_rate}%` : null],
-          ].map(([label, val]) => (
-            <span key={label} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] border"
-                  style={{ background: 'var(--bg-3)', color: 'var(--text-2)', borderColor: 'var(--border)' }}>
-              <span style={{ color: 'var(--text-3)' }}>{label}</span>
-              <span className="mono" style={{ color: 'var(--text-1)' }}>{val ?? '—'}</span>
-            </span>
-          ))}
-        </div>
-      </div>
-      <CardFilterBar activeFilters={activeFilters} onToggle={onToggleFilter} onToggleAll={onToggleAll} />
-      {/* Single unified scroll area — one scrollbar for both sections */}
+      <DrillDownBar search={search} setSearch={setSearch} showFilter={showFilter} setShowFilter={setShowFilter} stats={stats} />
       <div className="flex-1 overflow-auto min-h-0">
         <AlertsPanel />
-        <DashboardCards activeFilters={activeFilters} />
-        <div className="border-t px-5 py-4" style={{ borderColor: 'var(--border)' }}>
-          <ServiceCardsErrorBoundary>
-            <ServiceCards activeFilters={activeFilters} onTab={onTab} />
-          </ServiceCardsErrorBoundary>
-        </div>
+
+        <SectionAccordion icon="⬡" title="DEATHSTAR PLATFORM" badge="INTERNAL" statusText="" defaultOpen={true}>
+          <DashboardCards activeFilters={activeFilters} />
+        </SectionAccordion>
+
+        <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <ServiceCardsErrorBoundary>
+              <ServiceCards activeFilters={activeFilters.filter(k => k.includes('vm'))} onTab={onTab} />
+            </ServiceCardsErrorBoundary>
+          </div>
+        </SectionAccordion>
+
+        <SectionAccordion icon="◉" title="NETWORK · STORAGE · SECURITY" badge="EXTERNAL" statusText="" defaultOpen={true}>
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <ServiceCardsErrorBoundary>
+              <ServiceCards activeFilters={activeFilters.filter(k => k.includes('external') || k.includes('containers'))} onTab={onTab} />
+            </ServiceCardsErrorBoundary>
+          </div>
+        </SectionAccordion>
       </div>
     </div>
   )
