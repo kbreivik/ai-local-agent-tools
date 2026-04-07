@@ -133,6 +133,31 @@ function SectionHeader({ label }) {
 }
 
 function InfrastructureTab({ draft, update }) {
+  // Pre-fill platform fields from connections DB on mount
+  const [connLoaded, setConnLoaded] = useState(false)
+  useEffect(() => {
+    if (connLoaded) return
+    const platforms = [
+      { platform: 'proxmox', hostKey: 'proxmoxHost', credKeys: { token_id: 'proxmoxTokenId', secret: 'proxmoxTokenSecret' } },
+      { platform: 'fortigate', hostKey: 'fortigateHost', credKeys: { api_key: 'fortigateApiKey' } },
+      { platform: 'truenas', hostKey: 'truenasHost', credKeys: { api_key: 'truenasApiKey' } },
+    ]
+    fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : { data: [] })
+      .then(d => {
+        const conns = d.data || []
+        for (const { platform, hostKey, credKeys } of platforms) {
+          const conn = conns.find(c => c.platform === platform && c.host)
+          if (conn && !draft[hostKey]) {
+            update(hostKey, conn.host)
+          }
+          // Don't pre-fill secrets — they're masked ("***") in the connections list
+        }
+        setConnLoaded(true)
+      })
+      .catch(() => setConnLoaded(true))
+  }, [connLoaded, draft, update])
+
   return (
     <div>
       {/* Docker / Swarm */}

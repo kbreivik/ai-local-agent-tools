@@ -143,8 +143,10 @@ def update_settings(
         for key, value in body.items():
             if key not in SETTINGS_KEYS:
                 continue
-            # Don't overwrite real values with masked placeholders
+            # Don't overwrite real values with masked placeholders or empty secrets
             if isinstance(value, str) and "***" in value:
+                continue
+            if key in SENSITIVE_KEYS and (value == "" or value is None):
                 continue
             _set(key, value, registry=SETTINGS_KEYS)
             updated[key] = _mask(value) if (key in SENSITIVE_KEYS and value) else value

@@ -131,9 +131,16 @@ export function OptionsProvider({ children }) {
     setOptions(merged)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged))
 
-    // Persist server-owned keys to API — exclude masked values to avoid overwriting real secrets
+    // Persist server-owned keys to API — exclude masked values and empty secrets
+    const SENSITIVE = new Set(['lmStudioApiKey', 'externalApiKey', 'proxmoxTokenSecret', 'ghcrToken', 'fortigateApiKey', 'truenasApiKey'])
     const serverPayload = Object.fromEntries(
-      Object.entries(merged).filter(([k, v]) => SERVER_KEYS.has(k) && !isMasked(v))
+      Object.entries(merged).filter(([k, v]) => {
+        if (!SERVER_KEYS.has(k)) return false
+        if (isMasked(v)) return false
+        // Don't send empty strings for sensitive keys — preserves existing DB value
+        if (SENSITIVE.has(k) && (v === '' || v == null)) return false
+        return true
+      })
     )
     await saveSettings(serverPayload)  // throws on failure — let caller handle
   }
