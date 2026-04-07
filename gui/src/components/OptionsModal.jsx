@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Display']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Display']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -917,3 +917,6 @@ export default function OptionsModal() {
     </>
   )
 }
+
+// Named exports for SettingsPage
+export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, DisplayTab, UpdateStatus }

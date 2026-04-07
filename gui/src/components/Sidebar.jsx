@@ -5,7 +5,6 @@
 import { useState, useEffect } from 'react'
 import { useAgentOutput } from '../context/AgentOutputContext'
 import { fetchHealth } from '../api'
-import OptionsModal from './OptionsModal'
 import LockBadge from './LockBadge'
 
 const NAV = [
@@ -24,6 +23,9 @@ const NAV = [
     { key: 'Tests',     icon: '✓' },
     { key: 'Ingest',    icon: '↓' },
     { key: 'Docs',      icon: '◪' },
+  ]},
+  { section: 'Settings', items: [
+    { key: 'Settings',  icon: '⚙' },
   ]},
 ]
 
@@ -65,12 +67,6 @@ export default function Sidebar({ activeTab, onTab }) {
             ))}
           </div>
         ))}
-
-        {/* Settings section */}
-        <div className="sidebar-section">Settings</div>
-        <div className="mx-2">
-          <OptionsModal />
-        </div>
       </nav>
 
       {/* Footer — status indicators */}

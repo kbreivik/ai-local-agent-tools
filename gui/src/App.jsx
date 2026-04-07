@@ -10,7 +10,7 @@ import MemoryPanel    from './components/MemoryPanel'
 import LogsPanel      from './components/LogsPanel'
 import TestsPanel     from './components/TestsPanel'
 import DashboardCards from './components/DashboardCards'
-import OptionsModal   from './components/OptionsModal'
+import SettingsPage   from './components/SettingsPage'
 import { OptionsProvider, useOptions } from './context/OptionsContext'
 import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelContext'
 import { AgentProvider } from './context/AgentContext'
@@ -198,7 +198,6 @@ function Header({ activeTab, onTab }) {
 
       <div className="flex items-center gap-2 h-full">
         <UserBadge />
-        <OptionsModal />
       </div>
     </header>
   )
@@ -802,6 +801,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden">
                 <TestsPanel />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Settings' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: 'var(--bg-0)' }}>
+                <SettingsPage />
               </div>
             </div>
           )}
