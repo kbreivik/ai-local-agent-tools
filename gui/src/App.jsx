@@ -643,7 +643,7 @@ function ProxmoxAuthRows() {
   useEffect(() => {
     fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections?platform=proxmox`, { headers: { ...authHeaders() } })
       .then(r => r.ok ? r.json() : { data: [] })
-      .then(d => { const c = (d.data || []).find(x => x.host); if (c) setConn(c) })
+      .then(d => { const c = (d.data || []).find(x => x.host && x.platform === 'proxmox'); if (c) setConn(c) })
       .catch(() => {})
   }, [])
   if (!conn) return null
@@ -680,14 +680,36 @@ function PlatformCoreCards() {
   const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
   const apiOk = health?.status === 'ok'
 
+  const _healthDot = (h) => {
+    if (h === 'healthy' || h === 'ok' || h === 'green') return 'var(--green)'
+    if (h === 'degraded' || h === 'yellow') return 'var(--amber)'
+    if (h === 'critical' || h === 'error' || h === 'red') return 'var(--red)'
+    return 'var(--text-3)'
+  }
+  const _healthTag = (h) => {
+    if (h === 'healthy' || h === 'ok' || h === 'green') return 'green'
+    if (h === 'degraded' || h === 'yellow') return 'amber'
+    if (h === 'critical' || h === 'error' || h === 'red') return 'red'
+    return 'grey'
+  }
+  const _tagBg = (c) => c === 'green' ? 'var(--green-dim)' : c === 'amber' ? 'var(--amber-dim)' : c === 'red' ? 'var(--red-dim)' : 'var(--bg-3)'
+  const _tagFg = (c) => c === 'green' ? 'var(--green)' : c === 'amber' ? 'var(--amber)' : c === 'red' ? 'var(--red)' : 'var(--text-3)'
+
   const _row = (dot, label, tag, tagColor, value) => (
     <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6 }}>
       <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
       <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
-      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: tagColor === 'green' ? 'var(--green-dim)' : tagColor === 'red' ? 'var(--red-dim)' : 'var(--bg-3)', color: tagColor === 'green' ? 'var(--green)' : tagColor === 'red' ? 'var(--red)' : 'var(--text-3)', borderRadius: 2 }}>{tag}</span>}
-      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>
+      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2 }}>{tag}</span>}
+      {value && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>}
     </div>
   )
+
+  // Extract data for right-side values
+  const kafkaHealth = statusData?.kafka?.health || 'unknown'
+  const kafkaBrokers = statusData?.kafka?.data?.brokers?.length ?? statusData?.kafka?.data?.count ?? ''
+  const esHealth = statusData?.elasticsearch?.health || 'unknown'
+  const esNodes = statusData?.elasticsearch?.data?.node_count ?? statusData?.elasticsearch?.data?.nodes ?? ''
+  const muninnEngrams = statusData?.muninndb?.data?.engram_count ?? statusData?.muninndb?.data?.count ?? ''
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -695,18 +717,19 @@ function PlatformCoreCards() {
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${apiOk ? 'var(--green)' : 'var(--red)'}`, borderRadius: 2, padding: '8px 10px' }}>
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>PLATFORM CORE</div>
         {_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
-        {_row('var(--green)', 'DS-postgres', 'HEALTHY', 'green', '')}
-        {_row('var(--green)', 'DS-muninndb', 'HEALTHY', 'green', '')}
-        {_row(statusData?.kafka?.health === 'healthy' ? 'var(--green)' : 'var(--amber)', 'Kafka', statusData?.kafka?.health === 'healthy' ? 'HEALTHY' : 'DEGRADED', statusData?.kafka?.health === 'healthy' ? 'green' : 'red', '')}
-        {_row(statusData?.elasticsearch?.health === 'healthy' ? 'var(--green)' : 'var(--amber)', 'Elasticsearch', statusData?.elasticsearch?.health === 'healthy' ? 'HEALTHY' : 'DEGRADED', statusData?.elasticsearch?.health === 'healthy' ? 'green' : 'red', '')}
+        {_row('var(--green)', 'DS-postgres', 'HEALTHY', 'green', 'pg16')}
+        {_row(_healthDot(statusData?.muninndb?.health), 'DS-muninndb', (statusData?.muninndb?.health || 'unknown').toUpperCase(), _healthTag(statusData?.muninndb?.health), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
+        {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
+        {_row(_healthDot(esHealth), 'Elasticsearch', esHealth.toUpperCase(), _healthTag(esHealth), esNodes ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '')}
       </div>
 
       {/* COLLECTORS */}
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--green)', borderRadius: 2, padding: '8px 10px' }}>
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>COLLECTORS</div>
-        {sortedCollectors.map(([name, c]) => (
-          _row(c.running ? 'var(--green)' : 'var(--red)', name, c.last_health || 'unknown', c.running ? 'green' : 'red', c.running ? '' : 'stopped')
-        ))}
+        {sortedCollectors.map(([name, c]) => {
+          const h = c.last_health || 'unknown'
+          return _row(_healthDot(h), name, h.toUpperCase(), _healthTag(h), c.running ? '' : 'stopped')
+        })}
         {sortedCollectors.length === 0 && (
           <div style={{ fontSize: 9, color: 'var(--text-3)', padding: '4px 0' }}>Loading collectors...</div>
         )}
