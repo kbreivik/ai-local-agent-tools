@@ -890,7 +890,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
           <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
             <ProxmoxAuthRows />
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['vms']} onTab={onTab} />
+              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}
@@ -898,7 +898,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('COMPUTE') && (
           <SectionAccordion icon="⊟" title="CONTAINERS" badge="DOCKER" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} />
+              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}

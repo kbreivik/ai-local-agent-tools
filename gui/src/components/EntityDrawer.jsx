@@ -75,15 +75,15 @@ export default function EntityDrawer({ entityId, onClose }) {
         onClick={onClose}
         style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          zIndex: 900,
+          zIndex: 49,
         }}
       />
 
       {/* Drawer */}
       <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 380,
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 400,
         background: 'var(--bg-1)', borderLeft: '1px solid var(--border)',
-        zIndex: 901, display: 'flex', flexDirection: 'column',
+        zIndex: 50, display: 'flex', flexDirection: 'column',
         animation: 'slideInRight 0.15s ease-out',
       }}>
         {/* Header */}

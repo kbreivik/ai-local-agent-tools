@@ -660,12 +660,20 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   )
 }
 
-function ContainerCardCollapsed({ c }) {
-  // Compact pill — detail rows removed; InfraCard header shows dot + name + version
-  if (c.problem) {
-    return <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>
-  }
-  return null
+function ContainerCardCollapsed({ c, onEntityDetail }) {
+  return (
+    <div className="flex items-center gap-1">
+      {c.problem && <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>}
+      {onEntityDetail && (
+        <button
+          className="text-[10px] px-1 py-px ml-auto"
+          style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
+          onClick={e => { e.stopPropagation(); onEntityDetail(`docker:${c.name || c.id}`) }}
+          title="Entity detail"
+        >›</button>
+      )}
+    </div>
+  )
 }
 
 // ── VM / LXC card ─────────────────────────────────────────────────────────────
@@ -719,16 +727,26 @@ function ProxmoxCardExpanded({ vm, onAction, confirm, showToast }) {
   )
 }
 
-function ProxmoxCardCollapsed({ vm }) {
+function ProxmoxCardCollapsed({ vm, onEntityDetail }) {
   const typeBadge = vm.type === 'lxc'
     ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
     : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
   return (
     <>
       <div className="text-[10px] text-[#383850] mb-1">{vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM</div>
-      {vm.problem
-        ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30 mb-1">⚠ {vm.problem}</div>
-        : <div className="flex items-center">{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></div>}
+      <div className="flex items-center">
+        {vm.problem
+          ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
+          : <>{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></>}
+        {onEntityDetail && (
+          <button
+            className="text-[10px] px-1 py-px ml-auto"
+            style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
+            onClick={e => { e.stopPropagation(); onEntityDetail(`proxmox_vms:${vm.node_api}:${vm.type === 'lxc' ? 'lxc' : 'qemu'}:${vm.vmid}`) }}
+            title="Entity detail"
+          >›</button>
+        )}
+      </div>
     </>
   )
 }
@@ -948,7 +966,7 @@ function ExternalCardExpanded({ svc, onAction }) {
   )
 }
 
-function ExternalCardCollapsed({ svc }) {
+function ExternalCardCollapsed({ svc, onEntityDetail }) {
   const [reconnecting, setReconnecting] = useState(false)
   const [reconnectResult, setReconnectResult] = useState(null)
   const latencyColor = !svc.reachable ? 'text-red-400' : svc.latency_ms > 100 ? 'text-amber-400' : 'text-green-400'
@@ -964,7 +982,7 @@ function ExternalCardCollapsed({ svc }) {
   }
 
   return (
-    <>
+    <div className="flex items-center gap-1">
       {svc.problem
         ? <div className="text-[10px] px-1.5 py-px rounded inline-flex gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {svc.problem}</div>
         : <span className={`text-[10px] font-mono ${latencyColor}`}>● {svc.latency_ms != null ? `${svc.latency_ms} ms` : '—'}</span>}
@@ -975,7 +993,15 @@ function ExternalCardCollapsed({ svc }) {
           {reconnecting ? '…' : reconnectResult === 'ok' ? '✓' : reconnectResult === 'fail' ? '✕' : 'Reconnect'}
         </button>
       )}
-    </>
+      {onEntityDetail && (
+        <button
+          className="text-[10px] px-1 py-px ml-auto"
+          style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
+          onClick={e => { e.stopPropagation(); onEntityDetail(`external_services:${svc.slug}`) }}
+          title="Entity detail"
+        >›</button>
+      )}
+    </div>
   )
 }
 
@@ -1101,7 +1127,7 @@ function AutoUpdateToggle() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null, onTab }) {
+export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
   const [containers, setContainers] = useState(null)
@@ -1207,7 +1233,7 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port} uptime={c.uptime}
-                collapsed={<ContainerCardCollapsed c={c} />}
+                collapsed={<ContainerCardCollapsed c={c} onEntityDetail={onEntityDetail} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
                   onTagsLoaded={onTagsLoaded} onTab={onTab}
@@ -1272,7 +1298,7 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
                   name={vm.name}
                   sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
                   net={vm.ip || ''} uptime={vm.uptime || ''}
-                  collapsed={<ProxmoxCardCollapsed vm={vm} />}
+                  collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
                   expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
                 />
               ))}
@@ -1292,7 +1318,7 @@ export default function ServiceCards({ activeFilters = null, onTab }) {
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
                 uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
-                collapsed={<ExternalCardCollapsed svc={svc} />}
+                collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} />}
                 expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
               />
             ))}
