@@ -80,7 +80,7 @@ export default function SettingsPage({ initialTab }) {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="flex-1 overflow-y-auto px-5 py-4" style={{ overflowX: 'hidden' }}>
         {!serverLoaded && (tab === 'Infrastructure' || tab === 'AI Services') && (
           <p className="text-xs animate-pulse mb-3" style={{ color: 'var(--text-3)' }}>Loading from server…</p>
         )}
