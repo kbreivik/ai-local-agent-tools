@@ -171,6 +171,23 @@ async def get_external(user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/pbs")
+async def get_pbs(user: str = Depends(get_current_user)):
+    """PBS datastore and task status from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "pbs")
+
+    state = _parse_state(snap)
+    return {
+        "health": state.get("health", "unknown"),
+        "datastores": state.get("datastores", []),
+        "tasks": state.get("tasks", {}),
+        "latency_ms": state.get("latency_ms"),
+        "connection_label": state.get("connection_label", ""),
+        "last_updated": snap.get("timestamp") if snap else None,
+    }
+
+
 # ── GET /containers/{id}/tags ─────────────────────────────────────────────────
 
 def _fetch_ghcr_tags(image_bare: str) -> list[str]:
