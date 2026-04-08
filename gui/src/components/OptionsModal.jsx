@@ -803,26 +803,24 @@ function AccessTab() {
 
   return (
     <div onClick={e => e.stopPropagation()}>
-      {/* Header: sub-tab buttons + action button */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {['users', 'tokens'].map(t => (
-            <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null); setShowAddUser(false); setShowAddToken(false) }} style={{
-              fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
-              background: subTab === t ? 'var(--accent-dim)' : 'transparent',
-              color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
-              border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
-              borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
-            }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
-          ))}
-        </div>
+      {/* Header: sub-tab buttons + action button in one row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        {['users', 'tokens'].map(t => (
+          <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null); setShowAddUser(false); setShowAddToken(false) }} style={{
+            fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
+            background: subTab === t ? 'var(--accent-dim)' : 'transparent',
+            color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
+            border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
+          }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
+        ))}
         {subTab === 'users' && (
-          <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddUser(!showAddUser)}>
+          <button className="btn btn-primary text-[9px] px-2 py-1" style={{ marginLeft: 'auto' }} onClick={() => setShowAddUser(!showAddUser)}>
             {showAddUser ? '✕ Cancel' : '+ ADD USER'}
           </button>
         )}
         {subTab === 'tokens' && (
-          <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddToken(!showAddToken)}>
+          <button className="btn btn-primary text-[9px] px-2 py-1" style={{ marginLeft: 'auto' }} onClick={() => setShowAddToken(!showAddToken)}>
             {showAddToken ? '✕ Cancel' : '+ GENERATE TOKEN'}
           </button>
         )}
@@ -851,15 +849,37 @@ function AccessTab() {
               <th style={_th}>USERNAME</th><th style={_th}>ROLE</th><th style={_th}>STATUS</th><th style={_th}>LAST LOGIN</th><th style={_th}>ACTIONS</th>
             </tr></thead>
             <tbody>
-              {users.map(u => (
-                <tr key={u.id}>
-                  <td style={{ ..._td, color: 'var(--text-1)' }}>{u.username}</td>
-                  <td style={_td}><span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: ROLE_COLORS[u.role] || 'var(--text-3)', letterSpacing: 0.5 }}>{ROLE_LABELS[u.role] || u.role}</span></td>
-                  <td style={_td}><span style={{ color: u.enabled ? 'var(--green)' : 'var(--text-3)' }}>{u.enabled ? '● ACTIVE' : '○ DISABLED'}</span></td>
-                  <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(u.last_login)}</td>
-                  <td style={_td}><button style={{ fontSize: 9, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => deleteUser(u.id)}>Delete</button></td>
-                </tr>
-              ))}
+              {users.map(u => {
+                const changeRole = async (newRole) => {
+                  await fetch(`${BASE}/api/users/${u.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ role: newRole }) })
+                  fetchUsers()
+                }
+                const toggleEnabled = async () => {
+                  await fetch(`${BASE}/api/users/${u.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ enabled: !u.enabled }) })
+                  fetchUsers()
+                }
+                return (
+                  <tr key={u.id}>
+                    <td style={{ ..._td, color: 'var(--text-1)' }}>{u.username}</td>
+                    <td style={_td}><span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: ROLE_COLORS[u.role] || 'var(--text-3)', letterSpacing: 0.5 }}>{ROLE_LABELS[u.role] || u.role}</span></td>
+                    <td style={_td}><span style={{ color: u.enabled ? 'var(--green)' : 'var(--text-3)' }}>{u.enabled ? '● ACTIVE' : '○ DISABLED'}</span></td>
+                    <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(u.last_login)}</td>
+                    <td style={{ ..._td, whiteSpace: 'nowrap' }}>
+                      <select style={{ fontSize: 8, background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 2, padding: '1px 4px', marginRight: 4, fontFamily: 'var(--font-mono)' }}
+                              value={u.role} onChange={e => changeRole(e.target.value)}>
+                        <option value="sith_lord">Sith Lord</option>
+                        <option value="imperial_officer">Officer</option>
+                        <option value="stormtrooper">Trooper</option>
+                        <option value="droid">Droid</option>
+                      </select>
+                      <button style={{ fontSize: 8, color: u.enabled ? 'var(--amber)' : 'var(--green)', background: 'none', border: 'none', cursor: 'pointer', marginRight: 4 }}
+                              onClick={toggleEnabled}>{u.enabled ? 'Disable' : 'Enable'}</button>
+                      <button style={{ fontSize: 8, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}
+                              onClick={() => deleteUser(u.id)}>Delete</button>
+                    </td>
+                  </tr>
+                )
+              })}
               {users.length === 0 && <tr><td colSpan={5} style={{ ..._td, color: 'var(--text-3)', textAlign: 'center' }}>No users — the Force is strong but the team is small</td></tr>}
             </tbody>
           </table>
