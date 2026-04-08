@@ -763,6 +763,88 @@ function SectionAccordion({ icon, title, badge, statusText, statusColor, default
   )
 }
 
+// Platform groupings for dashboard sections
+const SECTION_PLATFORMS = {
+  NETWORK:  ['fortigate', 'fortiswitch', 'opnsense', 'cisco', 'juniper', 'aruba', 'unifi', 'pihole', 'technitium', 'nginx', 'caddy', 'traefik'],
+  STORAGE:  ['truenas', 'pbs', 'synology', 'syncthing'],
+  SECURITY: ['security_onion', 'wazuh', 'grafana', 'kibana'],
+}
+
+const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: 'SSH', none: 'NONE' }
+const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
+
+function ConnectionSectionCards({ platforms, externalData }) {
+  const [conns, setConns] = useState([])
+  useEffect(() => {
+    const load = () => {
+      fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections`, { headers: { ...authHeaders() } })
+        .then(r => r.ok ? r.json() : { data: [] })
+        .then(d => setConns((d.data || []).filter(c => platforms.includes(c.platform) && c.host)))
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [expanded, setExpanded] = useState({})
+
+  if (conns.length === 0) {
+    return (
+      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', padding: 12 }}>
+        No connections configured — add one in Settings → Connections
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
+      {conns.map(c => {
+        const ext = (externalData || []).find(e => e.slug === c.platform)
+        const borderColor = c.verified ? 'var(--green)' : c.verified === false ? 'var(--red)' : 'var(--text-3)'
+        const isExpanded = expanded[c.id]
+        return (
+          <div key={c.id} style={{
+            background: 'var(--bg-2)', border: '1px solid var(--border)',
+            borderLeft: `3px solid ${borderColor}`, borderRadius: 2, padding: '8px 10px',
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
+              <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>{c.platform?.toUpperCase()}</span>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: borderColor, flexShrink: 0 }} />
+              {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
+              <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{AUTH_DISPLAY[c.auth_type] || c.auth_type}</span>
+              <button onClick={() => setExpanded(e => ({ ...e, [c.id]: !e[c.id] }))} style={{
+                background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
+              }}>{isExpanded ? '−' : '+'}</button>
+            </div>
+            {/* AUTH + HOST rows */}
+            <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>AUTH</span>
+                <span style={{ color: 'var(--cyan)' }}>{AUTH_DISPLAY[c.auth_type] || c.auth_type}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>HOST</span>
+                <span style={{ color: 'var(--cyan)' }}>{c.host}:{c.port || 443}</span>
+              </div>
+            </div>
+            {/* Expanded detail */}
+            {isExpanded && (
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bg-3)', fontSize: 9, color: 'var(--text-3)' }}>
+                <div>Library: {LIB_DISPLAY(c.auth_type)}</div>
+                <div>Verified: {c.verified ? 'yes' : 'no'}{c.last_seen ? ` · ${c.last_seen}` : ''}</div>
+                <div>ID: {(c.id || '').slice(0, 8)}…</div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
@@ -811,11 +893,29 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
           </SectionAccordion>
         )}
 
-        {(showSection('NETWORK') || showSection('STORAGE') || showSection('SECURITY')) && (
-          <SectionAccordion icon="◉" title="NETWORK · STORAGE · SECURITY" badge="EXTERNAL" statusText="" defaultOpen={true}>
+        {showSection('COMPUTE') && (
+          <SectionAccordion icon="⊟" title="CONTAINERS" badge="DOCKER" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['external_services', 'containers_local', 'containers_swarm']} onTab={onTab} />
+              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} />
             </ServiceCardsErrorBoundary>
+          </SectionAccordion>
+        )}
+
+        {showSection('NETWORK') && (
+          <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} />
+          </SectionAccordion>
+        )}
+
+        {showSection('STORAGE') && (
+          <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} />
+          </SectionAccordion>
+        )}
+
+        {showSection('SECURITY') && (
+          <SectionAccordion icon="⊛" title="SECURITY" badge="SOC" statusText="" defaultOpen={true}>
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} />
           </SectionAccordion>
         )}
       </div>
