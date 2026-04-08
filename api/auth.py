@@ -58,7 +58,19 @@ def verify_password(plain: str) -> bool:
 
 
 def authenticate(username: str, password: str) -> Optional[str]:
-    """Return username if credentials valid, else None."""
+    """Return username if credentials valid, else None.
+
+    Checks users table first (multi-user), falls back to env var admin.
+    """
+    # Try users table first
+    try:
+        from api.users import authenticate_user
+        user = authenticate_user(username, password)
+        if user:
+            return user["username"]
+    except Exception:
+        pass
+    # Fallback: env var admin
     if username == _ADMIN_USER and verify_password(password):
         return username
     return None
@@ -71,15 +83,27 @@ def create_token(username: str) -> str:
 
 
 def decode_token(token: str) -> str:
-    """Return username or raise HTTPException 401."""
+    """Return username or raise HTTPException 401.
+
+    Tries JWT first, then API token hash lookup.
+    """
+    # Try JWT
     try:
         payload = _pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return username
+        if username:
+            return username
     except _pyjwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        pass
+    # Try API token
+    try:
+        from api.users import authenticate_token
+        result = authenticate_token(token)
+        if result:
+            return result["username"]
+    except Exception:
+        pass
+    raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 # ── FastAPI dependency ────────────────────────────────────────────────────────

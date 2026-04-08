@@ -27,6 +27,7 @@ from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
 from api.routers.connections import router as connections_router
+from api.routers.users import router as users_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
@@ -107,6 +108,12 @@ async def lifespan(app: FastAPI):
         init_connections()
     except Exception as e:
         _log.debug("Connections table init skipped: %s", e)
+    # Initialize users + API tokens tables
+    try:
+        from api.users import init_users_tables
+        init_users_tables()
+    except Exception as e:
+        _log.debug("Users table init skipped: %s", e)
     # Scan and load plugins (Tier 2 tools)
     try:
         from api.plugin_loader import scan_plugins
@@ -180,6 +187,7 @@ app.include_router(ingest_router)
 app.include_router(skills_router)
 app.include_router(dashboard_router)
 app.include_router(connections_router)
+app.include_router(users_router)
 
 
 def _get_host_ips() -> dict:

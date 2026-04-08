@@ -741,12 +741,71 @@ function PermissionsTab() {
 
 function AccessTab() {
   const [subTab, setSubTab] = useState('users')
+  const [users, setUsers] = useState([])
+  const [tokens, setTokens] = useState([])
+  const [showAddUser, setShowAddUser] = useState(false)
+  const [showAddToken, setShowAddToken] = useState(false)
+  const [newUser, setNewUser] = useState({ username: '', password: '', confirm: '', role: 'stormtrooper' })
+  const [newToken, setNewToken] = useState({ name: '', role: 'droid', expires_at: '' })
+  const [generatedToken, setGeneratedToken] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const ROLE_COLORS = { sith_lord: 'var(--red)', imperial_officer: 'var(--amber)', stormtrooper: 'var(--cyan)', droid: 'var(--text-3)' }
+  const ROLE_LABELS = { sith_lord: 'SITH LORD', imperial_officer: 'IMPERIAL OFFICER', stormtrooper: 'STORMTROOPER', droid: 'DROID' }
+
+  const fetchUsers = () => fetch(`${BASE}/api/users`, { headers: { ...authHeaders() } }).then(r => r.json()).then(d => setUsers(d.data || [])).catch(() => {})
+  const fetchTokens = () => fetch(`${BASE}/api/tokens`, { headers: { ...authHeaders() } }).then(r => r.json()).then(d => setTokens(d.data || [])).catch(() => {})
+  useEffect(() => { fetchUsers(); fetchTokens() }, [])
+
+  const addUser = async () => {
+    if (newUser.password !== newUser.confirm) return
+    setSaving(true)
+    const r = await fetch(`${BASE}/api/users`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ username: newUser.username, password: newUser.password, role: newUser.role }) })
+    setSaving(false)
+    if (r.ok) { setShowAddUser(false); setNewUser({ username: '', password: '', confirm: '', role: 'stormtrooper' }); fetchUsers() }
+  }
+
+  const deleteUser = async (id) => {
+    await fetch(`${BASE}/api/users/${id}`, { method: 'DELETE', headers: { ...authHeaders() } })
+    fetchUsers()
+  }
+
+  const addToken = async () => {
+    setSaving(true)
+    const r = await fetch(`${BASE}/api/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ name: newToken.name, role: newToken.role, expires_at: newToken.expires_at || null }) })
+    setSaving(false)
+    if (r.ok) {
+      const d = await r.json()
+      setGeneratedToken(d.token)
+      setShowAddToken(false)
+      setNewToken({ name: '', role: 'droid', expires_at: '' })
+      fetchTokens()
+    }
+  }
+
+  const revokeToken = async (id) => {
+    await fetch(`${BASE}/api/tokens/${id}`, { method: 'DELETE', headers: { ...authHeaders() } })
+    fetchTokens()
+  }
+
+  const _relTime = (iso) => {
+    if (!iso) return 'never'
+    const d = new Date(iso)
+    const s = Math.floor((Date.now() - d.getTime()) / 1000)
+    if (s < 60) return 'just now'
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+    return `${Math.floor(s / 86400)}d ago`
+  }
+
+  const _td = { fontSize: 10, padding: '5px 8px', borderBottom: '1px solid var(--bg-3)', fontFamily: 'var(--font-mono)' }
+  const _th = { fontSize: 8, padding: '5px 8px', borderBottom: '1px solid var(--border)', color: 'var(--text-3)', letterSpacing: 1, textAlign: 'left', fontFamily: 'var(--font-mono)' }
+
   return (
-    <div>
-      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>User and API token management coming soon</div>
+    <div onClick={e => e.stopPropagation()}>
       <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
         {['users', 'tokens'].map(t => (
-          <button key={t} onClick={() => setSubTab(t)} style={{
+          <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null) }} style={{
             fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
             background: subTab === t ? 'var(--accent-dim)' : 'transparent',
             color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
@@ -755,9 +814,97 @@ function AccessTab() {
           }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
         ))}
       </div>
-      <div style={{ fontSize: 10, color: 'var(--text-3)', padding: 16, textAlign: 'center', background: 'var(--bg-2)', borderRadius: 2 }}>
-        {subTab === 'users' ? 'User management will be available in a future release.' : 'API token generation and rotation will be available in a future release.'}
-      </div>
+
+      {subTab === 'users' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddUser(!showAddUser)}>
+              {showAddUser ? '✕ Cancel' : '+ ADD USER'}
+            </button>
+          </div>
+          {showAddUser && (
+            <div className="card p-3 space-y-2 mb-3" onClick={e => e.stopPropagation()}>
+              <input className="input text-[10px]" placeholder="Username" value={newUser.username} onChange={e => setNewUser(u => ({ ...u, username: e.target.value }))} />
+              <input className="input text-[10px]" type="password" placeholder="Password" value={newUser.password} onChange={e => setNewUser(u => ({ ...u, password: e.target.value }))} />
+              <input className="input text-[10px]" type="password" placeholder="Confirm password" value={newUser.confirm} onChange={e => setNewUser(u => ({ ...u, confirm: e.target.value }))} />
+              {newUser.password && newUser.confirm && newUser.password !== newUser.confirm && <div style={{ fontSize: 9, color: 'var(--red)' }}>Passwords don't match</div>}
+              <select className="input text-[10px]" value={newUser.role} onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}>
+                <option value="imperial_officer">Imperial Officer</option>
+                <option value="stormtrooper">Stormtrooper</option>
+                <option value="droid">Droid</option>
+              </select>
+              <button className="btn btn-primary w-full text-[10px]" onClick={addUser} disabled={saving || !newUser.username || !newUser.password || newUser.password !== newUser.confirm}>
+                {saving ? 'Creating…' : 'Create User'}
+              </button>
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={_th}>USERNAME</th><th style={_th}>ROLE</th><th style={_th}>STATUS</th><th style={_th}>LAST LOGIN</th><th style={_th}>ACTIONS</th>
+            </tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id}>
+                  <td style={{ ..._td, color: 'var(--text-1)' }}>{u.username}</td>
+                  <td style={_td}><span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: ROLE_COLORS[u.role] || 'var(--text-3)', letterSpacing: 0.5 }}>{ROLE_LABELS[u.role] || u.role}</span></td>
+                  <td style={_td}><span style={{ color: u.enabled ? 'var(--green)' : 'var(--text-3)' }}>{u.enabled ? '● ACTIVE' : '○ DISABLED'}</span></td>
+                  <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(u.last_login)}</td>
+                  <td style={_td}><button style={{ fontSize: 9, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => deleteUser(u.id)}>Delete</button></td>
+                </tr>
+              ))}
+              {users.length === 0 && <tr><td colSpan={5} style={{ ..._td, color: 'var(--text-3)', textAlign: 'center' }}>No users — the Force is strong but the team is small</td></tr>}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {subTab === 'tokens' && (
+        <>
+          {generatedToken && (
+            <div style={{ padding: '8px 12px', background: 'var(--amber-dim)', border: '1px solid var(--amber)', borderRadius: 2, marginBottom: 8, fontSize: 10 }}>
+              <div style={{ color: 'var(--amber)', marginBottom: 4, fontWeight: 600 }}>⚠ This token will not be shown again</div>
+              <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)', wordBreak: 'break-all', cursor: 'pointer' }} onClick={() => { navigator.clipboard.writeText(generatedToken); setGeneratedToken(null) }} title="Click to copy">{generatedToken}</div>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddToken(!showAddToken)}>
+              {showAddToken ? '✕ Cancel' : '+ GENERATE TOKEN'}
+            </button>
+          </div>
+          {showAddToken && (
+            <div className="card p-3 space-y-2 mb-3" onClick={e => e.stopPropagation()}>
+              <input className="input text-[10px]" placeholder="Token name (e.g. ansible-deploy)" value={newToken.name} onChange={e => setNewToken(t => ({ ...t, name: e.target.value }))} />
+              <select className="input text-[10px]" value={newToken.role} onChange={e => setNewToken(t => ({ ...t, role: e.target.value }))}>
+                <option value="imperial_officer">Imperial Officer</option>
+                <option value="stormtrooper">Stormtrooper</option>
+                <option value="droid">Droid</option>
+              </select>
+              <input className="input text-[10px]" type="date" placeholder="Expires (optional)" value={newToken.expires_at} onChange={e => setNewToken(t => ({ ...t, expires_at: e.target.value }))} />
+              <button className="btn btn-primary w-full text-[10px]" onClick={addToken} disabled={saving || !newToken.name}>
+                {saving ? 'Generating…' : 'Generate Token'}
+              </button>
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={_th}>NAME</th><th style={_th}>ROLE</th><th style={_th}>CREATED</th><th style={_th}>EXPIRES</th><th style={_th}>LAST USED</th><th style={_th}>ACTIONS</th>
+            </tr></thead>
+            <tbody>
+              {tokens.map(t => (
+                <tr key={t.id}>
+                  <td style={{ ..._td, color: 'var(--text-1)' }}>{t.name}</td>
+                  <td style={_td}><span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: ROLE_COLORS[t.role] || 'var(--text-3)' }}>{ROLE_LABELS[t.role] || t.role}</span></td>
+                  <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(t.created_at)}</td>
+                  <td style={{ ..._td, color: 'var(--text-3)' }}>{t.expires_at ? new Date(t.expires_at).toLocaleDateString() : 'never'}</td>
+                  <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(t.last_used)}</td>
+                  <td style={_td}><button style={{ fontSize: 9, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => revokeToken(t.id)}>Revoke</button></td>
+                </tr>
+              ))}
+              {tokens.length === 0 && <tr><td colSpan={6} style={{ ..._td, color: 'var(--text-3)', textAlign: 'center' }}>No API tokens generated</td></tr>}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   )
 }
