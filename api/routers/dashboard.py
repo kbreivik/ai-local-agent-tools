@@ -188,6 +188,23 @@ async def get_pbs(user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/truenas")
+async def get_truenas(user: str = Depends(get_current_user)):
+    """TrueNAS pool health and capacity from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "truenas")
+
+    state = _parse_state(snap)
+    return {
+        "health": state.get("health", "unknown"),
+        "pools": state.get("pools", []),
+        "pool_count": state.get("pool_count", 0),
+        "latency_ms": state.get("latency_ms"),
+        "connection_label": state.get("connection_label", ""),
+        "last_updated": snap.get("timestamp") if snap else None,
+    }
+
+
 # ── GET /containers/{id}/tags ─────────────────────────────────────────────────
 
 def _fetch_ghcr_tags(image_bare: str) -> list[str]:
