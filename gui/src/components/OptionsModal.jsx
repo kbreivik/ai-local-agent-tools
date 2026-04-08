@@ -710,10 +710,23 @@ function PermissionsTab() {
           </tr>
         </thead>
         <tbody>
-          {['Execute tasks', 'View logs', 'Manage connections', 'Manage skills', 'System admin'].map(p => (
+          {[
+            //                                     SITH  OFFICER  TROOPER  DROID
+            ['Execute tasks',          [true,  true,  true,   false]],
+            ['Run agent commands',     [true,  true,  false,  false]],
+            ['View logs',              [true,  true,  true,   true ]],
+            ['Manage connections',     [true,  true,  false,  false]],
+            ['Manage skills',          [true,  true,  false,  false]],
+            ['Toggle maintenance',     [true,  true,  true,   false]],
+            ['Global maintenance',     [true,  true,  false,  false]],
+            ['Change AI model config', [true,  false, false,  false]],
+            ['Manage users / roles',   [true,  false, false,  false]],
+            ['System admin',           [true,  false, false,  false]],
+            ['Read-only API token',    [true,  true,  true,   true ]],
+          ].map(([p, perms]) => (
             <tr key={p}>
               <td style={{ fontSize: 10, padding: '4px 12px', color: 'var(--text-2)', borderBottom: '1px solid var(--bg-3)' }}>{p}</td>
-              {[true, true, p !== 'System admin', p === 'View logs'].map((v, i) => (
+              {perms.map((v, i) => (
                 <td key={i} style={{ fontSize: 10, padding: '4px 12px', textAlign: 'center', borderBottom: '1px solid var(--bg-3)', color: v ? 'var(--green)' : 'var(--text-3)' }}>{v ? '✓' : '—'}</td>
               ))}
             </tr>
@@ -795,7 +808,7 @@ function NamingTab({ draft, update }) {
         ].map(([label, val]) => (
           <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 10 }}>
             <span style={{ color: 'var(--text-3)' }}>{label}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--cyan, var(--accent))' }}>{val}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--cyan)' }}>{val || '—'}</span>
           </div>
         ))}
       </div>

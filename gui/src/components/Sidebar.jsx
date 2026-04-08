@@ -48,7 +48,7 @@ const orbBandStyle = {
   height: 2, background: '#200', display: 'flex', alignItems: 'center', justifyContent: 'center',
 }
 
-export default function Sidebar({ activeTab, onTab, onSettingsTab }) {
+export default function Sidebar({ activeTab, onTab, onSettingsTab, activeSettingsTab }) {
   const { isRunning, wsState } = useAgentOutput()
   const [health, setHealth] = useState(null)
   const [collapsed, setCollapsed] = useState(false)
@@ -111,7 +111,7 @@ export default function Sidebar({ activeTab, onTab, onSettingsTab }) {
             }}>{group.section}</div>
 
             {group.items.map((item, idx) => {
-              const isActive = item.key === activeTab && (!item.settingsTab || item.settingsTab === (onSettingsTab?._current || 'Connections'))
+              const isActive = item.key === activeTab && (!item.settingsTab || item.settingsTab === activeSettingsTab)
               const navKey = item.settingsTab ? `${item.key}-${item.settingsTab}` : item.key
               return (
                 <button

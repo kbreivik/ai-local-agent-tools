@@ -915,7 +915,7 @@ function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-0)' }}>
       {/* Sidebar navigation */}
-      <Sidebar activeTab={activeTab} onTab={setActiveTab} onSettingsTab={setSettingsTab} />
+      <Sidebar activeTab={activeTab} onTab={setActiveTab} onSettingsTab={setSettingsTab} activeSettingsTab={settingsTab} />
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">
