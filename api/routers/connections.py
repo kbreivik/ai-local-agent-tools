@@ -12,12 +12,19 @@ router = APIRouter(prefix="/api/connections", tags=["connections"])
 log = logging.getLogger(__name__)
 
 
-def _trigger_collector_repoll() -> None:
+_SSH_PLATFORMS = {"fortiswitch", "cisco", "juniper", "aruba"}
+
+def _trigger_collector_repoll(platform: str = "") -> None:
     """Trigger immediate repoll for collectors that read from connections DB."""
     try:
         from api.collectors.manager import manager
         loop = asyncio.get_event_loop()
-        for component in ("proxmox_vms", "external_services"):
+        targets = ["external_services"]
+        if platform in ("proxmox", "pbs"):
+            targets.append("proxmox_vms")
+        if platform in _SSH_PLATFORMS:
+            targets.append("network_ssh")
+        for component in targets:
             if manager.get(component):
                 loop.create_task(manager.trigger_poll(component))
     except Exception as e:
@@ -76,29 +83,35 @@ def create(req: CreateConnectionRequest, _: str = Depends(get_current_user)):
     )
     if result["status"] != "ok":
         raise HTTPException(400, result["message"])
-    _trigger_collector_repoll()
+    _trigger_collector_repoll(req.platform)
     return result
 
 
 @router.put("/{connection_id}")
 def update(connection_id: str, req: UpdateConnectionRequest, _: str = Depends(get_current_user)):
     """Partial update of a connection."""
-    from api.connections import update_connection
+    from api.connections import update_connection, get_connection
     kwargs = {k: v for k, v in req.model_dump().items() if v is not None}
     result = update_connection(connection_id, **kwargs)
     if result["status"] != "ok":
         raise HTTPException(400, result["message"])
-    _trigger_collector_repoll()
+    # Get platform for targeted repoll
+    conn = get_connection(connection_id)
+    _trigger_collector_repoll(conn.get("platform", "") if conn else "")
     return result
 
 
 @router.delete("/{connection_id}")
 def delete(connection_id: str, _: str = Depends(get_current_user)):
     """Delete a connection."""
-    from api.connections import delete_connection
+    from api.connections import delete_connection, get_connection
+    # Get platform before delete for targeted repoll
+    conn = get_connection(connection_id)
+    platform = conn.get("platform", "") if conn else ""
     result = delete_connection(connection_id)
     if result["status"] != "ok":
         raise HTTPException(404, result["message"])
+    _trigger_collector_repoll(platform)
     return result
 
 
