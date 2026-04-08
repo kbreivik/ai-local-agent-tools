@@ -1243,4 +1243,4 @@ export function NotificationsTab({ draft, update }) {
 }
 
 // Named exports for SettingsPage
-export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, NotificationsTab, UpdateStatus }
+export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, UpdateStatus }
