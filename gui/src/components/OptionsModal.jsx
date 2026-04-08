@@ -803,25 +803,33 @@ function AccessTab() {
 
   return (
     <div onClick={e => e.stopPropagation()}>
-      <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-        {['users', 'tokens'].map(t => (
-          <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null) }} style={{
-            fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
-            background: subTab === t ? 'var(--accent-dim)' : 'transparent',
-            color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
-            border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
-            borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
-          }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
-        ))}
+      {/* Header: sub-tab buttons + action button */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {['users', 'tokens'].map(t => (
+            <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null); setShowAddUser(false); setShowAddToken(false) }} style={{
+              fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
+              background: subTab === t ? 'var(--accent-dim)' : 'transparent',
+              color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
+              border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
+            }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
+          ))}
+        </div>
+        {subTab === 'users' && (
+          <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddUser(!showAddUser)}>
+            {showAddUser ? '✕ Cancel' : '+ ADD USER'}
+          </button>
+        )}
+        {subTab === 'tokens' && (
+          <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddToken(!showAddToken)}>
+            {showAddToken ? '✕ Cancel' : '+ GENERATE TOKEN'}
+          </button>
+        )}
       </div>
 
       {subTab === 'users' && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-            <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddUser(!showAddUser)}>
-              {showAddUser ? '✕ Cancel' : '+ ADD USER'}
-            </button>
-          </div>
           {showAddUser && (
             <div className="card p-3 space-y-2 mb-3" onClick={e => e.stopPropagation()}>
               <input className="input text-[10px]" placeholder="Username" value={newUser.username} onChange={e => setNewUser(u => ({ ...u, username: e.target.value }))} />
@@ -866,11 +874,6 @@ function AccessTab() {
               <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)', wordBreak: 'break-all', cursor: 'pointer' }} onClick={() => { navigator.clipboard.writeText(generatedToken); setGeneratedToken(null) }} title="Click to copy">{generatedToken}</div>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-            <button className="btn btn-primary text-[9px] px-2 py-1" onClick={() => setShowAddToken(!showAddToken)}>
-              {showAddToken ? '✕ Cancel' : '+ GENERATE TOKEN'}
-            </button>
-          </div>
           {showAddToken && (
             <div className="card p-3 space-y-2 mb-3" onClick={e => e.stopPropagation()}>
               <input className="input text-[10px]" placeholder="Token name (e.g. ansible-deploy)" value={newToken.name} onChange={e => setNewToken(t => ({ ...t, name: e.target.value }))} />
