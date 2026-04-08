@@ -11,6 +11,7 @@ import LogsPanel      from './components/LogsPanel'
 import TestsPanel     from './components/TestsPanel'
 import DashboardCards from './components/DashboardCards'
 import SettingsPage   from './components/SettingsPage'
+import EntityDrawer   from './components/EntityDrawer'
 import { OptionsProvider, useOptions } from './context/OptionsContext'
 import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelContext'
 import { AgentProvider } from './context/AgentContext'
@@ -773,7 +774,7 @@ const SECTION_PLATFORMS = {
 const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: 'SSH', none: 'NONE' }
 const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
 
-function ConnectionSectionCards({ platforms, externalData }) {
+function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
   const [conns, setConns] = useState([])
   useEffect(() => {
     const load = () => {
@@ -804,9 +805,10 @@ function ConnectionSectionCards({ platforms, externalData }) {
         const borderColor = c.verified ? 'var(--green)' : c.verified === false ? 'var(--red)' : 'var(--text-3)'
         const isExpanded = expanded[c.id]
         return (
-          <div key={c.id} style={{
+          <div key={c.id} onClick={() => onEntityClick && onEntityClick(`external_services:${c.platform}`)} style={{
             background: 'var(--bg-2)', border: '1px solid var(--border)',
             borderLeft: `3px solid ${borderColor}`, borderRadius: 2, padding: '8px 10px',
+            cursor: onEntityClick ? 'pointer' : 'default',
           }}>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -845,7 +847,7 @@ function ConnectionSectionCards({ platforms, externalData }) {
   )
 }
 
-function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick }) {
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
@@ -903,19 +905,19 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab }) {
 
         {showSection('NETWORK') && (
           <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} onEntityClick={onEntityClick} />
           </SectionAccordion>
         )}
 
         {showSection('STORAGE') && (
           <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} onEntityClick={onEntityClick} />
           </SectionAccordion>
         )}
 
         {showSection('SECURITY') && (
           <SectionAccordion icon="⊛" title="SECURITY" badge="SOC" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} onEntityClick={onEntityClick} />
           </SectionAccordion>
         )}
       </div>
@@ -957,6 +959,7 @@ function ClusterView() {
 function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [settingsTab, setSettingsTab] = useState('Connections')
+  const [drawerEntityId, setDrawerEntityId] = useState(null)
   const { panelOpen } = useCommandPanel()
 
   // Filter state (lifted here so SubBar can set it via onAlertNavigate)
@@ -1037,6 +1040,7 @@ function AppShell() {
               onToggleFilter={toggleFilter}
               onToggleAll={toggleAll}
               onTab={setActiveTab}
+              onEntityClick={setDrawerEntityId}
             />
           )}
 
@@ -1115,6 +1119,9 @@ function AppShell() {
 
       <AlertToast />
       <PlanConfirmModal />
+      {drawerEntityId && (
+        <EntityDrawer entityId={drawerEntityId} onClose={() => setDrawerEntityId(null)} />
+      )}
 
       {_showLayoutTest && LayoutTest && (
         <Suspense fallback={null}>
