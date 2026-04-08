@@ -968,6 +968,11 @@ class StopRequest(BaseModel):
     session_id: str
 
 
+class AskRequest(BaseModel):
+    question: str = Field(max_length=512)
+    context: dict = Field(default_factory=dict)
+
+
 @router.post("/stop")
 async def stop_agent(req: StopRequest, _: str = Depends(get_current_user)):
     """Signal the running agent loop for a session to cancel after its current step."""
@@ -1001,3 +1006,106 @@ async def list_models():
         return {"models": [m.id for m in models.data], "base_url": _lm_base()}
     except Exception as e:
         return {"models": [], "error": str(e), "base_url": _lm_base()}
+
+
+@router.post("/ask")
+async def ask_agent(req: AskRequest, _: str = Depends(get_current_user)):
+    """
+    Lightweight single-turn LLM call with entity context. No tools, no planning.
+    Streams response as Server-Sent Events (text/event-stream).
+    """
+    from starlette.responses import StreamingResponse
+    from fastapi.responses import JSONResponse
+
+    base_url = _lm_base()
+    if not base_url:
+        return JSONResponse({"error": "LM Studio not configured"}, status_code=503)
+
+    question = req.question.strip()
+    if not question:
+        return JSONResponse({"error": "question is required"}, status_code=400)
+
+    entity_ctx = req.context
+
+    system_prompt = (
+        "You are an infrastructure assistant for DEATHSTAR (Imperial Ops). "
+        "Answer questions about the infrastructure entity provided in context. "
+        "Be concise — 2-4 sentences max unless a longer answer is clearly needed. "
+        "Use plain text. No markdown headers. No bullet lists unless listing items."
+    )
+
+    ctx_lines = []
+    if entity_ctx:
+        ctx_lines.append(f"Entity: {entity_ctx.get('label', '?')} ({entity_ctx.get('id', '?')})")
+        ctx_lines.append(f"Status: {entity_ctx.get('status', 'unknown')}")
+        ctx_lines.append(f"Platform: {entity_ctx.get('platform', '?')} / Section: {entity_ctx.get('section', '?')}")
+        if entity_ctx.get('last_error'):
+            ctx_lines.append(f"Last error: {entity_ctx['last_error']}")
+        if entity_ctx.get('latency_ms') is not None:
+            ctx_lines.append(f"Latency: {entity_ctx['latency_ms']}ms")
+        meta = entity_ctx.get('metadata', {})
+        if meta:
+            meta_str = ', '.join(f"{k}={v}" for k, v in list(meta.items())[:6])
+            ctx_lines.append(f"Metadata: {meta_str}")
+
+    user_msg = "\n".join(ctx_lines) + f"\n\nQuestion: {question}"
+
+    async def generate():
+        try:
+            from openai import OpenAI
+            client = OpenAI(base_url=base_url, api_key=_lm_key())
+            stream = client.chat.completions.create(
+                model=_lm_model(),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                stream=True,
+                max_tokens=300,
+                temperature=0.3,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield f"data: {delta}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {str(e)[:120]}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/ask/suggestions")
+async def ask_suggestions(status: str = "", section: str = "", _: str = Depends(get_current_user)):
+    """Return suggested questions based on entity status and section."""
+    suggestions = ["What does this component do?", "Is this status expected?"]
+
+    if status == "error":
+        suggestions = [
+            "Why might this be failing?",
+            "What are common causes for this error?",
+            "What should I check first?",
+        ]
+    elif status == "degraded":
+        suggestions = [
+            "What could cause this degradation?",
+            "Is this a warning or something serious?",
+            "What thresholds trigger degraded status?",
+        ]
+    elif status == "healthy":
+        suggestions = [
+            "What does this component do?",
+            "What would cause this to degrade?",
+        ]
+
+    if section == "STORAGE":
+        suggestions.append("What happens when storage is full?")
+    elif section == "COMPUTE":
+        suggestions.append("How does this affect other services?")
+    elif section == "NETWORK":
+        suggestions.append("What services depend on this?")
+    elif section == "SECURITY":
+        suggestions.append("What alerts should I watch for?")
+
+    return {"suggestions": suggestions[:4]}

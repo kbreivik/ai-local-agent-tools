@@ -319,6 +319,56 @@ export async function dashboardAction(path, body = null) {
   return r.json()
 }
 
+// ── Ask agent (entity drawer) ────────────────────────────────────────────────
+
+export async function askAgent(context, question, onChunk, onDone, onError) {
+  try {
+    const resp = await fetch(`${BASE}/api/agent/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ question, context }),
+    })
+    if (!resp.ok) {
+      onError(`HTTP ${resp.status}`)
+      return
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const payload = line.slice(6)
+        if (payload === '[DONE]') { onDone(); return }
+        if (payload.startsWith('[ERROR]')) { onError(payload.slice(8)); return }
+        onChunk(payload)
+      }
+    }
+    onDone()
+  } catch (e) {
+    onError(e.message)
+  }
+}
+
+export async function fetchAskSuggestions(status = '', section = '') {
+  try {
+    const r = await fetch(
+      `${BASE}/api/agent/ask/suggestions?status=${encodeURIComponent(status)}&section=${encodeURIComponent(section)}`,
+      { headers: authHeaders() }
+    )
+    if (!r.ok) return []
+    const d = await r.json()
+    return d.suggestions || []
+  } catch {
+    return []
+  }
+}
+
 // ── WebSocket ────────────────────────────────────────────────────────────────
 
 const WS_BASE = (() => {

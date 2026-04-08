@@ -3,9 +3,9 @@
  * Opens from the right when an entity card is clicked.
  * Fetches data from GET /api/entities, filtered client-side by entity id.
  */
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { authHeaders } from '../api'
+import { authHeaders, askAgent, fetchAskSuggestions } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -35,6 +35,11 @@ export default function EntityDrawer({ entityId, onClose }) {
   const [entity, setEntity] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [question, setQuestion]       = useState('')
+  const [answer, setAnswer]           = useState('')
+  const [asking, setAsking]           = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const textareaRef                   = useRef(null)
 
   const load = useCallback(() => {
     if (!entityId) return
@@ -62,6 +67,32 @@ export default function EntityDrawer({ entityId, onClose }) {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
+
+  // Fetch suggestions when entity loads
+  useEffect(() => {
+    if (!entity) return
+    setAnswer('')
+    setQuestion('')
+    fetchAskSuggestions(entity.status, entity.section)
+      .then(setSuggestions)
+  }, [entity])
+
+  const sendQuestion = () => {
+    if (!question.trim() || asking || !entity) return
+    setAsking(true)
+    setAnswer('')
+    askAgent(
+      entity,
+      question,
+      (chunk) => setAnswer(prev => prev + chunk),
+      ()      => setAsking(false),
+      (err)   => { setAnswer(`Error: ${err}`); setAsking(false) }
+    )
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendQuestion()
+  }
 
   if (!entityId) return null
 
@@ -181,6 +212,83 @@ export default function EntityDrawer({ entityId, onClose }) {
                   </div>
                 </div>
               )}
+
+              {/* ── Ask panel ── */}
+              <div style={{
+                borderTop: '1px solid var(--accent-dim)',
+                marginTop: 16, paddingTop: 14,
+              }}>
+                <p style={{
+                  fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em',
+                  color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 8,
+                }}>Ask</p>
+
+                {suggestions.length > 0 && !answer && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    {suggestions.map((s, i) => (
+                      <button key={i}
+                        onClick={() => { setQuestion(s); textareaRef.current?.focus() }}
+                        style={{
+                          fontSize: '0.65rem', padding: '3px 8px',
+                          border: '1px solid var(--accent-dim)', borderRadius: 2,
+                          background: 'transparent', color: 'var(--cyan)',
+                          cursor: 'pointer', fontFamily: 'var(--font-mono)', lineHeight: 1.4,
+                        }}
+                      >{s}</button>
+                    ))}
+                  </div>
+                )}
+
+                <textarea ref={textareaRef} rows={2}
+                  value={question} onChange={e => setQuestion(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask about this entity… (Ctrl+Enter to send)"
+                  disabled={asking}
+                  style={{
+                    width: '100%', background: 'var(--bg-2)',
+                    border: '1px solid var(--accent-dim)', borderRadius: 2,
+                    color: 'var(--text-1)', fontFamily: 'var(--font-mono)',
+                    fontSize: '0.72rem', padding: '6px 8px',
+                    resize: 'none', outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6, gap: 6 }}>
+                  {answer && (
+                    <button onClick={() => { setAnswer(''); setQuestion('') }}
+                      style={{
+                        fontSize: '0.65rem', padding: '4px 10px',
+                        border: '1px solid var(--accent-dim)', borderRadius: 2,
+                        background: 'transparent', color: 'var(--text-3)',
+                        cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                      }}>Clear</button>
+                  )}
+                  <button onClick={sendQuestion}
+                    disabled={!question.trim() || asking}
+                    style={{
+                      fontSize: '0.65rem', padding: '4px 12px',
+                      border: '1px solid var(--accent)', borderRadius: 2,
+                      background: asking ? 'transparent' : 'var(--accent-dim)',
+                      color: asking ? 'var(--text-3)' : 'var(--cyan)',
+                      cursor: !question.trim() || asking ? 'not-allowed' : 'pointer',
+                      fontFamily: 'var(--font-mono)',
+                      opacity: !question.trim() || asking ? 0.5 : 1,
+                    }}>{asking ? 'Asking…' : 'Ask'}</button>
+                </div>
+
+                {answer && (
+                  <div style={{
+                    marginTop: 10, padding: 10,
+                    background: 'var(--bg-2)', border: '1px solid var(--accent-dim)',
+                    borderRadius: 2, fontFamily: 'var(--font-mono)',
+                    fontSize: '0.72rem', color: 'var(--cyan)',
+                    lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>
+                    {answer}
+                    {asking && <span style={{ opacity: 0.5 }}>█</span>}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
