@@ -6,7 +6,9 @@
  */
 import { useEffect, useState, useRef } from 'react'
 import { ToolCallsView, OpsView, EscView, StatsView } from './LogTable'
-import { createUnifiedLogStream } from '../api'
+import { createUnifiedLogStream, authHeaders } from '../api'
+
+const _CONN_BASE = import.meta.env.VITE_API_BASE ?? ''
 
 function matchesKeyword(entry, keyword) {
   if (!keyword.trim()) return true
@@ -37,6 +39,8 @@ function LiveLogsView() {
   const [paused, setPaused]                       = useState(false)
   const [esStatus, setEsStatus]                   = useState('unknown')
   const [popoutOpen, setPopoutOpen]               = useState(false)
+  const [connSources, setConnSources]             = useState([])
+  const [checkedConns, setCheckedConns]            = useState(new Set())
 
   const pausedRef       = useRef(false)
   const esRef           = useRef(null)
@@ -68,6 +72,31 @@ function LiveLogsView() {
     })
     return () => { esRef.current?.close() }
   }, [])
+
+  // Fetch connection sources for source filter pills
+  useEffect(() => {
+    const loadConns = () => {
+      fetch(`${_CONN_BASE}/api/connections`, { headers: { ...authHeaders() } })
+        .then(r => r.ok ? r.json() : { data: [] })
+        .then(d => {
+          const conns = (d.data || []).filter(c => c.host).map(c => ({ label: c.label || c.host, platform: c.platform }))
+          setConnSources(conns)
+          setCheckedConns(new Set(conns.map(c => c.label)))
+        })
+        .catch(() => {})
+    }
+    loadConns()
+    const id = setInterval(loadConns, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const toggleConn = (label) => {
+    setCheckedConns(prev => {
+      const next = new Set(prev)
+      if (next.has(label)) next.delete(label); else next.add(label)
+      return next
+    })
+  }
 
   // Auto-scroll both inline and popout containers
   useEffect(() => {
@@ -101,9 +130,15 @@ function LiveLogsView() {
     })
   }
 
-  // Client-side filter
+  // Client-side filter — containers + connection sources
   const visible = lines.filter(entry => {
     if (entry.container && !checkedContainers.has(entry.container)) return false
+    // If any connection sources are unchecked, filter log lines matching those platforms
+    if (connSources.length > 0) {
+      const entryText = `${entry.msg ?? ''} ${entry.container ?? ''}`.toLowerCase()
+      const matchedConn = connSources.find(c => entryText.includes(c.platform.toLowerCase()) || entryText.includes(c.label.toLowerCase()))
+      if (matchedConn && !checkedConns.has(matchedConn.label)) return false
+    }
     const lvl = (entry.level ?? 'info').toLowerCase()
     if (levelFilter === 'error' && !['error', 'critical', 'fatal'].includes(lvl)) return false
     if (levelFilter === 'warn'  && !['warn', 'warning', 'error', 'critical', 'fatal'].includes(lvl)) return false
@@ -152,6 +187,26 @@ function LiveLogsView() {
           {name}
         </button>
       ))}
+      {/* Connection sources — separated from container pills */}
+      {connSources.length > 0 && (
+        <>
+          <span style={{ width: 1, height: 16, background: 'var(--border, #334155)', flexShrink: 0, margin: '0 2px' }} />
+          {connSources.map(c => (
+            <button
+              key={c.label}
+              onClick={() => toggleConn(c.label)}
+              className={`text-[10px] px-1.5 py-0.5 rounded font-mono transition-colors ${
+                checkedConns.has(c.label)
+                  ? 'text-cyan-400 bg-cyan-950'
+                  : 'text-slate-600 hover:text-slate-400'
+              }`}
+              style={{ borderLeft: '2px solid var(--cyan, #00c8ee)', border: `1px solid ${checkedConns.has(c.label) ? '#164e63' : '#334155'}`, borderLeftWidth: 2, borderLeftColor: 'var(--cyan, #00c8ee)' }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </>
+      )}
       <input
         value={keyword}
         onChange={e => setKeyword(e.target.value)}
