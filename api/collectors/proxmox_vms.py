@@ -66,6 +66,9 @@ class ProxmoxVMsCollector(BaseCollector):
             token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
             port = int(os.environ.get("PROXMOX_PORT", "8006"))
 
+        conn_label = conn.get("label", host) if conn else host
+        conn_id = conn.get("id", "") if conn else ""
+
         if not host:
             return {"health": "unconfigured", "vms": [], "lxc": [], "message": "No Proxmox connection configured"}
 
@@ -105,7 +108,9 @@ class ProxmoxVMsCollector(BaseCollector):
                     log.warning("Proxmox node %s error: %s", node, e)
 
             if nodes_ok == 0:
-                return {"health": "error", "vms": [], "lxc": [], "error": "No Proxmox nodes responded"}
+                return {"health": "error", "vms": [], "lxc": [],
+                        "error": f"{conn_label} ({host}): No nodes responded",
+                        "connection_label": conn_label, "connection_id": conn_id}
 
             all_items = vms + lxc_list
             if not all_items or all(v["dot"] == "green" for v in all_items):
@@ -115,11 +120,14 @@ class ProxmoxVMsCollector(BaseCollector):
             else:
                 overall = "degraded"
 
-            return {"health": overall, "vms": vms, "lxc": lxc_list}
+            return {"health": overall, "vms": vms, "lxc": lxc_list,
+                    "connection_label": conn_label, "connection_id": conn_id}
 
         except Exception as e:
             log.error("ProxmoxVMsCollector error: %s", e)
-            return {"health": "error", "vms": [], "lxc": [], "error": str(e)}
+            return {"health": "error", "vms": [], "lxc": [],
+                    "error": f"{conn_label} ({host}): {e}",
+                    "connection_label": conn_label, "connection_id": conn_id}
 
 
 def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:

@@ -567,7 +567,7 @@ function AlertsPanel() {
             <span className="dot dot-pulse shrink-0" style={{ background: sv.dot }} />
             <div className="flex-1 min-w-0">
               <span className="text-[11px]" style={{ color: 'var(--text-1)' }}>
-                {a.component}{a.message ? ` — ${a.message}` : ''}
+                {a.connection_label || a.component}{a.message ? ` — ${a.message}` : ''}
               </span>
             </div>
             <span className="pill shrink-0" style={{ background: sv.bg, color: sv.color }}>

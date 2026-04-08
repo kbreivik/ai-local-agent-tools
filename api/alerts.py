@@ -38,10 +38,11 @@ def _sev(health: str) -> int:
     return _SEVERITY.get(health, 1)
 
 
-async def check_transition(component: str, current_health: str) -> None:
+async def check_transition(component: str, current_health: str, **extra) -> None:
     """
     Called after every collector poll. Fires an alert if health worsened.
     Also fires a recovery alert when health improves from critical/error.
+    Extra kwargs: connection_label, connection_id from collector state.
     """
     prev = _prev_health.get(component)
     _prev_health[component] = current_health
@@ -58,24 +59,27 @@ async def check_transition(component: str, current_health: str) -> None:
     now = datetime.now(timezone.utc)
     alert_id = f"{component}_{now.timestamp():.0f}"
 
+    # Use connection label if available, otherwise component name
+    display_name = extra.get("connection_label") or component
+
     if curr_sev > prev_sev:
-        # Degradation
         severity = "critical" if curr_sev >= 3 else "warning"
-        message = f"{component}: {prev} → {current_health}"
+        message = f"{display_name}: {prev} → {current_health}"
     else:
-        # Recovery
         severity = "info"
-        message = f"{component}: recovered ({prev} → {current_health})"
+        message = f"{display_name}: recovered ({prev} → {current_health})"
 
     alert = {
         "id": alert_id,
-        "component": component,
+        "component": display_name,
         "severity": severity,
         "message": message,
         "prev_health": prev,
         "health": current_health,
         "timestamp": now.isoformat(),
         "dismissed": False,
+        "connection_label": extra.get("connection_label", ""),
+        "connection_id": extra.get("connection_id", ""),
     }
 
     _alerts.appendleft(alert)

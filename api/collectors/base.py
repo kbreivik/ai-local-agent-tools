@@ -47,9 +47,13 @@ class BaseCollector(ABC):
             import api.logger as logger_mod
             await logger_mod.log_status_snapshot(self.component, state, is_healthy)
 
-            # Trigger alert check (late import avoids circular)
+            # Trigger alert check — pass connection metadata if available
             from api.alerts import check_transition
-            await check_transition(self.component, self.last_health)
+            await check_transition(
+                self.component, self.last_health,
+                connection_label=state.get("connection_label", ""),
+                connection_id=state.get("connection_id", ""),
+            )
 
             # Memory hooks — health transition + semantic triggers
             from api.memory.hooks import after_status_snapshot
