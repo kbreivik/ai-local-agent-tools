@@ -4,6 +4,7 @@
  * Fetches data from GET /api/entities, filtered client-side by entity id.
  */
 import { useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -68,7 +69,7 @@ export default function EntityDrawer({ entityId, onClose }) {
   const meta = entity?.metadata || {}
   const metaEntries = Object.entries(meta).filter(([, v]) => v != null && v !== '')
 
-  return (
+  return createPortal(
     <>
       {/* Overlay */}
       <div
@@ -191,7 +192,8 @@ export default function EntityDrawer({ entityId, onClose }) {
           to   { transform: translateX(0); }
         }
       `}</style>
-    </>
+    </>,
+    document.body
   )
 }
 
