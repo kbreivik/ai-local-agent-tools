@@ -27,3 +27,4 @@ onnxruntime>=1.17.0
 cryptography>=42.0.0
 tokenizers>=0.15.0
 pgvector>=0.3.0
+pytest-asyncio>=0.23.0

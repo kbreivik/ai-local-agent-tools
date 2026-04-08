@@ -38,6 +38,39 @@ def _sev(health: str) -> int:
     return _SEVERITY.get(health, 1)
 
 
+async def _dispatch_webhook(alert: dict) -> None:
+    """
+    POST alert payload to the configured webhook URL.
+    Non-blocking — caller uses asyncio.create_task().
+    Silently swallows errors (webhook failure must never affect the platform).
+    """
+    try:
+        from api.settings_manager import get_setting
+        url = (get_setting("notificationWebhookUrl") or {}).get("value", "").strip()
+        if not url:
+            return
+
+        payload = {
+            "platform": "deathstar",
+            "severity": alert.get("severity", "unknown"),
+            "component": alert.get("component", ""),
+            "message": alert.get("message", ""),
+            "prev_health": alert.get("prev_health"),
+            "health": alert.get("health"),
+            "timestamp": alert.get("timestamp", ""),
+            "connection_label": alert.get("connection_label", ""),
+            "connection_id": alert.get("connection_id", ""),
+        }
+
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(url, json=payload)
+            log.debug("Webhook dispatch → %s HTTP %d", url[:60], r.status_code)
+
+    except Exception as e:
+        log.debug("Webhook dispatch failed (non-critical): %s", e)
+
+
 async def check_transition(component: str, current_health: str, **extra) -> None:
     """
     Called after every collector poll. Fires an alert if health worsened.
@@ -84,6 +117,19 @@ async def check_transition(component: str, current_health: str, **extra) -> None
 
     _alerts.appendleft(alert)
     log.warning("ALERT [%s] %s", severity.upper(), message)
+
+    # Dispatch webhook notification (non-blocking)
+    try:
+        from api.settings_manager import get_setting
+        notify_recovery = str(
+            (get_setting("notifyOnRecovery") or {}).get("value", "false")
+        ).lower() in ("true", "1", "yes")
+        should_dispatch = severity in ("warning", "critical") or (severity == "info" and notify_recovery)
+        if should_dispatch:
+            import asyncio
+            asyncio.create_task(_dispatch_webhook(alert))
+    except Exception as _e:
+        log.debug("Webhook dispatch scheduling failed: %s", _e)
 
     # Write to audit_log (non-blocking via logger queue)
     try:
@@ -140,6 +186,14 @@ def fire_alert(
             ))
     except Exception:
         pass
+
+    # Dispatch webhook notification (non-blocking, sync context)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_dispatch_webhook(alert))
+    except Exception as _e:
+        log.debug("Webhook dispatch scheduling failed (fire_alert): %s", _e)
 
 
 def update_content(component: str, content: str) -> bool:

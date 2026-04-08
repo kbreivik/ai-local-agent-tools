@@ -43,6 +43,9 @@ CATEGORIES = {
     "truenasHost": "truenas", "truenasApiKey": "truenas",
     # UI
     "dashboardRefreshInterval": "ui",
+    # Notifications
+    "notificationWebhookUrl": "notifications",
+    "notifyOnRecovery":       "notifications",
 }
 
 

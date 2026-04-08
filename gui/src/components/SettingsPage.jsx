@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 import {
   GeneralTab, InfrastructureTab, AIServicesTab,
   ConnectionsTab, PermissionsTab, AccessTab, NamingTab,
-  DisplayTab, UpdateStatus, TABS,
+  DisplayTab, NotificationsTab, UpdateStatus, TABS,
 } from './OptionsModal'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -94,6 +94,7 @@ export default function SettingsPage({ initialTab }) {
             {tab === 'Access'        && <AccessTab />}
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
+            {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
           </>
         )}
       </div>

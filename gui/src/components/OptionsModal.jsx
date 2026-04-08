@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display', 'Notifications']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -1179,5 +1179,68 @@ export default function OptionsModal() {
   )
 }
 
+export function NotificationsTab({ draft, update }) {
+  const [testResult, setTestResult] = useState(null)
+  const [testing, setTesting]       = useState(false)
+
+  const testWebhook = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await fetch(`${BASE}/api/alerts/test-webhook`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      const d = await r.json()
+      setTestResult(d)
+    } catch (e) {
+      setTestResult({ ok: false, message: e.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div>
+      <Field label="Webhook URL" hint="Receives a JSON POST on every warning or critical alert. Compatible with Slack, Discord, ntfy, Gotify, and custom endpoints.">
+        <Input
+          type="url"
+          placeholder="https://hooks.slack.com/... or https://ntfy.sh/your-topic"
+          value={draft.notificationWebhookUrl ?? ''}
+          onChange={v => update('notificationWebhookUrl', v)}
+        />
+      </Field>
+
+      <Field label="Notify on Recovery" hint="Also send a notification when a service recovers to healthy.">
+        <Toggle
+          value={!!draft.notifyOnRecovery}
+          onChange={v => update('notifyOnRecovery', v)}
+          label="Send recovery notifications"
+        />
+      </Field>
+
+      <div className="mt-6 flex items-center gap-3">
+        <button
+          onClick={testWebhook}
+          disabled={testing || !draft.notificationWebhookUrl}
+          className="btn-secondary text-sm"
+        >
+          {testing ? 'Sending…' : 'Send test notification'}
+        </button>
+
+        {testResult && (
+          <span className={`text-sm ${testResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+            {testResult.ok ? '✓' : '✗'} {testResult.message}
+          </span>
+        )}
+      </div>
+
+      <p className="mt-6 text-xs opacity-40">
+        Payload schema: platform, severity, component, message, timestamp, connection_label, connection_id
+      </p>
+    </div>
+  )
+}
+
 // Named exports for SettingsPage
-export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, UpdateStatus }
+export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, NotificationsTab, UpdateStatus }

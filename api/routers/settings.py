@@ -53,6 +53,9 @@ SETTINGS_KEYS: dict[str, dict] = {
     "autoUpdate":               {"env": None,                   "sens": False, "default": False},
     # UI (stored server-side so they survive browser clears)
     "dashboardRefreshInterval": {"env": None,                   "sens": False, "default": 15000},
+    # Notifications
+    "notificationWebhookUrl": {"env": None, "sens": False, "default": ""},
+    "notifyOnRecovery":       {"env": None, "sens": False, "default": False},
 }
 
 

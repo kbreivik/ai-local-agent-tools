@@ -1,5 +1,6 @@
 """GET /api/alerts — recent alert notifications."""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from api.auth import get_current_user
 from api.alerts import get_recent, dismiss, dismiss_all, fire_alert, update_content
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
@@ -39,3 +40,42 @@ async def dismiss_alert(alert_id: str):
 async def dismiss_all_alerts():
     count = dismiss_all()
     return {"dismissed": count}
+
+
+@router.post("/test-webhook")
+async def test_webhook(_: str = Depends(get_current_user)):
+    """
+    Send a synthetic test alert to the configured webhook URL.
+    Returns success/failure without adding to the real alert ring buffer.
+    """
+    from api.settings_manager import get_setting
+    import httpx
+    from datetime import datetime, timezone
+
+    url = (get_setting("notificationWebhookUrl") or {}).get("value", "").strip()
+    if not url:
+        return {"ok": False, "message": "No webhook URL configured. Set it in Settings → Notifications."}
+
+    payload = {
+        "platform": "deathstar",
+        "severity": "info",
+        "component": "test",
+        "message": "DEATHSTAR webhook test — if you see this, notifications are working.",
+        "prev_health": None,
+        "health": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "connection_label": "",
+        "connection_id": "",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(url, json=payload)
+        if r.status_code < 300:
+            return {"ok": True, "message": f"Delivered — HTTP {r.status_code}"}
+        else:
+            return {"ok": False, "message": f"Webhook returned HTTP {r.status_code}"}
+    except httpx.TimeoutException:
+        return {"ok": False, "message": "Timed out (8s) — check the URL is reachable"}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:120]}
