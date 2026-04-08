@@ -108,7 +108,8 @@ def sync_env_from_db() -> int:
             continue
         db_value = backend.get_setting(key)
         if db_value is not None and str(db_value).strip():
-            os.environ[env_var] = str(db_value)
+            from api.crypto import decrypt_value
+            os.environ[env_var] = decrypt_value(str(db_value))
             synced += 1
     logger.info("Settings: synced %d keys from DB into os.environ", synced)
     return synced
