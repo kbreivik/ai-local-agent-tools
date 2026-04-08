@@ -12,23 +12,24 @@ router = APIRouter(prefix="/api/connections", tags=["connections"])
 log = logging.getLogger(__name__)
 
 
-_SSH_PLATFORMS = {"fortiswitch", "cisco", "juniper", "aruba"}
-
 def _trigger_collector_repoll(platform: str = "") -> None:
-    """Trigger immediate repoll for collectors that read from connections DB."""
+    """Trigger immediate repoll for all collectors that declare this platform.
+    Derived from each collector's `platforms` class attribute — no hardcoded lists."""
     try:
         from api.collectors.manager import manager
         loop = asyncio.get_event_loop()
-        targets = ["external_services"]
-        if platform in ("proxmox", "pbs"):
-            targets.append("proxmox_vms")
-        if platform in _SSH_PLATFORMS:
-            targets.append("network_ssh")
-        for component in targets:
+        targets: set[str] = set()
+        for component, collector in manager._collectors.items():
+            collector_platforms = getattr(collector, "platforms", [])
+            if not platform or platform in collector_platforms:
+                targets.add(component)
+        for component in sorted(targets):
             if manager.get(component):
                 loop.create_task(manager.trigger_poll(component))
+        if targets:
+            log.debug("_trigger_collector_repoll(%r) → %s", platform, sorted(targets))
     except Exception as e:
-        log.debug("Collector repoll trigger skipped: %s", e)
+        log.warning("_trigger_collector_repoll failed: %s", e)
 
 
 class CreateConnectionRequest(BaseModel):

@@ -6,10 +6,14 @@ The loop calls `poll()` every `interval` seconds, catches all exceptions,
 writes snapshots via the logger, and triggers alert checks.
 Never crashes the API on infra unavailability.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +21,7 @@ log = logging.getLogger(__name__)
 class BaseCollector(ABC):
     component: str = "base"
     interval: int = 30  # seconds
+    platforms: list[str] = []  # connection platform types that trigger this collector
 
     def __init__(self):
         self._task: asyncio.Task | None = None
@@ -110,3 +115,64 @@ class BaseCollector(ABC):
             "last_health": self.last_health,
             "interval_s": self.interval,
         }
+
+    def mock(self) -> dict:
+        """Return fixture data in the same shape as poll(). No network calls."""
+        raise NotImplementedError(f"{self.__class__.__name__} must implement mock()")
+
+    def to_entities(self, state: dict) -> list[Entity]:
+        """Convert a poll() state dict to canonical Entity objects."""
+        status_map = {
+            "healthy": "healthy", "ok": "healthy", "green": "healthy", "active": "healthy",
+            "degraded": "degraded", "warn": "degraded", "amber": "degraded",
+            "error": "error", "critical": "error", "red": "error",
+            "unconfigured": "unknown",
+        }
+        raw = state.get("health", "unknown")
+        status = status_map.get(str(raw).lower(), "unknown")
+        last_error = state.get("error") or state.get("message") if status == "error" else None
+        platform = self.platforms[0] if self.platforms else self.component
+        return [Entity(
+            id=self.component,
+            label=self.component.replace("_", " ").title(),
+            component=self.component,
+            platform=platform,
+            section=PLATFORM_SECTION.get(platform, "PLATFORM"),
+            status=status,
+            last_error=last_error,
+            metadata={k: v for k, v in state.items()
+                      if k not in ("health", "error", "message")},
+        )]
+
+
+PLATFORM_SECTION: dict[str, str] = {
+    "proxmox": "COMPUTE", "pbs": "COMPUTE",
+    "fortigate": "NETWORK", "fortiswitch": "NETWORK", "opnsense": "NETWORK",
+    "cisco": "NETWORK", "juniper": "NETWORK", "aruba": "NETWORK",
+    "unifi": "NETWORK", "pihole": "NETWORK", "technitium": "NETWORK",
+    "nginx": "NETWORK", "caddy": "NETWORK", "traefik": "NETWORK",
+    "truenas": "STORAGE", "synology": "STORAGE", "syncthing": "STORAGE",
+    "security_onion": "SECURITY", "wazuh": "SECURITY",
+    "grafana": "SECURITY", "kibana": "SECURITY",
+    "portainer": "COMPUTE", "netbox": "NETWORK",
+    "adguard": "NETWORK", "bookstack": "PLATFORM",
+    "trilium": "PLATFORM",
+    "lm_studio": "PLATFORM",
+}
+
+
+@dataclass
+class Entity:
+    id: str
+    label: str
+    component: str
+    platform: str
+    section: str
+    status: str
+    last_seen: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    latency_ms: int | None = None
+    last_error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)

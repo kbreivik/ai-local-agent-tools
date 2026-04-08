@@ -61,10 +61,43 @@ LM_STUDIO_CONFIG = {
 
 class ExternalServicesCollector(BaseCollector):
     component = "external_services"
+    platforms = list(PLATFORM_HEALTH.keys())
 
     def __init__(self):
         super().__init__()
         self.interval = int(os.environ.get("EXTERNAL_POLL_INTERVAL", "30"))
+
+    def mock(self) -> dict:
+        return {
+            "health": "degraded",
+            "services": [
+                {"name": "FortiGate", "slug": "fortigate", "service_type": "fortigate",
+                 "host_port": "192.168.1.1:443", "summary": "HTTP 200", "latency_ms": 18,
+                 "reachable": True, "dot": "green", "problem": None, "open_ui_url": "https://192.168.1.1", "connection_id": "mock-fg"},
+                {"name": "TrueNAS", "slug": "truenas", "service_type": "truenas",
+                 "host_port": "192.168.1.2:443", "summary": "unreachable", "latency_ms": None,
+                 "reachable": False, "dot": "red", "problem": "unreachable", "open_ui_url": "https://192.168.1.2", "connection_id": "mock-tn"},
+            ],
+        }
+
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity, PLATFORM_SECTION
+        dot_to_status = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        entities = []
+        for svc in state.get("services", []):
+            slug = svc.get("slug") or svc.get("service_type", "unknown")
+            dot = svc.get("dot", "grey")
+            entities.append(Entity(
+                id=f"external_services:{slug}", label=svc.get("name", slug),
+                component=self.component, platform=slug,
+                section=PLATFORM_SECTION.get(slug, "PLATFORM"),
+                status=dot_to_status.get(dot, "unknown"),
+                latency_ms=svc.get("latency_ms"),
+                last_error=svc.get("problem") if dot == "red" else None,
+                metadata={"host_port": svc.get("host_port"), "open_ui_url": svc.get("open_ui_url"),
+                          "summary": svc.get("summary"), "connection_id": svc.get("connection_id")},
+            ))
+        return entities if entities else super().to_entities(state)
 
     async def poll(self) -> dict:
         return await asyncio.to_thread(self._collect_sync)

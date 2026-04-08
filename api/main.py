@@ -28,6 +28,7 @@ from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
 from api.routers.connections import router as connections_router
 from api.routers.users import router as users_router
+from api.routers.entities import router as entities_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
@@ -188,6 +189,7 @@ app.include_router(skills_router)
 app.include_router(dashboard_router)
 app.include_router(connections_router)
 app.include_router(users_router)
+app.include_router(entities_router)
 
 
 def _get_host_ips() -> dict:

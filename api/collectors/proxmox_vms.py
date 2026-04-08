@@ -33,10 +33,45 @@ VM_IP_MAP = _load_vm_ip_map()
 
 class ProxmoxVMsCollector(BaseCollector):
     component = "proxmox_vms"
+    platforms = ["proxmox", "pbs"]
 
     def __init__(self):
         super().__init__()
         self.interval = int(os.environ.get("PROXMOX_POLL_INTERVAL", "30"))
+
+    def mock(self) -> dict:
+        return {
+            "health": "healthy", "connection_label": "mock-proxmox", "connection_id": "mock-id",
+            "vms": [
+                {"vmid": 100, "name": "mock-vm-100", "node": "pve1", "status": "running", "dot": "green", "type": "qemu", "mem": 2048, "maxmem": 4096, "cpus": 2},
+                {"vmid": 101, "name": "mock-vm-101", "node": "pve1", "status": "stopped", "dot": "amber", "type": "qemu", "mem": 0, "maxmem": 2048, "cpus": 1},
+            ],
+            "lxc": [{"vmid": 200, "name": "mock-lxc-200", "node": "pve1", "status": "running", "dot": "green", "type": "lxc"}],
+        }
+
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity
+        dot_to_status = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        label = state.get("connection_label", "proxmox")
+        entities = []
+        for vm in state.get("vms", []):
+            entities.append(Entity(
+                id=f"proxmox_vms:{vm.get('node','?')}:vm:{vm.get('vmid','?')}",
+                label=vm.get("name", str(vm.get("vmid", "?"))),
+                component=self.component, platform="proxmox", section="COMPUTE",
+                status=dot_to_status.get(vm.get("dot", "grey"), "unknown"),
+                metadata={"node": vm.get("node"), "type": "qemu", "vmid": vm.get("vmid"),
+                          "connection": label, "mem": vm.get("mem"), "maxmem": vm.get("maxmem"), "cpus": vm.get("cpus")},
+            ))
+        for ct in state.get("lxc", []):
+            entities.append(Entity(
+                id=f"proxmox_vms:{ct.get('node','?')}:lxc:{ct.get('vmid','?')}",
+                label=ct.get("name", str(ct.get("vmid", "?"))),
+                component=self.component, platform="proxmox", section="COMPUTE",
+                status=dot_to_status.get(ct.get("dot", "grey"), "unknown"),
+                metadata={"node": ct.get("node"), "type": "lxc", "vmid": ct.get("vmid"), "connection": label},
+            ))
+        return entities if entities else super().to_entities(state)
 
     async def poll(self) -> dict:
         return await asyncio.to_thread(self._collect_sync)

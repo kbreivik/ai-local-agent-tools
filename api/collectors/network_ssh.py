@@ -30,10 +30,41 @@ SHOW_CMDS = {
 
 class NetworkSSHCollector(BaseCollector):
     component = "network_ssh"
+    platforms = ["fortiswitch", "cisco", "juniper", "aruba"]
 
     def __init__(self):
         super().__init__()
         self.interval = int(os.environ.get("NETWORK_SSH_POLL_INTERVAL", "60"))
+
+    def mock(self) -> dict:
+        return {
+            "health": "healthy",
+            "devices": [
+                {"id": "mock-fs", "label": "FortiSwitch-48E", "host": "192.168.1.10", "port": 22,
+                 "platform": "fortiswitch", "device_type": "fortinet_fswitch",
+                 "dot": "green", "status": "online", "output_snippet": "FortiSwitch-48E v7.4.1"},
+            ],
+        }
+
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity, PLATFORM_SECTION
+        dot_to_status = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        entities = []
+        for dev in state.get("devices", []):
+            platform = dev.get("platform", "network")
+            dot = dev.get("dot", "grey")
+            entities.append(Entity(
+                id=f"network_ssh:{dev.get('host', dev.get('id', 'unknown'))}",
+                label=dev.get("label", dev.get("host", "unknown")),
+                component=self.component, platform=platform,
+                section=PLATFORM_SECTION.get(platform, "NETWORK"),
+                status=dot_to_status.get(dot, "unknown"),
+                last_error=dev.get("error") if dot == "red" else None,
+                metadata={"host": dev.get("host"), "port": dev.get("port"),
+                          "device_type": dev.get("device_type"),
+                          "output_snippet": (dev.get("output_snippet") or "")[:100]},
+            ))
+        return entities if entities else super().to_entities(state)
 
     async def poll(self) -> dict:
         return await asyncio.to_thread(self._collect_sync)
