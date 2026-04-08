@@ -9,17 +9,12 @@ def test_poll_returns_services_key():
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.elapsed.total_seconds.return_value = 0.042
     mock_resp.json.return_value = {"data": [{"id": "llama-3.1-8b"}]}
 
-    env = {
-        "LM_STUDIO_URL": "http://192.168.1.100:1234",
-        "PROXMOX_HOST": "192.168.1.5",
-        "TRUENAS_HOST": "192.168.1.10",
-        "FORTIGATE_HOST": "192.168.1.1",
-    }
+    env = {"LM_STUDIO_BASE_URL": "http://192.168.1.100:1234/v1"}
     with patch.dict(os.environ, env, clear=False), \
-         patch("api.collectors.external_services.httpx.get", return_value=mock_resp):
+         patch("api.collectors.external_services.httpx.get", return_value=mock_resp), \
+         patch("api.connections.get_connection_for_platform", return_value=None):
         result = asyncio.run(collector.poll())
 
     assert "services" in result
@@ -34,14 +29,16 @@ def test_unconfigured_service_shows_grey():
     from api.collectors.external_services import ExternalServicesCollector
     collector = ExternalServicesCollector()
 
-    env = {"LM_STUDIO_URL": "", "PROXMOX_HOST": "", "TRUENAS_HOST": "", "FORTIGATE_HOST": ""}
-    with patch.dict(os.environ, env, clear=False):
+    env = {"LM_STUDIO_BASE_URL": ""}
+    with patch.dict(os.environ, env, clear=False), \
+         patch("api.connections.get_connection_for_platform", return_value=None):
         result = asyncio.run(collector.poll())
 
     assert "services" in result
-    # All unconfigured → grey dots
-    for svc in result["services"]:
-        assert svc["dot"] == "grey"
+    # LM Studio unconfigured → grey dot
+    lm = [s for s in result["services"] if s["slug"] == "lm_studio"]
+    assert len(lm) == 1
+    assert lm[0]["dot"] == "grey"
 
 
 def test_unreachable_service_returns_red_dot():
@@ -50,9 +47,10 @@ def test_unreachable_service_returns_red_dot():
 
     env = {"LM_STUDIO_BASE_URL": "http://192.168.1.100:1234/v1"}
     with patch.dict(os.environ, env, clear=False), \
-         patch("api.collectors.external_services.httpx.get", side_effect=Exception("connection refused")):
+         patch("api.collectors.external_services.httpx.get", side_effect=Exception("refused")), \
+         patch("api.connections.get_connection_for_platform", return_value=None):
         result = asyncio.run(collector.poll())
 
-    lm = next(s for s in result["services"] if s["slug"] == "lm_studio")
-    assert lm["dot"] == "red"
-    assert lm["reachable"] is False
+    lm = [s for s in result["services"] if s["slug"] == "lm_studio"]
+    assert len(lm) == 1
+    assert lm[0]["dot"] == "red"

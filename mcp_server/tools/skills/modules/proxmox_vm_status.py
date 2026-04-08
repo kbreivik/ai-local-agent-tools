@@ -86,28 +86,48 @@ try:
 
     def execute(**kwargs) -> dict:
         node = kwargs.get("node", "")
+        connection_id = kwargs.get("connection_id", "")
         if not node:
             return _err("node is required")
 
-        cfg = _proxmox_config()
-        if not cfg["host"]:
-            return _err("PROXMOX_HOST not set. Configure via Settings or env var.")
-        if not cfg["token_id"] or not cfg["token_secret"]:
-            return _err("PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET not set. Configure via Settings or env var.")
-
+        # Try connections DB first, then env vars
+        host, user, token_name, token_secret = "", "", "", ""
+        conn_label = ""
         try:
-            # PROXMOX_TOKEN_ID format is 'user@realm!tokenname' — split on '!'
-            token_id = cfg["token_id"]
+            from api.connections import get_connection_for_platform, get_connection
+            conn = get_connection(connection_id) if connection_id else get_connection_for_platform("proxmox")
+            if conn:
+                host = conn.get("host", "")
+                creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
+                user = creds.get("user", "")
+                token_name = creds.get("token_name", "")
+                token_secret = creds.get("secret", "")
+                conn_label = conn.get("label", "")
+        except Exception:
+            pass
+
+        if not host:
+            cfg = _proxmox_config()
+            host = cfg["host"]
+            token_id = cfg.get("token_id", "")
             if "!" in token_id:
                 user, token_name = token_id.split("!", 1)
             else:
-                user = cfg["user"]
+                user = cfg.get("user", "")
                 token_name = token_id
+            token_secret = cfg.get("token_secret", "")
+
+        if not host:
+            return _err("No Proxmox connection configured. Add one in Settings → Connections or set PROXMOX_HOST env var.")
+        if not user or not token_name or not token_secret:
+            return _err("Proxmox credentials incomplete. Check connection settings.")
+
+        try:
             prox = ProxmoxAPI(
-                cfg["host"],
+                host,
                 user=user,
                 token_name=token_name,
-                token_value=cfg["token_secret"],
+                token_value=token_secret,
                 verify_ssl=False,
             )
 
