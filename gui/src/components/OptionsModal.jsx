@@ -1203,11 +1203,12 @@ export function NotificationsTab({ draft, update }) {
   return (
     <div>
       <Field label="Webhook URL" hint="Receives a JSON POST on every warning or critical alert. Compatible with Slack, Discord, ntfy, Gotify, and custom endpoints.">
-        <Input
+        <input
+          className="input text-[10px]"
           type="url"
           placeholder="https://hooks.slack.com/... or https://ntfy.sh/your-topic"
           value={draft.notificationWebhookUrl ?? ''}
-          onChange={v => update('notificationWebhookUrl', v)}
+          onChange={e => update('notificationWebhookUrl', e.target.value)}
         />
       </Field>
 
