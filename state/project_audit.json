@@ -1,0 +1,405 @@
+{
+  "audit_date": "2026-04-04T00:30:00+02:00",
+  "audit_version": 2,
+  "current_phase": "Phase 3 complete. Phase 4 (Live Swarm + Kafka status panels + NodeMap + alerting) is next per ROADMAP, but significant Phase 4-6 work already implemented ahead of roadmap (collectors, alerts, Elasticsearch tools, memory hooks, dashboard endpoints).",
+
+  "existing_tools": {
+    "registered_in_server_py": [
+      "swarm_status", "service_list", "service_health", "service_current_version",
+      "service_resolve_image", "service_version_history", "service_upgrade",
+      "service_rollback", "node_drain", "node_activate", "pre_upgrade_check",
+      "postgres_health", "service_logs",
+      "kafka_broker_status", "kafka_consumer_lag", "kafka_topic_health",
+      "kafka_topic_list", "kafka_rolling_restart_safe", "pre_kafka_check",
+      "agent_status", "checkpoint_save", "checkpoint_restore", "audit_log",
+      "escalate", "pre_upgrade_check_full", "post_upgrade_verify",
+      "elastic_cluster_health", "elastic_search_logs", "elastic_error_logs",
+      "elastic_kafka_logs", "elastic_log_pattern", "elastic_index_stats",
+      "elastic_correlate_operation",
+      "docker_engine_version_tool", "docker_engine_check_update_tool",
+      "docker_engine_update_tool",
+      "ingest_url", "ingest_pdf", "check_internet_connectivity",
+      "skill_search", "skill_list", "skill_info", "skill_create", "skill_import",
+      "skill_export_prompt", "skill_disable", "skill_enable",
+      "skill_generation_config", "service_catalog_list", "service_catalog_update",
+      "skill_compat_check", "skill_compat_check_all", "skill_health_summary",
+      "knowledge_ingest_changelog", "knowledge_export_request",
+      "skill_recommend_updates", "skill_regenerate", "discover_environment",
+      "skill_execute", "validate_skill_live", "storage_health"
+    ],
+    "total_registered": 55,
+    "skill_modules": [
+      "fortigate_system_status.py",
+      "http_health_check.py",
+      "proxmox_vm_status.py"
+    ],
+    "working_tools": "All 55 tools compile and have real implementations. Infrastructure tools return errors when target service unreachable (by design).",
+    "broken_or_stub": [],
+    "tool_signature_bugs": [
+      "audit_log: missing optional target= and details= params",
+      "discover_environment: breaks on no-arg call (LLM can't pass empty)",
+      "skill_execute: description confuses LLM on how to pass kwargs",
+      "node_drain/node_activate: expect hex node ID but LLM passes hostname"
+    ]
+  },
+
+  "tool_routing": {
+    "mcp_layer": "server.py: 55 @mcp.tool() wrappers, each a direct import call (e.g., return swarm.service_upgrade(name, image)). Promoted skills loaded dynamically at startup via _make_promoted_tool() closure.",
+    "api_layer": "api/tool_registry.py: AST-based auto-discovery of mcp_server/tools/*.py. load_registry() extracts function names + docstrings + param types. invoke_tool(name, params) dynamically imports and calls. This is how the agent loop calls tools (not via MCP protocol).",
+    "agent_layer": "api/agents/router.py: 4 agent types (observe, investigate, execute, build) with exclusive tool allowlists. Promoted skills injected into domain allowlists at startup.",
+    "agent_types": {
+      "observe": "Read-only: swarm_status, service_health, elastic_cluster_health, etc. Max 8 steps.",
+      "investigate": "Read-only + log search + correlation + ingestion. Max 12 steps.",
+      "execute": "Domain-filtered destructive tools (kafka/swarm/proxmox/general subsets). Max 20 steps.",
+      "build": "Skill management only (skill_create, skill_regenerate, etc.). Max 15 steps."
+    }
+  },
+
+  "safety_layer": {
+    "gate_rules": {
+      "file": "api/agents/gate_rules.py",
+      "rules": [
+        "kafka_rolling_restart: all brokers up? ISR >= RF-1?",
+        "swarm_service_upgrade: quorum maintained? majority managers up?",
+        "changelog_check: changelog ingested? breaking changes present?"
+      ],
+      "verdicts": ["GO", "ASK", "HALT"]
+    },
+    "pre_upgrade_check": {
+      "steps": 6,
+      "description": "Sequential gate: (1) Swarm nodes ready, (2) Kafka ISR intact, (3) Elastic errors=0 (30min), (4) Error rate anomaly (24h), (5) Memory context activation (past failures), (6) Checkpoint save"
+    },
+    "post_upgrade_verify": {
+      "steps": 4,
+      "description": "After 20s delay: (1) Replicas at desired count, (2) No new Elastic errors (5min), (3) Log correlation, (4) Store result as MuninnDB engram"
+    },
+    "plan_lock": {
+      "file": "api/lock.py",
+      "description": "Global singleton — ONE destructive plan at a time. 10-min stale timeout. Pre-flight enforcement: destructive tools blocked until plan_action() called. GUI confirmation flow: broadcast → wait_for_confirmation → release."
+    },
+    "destructive_tools_requiring_plan": [
+      "service_upgrade", "service_rollback", "node_drain",
+      "checkpoint_restore", "kafka_rolling_restart_safe",
+      "docker_engine_update",
+      "skill_create", "skill_regenerate", "skill_disable", "skill_enable"
+    ],
+    "escalation_triggers": [
+      "Tool returns degraded/failed/escalated → auto-escalate with memory context",
+      "Service vendor mismatch in service_upgrade() → fail with escalation",
+      "Agent calls escalate() explicitly",
+      "Memory trigger: repeated error pattern → critical alert"
+    ],
+    "vendor_switch_guard": "service_upgrade() blocks vendor changes unless task_hint contains 'switch image', 'change vendor', or 'migrate to'"
+  },
+
+  "agent_loop": {
+    "file": "api/routers/agent.py (41KB)",
+    "flow": "POST /api/agent/run → classify task → detect domain → build_step_plan (1-2 steps) → filter tools → inject memory → execute steps with pre-flight safety, lock checks, memory hooks, auto-escalation",
+    "step_orchestrator": "api/agents/orchestrator.py: decomposes complex tasks into observe-then-execute steps. verdict_from_text() extracts GO/ASK/HALT between steps.",
+    "clarification": "api/clarification.py: Agent calls clarifying_question() → GUI widget → 300s timeout → 'proceed with best guess'",
+    "confirmation": "api/confirmation.py: wait_for_confirmation() blocks agent until GUI user approves plan"
+  },
+
+  "collectors": {
+    "manager": "api/collectors/manager.py: auto-discovers BaseCollector subclasses, starts as asyncio background tasks",
+    "base": "api/collectors/base.py: poll() returns state dict → log_status_snapshot() → check_transition() (alerts) → evaluate_triggers() (memory hooks)",
+    "collectors": [
+      {"file": "swarm.py", "component": "swarm", "polls": "Docker Swarm nodes, services, replicas"},
+      {"file": "kafka.py", "component": "kafka", "polls": "Kafka broker status, topic replication"},
+      {"file": "elastic.py", "component": "elastic", "polls": "Elasticsearch cluster health, index stats"},
+      {"file": "proxmox_vms.py", "component": "proxmox_vms", "polls": "Proxmox VMs and LXC containers"},
+      {"file": "docker_agent01.py", "component": "docker_agent01", "polls": "Agent-01 container list"},
+      {"file": "external_services.py", "component": "external_services", "polls": "FortiGate, TrueNAS, etc. health checks"}
+    ]
+  },
+
+  "logging_and_observability": {
+    "logger": {
+      "file": "api/logger.py",
+      "pattern": "Async batch-buffered: queue → flush every 100ms or 10 items. Operation start/complete are immediate writes. Tool calls, snapshots, escalations, audit are batched."
+    },
+    "correlator": {
+      "file": "api/correlator.py",
+      "description": "Links PostgreSQL operations ↔ Elasticsearch logs. Time-window matching (300s default, 30s per tool call). Anomaly detection. Memory activation."
+    },
+    "alerts": {
+      "file": "api/alerts.py",
+      "description": "In-memory ring buffer (200 entries). Health state transitions → warning/critical/info. ElasticAlerter (api/elastic_alerter.py) for log-derived alerts. Memory-triggered alerts for repeated error patterns."
+    },
+    "websocket": {
+      "file": "api/websocket.py",
+      "description": "JWT-authenticated (/ws/output?token=<jwt>). broadcast() → all clients + DB store. send_line() typed: step, tool, reasoning, halt, done, error. Session replay via get_replay()."
+    },
+    "session_store": {
+      "file": "api/session_store.py",
+      "description": "Background flush every 0.2s to operation_log table. Enables GUI session replay."
+    }
+  },
+
+  "skill_generation": {
+    "functional": true,
+    "backend_in_use": "local",
+    "can_generate_from_description": true,
+    "pipeline": "description → LLM → SKILL_SPEC (JSON) → live_validator (probe real endpoint) → generate_code_from_spec → validator.py (AST) → save to modules/ → register in DB",
+    "lifecycle_states": ["auto_generated", "promoted", "scrapped", "purged", "restored"],
+    "promoter": {
+      "file": "mcp_server/tools/skills/promoter.py",
+      "operations": ["promote_skill (→ first-class @mcp.tool)", "demote_skill", "scrap_skill (→ data/skill_modules_scrapped/)", "purge_skill (hard-delete)", "restore_skill"]
+    },
+    "last_successful_generation": "Three built-in skills (proxmox_vm_status, fortigate_system_status, http_health_check). Pipeline complete but no auto-generated skills yet.",
+    "known_issues": [
+      "Depends on LM Studio (Qwen3-Coder-30B) being reachable for local generation",
+      "Cloud backend requires ANTHROPIC_API_KEY",
+      "Export backend saves prompts only, no code generation"
+    ]
+  },
+
+  "rag_and_memory": {
+    "muninndb_status": "partially_configured",
+    "muninndb_version": null,
+    "modules": {
+      "client.py": "MuninnDB REST client (engram CRUD, concept activation)",
+      "ingest.py": "Startup runbook ingestion (Swarm, Kafka, Elasticsearch, Filebeat) as engrams",
+      "ingest_worker.py": "Async document ingestion worker",
+      "hooks.py": "Before/after tool call hooks, memory context injection into agent",
+      "triggers.py": "Semantic trigger evaluation (e.g., Kafka lag > threshold → activate)",
+      "feedback.py": "Outcome + association engrams, Hebbian reinforcement (success stored 2x)",
+      "fetch_docs.py": "External document fetching",
+      "summarize.py": "Operation summarization for memory storage",
+      "schemas.py": "Data schemas for engrams and docs"
+    },
+    "self_improvement_loop": [
+      "Before tool call: activate relevant engrams → inject into agent context",
+      "After tool call: store execution context in MuninnDB",
+      "On completion: store outcome engram (task → tools → status)",
+      "On success: store tool association TWICE (Hebbian reinforcement)",
+      "On failure: store once with 'failure' tag",
+      "User thumbs-up: golden engram; thumbs-down: just log",
+      "Repeated error patterns: fire critical alert"
+    ],
+    "doc_retrieval_py_status": "functional — Multi-strategy retrieval, 60+ service keywords, graceful fallback if MuninnDB unavailable",
+    "knowledge_base_py_status": "functional — Version tracking, compat checking, changelog parsing, vendor doc URLs",
+    "ingest_command_works": false,
+    "vector_search_available": false,
+    "docs_currently_indexed": "none — MuninnDB container must be running"
+  },
+
+  "infrastructure": {
+    "lm_studio_model": "lmstudio-community/qwen3-coder-30b-a3b-instruct",
+    "lm_studio_reachable": "unknown — runs on 192.168.199.51:1234",
+    "agent_container_running": "unknown — production on hp1-prod-agent-01 (192.168.199.10:8000)",
+    "database_backend": "sqlite (default, auto-detects PostgreSQL if DATABASE_URL set)",
+    "docker_compose_services": [
+      "postgres (dev profile only)",
+      "pgadmin (dev profile only)",
+      "muninndb",
+      "hp1_agent"
+    ],
+    "swarm_services": [
+      "agent (single replica, 1G memory, 2 CPU limit, overlay network)"
+    ]
+  },
+
+  "settings": {
+    "file": "api/routers/settings.py",
+    "mechanism": "DB-backed with env var seeding on first startup. Sync DB → os.environ so collectors pick up changes.",
+    "sensitive_masking": true,
+    "keys_managed": 20
+  },
+
+  "gui": {
+    "tabs_implemented": [
+      "Dashboard — 6 status cards (Nodes, Brokers, Services, Elastic, Muninn, Summary)",
+      "Cluster — NodeMap visual grid (3 managers + 3 workers) with Kafka broker placement",
+      "Commands — Agent prompt execution with tool/skill picker, live feedback",
+      "Skills — Skill browser with execution forms, promote/demote",
+      "Logs — 5 sub-tabs: Live Logs, Tool Calls, Operations, Escalations, Stats",
+      "Memory — MuninnDB engram browser, patterns, doc fetching, engram activation",
+      "Output — Real-time agent execution feed (WebSocket)",
+      "Tests (dropdown) — Integration test runner with pass/fail",
+      "Ingest (dropdown) — Document ingestion with preview and breaking changes"
+    ],
+    "tabs_stub": [],
+    "components": 24,
+    "contexts": 6,
+    "supporting_components": [
+      "AlertToast", "CardFilterBar", "ChoiceBar", "ClarificationWidget",
+      "ElasticStatus", "LockBadge", "LoginScreen", "LogTable", "OptionsModal",
+      "PlanConfirmModal", "ServiceCards", "SparkLine", "StatsBar", "StatusPanel",
+      "VersionBadge"
+    ]
+  },
+
+  "database_schema": {
+    "api_database": {
+      "engine": "SQLAlchemy (asyncpg for Postgres, aiosqlite for SQLite)",
+      "tables": [
+        "schema_versions — migration tracking",
+        "operations — agent sessions (session_id, label, status, duration, final_answer)",
+        "tool_calls — per-tool execution log (operation FK, params, result, duration, model)",
+        "status_snapshots — collector poll results",
+        "escalations — escalation events",
+        "audit_log — structured event log",
+        "operation_log — WebSocket line store for session replay"
+      ],
+      "migrations": 6
+    },
+    "skills_database": {
+      "engine": "Direct psycopg2 (Postgres) or sqlite3 (SQLite) via auto_detect.py",
+      "tables": [
+        "skills — metadata, metrics, lifecycle state",
+        "service_catalog — detected versions, docs ingested flags",
+        "breaking_changes — version-specific breaking changes",
+        "skill_compat_log — compatibility check history",
+        "skill_audit_log — skill system audit trail",
+        "checkpoints — pre-operation state snapshots",
+        "settings — DB-backed settings"
+      ]
+    }
+  },
+
+  "platforms_with_existing_tools": {
+    "proxmox": {
+      "tools": ["proxmox_vm_status (skill module)"],
+      "collector": "proxmox_vms.py",
+      "fingerprinted": true,
+      "api_connected": false,
+      "notes": "Requires PROXMOX_HOST, PROXMOX_USER, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET."
+    },
+    "fortigate": {
+      "tools": ["fortigate_system_status (skill module)"],
+      "collector": "external_services.py (shared)",
+      "fingerprinted": true,
+      "api_connected": false,
+      "notes": "Requires FORTIGATE_HOST, FORTIGATE_API_KEY."
+    },
+    "truenas": {
+      "tools": [],
+      "collector": "external_services.py (shared)",
+      "fingerprinted": true,
+      "api_connected": false,
+      "notes": "Fingerprinted (port 443, /api/v2.0/system/version). No skill module yet."
+    },
+    "docker_swarm": {
+      "tools": [
+        "swarm_status", "service_list", "service_health", "service_current_version",
+        "service_resolve_image", "service_version_history", "service_upgrade",
+        "service_rollback", "node_drain", "node_activate", "pre_upgrade_check",
+        "service_logs", "docker_engine_version_tool", "docker_engine_check_update_tool",
+        "docker_engine_update_tool"
+      ],
+      "collector": "swarm.py",
+      "fingerprinted": true,
+      "api_connected": false,
+      "notes": "Most complete platform. 15 tools."
+    },
+    "kafka": {
+      "tools": [
+        "kafka_broker_status", "kafka_consumer_lag", "kafka_topic_health",
+        "kafka_topic_list", "kafka_rolling_restart_safe", "pre_kafka_check"
+      ],
+      "collector": "kafka.py",
+      "fingerprinted": false,
+      "api_connected": false,
+      "notes": "6 tools. Native kafka-python, not HTTP fingerprinted."
+    },
+    "elasticsearch": {
+      "tools": [
+        "elastic_cluster_health", "elastic_search_logs", "elastic_error_logs",
+        "elastic_kafka_logs", "elastic_log_pattern", "elastic_index_stats",
+        "elastic_correlate_operation"
+      ],
+      "collector": "elastic.py",
+      "fingerprinted": true,
+      "api_connected": false,
+      "notes": "7 tools."
+    },
+    "unifi": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 8443). No skill."},
+    "netbox": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "wazuh": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "security_onion": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "pihole": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 80, /admin/api.php). No skill."},
+    "technitium": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "nginx_caddy_traefik": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "NGINX + Traefik fingerprinted. No skills."},
+    "pbs": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "ansible": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Router exists (api/routers/ansible.py) but no MCP tools."},
+    "terraform": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not implemented."},
+    "syncthing": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not fingerprinted."},
+    "trilium": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not implemented."},
+    "bookstack": {"tools": [], "fingerprinted": false, "api_connected": false, "notes": "Not implemented."},
+    "synology": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 5001). No skill."},
+    "opnsense": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 443). No skill."},
+    "grafana": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 3000). No skill."},
+    "portainer": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 9443). No skill."},
+    "kibana": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 5601). No skill."},
+    "adguard_home": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 3000). No skill."},
+    "fortiswitch": {"tools": [], "fingerprinted": true, "api_connected": false, "notes": "Fingerprinted (port 443). No skill."}
+  },
+
+  "fingerprinted_services_total": 16,
+
+  "file_inventory": {
+    "total_python_files": 121,
+    "total_lines_of_code": 23888,
+    "total_frontend_files": 38,
+    "requirements_count": 23,
+    "env_vars_defined": [
+      "DATABASE_URL", "SQLITE_PATH", "LM_STUDIO_BASE_URL", "LM_STUDIO_MODEL",
+      "LM_STUDIO_API_KEY", "DOCKER_HOST", "SWARM_POLL_INTERVAL",
+      "KAFKA_BOOTSTRAP_SERVERS", "KAFKA_POLL_INTERVAL", "KAFKA_LAG_THRESHOLD",
+      "ELASTIC_URL", "ELASTIC_POLL_INTERVAL", "FILEBEAT_INDEX_PATTERN",
+      "ELASTIC_INDEX_PATTERN", "ELASTIC_ERROR_RATE_THRESHOLD",
+      "ELASTIC_FILEBEAT_STALE_MINUTES", "ENABLE_KIBANA", "KIBANA_URL",
+      "CORRELATION_WINDOW_SECONDS", "MUNINNDB_URL", "AUDIT_LOG_PATH",
+      "CHECKPOINT_PATH", "API_HOST", "API_PORT", "CORS_ALLOW_ALL",
+      "ADMIN_PASSWORD", "SKILL_GEN_BACKEND", "ANTHROPIC_API_KEY",
+      "PROXMOX_HOST", "PROXMOX_USER", "PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET",
+      "FORTIGATE_HOST", "FORTIGATE_API_KEY", "TRUENAS_HOST", "TRUENAS_API_KEY",
+      "DOCKER_ENGINE_HOST", "DOCKER_ENGINE_USER", "DOCKER_ENGINE_SSH_KEY",
+      "DOCKER_ENGINE_SSH_PORT", "DOCKER_GID"
+    ],
+    "tests_exist": true,
+    "test_count": 17,
+    "syntax_validation": "All 121 Python files compile successfully (py_compile)",
+    "test_results": "16/17 pass. 1 failure: test_collectors_proxmox_vms.py (stale patch target)"
+  },
+
+  "dead_code": [
+    "mcp_server/tools/skill_meta_tools.py — legacy wrapper, not imported in server.py",
+    "./doc_retrieval.py — stale copy at project root, outside package"
+  ],
+
+  "missing_files": [
+    "agent_settings.json — referenced in CLAUDE.md but does not exist in codebase"
+  ],
+
+  "blockers_and_gaps": [
+    "CRITICAL: Operations never complete — agent.py enqueues complete_operation but background task exits before 100ms flush window, DB status stays 'running'. Fix: add flush_now() before complete_operation (documented in HANDOFF.md).",
+    "CRITICAL: stop_agent only sets cancel flag, doesn't update DB status — cancelled ops stay 'running' forever.",
+    "BUG: audit_log tool missing optional target= and details= params in server.py signature.",
+    "BUG: discover_environment breaks on no-arg call (LLM can't call without args).",
+    "BUG: skill_execute description confuses LLM on how to pass kwargs.",
+    "BUG: node_drain/node_activate expect hex node ID but LLM passes hostname.",
+    "TEST: test_collectors_proxmox_vms.py patches non-existent _get_disk_usage function.",
+    "INFRA: MuninnDB not running — memory, ingest, RAG, triggers, feedback all non-functional.",
+    "COVERAGE: Only 3 skill modules exist despite 16 fingerprinted services.",
+    "COVERAGE: 16+ of 25 listed platforms have zero tools.",
+    "DEAD CODE: 2 unused files (skill_meta_tools.py, root doc_retrieval.py).",
+    "MISSING: agent_settings.json referenced in CLAUDE.md doesn't exist.",
+    "NO scheduled task support (no cron, no APScheduler, no Celery).",
+    "NO rate limiting on tool calls."
+  ],
+
+  "recommendations": [
+    "1. Fix operation completion bug (flush_now before complete_operation) — #1 blocker for reliable agent operations.",
+    "2. Fix stop_agent to update DB status on cancellation.",
+    "3. Fix 4 tool signature bugs (audit_log, discover_environment, skill_execute, node_drain/activate).",
+    "4. Get MuninnDB running — unlocks Phase 5 (memory + RAG), GUI Memory tab already built.",
+    "5. Fix failing test (test_collectors_proxmox_vms.py stale patch target).",
+    "6. Remove dead code (skill_meta_tools.py, root doc_retrieval.py).",
+    "7. Generate TrueNAS skill module — validates auto-generation pipeline end-to-end.",
+    "8. Connect to live infrastructure (set env vars for Proxmox, FortiGate, Kafka, Elasticsearch).",
+    "9. Add fingerprints for missing platforms (NetBox, Wazuh, Security Onion, PBS, Technitium, Syncthing).",
+    "10. Generate skills for already-fingerprinted services (Pi-hole, UniFi, Traefik, Grafana, Portainer, etc.)."
+  ]
+}

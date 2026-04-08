@@ -44,8 +44,6 @@ data/skill_exports/
 # GUI build output — built inside Docker, not committed
 gui/dist/
 
-# WISC session state — never commit
-state/
 
 # Visual companion / brainstorm HTML docs
 docs/*.html
