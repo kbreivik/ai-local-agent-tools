@@ -186,7 +186,7 @@ class PBSCollector(BaseCollector):
 def _collect_datastores(base: str, headers: dict) -> list:
     """Fetch all datastores and their usage stats."""
     try:
-        r = httpx.get(f"{base}/admin/datastore", headers=headers, verify=False, timeout=10)
+        r = httpx.get(f"{base}/config/datastore", headers=headers, verify=False, timeout=10)
         r.raise_for_status()
         stores = r.json().get("data", [])
     except Exception as e:
