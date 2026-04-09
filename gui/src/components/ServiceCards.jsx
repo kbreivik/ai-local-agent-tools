@@ -267,7 +267,7 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd }) {
+function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd, entityForCompare }) {
   const { cardMinWidth, cardMaxWidth } = useOptions()
   const _min = cardMinWidth ?? 300
   const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
@@ -302,8 +302,9 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
       {/* Row 1: identity | gap | counts | auth — click to collapse */}
       <div
         onClick={(e) => {
-          if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd) {
-            onCompareAdd({ id: `cluster:${label}`, label, platform: 'proxmox', section: 'COMPUTE', metadata: { running: runningCount, total: totalCount, issues: issueCount, host, auth } })
+          if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd && entityForCompare) {
+            e.stopPropagation()
+            onCompareAdd(entityForCompare)
             return
           }
           setExpanded(prev => !prev)
@@ -1089,7 +1090,7 @@ function ExternalCardExpanded({ svc, onAction }) {
   )
 }
 
-function ExternalCardCollapsed({ svc, onEntityDetail }) {
+function ExternalCardCollapsed({ svc, onEntityDetail, compareMode, onCompareAdd }) {
   const [reconnecting, setReconnecting] = useState(false)
   const [reconnectResult, setReconnectResult] = useState(null)
   const latencyColor = !svc.reachable ? 'text-red-400' : svc.latency_ms > 100 ? 'text-amber-400' : 'text-green-400'
@@ -1409,6 +1410,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               totalCount={allItems.length}
               issueCount={issues}
               compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+              entityForCompare={{ id: `cluster:proxmox:${connLabel}`, label: connLabel, platform: 'proxmox', section: 'COMPUTE', metadata: { host: connHost, running: runningCount, total: allItems.length, issues } }}
               filterBar={
                 <ProxmoxFilterBar
                   items={allItems}
@@ -1453,7 +1455,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
                 uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
-                collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} />}
+                collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} compareMode={compareMode} onCompareAdd={onCompareAdd} />}
                 expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{ id: `external_services:${svc.slug}`, label: svc.name, platform: svc.slug, section: svc.service_type === 'fortigate' ? 'NETWORK' : 'PLATFORM', metadata: { host_port: svc.host_port, latency_ms: svc.latency_ms, reachable: svc.reachable, dot: svc.dot } }}
