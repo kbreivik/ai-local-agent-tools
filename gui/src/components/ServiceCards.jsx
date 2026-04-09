@@ -16,13 +16,6 @@ import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
 
-// Inject compare-hint hover CSS once
-if (typeof document !== 'undefined' && !document.getElementById('compare-hint-css')) {
-  const style = document.createElement('style')
-  style.id = 'compare-hint-css'
-  style.textContent = '.vmc:hover .compare-hint { opacity: 1 !important; }'
-  document.head.appendChild(style)
-}
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 // Platform slug → connection test helper
@@ -199,10 +192,11 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
   const compareId = entityForCompare?.id
   const slotIdx = compareId ? (compareSet || []).findIndex(e => e.id === compareId) : -1
   const isSelected = slotIdx >= 0
+  const [hovered, setHovered] = useState(false)
 
   return (
     <div
-      className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''} ${compareMode ? 'vmc' : ''}`}
+      className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
       style={{
         background: isSelected ? `${_SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
         borderColor: isOpen ? undefined : 'var(--border)',
@@ -213,6 +207,8 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
         outlineOffset: isSelected ? -1 : 0,
         position: 'relative',
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onClick={(e) => {
         if ((e.ctrlKey || e.metaKey) && compareMode && entityForCompare && onCompareAdd) {
           e.stopPropagation()
@@ -235,8 +231,8 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
           position: 'absolute', bottom: 3, right: 6,
           fontFamily: 'var(--font-mono)', fontSize: 7,
           color: 'var(--text-3)', letterSpacing: '0.04em',
-          opacity: 0, transition: 'opacity 0.1s', pointerEvents: 'none',
-        }} className="compare-hint">ctrl+click</span>
+          opacity: hovered ? 1 : 0, transition: 'opacity 0.1s', pointerEvents: 'none',
+        }}>ctrl+click</span>
       )}
       {/* Header row — always visible, click to toggle */}
       <div className="flex items-center justify-between">
@@ -271,7 +267,7 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children }) {
+function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd }) {
   const { cardMinWidth, cardMaxWidth } = useOptions()
   const _min = cardMinWidth ?? 300
   const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
@@ -305,7 +301,13 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
     <div style={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
       {/* Row 1: identity | gap | counts | auth — click to collapse */}
       <div
-        onClick={() => setExpanded(e => !e)}
+        onClick={(e) => {
+          if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd) {
+            onCompareAdd({ id: `cluster:${label}`, label, platform: 'proxmox', section: 'COMPUTE', metadata: { running: runningCount, total: totalCount, issues: issueCount, host, auth } })
+            return
+          }
+          setExpanded(prev => !prev)
+        }}
         style={{ display: 'flex', alignItems: 'stretch', background: 'var(--bg-1)',
                   borderBottom: '1px solid var(--border)', minHeight: 36,
                   cursor: 'pointer', userSelect: 'none' }}>
@@ -1406,6 +1408,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               runningCount={runningCount}
               totalCount={allItems.length}
               issueCount={issues}
+              compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
               filterBar={
                 <ProxmoxFilterBar
                   items={allItems}

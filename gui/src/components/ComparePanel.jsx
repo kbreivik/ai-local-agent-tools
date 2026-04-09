@@ -17,11 +17,7 @@ export default function ComparePanel({ compareSet, chats, setChats, bcTargets, s
   const sendToEntity = (entity, text) => {
     if (!text.trim()) return
     const id = entity.id
-    setChats(prev => ({
-      ...prev,
-      [id]: [...(prev[id] || []), { role: 'user', text }],
-    }))
-    // Stream AI response
+    // Add user message + empty AI placeholder in one update
     let aiText = ''
     setChats(prev => ({
       ...prev,
