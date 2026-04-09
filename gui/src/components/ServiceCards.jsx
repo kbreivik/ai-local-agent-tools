@@ -322,7 +322,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
                          textTransform: 'uppercase', color: 'var(--text-1)', whiteSpace: 'nowrap',
                          overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{label}</span>
           <span style={{
-            fontSize: 10, color: 'var(--text-3)',
+            fontSize: 8, color: 'var(--text-3)',
             transition: 'transform 0.1s', display: 'flex', alignItems: 'center',
             transform: expanded ? 'rotate(90deg)' : 'none',
           }}>▶</span>
