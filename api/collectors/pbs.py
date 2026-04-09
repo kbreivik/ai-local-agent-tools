@@ -220,7 +220,7 @@ def _collect_datastores(base: str, headers: dict) -> list:
 def _collect_tasks(base: str, headers: dict) -> dict:
     """Fetch recent tasks and count failures."""
     try:
-        r = httpx.get(f"{base}/nodes/localhost/tasks", headers=headers,
+        r = httpx.get(f"{base}/system/tasks", headers=headers,
                       verify=False, timeout=10, params={"limit": 20})
         r.raise_for_status()
         tasks = r.json().get("data", [])
