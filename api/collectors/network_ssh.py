@@ -28,6 +28,67 @@ SHOW_CMDS = {
 }
 
 
+def _ssh_exec(host: str, port: int, username: str, password: str,
+              device_type: str, cmd: str) -> str:
+    """
+    Execute a CLI command via SSH with wingpy -> netmiko -> paramiko fallback.
+    Returns command output string. Raises RuntimeError if all methods fail.
+    """
+    last_exc = None
+
+    # 1. wingpy (optional, fastest — silent skip if not installed)
+    try:
+        from wingpy import Device as WingDevice  # noqa
+        dev = WingDevice(host=host, port=port, username=username, password=password,
+                         device_type=device_type, timeout=10)
+        with dev:
+            return dev.send_command(cmd)
+    except ImportError:
+        pass
+    except Exception as e:
+        last_exc = e
+        log.debug("wingpy failed for %s: %s", host, e)
+
+    # 2. netmiko (primary / most compatible)
+    try:
+        from netmiko import ConnectHandler
+        with ConnectHandler(
+            device_type=device_type, host=host, port=port,
+            username=username, password=password,
+            timeout=10, session_timeout=15,
+            conn_timeout=8, banner_timeout=8, fast_cli=True,
+        ) as conn:
+            return conn.send_command(cmd, read_timeout=8)
+    except ImportError:
+        pass
+    except Exception as e:
+        last_exc = e
+        log.debug("netmiko failed for %s: %s", host, e)
+
+    # 3. paramiko (last resort — raw SSH)
+    try:
+        import paramiko
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(host, port=port, username=username, password=password,
+                    timeout=10, look_for_keys=False, allow_agent=False)
+        try:
+            _, stdout, _ = ssh.exec_command(cmd, timeout=10)
+            output = stdout.read().decode("utf-8", errors="replace").strip()
+        finally:
+            ssh.close()
+        if output:
+            return output
+        raise RuntimeError("paramiko exec_command returned empty output")
+    except ImportError:
+        pass
+    except Exception as e:
+        last_exc = e
+        log.debug("paramiko failed for %s: %s", host, e)
+
+    raise RuntimeError(f"All SSH methods failed for {host}: {last_exc}")
+
+
 class NetworkSSHCollector(BaseCollector):
     component = "network_ssh"
     platforms = ["fortiswitch", "cisco", "juniper", "aruba"]
@@ -97,22 +158,8 @@ class NetworkSSHCollector(BaseCollector):
             label = c.get("label") or host
 
             try:
-                from netmiko import ConnectHandler
                 cmd = SHOW_CMDS.get(device_type, SHOW_CMDS["default"])
-                device_params = {
-                    "device_type": device_type,
-                    "host": host,
-                    "port": port,
-                    "username": username,
-                    "password": password,
-                    "timeout": 10,
-                    "session_timeout": 15,
-                    "conn_timeout": 8,
-                    "banner_timeout": 8,
-                    "fast_cli": True,
-                }
-                with ConnectHandler(**device_params) as net_conn:
-                    output = net_conn.send_command(cmd, read_timeout=8)
+                output = _ssh_exec(host, port, username, password, device_type, cmd)
 
                 devices.append({
                     "id": c.get("id"),

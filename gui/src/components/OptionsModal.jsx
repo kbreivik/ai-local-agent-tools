@@ -447,10 +447,10 @@ const PLATFORMS = [
 const PLATFORM_AUTH = {
   proxmox:         { auth_type: 'token',  defaultPort: 8006, fields: [{ key: 'user', label: 'PVE User', placeholder: 'terraform@pve' }, { key: 'token_name', label: 'Token Name', placeholder: 'terraform-token' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
   fortigate:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
-  fortiswitch:     { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'fortinet' }] },
+  fortiswitch:     { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'fortinet' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'FortiSwitch API key (optional — future use)' }] },
   truenas:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   pbs:             { auth_type: 'token',  defaultPort: 8007, fields: [{ key: 'user', label: 'PBS User', placeholder: 'root@pam' }, { key: 'token_name', label: 'Token Name', placeholder: 'automation-token' }, { key: 'secret', label: 'Token Secret', type: 'password' }] },
-  unifi:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
+  unifi:           { auth_type: 'apikey', defaultPort: 443, fields: [{ key: 'api_key', label: 'API Key (recommended)', type: 'password', placeholder: 'Network → Settings → Control Plane → Integrations (UniFi OS only)' }, { key: 'username', label: 'Username (classic only)', placeholder: 'local admin account only' }, { key: 'password', label: 'Password (classic only)', type: 'password' }] },
   wazuh:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username' }, { key: 'password', label: 'Password', type: 'password' }] },
   grafana:         { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
   portainer:       { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
@@ -468,8 +468,9 @@ const PLATFORM_AUTH = {
   nginx:           { auth_type: 'basic',  fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }] },
   pihole:          { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key / Password', type: 'password' }] },
   technitium:      { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] },
-  cisco:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'cisco_ios' }] },
-  juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }] },
+  cisco:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'cisco_ios' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'RESTCONF key (optional — future use)' }] },
+  juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'Junos REST API key (optional — future use)' }] },
+  aruba:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'aruba_os' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'AOS-CX API key (optional — future use)' }] },
 }
 const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{txt}</label>
 

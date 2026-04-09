@@ -225,6 +225,29 @@ async def get_fortigate(user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/unifi")
+async def get_unifi(user: str = Depends(get_current_user)):
+    """UniFi device status and client count from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "unifi")
+    state = _parse_state(snap)
+    return {
+        "health": state.get("health", "unknown"),
+        "auth_mode": state.get("auth_mode", "unknown"),
+        "site": state.get("site", "default"),
+        "devices": state.get("devices", []),
+        "device_count": state.get("device_count", 0),
+        "devices_up": state.get("devices_up", 0),
+        "devices_down": state.get("devices_down", 0),
+        "client_count": state.get("client_count", 0),
+        "wired_clients": state.get("wired_clients", 0),
+        "wireless_clients": state.get("wireless_clients", 0),
+        "latency_ms": state.get("latency_ms"),
+        "connection_label": state.get("connection_label", ""),
+        "last_updated": snap.get("timestamp") if snap else None,
+    }
+
+
 # ── GET /containers/{id}/tags ─────────────────────────────────────────────────
 
 def _fetch_ghcr_tags(image_bare: str) -> list[str]:
