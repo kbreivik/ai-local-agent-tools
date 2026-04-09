@@ -205,6 +205,26 @@ async def get_truenas(user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/fortigate")
+async def get_fortigate(user: str = Depends(get_current_user)):
+    """FortiGate interface health and system info from latest snapshot."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "fortigate")
+
+    state = _parse_state(snap)
+    return {
+        "health": state.get("health", "unknown"),
+        "hostname": state.get("hostname", ""),
+        "version": state.get("version", ""),
+        "uptime": state.get("uptime"),
+        "ha_mode": state.get("ha_mode", ""),
+        "interfaces": state.get("interfaces", []),
+        "latency_ms": state.get("latency_ms"),
+        "connection_label": state.get("connection_label", ""),
+        "last_updated": snap.get("timestamp") if snap else None,
+    }
+
+
 # ── GET /containers/{id}/tags ─────────────────────────────────────────────────
 
 def _fetch_ghcr_tags(image_bare: str) -> list[str]:
