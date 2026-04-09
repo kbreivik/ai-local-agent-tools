@@ -259,22 +259,31 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
     )
   }
 
-  // New two-row cluster header
+  // New two-row cluster header with collapsible grid
+  const [expanded, setExpanded] = useState(true)
   const dotColor = dot === 'green' ? 'var(--green)' : dot === 'red' ? 'var(--red)' : 'var(--amber)'
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-      {/* Row 1: identity | gap | counts | auth */}
-      <div style={{ display: 'flex', alignItems: 'stretch', background: 'var(--bg-1)',
-                    borderBottom: '1px solid var(--border)', minHeight: 36 }}>
+      {/* Row 1: identity | gap | counts | auth — click to collapse */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{ display: 'flex', alignItems: 'stretch', background: 'var(--bg-1)',
+                  borderBottom: '1px solid var(--border)', minHeight: 36,
+                  cursor: 'pointer', userSelect: 'none' }}>
         {/* Name zone */}
         <div style={{ width: NAME_W, flexShrink: 0, display: 'flex', alignItems: 'center',
-                      gap: 9, padding: '0 14px 0 10px',
+                      gap: 9, padding: '0 8px 0 10px',
                       borderRight: '2px solid rgba(255,255,255,0.11)' }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
                         background: dotColor, boxShadow: `0 0 7px ${dotColor}` }} />
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.1em',
                          textTransform: 'uppercase', color: 'var(--text-1)', whiteSpace: 'nowrap',
-                         overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                         overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{label}</span>
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)',
+            transition: 'transform 0.2s', display: 'flex', alignItems: 'center',
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+          }}>›</span>
         </div>
         <div style={{ flex: 1 }} />
         {[
@@ -298,23 +307,30 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
         </div>
       </div>
 
-      {/* Row 2: spacer + filterBar */}
+      {/* Row 2: spacer + filterBar — always visible, clicks don't collapse */}
       {filterBar && (
-        <div style={{ display: 'flex', alignItems: 'stretch',
+        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'stretch',
                       background: 'var(--bg-0)', borderBottom: '1px solid var(--border)' }}>
           <div style={{ width: NAME_W, flexShrink: 0,
                         borderRight: '2px solid rgba(255,255,255,0.07)' }} />
-          <div style={{ flex: 1, overflow: 'hidden' }}>{filterBar}</div>
+          <div style={{ flex: 1, overflow: 'hidden', padding: '6px 10px' }}>{filterBar}</div>
         </div>
       )}
 
-      {/* Children grid */}
-      <div className="grid gap-2" style={{
-        padding: 2, background: 'var(--bg-0)',
-        gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
-        ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
+      {/* Children grid — collapses */}
+      <div style={{
+        overflow: 'hidden',
+        maxHeight: expanded ? 9999 : 0,
+        opacity: expanded ? 1 : 0,
+        transition: 'max-height 0.25s ease, opacity 0.2s ease',
       }}>
-        {children}
+        <div className="grid gap-2" style={{
+          padding: 2, background: 'var(--bg-0)',
+          gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
+          ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
+        }}>
+          {children}
+        </div>
       </div>
     </div>
   )
