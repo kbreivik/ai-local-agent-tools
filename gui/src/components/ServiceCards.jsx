@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   fetchDashboardContainers, fetchDashboardSwarm,
   fetchDashboardVMs, fetchDashboardExternal,
-  dashboardAction, fetchContainerTags, createLogStream,
+  fetchCollectorData, dashboardAction, fetchContainerTags, createLogStream,
   authHeaders,
 } from '../api'
 import { compareSemver, compareBuildTag } from '../utils/versionCheck'
@@ -267,7 +267,7 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd, entityForCompare }) {
+function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd, entityForCompare, countLabels }) {
   const { cardMinWidth, cardMaxWidth } = useOptions()
   const _min = cardMinWidth ?? 300
   const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
@@ -329,9 +329,9 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
         </div>
         <div style={{ flex: 1 }} />
         {[
-          { num: runningCount, lbl: 'running', color: 'var(--green)' },
-          { num: totalCount,   lbl: 'total',   color: 'var(--text-1)' },
-          { num: issueCount,   lbl: 'issues',  color: issueCount > 0 ? 'var(--red)' : 'var(--text-3)' },
+          { num: runningCount, lbl: (countLabels || [])[0] || 'running', color: 'var(--green)' },
+          { num: totalCount,   lbl: (countLabels || [])[1] || 'total',   color: 'var(--text-1)' },
+          { num: issueCount,   lbl: (countLabels || [])[2] || 'issues',  color: issueCount > 0 ? 'var(--red)' : 'var(--text-3)' },
         ].map(({ num, lbl, color }) => (
           <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
                                    justifyContent: 'center', padding: '0 14px', minWidth: 52,
@@ -1305,6 +1305,34 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   }, [containers])
   const { toasts, show: showToast } = useToast()
 
+  // UniFi + PBS collector data (60s poll, separate from 30s base)
+  const [unifiData, setUnifiData] = useState(null)
+  const [unifiConn, setUnifiConn] = useState(null)
+  const [pbsData, setPbsData]     = useState(null)
+  const [pbsConn, setPbsConn]     = useState(null)
+  useEffect(() => {
+    if (!show('unifi')) return
+    const loadUnifi = () => {
+      fetchCollectorData('unifi').then(r => r?.data ? setUnifiData(r.data) : null).catch(() => {})
+      fetch(`${BASE}/api/connections?platform=unifi`, { headers: { ...authHeaders() } })
+        .then(r => r.json()).then(d => setUnifiConn((d.data || []).find(c => c.host))).catch(() => {})
+    }
+    loadUnifi()
+    const id = setInterval(loadUnifi, 60000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!show('pbs')) return
+    const loadPbs = () => {
+      fetchCollectorData('pbs').then(r => r?.data ? setPbsData(r.data) : null).catch(() => {})
+      fetch(`${BASE}/api/connections?platform=pbs`, { headers: { ...authHeaders() } })
+        .then(r => r.json()).then(d => setPbsConn((d.data || []).find(c => c.host))).catch(() => {})
+    }
+    loadPbs()
+    const id = setInterval(loadPbs, 60000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const load = useCallback(async () => {
     const [c, s, v, e] = await Promise.allSettled([
       fetchDashboardContainers(),
@@ -1471,6 +1499,185 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             ))}
           </Section>
         )}
+
+        {/* UniFi Devices */}
+        {show('unifi') && unifiConn && (() => {
+          const devices   = unifiData?.devices || []
+          const devUp     = devices.filter(d => d.state === 'connected').length
+          const devDown   = devices.length - devUp
+          const dot       = unifiData?.health === 'healthy' ? 'green'
+                          : unifiData?.health === 'degraded' ? 'amber'
+                          : unifiData ? 'red' : 'grey'
+          const clientTot = unifiData?.client_count ?? 0
+          return (
+            <Section
+              label={unifiConn.label || unifiConn.host}
+              dot={dot}
+              auth="API KEY"
+              host={`${unifiConn.host}:${unifiConn.port || 443}`}
+              runningCount={devUp}
+              totalCount={devices.length}
+              issueCount={devDown}
+              countLabels={['up', 'total', 'issues']}
+              compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+              entityForCompare={{
+                id: `unifi:${unifiConn.label || unifiConn.host}`,
+                label: unifiConn.label || unifiConn.host,
+                platform: 'unifi', section: 'NETWORK',
+                metadata: { host: `${unifiConn.host}:${unifiConn.port || 443}`, devices: devices.length, clients: clientTot }
+              }}
+            >
+              {devices.filter(d => {
+                const devDot = d.state === 'connected' ? 'green' : 'amber'
+                const eid = `unifi:device:${d.mac || d.name}`
+                return matchesShowFilter(devDot) || isPinned(eid)
+              }).map(dev => {
+                const devDot = dev.state === 'connected' ? 'green' : 'amber'
+                const uptimeFmt = (() => {
+                  if (!dev.uptime) return ''
+                  const d = Math.floor(dev.uptime / 86400)
+                  const h = Math.floor((dev.uptime % 86400) / 3600)
+                  return d > 0 ? `${d}d` : `${h}h`
+                })()
+                return (
+                  <InfraCard
+                    key={dev.mac || dev.name}
+                    cardKey={`unifi-${dev.mac || dev.name}`}
+                    openKey={openKey} setOpenKey={setOpenKey}
+                    dot={devDot}
+                    name={dev.name}
+                    sub={`${dev.type_label} · ${dev.model}`}
+                    net={''}
+                    uptime={uptimeFmt}
+                    collapsed={
+                      <div className="text-[10px] mt-1" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                        {dev.clients} clients
+                      </div>
+                    }
+                    expanded={
+                      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+                        <div>Model: <span style={{ color: 'var(--text-1)' }}>{dev.model}</span></div>
+                        <div>Clients: <span style={{ color: 'var(--text-1)' }}>{dev.clients}</span></div>
+                        <div>Uptime: <span style={{ color: 'var(--text-1)' }}>{uptimeFmt || '—'}</span></div>
+                        <div>Version: <span style={{ color: 'var(--text-1)' }}>{dev.version || '—'}</span></div>
+                        <div>State: <span style={{ color: devDot === 'green' ? 'var(--green)' : 'var(--amber)' }}>{dev.state}</span></div>
+                        <div>MAC: <span style={{ color: 'var(--text-2)' }}>{dev.mac}</span></div>
+                      </div>
+                    }
+                    compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                    entityForCompare={{
+                      id: `unifi:device:${dev.mac || dev.name}`,
+                      label: dev.name, platform: 'unifi', section: 'NETWORK',
+                      metadata: { type: dev.type_label, model: dev.model, clients: dev.clients, state: dev.state, uptime: dev.uptime, version: dev.version }
+                    }}
+                  />
+                )
+              })}
+              {devices.length === 0 && unifiData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">No devices found</div>
+              )}
+              {!unifiData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">Loading UniFi devices…</div>
+              )}
+            </Section>
+          )
+        })()}
+
+        {/* PBS Datastores */}
+        {show('pbs') && pbsConn && (() => {
+          const datastores = pbsData?.datastores || []
+          const dsOk    = datastores.filter(d => d.usage_pct <= 85).length
+          const dsWarn  = datastores.filter(d => d.usage_pct > 85).length
+          const dot     = pbsData?.health === 'healthy' ? 'green'
+                        : pbsData?.health === 'degraded' ? 'amber'
+                        : pbsData ? 'red' : 'grey'
+          const tasks   = pbsData?.tasks || {}
+          return (
+            <Section
+              label={pbsConn.label || pbsConn.host}
+              dot={dot}
+              auth="TOKEN"
+              host={`${pbsConn.host}:${pbsConn.port || 8007}`}
+              runningCount={dsOk}
+              totalCount={datastores.length}
+              issueCount={dsWarn}
+              countLabels={['ok', 'total', 'issues']}
+              compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+              entityForCompare={{
+                id: `pbs:${pbsConn.label || pbsConn.host}`,
+                label: pbsConn.label || pbsConn.host,
+                platform: 'pbs', section: 'STORAGE',
+                metadata: { host: `${pbsConn.host}:${pbsConn.port || 8007}`, datastores: datastores.length }
+              }}
+            >
+              {datastores.filter(ds => {
+                const dsDot = ds.usage_pct > 95 ? 'red' : ds.usage_pct > 85 ? 'amber' : 'green'
+                const eid = `pbs:datastore:${ds.name}`
+                return matchesShowFilter(dsDot) || isPinned(eid)
+              }).map(ds => {
+                const pct = ds.usage_pct ?? 0
+                const dsDot = pct > 95 ? 'red' : pct > 85 ? 'amber' : 'green'
+                const barColor = pct > 95 ? 'var(--red)' : pct > 85 ? 'var(--amber)' : 'var(--green)'
+                return (
+                  <InfraCard
+                    key={ds.name}
+                    cardKey={`pbs-${ds.name}`}
+                    openKey={openKey} setOpenKey={setOpenKey}
+                    dot={dsDot}
+                    name={ds.name}
+                    sub={`${Math.round(pct)}% used`}
+                    net={''}
+                    uptime={`${ds.total_gb} GB`}
+                    collapsed={
+                      <div style={{ marginTop: 4 }}>
+                        <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 2 }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+                          <span>{ds.used_gb} GB used</span>
+                          <span>{ds.total_gb} GB total</span>
+                        </div>
+                      </div>
+                    }
+                    expanded={
+                      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+                        <div style={{ marginBottom: 6 }}>
+                          <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden', marginBottom: 4 }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 2 }} />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>{ds.used_gb} GB used</span>
+                            <span style={{ color: 'var(--text-1)' }}>{Math.round(pct)}%</span>
+                            <span>{ds.total_gb} GB total</span>
+                          </div>
+                        </div>
+                        <div>GC status: <span style={{ color: 'var(--text-1)' }}>{ds.gc_status || '—'}</span></div>
+                        {tasks.recent_count != null && (
+                          <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--bg-3)' }}>
+                            Tasks (last 20): <span style={{ color: 'var(--green)' }}>{tasks.recent_count - (tasks.failed_count || 0)} OK</span>
+                            {tasks.failed_count > 0 && <span style={{ color: 'var(--red)', marginLeft: 6 }}>{tasks.failed_count} failed</span>}
+                          </div>
+                        )}
+                      </div>
+                    }
+                    compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                    entityForCompare={{
+                      id: `pbs:datastore:${ds.name}`,
+                      label: ds.name, platform: 'pbs', section: 'STORAGE',
+                      metadata: { usage_pct: pct, used_gb: ds.used_gb, total_gb: ds.total_gb, gc_status: ds.gc_status }
+                    }}
+                  />
+                )
+              })}
+              {datastores.length === 0 && pbsData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">No datastores found</div>
+              )}
+              {!pbsData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">Loading PBS datastores…</div>
+              )}
+            </Section>
+          )
+        })()}
       </>}
 
       <Toast toasts={toasts} />

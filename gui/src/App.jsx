@@ -18,7 +18,7 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats, fetchStatus, fetchMemoryHealth, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, fetchCollectorData, authHeaders } from './api'
+import { fetchHealth, fetchStats, fetchStatus, fetchMemoryHealth, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, authHeaders } from './api'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
@@ -769,14 +769,10 @@ function SectionAccordion({ icon, title, badge, statusText, statusColor, default
 
 // Platform groupings for dashboard sections
 const SECTION_PLATFORMS = {
-  NETWORK:  ['fortigate', 'fortiswitch', 'opnsense', 'cisco', 'juniper', 'aruba', 'unifi', 'pihole', 'technitium', 'nginx', 'caddy', 'traefik'],
-  STORAGE:  ['truenas', 'pbs', 'synology', 'syncthing'],
+  NETWORK:  ['fortigate', 'fortiswitch', 'opnsense', 'cisco', 'juniper', 'aruba', 'pihole', 'technitium', 'nginx', 'caddy', 'traefik'],
+  STORAGE:  ['truenas', 'synology', 'syncthing'],
   SECURITY: ['security_onion', 'wazuh', 'grafana', 'kibana'],
 }
-
-const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: 'SSH', none: 'NONE' }
-function authLabel(auth_type) { return auth_type === 'ssh' ? 'SSH' : 'API' }
-const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
 
 // ── Helpers for connection card dot color ─────────────────────────────────────
 function connDotColor(ext, c) {
@@ -795,217 +791,6 @@ function connDotName(ext, c) {
   return 'grey'
 }
 
-const RICH_CARD_TYPE = { unifi: 'controller', pbs: 'storage' }
-
-// ── Connection card wrapper (compare slot badge + hover hint + click) ─────────
-function ConnCardWrapper({ c, ext, sectionName, compareMode, compareSet, onCompareAdd, onEntityClick, children }) {
-  const [hovered, setHovered] = useState(false)
-  const compareId = `connection:${c.id}`
-  const slotIdx = (compareSet || []).findIndex(e => e.id === compareId)
-  const isCompareSelected = slotIdx >= 0
-  const dotColor = connDotColor(ext, c)
-  return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={(e) => {
-        if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd) {
-          e.stopPropagation()
-          onCompareAdd({
-            id: compareId, label: c.label || c.host, platform: c.platform,
-            section: sectionName || 'NETWORK',
-            metadata: { host: `${c.host}:${c.port || 443}`, status: ext?.dot, latency_ms: ext?.latency_ms, verified: c.verified }
-          })
-          return
-        }
-        if (onEntityClick) onEntityClick(`external_services:${c.platform}`)
-      }}
-      style={{
-        background: isCompareSelected ? `${SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
-        border: '1px solid var(--border)',
-        borderLeft: `3px solid ${dotColor}`, borderRadius: 2, padding: '8px 10px',
-        cursor: onEntityClick || compareMode ? 'pointer' : 'default',
-        position: 'relative',
-        outline: isCompareSelected ? `1px solid ${SLOT_COLORS[slotIdx]}` : undefined,
-        outlineOffset: isCompareSelected ? -1 : undefined,
-      }}>
-      {isCompareSelected && (
-        <div style={{
-          position: 'absolute', top: 5, right: 5, width: 15, height: 15, borderRadius: 2,
-          background: SLOT_COLORS[slotIdx], color: '#05060a',
-          fontFamily: 'var(--font-mono)', fontSize: 8, fontWeight: 'bold',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
-        }}>{slotIdx + 1}</div>
-      )}
-      {compareMode && !isCompareSelected && hovered && (
-        <span style={{
-          position: 'absolute', bottom: 3, right: 6,
-          fontFamily: 'var(--font-mono)', fontSize: 7,
-          color: 'var(--text-3)', letterSpacing: '0.04em', pointerEvents: 'none',
-        }}>ctrl+click</span>
-      )}
-      {children}
-    </div>
-  )
-}
-
-// ── Simple connection card (flat AUTH/HOST — used for fortigate, nginx etc.) ──
-function SimpleConnectionCard({ c, ext, expanded, setExpanded }) {
-  const dotColor = connDotColor(ext, c)
-  const isExpanded = expanded[c.id]
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
-        <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>{c.platform?.toUpperCase()}</span>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
-        <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: c.auth_type === 'ssh' ? 'var(--cyan)' : c.verified ? 'var(--green)' : 'var(--red)' }}>{authLabel(c.auth_type)}</span>
-        <button onClick={(e) => { e.stopPropagation(); setExpanded(prev => ({ ...prev, [c.id]: !prev[c.id] })) }} style={{
-          background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
-        }}>{isExpanded ? '−' : '+'}</button>
-      </div>
-      <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>AUTH</span>
-          <span style={{ color: 'var(--cyan)' }}>{authLabel(c.auth_type)}</span>
-        </div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>HOST</span>
-          <span style={{ color: 'var(--cyan)' }}>{c.host}:{c.port || 443}</span>
-        </div>
-      </div>
-      {isExpanded && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bg-3)', fontSize: 9, color: 'var(--text-3)' }}>
-          <div>Library: {LIB_DISPLAY(c.auth_type)}</div>
-          <div>Verified: {c.verified ? 'yes' : 'no'}{c.last_seen ? ` · ${c.last_seen}` : ''}</div>
-          <div>ID: {(c.id || '').slice(0, 8)}…</div>
-        </div>
-      )}
-    </>
-  )
-}
-
-// ── UniFi rich card ──────────────────────────────────────────────────────────
-function _fmtUptime(s) {
-  if (!s) return ''
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600)
-  return d > 0 ? `${d}d` : `${h}h`
-}
-
-function UniFiCard({ c, ext, expanded, setExpanded }) {
-  const [data, setData] = useState(null)
-  const isExpanded = expanded[c.id]
-  const dotColor = connDotColor(ext, c)
-  useEffect(() => {
-    const load = () => fetchCollectorData('unifi').then(r => r?.data ? setData(r.data) : null).catch(() => {})
-    load()
-    const id = setInterval(load, 60000)
-    return () => clearInterval(id)
-  }, [])
-  const devices = data?.devices || []
-  const clientCount = data?.client_count ?? '…'
-  const deviceCount = data?.device_count ?? devices.length
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
-        <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>UNIFI</span>
-        {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
-        {data && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{deviceCount} devices · {clientCount} clients</span>}
-        <button onClick={(e) => { e.stopPropagation(); setExpanded(prev => ({ ...prev, [c.id]: !prev[c.id] })) }} style={{
-          background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
-        }}>{isExpanded ? '−' : '+'}</button>
-      </div>
-      {isExpanded && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bg-3)' }}>
-          {devices.length === 0 && <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>No device data yet</div>}
-          {devices.map((dev, i) => {
-            const devDot = dev.state === 'connected' ? 'var(--green)' : 'var(--amber)'
-            return (
-              <div key={dev.mac || i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 9, fontFamily: 'var(--font-mono)' }}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: devDot, flexShrink: 0 }} />
-                <span style={{ fontSize: 7, padding: '0 3px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 0.5, minWidth: 22, textAlign: 'center' }}>{dev.type_label || dev.type}</span>
-                <span style={{ color: 'var(--text-1)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dev.name}</span>
-                <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{dev.model}</span>
-                <span style={{ color: 'var(--text-3)', flexShrink: 0, minWidth: 48, textAlign: 'right' }}>{dev.clients} clients</span>
-                <span style={{ color: 'var(--text-3)', flexShrink: 0, minWidth: 30, textAlign: 'right' }}>{_fmtUptime(dev.uptime)}</span>
-              </div>
-            )
-          })}
-          <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--bg-3)', fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-            <span>AUTH {authLabel(c.auth_type)} · HOST {c.host}:{c.port || 443}</span>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-// ── PBS rich card ────────────────────────────────────────────────────────────
-function PBSCard({ c, ext, expanded, setExpanded }) {
-  const [data, setData] = useState(null)
-  const isExpanded = expanded[c.id]
-  const dotColor = connDotColor(ext, c)
-  useEffect(() => {
-    const load = () => fetchCollectorData('pbs').then(r => r?.data ? setData(r.data) : null).catch(() => {})
-    load()
-    const id = setInterval(load, 60000)
-    return () => clearInterval(id)
-  }, [])
-  const datastores = data?.datastores || []
-  const maxPct = datastores.length > 0 ? Math.max(...datastores.map(d => d.usage_pct || 0)) : null
-  const tasks = data?.tasks || {}
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
-        <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>PBS</span>
-        {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
-        {data && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{datastores.length} datastores{maxPct != null ? ` · max ${Math.round(maxPct)}%` : ''}</span>}
-        <button onClick={(e) => { e.stopPropagation(); setExpanded(prev => ({ ...prev, [c.id]: !prev[c.id] })) }} style={{
-          background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
-        }}>{isExpanded ? '−' : '+'}</button>
-      </div>
-      {isExpanded && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bg-3)' }}>
-          {datastores.length === 0 && <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>No datastore data yet</div>}
-          {datastores.map((ds, i) => {
-            const pct = ds.usage_pct || 0
-            const barColor = pct > 85 ? 'var(--red)' : pct > 70 ? 'var(--amber)' : 'var(--green)'
-            return (
-              <div key={ds.name || i} style={{ padding: '3px 0', fontSize: 9, fontFamily: 'var(--font-mono)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ color: 'var(--text-1)', minWidth: 80 }}>{ds.name}</span>
-                  <div style={{ flex: 1, height: 6, background: 'var(--bg-3)', borderRadius: 1, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: barColor, borderRadius: 1 }} />
-                  </div>
-                  <span style={{ color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{Math.round(pct)}%</span>
-                </div>
-                <div style={{ display: 'flex', gap: 8, color: 'var(--text-3)', marginTop: 1, paddingLeft: 86 }}>
-                  <span>{ds.total_gb} GB total · {ds.used_gb} GB used</span>
-                  {ds.gc_status && <span>GC: {ds.gc_status}</span>}
-                </div>
-              </div>
-            )
-          })}
-          {tasks.recent_count > 0 && (
-            <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--bg-3)', fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-              Last {tasks.recent_count} tasks: {tasks.recent_count - (tasks.failed_count || 0)} OK · {tasks.failed_count || 0} failed
-            </div>
-          )}
-          <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--bg-3)', fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
-            <span>AUTH {authLabel(c.auth_type)} · HOST {c.host}:{c.port || 8007}</span>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-// ── Main connection section cards ────────────────────────────────────────────
 function ConnectionSectionCards({ platforms, externalData, onEntityClick, compareMode, compareSet, onCompareAdd, sectionName, showFilter }) {
   const [conns, setConns] = useState([])
   useEffect(() => {
@@ -1021,6 +806,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [expanded, setExpanded] = useState({})
+  const [hoveredId, setHoveredId] = useState(null)
 
   if (conns.length === 0) {
     return (
@@ -1042,18 +828,84 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
     return true
   }) : conns
 
+  const authLabel = (t) => t === 'ssh' ? 'SSH' : 'API'
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
       {visibleConns.map(c => {
         const ext = (externalData || []).find(e => e.slug === c.platform)
-        const cardType = RICH_CARD_TYPE[c.platform]
+        const dotColor = connDotColor(ext, c)
+        const isExpanded = expanded[c.id]
+        const compareId = `connection:${c.id}`
+        const slotIdx = (compareSet || []).findIndex(e => e.id === compareId)
+        const isCompareSelected = slotIdx >= 0
         return (
-          <ConnCardWrapper key={c.id} c={c} ext={ext} sectionName={sectionName}
-            compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} onEntityClick={onEntityClick}>
-            {cardType === 'controller' ? <UniFiCard c={c} ext={ext} expanded={expanded} setExpanded={setExpanded} /> :
-             cardType === 'storage'    ? <PBSCard   c={c} ext={ext} expanded={expanded} setExpanded={setExpanded} /> :
-                                         <SimpleConnectionCard c={c} ext={ext} expanded={expanded} setExpanded={setExpanded} />}
-          </ConnCardWrapper>
+          <div key={c.id}
+            onMouseEnter={() => setHoveredId(c.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            onClick={(e) => {
+              if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd) {
+                e.stopPropagation()
+                onCompareAdd({
+                  id: compareId, label: c.label || c.host, platform: c.platform,
+                  section: sectionName || 'NETWORK',
+                  metadata: { host: `${c.host}:${c.port || 443}`, status: ext?.dot, latency_ms: ext?.latency_ms, verified: c.verified }
+                })
+                return
+              }
+              if (onEntityClick) onEntityClick(`external_services:${c.platform}`)
+            }}
+            style={{
+              background: isCompareSelected ? `${SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${dotColor}`, borderRadius: 2, padding: '8px 10px',
+              cursor: onEntityClick || compareMode ? 'pointer' : 'default',
+              position: 'relative',
+              outline: isCompareSelected ? `1px solid ${SLOT_COLORS[slotIdx]}` : undefined,
+              outlineOffset: isCompareSelected ? -1 : undefined,
+          }}>
+            {isCompareSelected && (
+              <div style={{
+                position: 'absolute', top: 5, right: 5, width: 15, height: 15, borderRadius: 2,
+                background: SLOT_COLORS[slotIdx], color: '#05060a',
+                fontFamily: 'var(--font-mono)', fontSize: 8, fontWeight: 'bold',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+              }}>{slotIdx + 1}</div>
+            )}
+            {compareMode && !isCompareSelected && hoveredId === c.id && (
+              <span style={{
+                position: 'absolute', bottom: 3, right: 6,
+                fontFamily: 'var(--font-mono)', fontSize: 7,
+                color: 'var(--text-3)', letterSpacing: '0.04em', pointerEvents: 'none',
+              }}>ctrl+click</span>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
+              <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>{c.platform?.toUpperCase()}</span>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+              {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
+              <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: c.auth_type === 'ssh' ? 'var(--cyan)' : c.verified ? 'var(--green)' : 'var(--red)' }}>{authLabel(c.auth_type)}</span>
+              <button onClick={(e) => { e.stopPropagation(); setExpanded(prev => ({ ...prev, [c.id]: !prev[c.id] })) }} style={{
+                background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
+              }}>{isExpanded ? '−' : '+'}</button>
+            </div>
+            <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>AUTH</span>
+                <span style={{ color: 'var(--cyan)' }}>{authLabel(c.auth_type)}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>HOST</span>
+                <span style={{ color: 'var(--cyan)' }}>{c.host}:{c.port || 443}</span>
+              </div>
+            </div>
+            {isExpanded && (
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--bg-3)', fontSize: 9, color: 'var(--text-3)' }}>
+                <div>Verified: {c.verified ? 'yes' : 'no'}{c.last_seen ? ` · ${c.last_seen}` : ''}</div>
+                <div>ID: {(c.id || '').slice(0, 8)}…</div>
+              </div>
+            )}
+          </div>
         )
       })}
     </div>
@@ -1127,12 +979,18 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
         {showSection('NETWORK') && (
           <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
+            <ServiceCardsErrorBoundary>
+              <ServiceCards activeFilters={['unifi']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+            </ServiceCardsErrorBoundary>
             <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
           </SectionAccordion>
         )}
 
         {showSection('STORAGE') && (
           <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
+            <ServiceCardsErrorBoundary>
+              <ServiceCards activeFilters={['pbs']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+            </ServiceCardsErrorBoundary>
             <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
           </SectionAccordion>
         )}
