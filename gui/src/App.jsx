@@ -666,30 +666,6 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
   )
 }
 
-function ProxmoxAuthRows() {
-  const [conn, setConn] = useState(null)
-  useEffect(() => {
-    fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections?platform=proxmox`, { headers: { ...authHeaders() } })
-      .then(r => r.ok ? r.json() : { data: [] })
-      .then(d => { const c = (d.data || []).find(x => x.host && x.platform === 'proxmox'); if (c) setConn(c) })
-      .catch(() => {})
-  }, [])
-  if (!conn) return null
-  const _label = { fontSize: 7, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', width: 36, flexShrink: 0, letterSpacing: 1 }
-  const _val = { fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--cyan, #00c8ee)' }
-  return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2, padding: '6px 10px', marginBottom: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-        <span style={_label}>AUTH</span>
-        <span style={_val}>{authLabel(conn.auth_type)}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={_label}>HOST</span>
-        <span style={_val}>{conn.host}:{conn.port || 8006}</span>
-      </div>
-    </div>
-  )
-}
 
 function PlatformCoreCards() {
   const [health, setHealth] = useState(null)
@@ -917,7 +893,6 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
         {showSection('COMPUTE') && (
           <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
-            <ProxmoxAuthRows />
             <ServiceCardsErrorBoundary>
               <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
             </ServiceCardsErrorBoundary>
