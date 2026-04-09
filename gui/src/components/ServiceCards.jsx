@@ -232,19 +232,85 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, filterBar, children }) {
+function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children }) {
   const { cardMinWidth, cardMaxWidth } = useOptions()
   const _min = cardMinWidth ?? 300
   const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
-  return (
-    <div>
-      <div className="flex items-baseline gap-2 mb-2">
-        <span className="text-[11px] text-gray-600 uppercase tracking-wider">{label}</span>
-        {meta && <span className="text-[10px] text-gray-800">{meta}</span>}
-        {errorCount > 0 && <span className="text-[10px] text-red-500/60">{errorCount} issue{errorCount !== 1 ? 's' : ''}</span>}
+  const NAME_W = 174
+  const isCluster = dot != null  // new two-row header when dot/auth/host are provided
+
+  if (!isCluster) {
+    // Legacy compact header (Containers, External Services)
+    return (
+      <div>
+        <div className="flex items-baseline gap-2 mb-2">
+          <span className="text-[11px] text-gray-600 uppercase tracking-wider">{label}</span>
+          {meta && <span className="text-[10px] text-gray-800">{meta}</span>}
+          {errorCount > 0 && <span className="text-[10px] text-red-500/60">{errorCount} issue{errorCount !== 1 ? 's' : ''}</span>}
+        </div>
+        {filterBar}
+        <div className="grid gap-2" style={{
+          gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
+          ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
+        }}>
+          {children}
+        </div>
       </div>
-      {filterBar}
+    )
+  }
+
+  // New two-row cluster header
+  const dotColor = dot === 'green' ? 'var(--green)' : dot === 'red' ? 'var(--red)' : 'var(--amber)'
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
+      {/* Row 1: identity | gap | counts | auth */}
+      <div style={{ display: 'flex', alignItems: 'stretch', background: 'var(--bg-1)',
+                    borderBottom: '1px solid var(--border)', minHeight: 36 }}>
+        {/* Name zone */}
+        <div style={{ width: NAME_W, flexShrink: 0, display: 'flex', alignItems: 'center',
+                      gap: 9, padding: '0 14px 0 10px',
+                      borderRight: '2px solid rgba(255,255,255,0.11)' }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                        background: dotColor, boxShadow: `0 0 7px ${dotColor}` }} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.1em',
+                         textTransform: 'uppercase', color: 'var(--text-1)', whiteSpace: 'nowrap',
+                         overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        {[
+          { num: runningCount, lbl: 'running', color: 'var(--green)' },
+          { num: totalCount,   lbl: 'total',   color: 'var(--text-1)' },
+          { num: issueCount,   lbl: 'issues',  color: issueCount > 0 ? 'var(--red)' : 'var(--text-3)' },
+        ].map(({ num, lbl, color }) => (
+          <div key={lbl} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+                                   justifyContent: 'center', padding: '0 14px', minWidth: 52,
+                                   borderLeft: '1px solid var(--border)', gap: 1 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, lineHeight: 1, color }}>{num}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)',
+                           letterSpacing: '0.06em', textTransform: 'uppercase' }}>{lbl}</span>
+          </div>
+        ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px',
+                      borderLeft: '1px solid var(--border)', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-2)',
+                         letterSpacing: '0.08em' }}>{auth}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9.5, color: 'var(--text-3)' }}>{host}</span>
+        </div>
+      </div>
+
+      {/* Row 2: spacer + filterBar */}
+      {filterBar && (
+        <div style={{ display: 'flex', alignItems: 'stretch',
+                      background: 'var(--bg-0)', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ width: NAME_W, flexShrink: 0,
+                        borderRight: '2px solid rgba(255,255,255,0.07)' }} />
+          <div style={{ flex: 1, overflow: 'hidden' }}>{filterBar}</div>
+        </div>
+      )}
+
+      {/* Children grid */}
       <div className="grid gap-2" style={{
+        padding: 2, background: 'var(--bg-0)',
         gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
         ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
       }}>
@@ -842,7 +908,7 @@ function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
           setDropOpen(false)
         }
         return (
-          <div className="relative flex items-center gap-0.5 ml-auto">
+          <div className="relative flex items-center gap-0.5">
             <button
               className="text-[9px] px-1.5 py-px rounded-l border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
               onClick={() => setDropOpen(o => !o)}
@@ -1267,15 +1333,20 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
           const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
           const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
           const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
-          const nodeSet = [...new Set(allItems.map(v => v.node))].join(' · ') || 'no data'
-          const vmCount = (vms?.vms || []).length
-          const lxcCount = (vms?.lxc || []).length
-          const metaStr = `${nodeSet} · ${vmCount} VM${vmCount !== 1 ? 's' : ''} · ${lxcCount} LXC`
+          const connLabel = vms?.connection_label || 'Proxmox Cluster'
+          const connHost  = vms?.connection_host || ''
+          const runningCount = allItems.filter(v => v.status === 'running').length
+          const issues = allItems.filter(v => v.dot === 'red' || v.dot === 'amber').length
+          const clusterDot = issues === 0 ? 'green' : issues === allItems.length ? 'red' : 'amber'
           return (
             <Section
-              label={`Proxmox Cluster (${sorted.length})`}
-              meta={metaStr}
-              errorCount={errorCount(allItems)}
+              label={connLabel}
+              dot={clusterDot}
+              auth="API"
+              host={connHost}
+              runningCount={runningCount}
+              totalCount={allItems.length}
+              issueCount={issues}
               filterBar={
                 <ProxmoxFilterBar
                   items={allItems}

@@ -147,10 +147,25 @@ async def get_vms(user: str = Depends(get_current_user)):
         snap = await q.get_latest_snapshot(conn, "proxmox_vms")
 
     state = _parse_state(snap)
+
+    # Connection metadata for header display
+    conn_label = state.get("connection_label", "Proxmox Cluster")
+    conn_host = ""
+    try:
+        from api.connections import get_connection_for_platform
+        pconn = get_connection_for_platform("proxmox")
+        if pconn:
+            conn_label = pconn.get("label", conn_label)
+            conn_host = f"{pconn.get('host', '')}:{pconn.get('port', 8006)}"
+    except Exception:
+        pass
+
     return {
         "vms": state.get("vms", []),
         "lxc": state.get("lxc", []),
         "health": state.get("health", "unknown"),
+        "connection_label": conn_label,
+        "connection_host": conn_host,
         "last_updated": snap.get("timestamp") if snap else None,
     }
 
