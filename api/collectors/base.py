@@ -42,6 +42,7 @@ class BaseCollector(ABC):
     async def _safe_poll(self) -> None:
         try:
             state = await self.poll()
+            self._last_state = state
             self.last_health = state.get("health", "unknown")
             self.last_error = None
 

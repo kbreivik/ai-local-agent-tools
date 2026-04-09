@@ -352,6 +352,17 @@ def test_connection(connection_id: str) -> dict:
         return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
 
 
+def mark_connection_verified(connection_id: str, verified: bool) -> None:
+    """Update verified status and last_seen after a probe."""
+    if not connection_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        update_connection(connection_id, verified=verified, last_seen=now)
+    except Exception as e:
+        log.debug("mark_connection_verified failed: %s", e)
+
+
 def _decode_creds(result: dict) -> dict:
     """Decrypt and parse credentials field in a connection row."""
     raw_creds = result.get("credentials", "")

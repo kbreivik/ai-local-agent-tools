@@ -297,6 +297,12 @@ export async function fetchDashboardExternal() {
   return r.json()
 }
 
+export async function fetchCollectorData(component) {
+  const r = await fetch(`${BASE}/api/status/collectors/${component}/data`, { headers: { ...authHeaders() } })
+  if (!r.ok) return { status: 'error', data: null }
+  return r.json()
+}
+
 export async function fetchContainerTags(containerId) {
   const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags`, {
     headers: { ...authHeaders() },

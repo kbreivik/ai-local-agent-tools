@@ -192,6 +192,11 @@ class ExternalServicesCollector(BaseCollector):
             reachable = r.status_code < 500
         except Exception as e:
             log.debug("External probe %s (%s) failed: %s", label, host, e)
+            try:
+                from api.connections import mark_connection_verified
+                mark_connection_verified(conn.get("id"), False)
+            except Exception:
+                pass
             return {
                 "name": label, "slug": platform, "service_type": platform,
                 "host_port": f"{host}:{port}", "summary": str(e)[:80],
@@ -202,6 +207,11 @@ class ExternalServicesCollector(BaseCollector):
             }
 
         dot, problem = _classify_external(reachable, latency_ms)
+        try:
+            from api.connections import mark_connection_verified
+            mark_connection_verified(conn.get("id"), reachable)
+        except Exception:
+            pass
         return {
             "name": label, "slug": platform, "service_type": platform,
             "host_port": f"{host}:{port}",

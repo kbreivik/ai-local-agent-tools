@@ -158,3 +158,16 @@ async def get_topics():
         "under_replicated_partitions": state.get("under_replicated_partitions", 0),
         "last_updated": state.get("last_updated"),
     }
+
+
+@router.get("/collectors/{component}/data")
+async def collector_data(component: str):
+    """Return the last collected state dict for a named collector."""
+    from api.collectors import manager as coll_mgr
+    collector = coll_mgr.get(component)
+    if not collector:
+        return {"status": "error", "data": None, "message": f"Collector '{component}' not found"}
+    state = getattr(collector, '_last_state', None)
+    if state is None:
+        return {"status": "ok", "data": None, "message": "No data yet"}
+    return {"status": "ok", "data": state}
