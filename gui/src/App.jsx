@@ -778,7 +778,7 @@ const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: '
 function authLabel(auth_type) { return auth_type === 'ssh' ? 'SSH' : 'API' }
 const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
 
-function ConnectionSectionCards({ platforms, externalData, onEntityClick, compareMode, compareSet, onCompareAdd }) {
+function ConnectionSectionCards({ platforms, externalData, onEntityClick, compareMode, compareSet, onCompareAdd, sectionName, showFilter }) {
   const [conns, setConns] = useState([])
   useEffect(() => {
     const load = () => {
@@ -803,9 +803,20 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
     )
   }
 
+  const isPinned = (id) => (compareSet || []).some(e => e.id === id)
+  const visibleConns = showFilter && showFilter !== 'ALL' ? conns.filter(c => {
+    const cid = `connection:${c.id}`
+    if (isPinned(cid)) return true
+    const dot = c.verified ? 'green' : c.verified === false ? 'red' : 'grey'
+    if (showFilter === 'ERRORS') return dot === 'red'
+    if (showFilter === 'DEGRADED') return dot === 'amber'
+    if (showFilter === 'IN MAINT') return dot === 'grey'
+    return true
+  }) : conns
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
-      {conns.map(c => {
+      {visibleConns.map(c => {
         const ext = (externalData || []).find(e => e.slug === c.platform)
         const borderColor = c.verified ? 'var(--green)' : c.verified === false ? 'var(--red)' : 'var(--text-3)'
         const isExpanded = expanded[c.id]
@@ -823,7 +834,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
                   id: compareId,
                   label: c.label || c.host,
                   platform: c.platform,
-                  section: 'NETWORK',
+                  section: sectionName || 'NETWORK',
                   metadata: {
                     host: `${c.host}:${c.port || 443}`,
                     status: ext?.dot,
@@ -940,7 +951,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('COMPUTE') && (
           <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
+              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}
@@ -948,26 +959,26 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('COMPUTE') && (
           <SectionAccordion icon="⊟" title="CONTAINERS" badge="DOCKER" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
+              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}
 
         {showSection('NETWORK') && (
           <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
           </SectionAccordion>
         )}
 
         {showSection('STORAGE') && (
           <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
           </SectionAccordion>
         )}
 
         {showSection('SECURITY') && (
           <SectionAccordion icon="⊛" title="SECURITY" badge="SOC" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="SECURITY" showFilter={showFilter} />
           </SectionAccordion>
         )}
       </div>

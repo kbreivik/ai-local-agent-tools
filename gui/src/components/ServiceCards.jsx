@@ -1251,9 +1251,17 @@ function AutoUpdateToggle() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd }) {
+export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd, showFilter }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
+  const isPinned = (entityId) => (compareSet || []).some(e => e.id === entityId)
+  const matchesShowFilter = (dot) => {
+    if (!showFilter || showFilter === 'ALL') return true
+    if (showFilter === 'ERRORS') return dot === 'red'
+    if (showFilter === 'DEGRADED') return dot === 'amber'
+    if (showFilter === 'IN MAINT') return dot === 'grey'
+    return true
+  }
   const [containers, setContainers] = useState(null)
   const [swarm, setSwarm]           = useState(null)
   const [vms, setVMs]               = useState(null)
@@ -1353,7 +1361,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
             errorCount={errorCount(containers?.containers)}
           >
-            {(containers?.containers || []).map(c => (
+            {(containers?.containers || []).filter(c => matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port} uptime={c.uptime}
@@ -1376,7 +1384,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
             errorCount={errorCount(swarm?.services)}
           >
-            {(swarm?.services || []).map(s => (
+            {(swarm?.services || []).filter(s => matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)).map(s => (
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
@@ -1424,7 +1432,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               {sorted.length === 0 && allItems.length > 0 && (
                 <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
               )}
-              {sorted.map(vm => (
+              {sorted.filter(vm => matchesShowFilter(vm.dot) || isPinned(`proxmox:${vm.name}:${vm.vmid}`)).map(vm => (
                 <InfraCard
                   key={`${vm.type}-${vm.vmid}`}
                   cardKey={`v-${vm.type}-${vm.vmid}`}
@@ -1450,7 +1458,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
             errorCount={errorCount(external?.services)}
           >
-            {(external?.services || []).map(svc => (
+            {(external?.services || []).filter(svc => matchesShowFilter(svc.dot) || isPinned(`external_services:${svc.slug}`)).map(svc => (
               <InfraCard
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
