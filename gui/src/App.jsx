@@ -654,7 +654,7 @@ function ProxmoxAuthRows() {
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2, padding: '6px 10px', marginBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
         <span style={_label}>AUTH</span>
-        <span style={_val}>{conn.auth_type === 'token' ? 'TOKEN' : conn.auth_type?.toUpperCase() || '—'}</span>
+        <span style={_val}>{authLabel(conn.auth_type)}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={_label}>HOST</span>
@@ -772,6 +772,7 @@ const SECTION_PLATFORMS = {
 }
 
 const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: 'SSH', none: 'NONE' }
+function authLabel(auth_type) { return auth_type === 'ssh' ? 'SSH' : 'API' }
 const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
 
 function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
@@ -816,7 +817,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
               <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>{c.platform?.toUpperCase()}</span>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: borderColor, flexShrink: 0 }} />
               {ext?.latency_ms != null && <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>↑ {ext.latency_ms}ms</span>}
-              <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{AUTH_DISPLAY[c.auth_type] || c.auth_type}</span>
+              <span style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: c.auth_type === 'ssh' ? 'var(--cyan)' : c.verified ? 'var(--green)' : 'var(--red)' }}>{authLabel(c.auth_type)}</span>
               <button onClick={() => setExpanded(e => ({ ...e, [c.id]: !e[c.id] }))} style={{
                 background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 10, padding: 0,
               }}>{isExpanded ? '−' : '+'}</button>
@@ -825,7 +826,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
             <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }}>
               <div style={{ display: 'flex', gap: 4 }}>
                 <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>AUTH</span>
-                <span style={{ color: 'var(--cyan)' }}>{AUTH_DISPLAY[c.auth_type] || c.auth_type}</span>
+                <span style={{ color: 'var(--cyan)' }}>{authLabel(c.auth_type)}</span>
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <span style={{ width: 36, color: 'var(--text-3)', fontSize: 7, letterSpacing: 1 }}>HOST</span>

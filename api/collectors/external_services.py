@@ -137,13 +137,21 @@ class ExternalServicesCollector(BaseCollector):
         if not isinstance(creds, dict):
             creds = {}
 
+        # UniFi dynamic auth: api_key → X-API-KEY + /proxy/network prefix; else basic
+        if platform == "unifi" and creds.get("api_key"):
+            port = conn.get("port") or 443
+            auth_style = "unifi_apikey"
+            path = "/proxy/network/api/s/default/stat/health"
+
         base_url = f"{scheme}://{host}:{port}"
         url = base_url + path
 
         # Build auth headers/params
         headers = {}
         params = {}
-        if auth_style == "pve_token":
+        if auth_style == "unifi_apikey":
+            headers["X-API-KEY"] = creds.get("api_key", "")
+        elif auth_style == "pve_token":
             user = creds.get("user", "")
             token_name = creds.get("token_name", "")
             secret = creds.get("secret", "")
