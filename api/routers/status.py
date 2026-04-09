@@ -6,8 +6,9 @@ Never calls Docker/Kafka/ES directly — that's the collectors' job.
 """
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from api.auth import get_current_user
 from api.db.base import get_engine
 from api.db import queries as q
 
@@ -171,3 +172,62 @@ async def collector_data(component: str):
     if state is None:
         return {"status": "ok", "data": None, "message": "No data yet"}
     return {"status": "ok", "data": state}
+
+
+@router.get("/collectors/{component}/debug")
+async def collector_debug(component: str, _: str = Depends(get_current_user)):
+    """
+    Make a raw API call using the component's stored connection credentials
+    and return the raw response. Used for diagnosing collector issues.
+    Only works for pbs and proxmox.
+    """
+    if component not in ("pbs", "proxmox"):
+        raise HTTPException(400, "Debug only supported for pbs and proxmox")
+
+    import httpx
+    from api.connections import get_connection_for_platform
+
+    conn = get_connection_for_platform(component)
+    if not conn:
+        return {"status": "error", "message": f"No {component} connection configured"}
+
+    host = conn.get("host", "")
+    port = conn.get("port") or (8007 if component == "pbs" else 8006)
+    creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
+    user = creds.get("user", "")
+    token_name = creds.get("token_name", "")
+    secret = creds.get("secret", "")
+
+    if component == "pbs":
+        auth_header = f"PBSAPIToken={user}!{token_name}:{secret}"
+    else:
+        auth_header = f"PVEAPIToken={user}!{token_name}={secret}"
+
+    headers = {"Authorization": auth_header}
+    base = f"https://{host}:{port}/api2/json"
+
+    results = {}
+    paths_to_test = (
+        ["/version", "/config/datastore", "/admin/datastore", "/nodes/localhost/tasks"]
+        if component == "pbs"
+        else ["/version", "/nodes"]
+    )
+
+    for path in paths_to_test:
+        try:
+            r = httpx.get(f"{base}{path}", headers=headers, verify=False, timeout=8)
+            results[path] = {
+                "status_code": r.status_code,
+                "body_preview": r.text[:500],
+            }
+        except Exception as e:
+            results[path] = {"error": str(e)[:200]}
+
+    return {
+        "status": "ok",
+        "host": f"{host}:{port}",
+        "user": user,
+        "token_name": token_name,
+        "secret_set": bool(secret),
+        "results": results,
+    }
