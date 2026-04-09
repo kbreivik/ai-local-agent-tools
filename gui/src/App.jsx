@@ -12,6 +12,7 @@ import TestsPanel     from './components/TestsPanel'
 import DashboardCards from './components/DashboardCards'
 import SettingsPage   from './components/SettingsPage'
 import EntityDrawer   from './components/EntityDrawer'
+import ComparePanel, { SLOT_COLORS } from './components/ComparePanel'
 import { OptionsProvider, useOptions } from './context/OptionsContext'
 import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelContext'
 import { AgentProvider } from './context/AgentContext'
@@ -585,7 +586,7 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats }) {
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare }) {
   const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
   const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
   const _btn = (active) => ({
@@ -629,6 +630,32 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
           border: `1px solid ${globalMaint ? 'var(--amber)' : 'var(--border)'}`,
           borderRadius: 2, cursor: 'pointer',
         }}>⚑ GLOBAL MAINT</button>
+      {/* Compare toggle */}
+      <div onClick={onToggleCompare} style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        padding: '3px 10px 3px 8px',
+        border: `1px solid ${compareMode ? 'var(--cyan)' : 'var(--border)'}`,
+        borderRadius: 2, cursor: 'pointer',
+        background: compareMode ? 'rgba(0,200,238,0.06)' : 'transparent',
+        transition: 'all 0.15s', userSelect: 'none', flexShrink: 0,
+      }}>
+        <span style={{ fontSize: 13, color: compareMode ? 'var(--cyan)' : 'var(--text-3)' }}>⊞</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.06em',
+                       color: compareMode ? 'var(--cyan)' : 'var(--text-3)', whiteSpace: 'nowrap' }}>
+          {(compareSet || []).length > 0 ? `${compareSet.length} selected` : 'compare'}
+        </span>
+        <div style={{ display: 'flex', gap: 2, alignItems: 'center', marginLeft: 2 }}>
+          {[0,1,2,3].map(i => (
+            <div key={i} style={{
+              width: 9, height: 9, borderRadius: 1,
+              border: `1px solid ${i < (compareSet || []).length ? SLOT_COLORS[i] : 'rgba(255,255,255,0.15)'}`,
+              background: i < (compareSet || []).length ? SLOT_COLORS[i] : 'transparent',
+              boxShadow: i < (compareSet || []).length ? `0 0 4px ${SLOT_COLORS[i]}` : 'none',
+              transition: 'all 0.15s',
+            }} />
+          ))}
+        </div>
+      </div>
       <div style={{ flex: 1 }} />
       <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)', flexShrink: 0 }}>
         <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats?.total_operations ?? '—'}</span></span>
@@ -848,7 +875,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
   )
 }
 
-function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick }) {
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare }) {
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
@@ -870,6 +897,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         typeFilter={typeFilter} setTypeFilter={setTypeFilter}
         globalMaint={globalMaint} setGlobalMaint={setGlobalMaint}
         stats={stats}
+        compareMode={compareMode} compareSet={compareSet} onToggleCompare={onToggleCompare}
       />
 
       {globalMaint && (
@@ -891,7 +919,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
           <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
             <ProxmoxAuthRows />
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} />
+              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}
@@ -899,7 +927,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('COMPUTE') && (
           <SectionAccordion icon="⊟" title="CONTAINERS" badge="DOCKER" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} />
+              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
             </ServiceCardsErrorBoundary>
           </SectionAccordion>
         )}
@@ -961,7 +989,39 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [settingsTab, setSettingsTab] = useState('Connections')
   const [drawerEntityId, setDrawerEntityId] = useState(null)
+  const [compareMode, setCompareMode]     = useState(false)
+  const [compareSet, setCompareSet]       = useState([])
+  const [compareChats, setCompareChats]   = useState({})
+  const [bcTargets, setBcTargets]         = useState({})
   const { panelOpen } = useCommandPanel()
+
+  const addToCompare = (entity) => {
+    setCompareSet(prev => {
+      if (prev.find(e => e.id === entity.id)) return prev
+      if (prev.length >= 4) return prev
+      return [...prev, entity]
+    })
+    setCompareChats(prev => prev[entity.id] ? prev : {...prev, [entity.id]: []})
+    setBcTargets(prev => ({...prev, [entity.id]: true}))
+    setCompareMode(true)
+  }
+
+  const removeFromCompare = (id) => {
+    setCompareSet(prev => prev.filter(e => e.id !== id))
+    setCompareChats(prev => { const n={...prev}; delete n[id]; return n })
+    setBcTargets(prev => { const n={...prev}; delete n[id]; return n })
+  }
+
+  const toggleCompareMode = () => {
+    if (compareMode) {
+      setCompareMode(false)
+      setCompareSet([])
+      setCompareChats({})
+      setBcTargets({})
+    } else {
+      setCompareMode(true)
+    }
+  }
 
   // Filter state (lifted here so SubBar can set it via onAlertNavigate)
   const [activeFilters, setActiveFilters] = useState(() => {
@@ -1042,6 +1102,10 @@ function AppShell() {
               onToggleAll={toggleAll}
               onTab={setActiveTab}
               onEntityClick={setDrawerEntityId}
+              compareMode={compareMode}
+              compareSet={compareSet}
+              onCompareAdd={addToCompare}
+              onToggleCompare={toggleCompareMode}
             />
           )}
 
@@ -1116,6 +1180,19 @@ function AppShell() {
             </div>
           )}
         </div>
+
+        {/* Compare panel — right side */}
+        {compareSet.length > 0 && (
+          <ComparePanel
+            compareSet={compareSet}
+            chats={compareChats}
+            setChats={setCompareChats}
+            bcTargets={bcTargets}
+            setBcTargets={setBcTargets}
+            onRemove={removeFromCompare}
+            onClose={toggleCompareMode}
+          />
+        )}
       </div>
 
       <AlertToast />

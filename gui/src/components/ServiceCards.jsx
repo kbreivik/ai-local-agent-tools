@@ -15,6 +15,14 @@ import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
+
+// Inject compare-hint hover CSS once
+if (typeof document !== 'undefined' && !document.getElementById('compare-hint-css')) {
+  const style = document.createElement('style')
+  style.id = 'compare-hint-css'
+  style.textContent = '.vmc:hover .compare-hint { opacity: 1 !important; }'
+  document.head.appendChild(style)
+}
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 // Platform slug → connection test helper
@@ -181,24 +189,55 @@ function useConfirm() {
 
 // ── Generic card shell ──────────────────────────────────────────────────────────
 
-function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, collapsed, expanded }) {
+const _SLOT_COLORS = ['#00aa44','#00c8ee','#cc8800','#7c6af7']
+
+function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare }) {
   const isOpen = openKey === cardKey
   const anyOpen = openKey != null
   const dimmed = anyOpen && !isOpen
   const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
+  const compareId = entityForCompare?.id
+  const slotIdx = compareId ? (compareSet || []).findIndex(e => e.id === compareId) : -1
+  const isSelected = slotIdx >= 0
 
   return (
     <div
-      className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
+      className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''} ${compareMode ? 'vmc' : ''}`}
       style={{
-        background: 'var(--bg-2)',
+        background: isSelected ? `${_SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
         borderColor: isOpen ? undefined : 'var(--border)',
         padding: isOpen ? '10px' : '8px 12px',
         opacity: dimmed ? 0.4 : 1,
         transition: 'opacity 0.15s ease, border-color 0.15s ease, padding 0.15s ease',
+        outline: isSelected ? `1px solid ${_SLOT_COLORS[slotIdx]}` : 'none',
+        outlineOffset: isSelected ? -1 : 0,
+        position: 'relative',
       }}
-      onClick={() => setOpenKey(isOpen ? null : cardKey)}
+      onClick={(e) => {
+        if ((e.ctrlKey || e.metaKey) && compareMode && entityForCompare && onCompareAdd) {
+          e.stopPropagation()
+          onCompareAdd(entityForCompare)
+          return
+        }
+        setOpenKey(isOpen ? null : cardKey)
+      }}
     >
+      {isSelected && (
+        <div style={{
+          position: 'absolute', top: 5, right: 5, width: 15, height: 15, borderRadius: 2,
+          background: _SLOT_COLORS[slotIdx], color: '#05060a',
+          fontFamily: 'var(--font-mono)', fontSize: 8, fontWeight: 'bold',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+        }}>{slotIdx + 1}</div>
+      )}
+      {compareMode && !isSelected && (
+        <span style={{
+          position: 'absolute', bottom: 3, right: 6,
+          fontFamily: 'var(--font-mono)', fontSize: 7,
+          color: 'var(--text-3)', letterSpacing: '0.04em',
+          opacity: 0, transition: 'opacity 0.1s', pointerEvents: 'none',
+        }} className="compare-hint">ctrl+click</span>
+      )}
       {/* Header row — always visible, click to toggle */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -1209,7 +1248,7 @@ function AutoUpdateToggle() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail }) {
+export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
   const [containers, setContainers] = useState(null)
@@ -1320,6 +1359,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
                   onTagsLoaded={onTagsLoaded} onTab={onTab}
                 />}
+                compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                entityForCompare={{ id: `docker:${c.name || c.id}`, label: c.name, platform: 'docker', section: 'COMPUTE', metadata: { status: c.status, dot: c.dot, image: c.image, uptime: c.uptime } }}
               />
             ))}
           </Section>
@@ -1339,6 +1380,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 uptime={s.replicas_running != null ? `${s.replicas_running}/${s.replicas_desired} replicas` : ''}
                 collapsed={<ContainerCardCollapsed c={s} />}
                 expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
+                compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                entityForCompare={{ id: `swarm:${s.name}`, label: s.name, platform: 'docker', section: 'COMPUTE', metadata: { replicas: `${s.replicas_running}/${s.replicas_desired}`, dot: s.dot, image: s.image } }}
               />
             ))}
           </Section>
@@ -1387,6 +1430,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   net={vm.ip || ''} uptime={vm.uptime || ''}
                   collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
                   expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
+                  compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                  entityForCompare={{ id: `proxmox:${vm.name}:${vm.vmid}`, label: vm.name, platform: 'proxmox', section: 'COMPUTE', metadata: { vmid: vm.vmid, node: vm.node_api, type: vm.type, status: vm.status, vcpus: vm.vcpus, maxmem_gb: vm.maxmem_gb, cpu_pct: vm.cpu_pct, dot: vm.dot } }}
                 />
               ))}
             </Section>
@@ -1407,6 +1452,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
                 collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} />}
                 expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
+                compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                entityForCompare={{ id: `external_services:${svc.slug}`, label: svc.name, platform: svc.slug, section: svc.service_type === 'fortigate' ? 'NETWORK' : 'PLATFORM', metadata: { host_port: svc.host_port, latency_ms: svc.latency_ms, reachable: svc.reachable, dot: svc.dot } }}
               />
             ))}
           </Section>
