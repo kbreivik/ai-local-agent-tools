@@ -778,7 +778,7 @@ const AUTH_DISPLAY = { token: 'TOKEN', apikey: 'API KEY', basic: 'BASIC', ssh: '
 function authLabel(auth_type) { return auth_type === 'ssh' ? 'SSH' : 'API' }
 const LIB_DISPLAY = (authType) => authType === 'ssh' ? 'netmiko · paramiko' : 'httpx · REST'
 
-function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
+function ConnectionSectionCards({ platforms, externalData, onEntityClick, compareMode, compareSet, onCompareAdd }) {
   const [conns, setConns] = useState([])
   useEffect(() => {
     const load = () => {
@@ -793,6 +793,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [expanded, setExpanded] = useState({})
+  const [hoveredId, setHoveredId] = useState(null)
 
   if (conns.length === 0) {
     return (
@@ -808,12 +809,57 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick }) {
         const ext = (externalData || []).find(e => e.slug === c.platform)
         const borderColor = c.verified ? 'var(--green)' : c.verified === false ? 'var(--red)' : 'var(--text-3)'
         const isExpanded = expanded[c.id]
+        const compareId = `connection:${c.id}`
+        const slotIdx = (compareSet || []).findIndex(e => e.id === compareId)
+        const isCompareSelected = slotIdx >= 0
         return (
-          <div key={c.id} onClick={() => onEntityClick && onEntityClick(`external_services:${c.platform}`)} style={{
-            background: 'var(--bg-2)', border: '1px solid var(--border)',
-            borderLeft: `3px solid ${borderColor}`, borderRadius: 2, padding: '8px 10px',
-            cursor: onEntityClick ? 'pointer' : 'default',
+          <div key={c.id}
+            onMouseEnter={() => setHoveredId(c.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            onClick={(e) => {
+              if ((e.ctrlKey || e.metaKey) && compareMode && onCompareAdd) {
+                e.stopPropagation()
+                onCompareAdd({
+                  id: compareId,
+                  label: c.label || c.host,
+                  platform: c.platform,
+                  section: 'NETWORK',
+                  metadata: {
+                    host: `${c.host}:${c.port || 443}`,
+                    status: ext?.dot,
+                    latency_ms: ext?.latency_ms,
+                    verified: c.verified,
+                  }
+                })
+                return
+              }
+              if (onEntityClick) onEntityClick(`external_services:${c.platform}`)
+            }}
+            style={{
+              background: isCompareSelected ? `${SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${borderColor}`, borderRadius: 2, padding: '8px 10px',
+              cursor: onEntityClick || compareMode ? 'pointer' : 'default',
+              position: 'relative',
+              outline: isCompareSelected ? `1px solid ${SLOT_COLORS[slotIdx]}` : undefined,
+              outlineOffset: isCompareSelected ? -1 : undefined,
           }}>
+            {isCompareSelected && (
+              <div style={{
+                position: 'absolute', top: 5, right: 5, width: 15, height: 15, borderRadius: 2,
+                background: SLOT_COLORS[slotIdx], color: '#05060a',
+                fontFamily: 'var(--font-mono)', fontSize: 8, fontWeight: 'bold',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+              }}>{slotIdx + 1}</div>
+            )}
+            {compareMode && !isCompareSelected && hoveredId === c.id && (
+              <span style={{
+                position: 'absolute', bottom: 3, right: 6,
+                fontFamily: 'var(--font-mono)', fontSize: 7,
+                color: 'var(--text-3)', letterSpacing: '0.04em',
+                pointerEvents: 'none',
+              }}>ctrl+click</span>
+            )}
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', flex: 1, letterSpacing: 0.5 }}>{c.label || c.host}</span>
@@ -909,19 +955,19 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
         {showSection('NETWORK') && (
           <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} onEntityClick={onEntityClick} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
           </SectionAccordion>
         )}
 
         {showSection('STORAGE') && (
           <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} onEntityClick={onEntityClick} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
           </SectionAccordion>
         )}
 
         {showSection('SECURITY') && (
           <SectionAccordion icon="⊛" title="SECURITY" badge="SOC" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} onEntityClick={onEntityClick} />
+            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} />
           </SectionAccordion>
         )}
       </div>
