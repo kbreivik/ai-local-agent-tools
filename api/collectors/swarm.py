@@ -18,6 +18,25 @@ from api.collectors.base import BaseCollector
 log = logging.getLogger(__name__)
 
 
+def _get_swarm_docker_host() -> str:
+    """Get Docker host URL for Swarm. DB first, env var fallback."""
+    try:
+        from api.connections import get_all_connections_for_platform
+        conns = get_all_connections_for_platform('docker_host')
+        managers = [c for c in conns
+                    if (c.get('config') or {}).get('role') in ('swarm_manager', 'manager')
+                    or 'manager' in c.get('label', '').lower()]
+        if managers:
+            c = managers[0]
+            host = c['host']
+            if host.startswith('unix://') or host.startswith('/'):
+                return host
+            return f"tcp://{host}:{c.get('port', 2375)}"
+    except Exception:
+        pass
+    return os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
+
+
 class SwarmCollector(BaseCollector):
     component = "swarm"
 
@@ -33,7 +52,7 @@ class SwarmCollector(BaseCollector):
         import docker
         from docker.errors import DockerException
 
-        host = os.environ.get("DOCKER_HOST", "npipe:////./pipe/docker_engine")
+        host = _get_swarm_docker_host()
         try:
             client = docker.DockerClient(base_url=host, timeout=10)
         except Exception as e:

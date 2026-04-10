@@ -17,6 +17,25 @@ log = logging.getLogger(__name__)
 VM_IP = os.environ.get("AGENT01_IP", "127.0.0.1")
 
 
+def _get_agent01_docker_host() -> str:
+    """Get Docker host URL for agent-01. DB first, env var fallback."""
+    try:
+        from api.connections import get_all_connections_for_platform
+        conns = get_all_connections_for_platform('docker_host')
+        local = [c for c in conns
+                 if (c.get('config') or {}).get('role') == 'standalone'
+                 or c.get('label', '').lower() in ('agent-01', 'local', 'self')]
+        if local:
+            c = local[0]
+            host = c['host']
+            if host.startswith('unix://') or host.startswith('/'):
+                return host
+            return f"tcp://{host}:{c.get('port', 2375)}"
+    except Exception:
+        pass
+    return os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
+
+
 class DockerAgent01Collector(BaseCollector):
     component = "docker_agent01"
 
@@ -31,7 +50,7 @@ class DockerAgent01Collector(BaseCollector):
         import docker
         from docker.errors import DockerException
 
-        docker_host = os.environ.get("AGENT01_DOCKER_HOST", "unix:///var/run/docker.sock")
+        docker_host = _get_agent01_docker_host()
         try:
             client = docker.DockerClient(base_url=docker_host, timeout=10)
         except Exception as e:

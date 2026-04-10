@@ -344,6 +344,36 @@ def test_connection(connection_id: str) -> dict:
     except Exception as e:
         log.warning("test_connection platform probe failed (%s): %s", platform, e)
 
+    # Docker host — direct Docker API test
+    if platform == 'docker_host':
+        try:
+            import docker
+            host = connection["host"]
+            port = connection.get("port", 2375)
+            if host.startswith("unix://") or host.startswith("/"):
+                url = host
+            else:
+                url = f"tcp://{host}:{port}"
+            client = docker.DockerClient(base_url=url, timeout=5)
+            info = client.info()
+            client.close()
+            is_swarm = info.get("Swarm", {}).get("LocalNodeState") == "active"
+            update_connection(connection_id, verified=True, last_seen=now)
+            return {
+                "status": "ok",
+                "data": {
+                    "docker_version": info.get("ServerVersion"),
+                    "is_swarm": is_swarm,
+                    "containers": info.get("Containers", 0),
+                    "swarm_role": "manager" if info.get("Swarm", {}).get("ControlAvailable") else "worker",
+                },
+                "timestamp": now,
+                "message": f"Docker {info.get('ServerVersion')} — {'swarm manager' if is_swarm else 'standalone'}",
+            }
+        except Exception as e:
+            update_connection(connection_id, verified=False, last_seen=now)
+            return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
+
     # Fallback for platforms not in PLATFORM_HEALTH: generic HTTPS reachability check
     try:
         import httpx

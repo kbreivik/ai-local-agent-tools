@@ -122,6 +122,9 @@ async def get_containers_swarm(user: str = Depends(get_current_user)):
             enriched["last_pull_at"] = last_pull_at
             enriched["dot"] = _swarm_dot(svc)
             enriched["problem"] = _swarm_problem(svc)
+            # Alias both naming conventions so frontend works regardless
+            enriched["replicas_running"] = enriched.get("running_replicas")
+            enriched["replicas_desired"] = enriched.get("desired_replicas")
             services.append(enriched)
 
         # Split nodes into managers and workers
