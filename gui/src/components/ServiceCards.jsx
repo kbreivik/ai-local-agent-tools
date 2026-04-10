@@ -1337,7 +1337,7 @@ function AutoUpdateToggle() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd, showFilter }) {
+export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd, showFilter, search = '' }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
   const isPinned = (entityId) => (compareSet || []).some(e => e.id === entityId)
@@ -1347,6 +1347,11 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
     if (showFilter === 'DEGRADED') return dot === 'amber'
     if (showFilter === 'IN MAINT') return dot === 'grey'
     return true
+  }
+  const _sl = search?.toLowerCase() || ''
+  const matchesSearch = (...fields) => {
+    if (!_sl) return true
+    return fields.some(f => f && String(f).toLowerCase().includes(_sl))
   }
   const [containers, setContainers] = useState(null)
   const [swarm, setSwarm]           = useState(null)
@@ -1511,7 +1516,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
             errorCount={errorCount(containers?.containers)}
           >
-            {(containers?.containers || []).filter(c => matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)).map(c => (
+            {(containers?.containers || []).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port} uptime={c.uptime}
@@ -1534,7 +1539,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
             errorCount={errorCount(swarm?.services)}
           >
-            {(swarm?.services || []).filter(s => matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)).map(s => (
+            {(swarm?.services || []).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
@@ -1613,7 +1618,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
                 )}
                 {sorted.filter(vm =>
-                  matchesShowFilter(vm.dot) || isPinned(`proxmox:${vm.name}:${vm.vmid}`)
+                  (matchesShowFilter(vm.dot) || isPinned(`proxmox:${vm.name}:${vm.vmid}`))
+                  && matchesSearch(vm.name, vm.vmid, vm.node, vm.ip)
                 ).map(vm => (
                   <InfraCard
                     key={`${vm.type}-${vm.vmid}`}
@@ -1646,7 +1652,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${external?.services?.filter(s => s.reachable).length ?? '…'} / ${external?.services?.length ?? '…'} reachable`}
             errorCount={errorCount(external?.services)}
           >
-            {(external?.services || []).filter(svc => matchesShowFilter(svc.dot) || isPinned(`external_services:${svc.slug}`)).map(svc => (
+            {(external?.services || []).filter(svc => (matchesShowFilter(svc.dot) || isPinned(`external_services:${svc.slug}`)) && matchesSearch(svc.name, svc.host_port, svc.slug)).map(svc => (
               <InfraCard
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
@@ -1699,7 +1705,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               {filteredDevices.filter(d => {
                 const devDot = d.state === 'connected' ? 'green' : 'amber'
                 const eid = `unifi:device:${d.mac || d.name}`
-                return matchesShowFilter(devDot) || isPinned(eid)
+                return (matchesShowFilter(devDot) || isPinned(eid)) && matchesSearch(d.name, d.mac, d.model)
               }).map(dev => {
                 const devDot = dev.state === 'connected' ? 'green' : 'amber'
                 const uptimeFmt = (() => {
@@ -1782,7 +1788,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               {datastores.filter(ds => {
                 const dsDot = ds.usage_pct > 95 ? 'red' : ds.usage_pct > 85 ? 'amber' : 'green'
                 const eid = `pbs:datastore:${ds.name}`
-                return matchesShowFilter(dsDot) || isPinned(eid)
+                return (matchesShowFilter(dsDot) || isPinned(eid)) && matchesSearch(ds.name)
               }).map(ds => {
                 const pct = ds.usage_pct ?? 0
                 const dsDot = pct > 95 ? 'red' : pct > 85 ? 'amber' : 'green'
@@ -1879,7 +1885,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               {pools.filter(pool => {
                 const poolDot = !pool.healthy || pool.status !== 'ONLINE' ? 'red'
                               : pool.usage_pct > 85 ? 'amber' : 'green'
-                return matchesShowFilter(poolDot) || isPinned(`truenas:pool:${pool.name}`)
+                return (matchesShowFilter(poolDot) || isPinned(`truenas:pool:${pool.name}`)) && matchesSearch(pool.name)
               }).map(pool => {
                 const pct      = pool.usage_pct ?? 0
                 const healthy  = pool.healthy && pool.status === 'ONLINE'
@@ -1988,7 +1994,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 const errors = (i.rx_errors || 0) + (i.tx_errors || 0)
                 const ifDot = !i.link ? 'red' : errors > 0 ? 'amber' : 'green'
                 const eid = `fortigate:iface:${i.name}`
-                return matchesShowFilter(ifDot) || isPinned(eid)
+                return (matchesShowFilter(ifDot) || isPinned(eid)) && matchesSearch(i.name, i.alias, i.ip)
               }).map(iface => {
                 const errors = (iface.rx_errors || 0) + (iface.tx_errors || 0)
                 const ifDot  = !iface.link ? 'red' : errors > 0 ? 'amber' : 'green'

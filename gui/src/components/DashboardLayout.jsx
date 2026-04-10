@@ -88,20 +88,20 @@ function Tile({ name, flex, collapsed, onDragStart, onDragOver, onDrop, onCollap
         {!canUnsplit && (
           <button
             onClick={(e) => { e.stopPropagation(); onSplit() }}
-            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 2px' }}
+            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             title="Split — add tile to this row"
           >⊞</button>
         )}
         {canUnsplit && (
           <button
             onClick={(e) => { e.stopPropagation(); onUnsplit() }}
-            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 2px' }}
+            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             title="Unsplit — move to own row"
           >⊟</button>
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onCollapse() }}
-          style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '0 2px' }}
+          style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           title={collapsed ? 'Expand' : 'Collapse'}
         >{collapsed ? '▶' : '▼'}</button>
       </div>
@@ -157,9 +157,10 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
         ;[row.flex[srcTileIdx], row.flex[tgtTileIdx]] = [row.flex[tgtTileIdx], row.flex[srcTileIdx]]
       }
     } else {
-      // Swap across rows: swap the tile names in their respective positions
-      newRows[srcRowIdx].tiles[srcTileIdx] = targetTile
-      newRows[tgtRowIdx].tiles[tgtTileIdx] = dragSource
+      // Move source row to target row's position
+      const [srcRow] = newRows.splice(srcRowIdx, 1)
+      const adjustedTgt = tgtRowIdx > srcRowIdx ? tgtRowIdx - 1 : tgtRowIdx
+      newRows.splice(adjustedTgt, 0, srcRow)
     }
 
     onRowsChange(newRows)

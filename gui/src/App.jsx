@@ -964,10 +964,14 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     return () => clearInterval(id)
   }, [])
 
-  // Auto-save layout on unmount if dirty
+  // Auto-save layout on unmount if dirty (refs avoid re-running effect on every state change)
+  const dirtyRef = useRef(false)
+  const saveLayoutRef = useRef(saveLayout)
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
+  useEffect(() => { saveLayoutRef.current = saveLayout }, [saveLayout])
   useEffect(() => {
-    return () => { if (dirty) saveLayout() }
-  }, [dirty, saveLayout])
+    return () => { if (dirtyRef.current) saveLayoutRef.current() }
+  }, [])
 
   const showSection = (type) => typeFilter === 'ALL' || typeFilter === type
 
@@ -976,18 +980,18 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards /> : null,
     COMPUTE: showSection('COMPUTE') ? (
       <ServiceCardsErrorBoundary>
-        <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+        <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
       </ServiceCardsErrorBoundary>
     ) : null,
     CONTAINERS: showSection('COMPUTE') ? (
       <ServiceCardsErrorBoundary>
-        <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+        <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
       </ServiceCardsErrorBoundary>
     ) : null,
     NETWORK: showSection('NETWORK') ? (
       <>
         <ServiceCardsErrorBoundary>
-          <ServiceCards activeFilters={['unifi', 'fortigate']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+          <ServiceCards activeFilters={['unifi', 'fortigate']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
         </ServiceCardsErrorBoundary>
         <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
       </>
@@ -995,7 +999,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     STORAGE: showSection('STORAGE') ? (
       <>
         <ServiceCardsErrorBoundary>
-          <ServiceCards activeFilters={['pbs', 'truenas']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+          <ServiceCards activeFilters={['pbs', 'truenas']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
         </ServiceCardsErrorBoundary>
         <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
       </>

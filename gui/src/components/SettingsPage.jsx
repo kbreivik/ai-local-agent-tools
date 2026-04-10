@@ -62,7 +62,7 @@ export default function SettingsPage({ initialTab, layoutState }) {
       {/* Header + tabs */}
       <div className="px-5 pt-4 pb-0 shrink-0">
         <h1 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-1)' }}>Settings</h1>
-        <div className="flex border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex border-b overflow-x-auto" style={{ borderColor: 'var(--border)', scrollbarWidth: 'none' }}>
           {TABS.map(t => (
             <button
               key={t}
