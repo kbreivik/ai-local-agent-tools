@@ -145,7 +145,7 @@ SYSTEM_TEMPLATES = [
     },
     {
         "name": "SOC_VIEW",
-        "description": "Security-first — SECURITY, NETWORK, PLATFORM visible; COMPUTE collapsed",
+        "description": "Security-first — SECURITY, NETWORK, PLATFORM visible; COMPUTE/STORAGE/CONTAINERS collapsed",
         "system": True,
         "layout": {
             "template": "SOC_VIEW",
@@ -154,8 +154,10 @@ SYSTEM_TEMPLATES = [
                 {"tiles": ["NETWORK"]},
                 {"tiles": ["PLATFORM"]},
                 {"tiles": ["COMPUTE"]},
+                {"tiles": ["STORAGE"]},
+                {"tiles": ["CONTAINERS"]},
             ],
-            "collapsed": ["COMPUTE"],
+            "collapsed": ["COMPUTE", "STORAGE", "CONTAINERS"],
             "prefs": {"drill_persist": True, "density": "compact", "compare_on_load": False},
         },
     },

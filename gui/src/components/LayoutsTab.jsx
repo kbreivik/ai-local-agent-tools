@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react'
 import { authHeaders } from '../api'
-import { useLayout, DEFAULT_LAYOUT } from '../hooks/useLayout'
+import { DEFAULT_LAYOUT } from '../hooks/useLayout'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -41,8 +41,7 @@ function LayoutPreview({ layout }) {
   )
 }
 
-export default function LayoutsTab() {
-  const { layout, dirty, saveLayout, applyTemplate, setLayout } = useLayout()
+export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, setLayout }) {
   const [templates, setTemplates] = useState([])
   const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [msg, setMsg] = useState('')

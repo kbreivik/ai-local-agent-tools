@@ -22,14 +22,18 @@ const TILE_META = {
 // All known tiles for split selection
 const ALL_TILES = ['PLATFORM', 'COMPUTE', 'CONTAINERS', 'NETWORK', 'STORAGE', 'SECURITY']
 
-function ResizeHandle({ onResize }) {
+function ResizeHandle({ onResize, rowFlex }) {
   const handleRef = useRef(null)
 
   const onMouseDown = useCallback((e) => {
     e.preventDefault()
     const startX = e.clientX
+    const rowEl = handleRef.current?.closest('.ds-row')
+    const rowWidth = rowEl ? rowEl.getBoundingClientRect().width : 1000
+    const totalFlex = (rowFlex || []).reduce((a, b) => a + b, 0) || 1
+    const pixelPerFlex = rowWidth / totalFlex
     const onMove = (me) => {
-      onResize(me.clientX - startX)
+      onResize(me.clientX - startX, pixelPerFlex)
     }
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
@@ -37,7 +41,7 @@ function ResizeHandle({ onResize }) {
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [onResize])
+  }, [onResize, rowFlex])
 
   return (
     <div
@@ -170,6 +174,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     const candidates = []
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) continue
+      if (layout.rows[ri].tiles.some(t => currentRow.tiles.includes(t))) continue
       if (layout.rows[ri].tiles.length === 1) {
         candidates.push({ tile: layout.rows[ri].tiles[0], rowIdx: ri })
       }
@@ -222,14 +227,12 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     onRowsChange(newRows)
   }, [layout.rows, onRowsChange])
 
-  const handleFlexChange = useCallback((rowIdx, tileIdx, delta) => {
+  const handleFlexChange = useCallback((rowIdx, tileIdx, delta, pixelPerFlex) => {
     const row = layout.rows[rowIdx]
     if (row.tiles.length < 2) return
 
     const flex = row.flex ? [...row.flex] : row.tiles.map(() => 1)
-    const totalFlex = flex.reduce((a, b) => a + b, 0)
-    const pixelPerFlex = 100 // approximate px per flex unit
-    const flexDelta = delta / pixelPerFlex
+    const flexDelta = delta / (pixelPerFlex || 100)
 
     flex[tileIdx] = Math.max(0.5, flex[tileIdx] + flexDelta)
     if (tileIdx + 1 < flex.length) {
@@ -250,7 +253,8 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
             <span key={tileName} style={{ display: 'contents' }}>
               {ti > 0 && (
                 <ResizeHandle
-                  onResize={(delta) => handleFlexChange(ri, ti - 1, delta)}
+                  rowFlex={row.flex || row.tiles.map(() => 1)}
+                  onResize={(delta, ppf) => handleFlexChange(ri, ti - 1, delta, ppf)}
                 />
               )}
               <Tile

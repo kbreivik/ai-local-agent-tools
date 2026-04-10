@@ -15,7 +15,7 @@ import LayoutsTab from './LayoutsTab'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export default function SettingsPage({ initialTab }) {
+export default function SettingsPage({ initialTab, layoutState }) {
   const options = useOptions()
   const { serverLoaded } = options
   const [tab, setTab] = useState(initialTab || 'General')
@@ -96,7 +96,7 @@ export default function SettingsPage({ initialTab }) {
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
             {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
-            {tab === 'Layouts'       && <LayoutsTab />}
+            {tab === 'Layouts'       && <LayoutsTab layout={layoutState.layout} dirty={layoutState.dirty} saveLayout={layoutState.saveLayout} applyTemplate={layoutState.applyTemplate} setLayout={layoutState.setLayout} />}
           </>
         )}
       </div>

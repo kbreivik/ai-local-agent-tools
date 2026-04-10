@@ -941,14 +941,14 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
   )
 }
 
-function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare }) {
+function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare, layoutState }) {
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [globalMaint, setGlobalMaint] = useState(false)
   const [externalData, setExternalData] = useState([])
-  const { layout, dirty, saveLayout, updateRows, toggleCollapse } = useLayout()
+  const { layout, dirty, saveLayout, updateRows, toggleCollapse } = layoutState
 
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
@@ -1071,6 +1071,7 @@ function ClusterView() {
 function AppShell() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [settingsTab, setSettingsTab] = useState('Connections')
+  const layoutState = useLayout()
   const [drawerEntityId, setDrawerEntityId] = useState(null)
   const [compareMode, setCompareMode]     = useState(false)
   const [compareSet, setCompareSet]       = useState([])
@@ -1189,6 +1190,7 @@ function AppShell() {
               compareSet={compareSet}
               onCompareAdd={addToCompare}
               onToggleCompare={toggleCompareMode}
+              layoutState={layoutState}
             />
           )}
 
@@ -1258,7 +1260,7 @@ function AppShell() {
           {activeTab === 'Settings' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: 'var(--bg-0)' }}>
-                <SettingsPage initialTab={settingsTab} />
+                <SettingsPage initialTab={settingsTab} layoutState={layoutState} />
               </div>
             </div>
           )}
