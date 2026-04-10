@@ -27,6 +27,7 @@ import DocsTab from './components/DocsTab'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
+import VMHostsSection from './components/VMHostsSection'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
 import { useLayout } from './hooks/useLayout'
@@ -955,6 +956,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [globalMaint, setGlobalMaint] = useState(false)
   const [externalData, setExternalData] = useState([])
+  const [vmHostsData, setVmHostsData] = useState(null)
   const { layout, dirty, saveLayout, updateRows, toggleCollapse } = layoutState
 
   useEffect(() => {
@@ -968,6 +970,16 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
       .catch(() => {})
     load()
     const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [])
+  useEffect(() => {
+    const load = () => fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/dashboard/vm-hosts`,
+      { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setVmHostsData(d))
+      .catch(() => {})
+    load()
+    const id = setInterval(load, 60000)
     return () => clearInterval(id)
   }, [])
 
@@ -1013,6 +1025,16 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     ) : null,
     SECURITY: showSection('SECURITY') ? (
       <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="SECURITY" showFilter={showFilter} />
+    ) : null,
+    VM_HOSTS: showSection('COMPUTE') ? (
+      <VMHostsSection
+        data={vmHostsData}
+        onAction={() => {
+          fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/dashboard/vm-hosts`, { headers: { ...authHeaders() } })
+            .then(r => r.ok ? r.json() : null).then(d => d && setVmHostsData(d)).catch(() => {})
+        }}
+        compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter}
+      />
     ) : null,
   }
 

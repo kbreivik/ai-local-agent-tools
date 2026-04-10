@@ -19,6 +19,7 @@ const TILE_META = {
   NETWORK:    { icon: '◉', badge: 'INFRA' },
   STORAGE:    { icon: '⊠', badge: 'DATA' },
   SECURITY:   { icon: '⊛', badge: 'SOC' },
+  VM_HOSTS:   { icon: '⬢', badge: 'NODES' },
 }
 
 const ACTION_BTN = {

@@ -15,6 +15,7 @@ export const DEFAULT_LAYOUT = {
     { tiles: ['COMPUTE', 'CONTAINERS'], flex: [3, 2] },
     { tiles: ['NETWORK'] },
     { tiles: ['STORAGE', 'SECURITY'] },
+    { tiles: ['VM_HOSTS'] },
   ],
   collapsed: [],
   prefs: {

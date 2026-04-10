@@ -1382,3 +1382,128 @@ def toggle_auto_update(req: AutoUpdateRequest, _: str = Depends(get_current_user
                 "message": f"Auto-update {'enabled' if req.enabled else 'disabled'}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ── VM Hosts ─────────────────────────────────────────────────────────────────
+
+class VMExecRequest(BaseModel):
+    command: str
+    args: str = ""
+
+_VM_ALLOWED_COMMANDS = {
+    "uptime", "df -h", "free -m", "uname -r",
+    "journalctl", "systemctl status", "systemctl restart",
+    "docker ps", "docker ps -a", "docker images",
+    "docker system df", "apt list --upgradable",
+}
+
+_VM_ALLOWED_SERVICES = {
+    "docker", "elasticsearch", "logstash", "kibana",
+    "filebeat", "kafka", "nginx", "ssh",
+}
+
+
+def _vm_allowlist_check(command):
+    """Return the safe command string, or None if disallowed."""
+    cmd = command.strip().lower()
+    for allowed in _VM_ALLOWED_COMMANDS:
+        if cmd == allowed or cmd.startswith(allowed + " "):
+            # Strip shell metacharacters — no pipes, redirects, semicolons
+            safe = command.replace(";", "").replace("|", "").replace(">", "").replace("<", "").replace("&", "")
+            return safe.strip()
+    return None
+
+
+def _get_vm_conn(host_id):
+    """Resolve vm_host connection by connection ID or label."""
+    from api.connections import get_connection, get_all_connections_for_platform
+    conn = get_connection(host_id)
+    if conn and conn.get("platform") == "vm_host":
+        return conn
+    conns = get_all_connections_for_platform("vm_host")
+    match = next((c for c in conns if c.get("label") == host_id), None)
+    if match:
+        return get_connection(str(match["id"]))
+    return None
+
+
+def _vm_ssh_exec(conn, command):
+    """Execute a command on a VM via SSH."""
+    from api.collectors.vm_hosts import _ssh_run
+    host  = conn.get("host", "")
+    port  = conn.get("port") or 22
+    creds = conn.get("credentials", {}) or {}
+    if isinstance(creds, str):
+        import json
+        try: creds = json.loads(creds)
+        except Exception: creds = {}
+    username    = creds.get("username", "ubuntu")
+    password    = creds.get("password") or None
+    private_key = creds.get("private_key") or None
+    try:
+        out = _ssh_run(host, port, username, password, private_key, command)
+        return {"ok": True, "output": out}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/vm-hosts")
+async def get_vm_hosts(user: str = Depends(get_current_user)):
+    """Latest snapshot of all VM hosts."""
+    async with get_engine().connect() as conn:
+        snap = await q.get_latest_snapshot(conn, "vm_hosts")
+    state = _parse_state(snap)
+    return {
+        "vms": state.get("vms", []),
+        "health": state.get("health", "unknown"),
+        "last_updated": snap.get("timestamp") if snap else None,
+    }
+
+
+@router.post("/vm-hosts/{host_id}/exec")
+async def vm_exec(host_id: str, req: VMExecRequest, user: str = Depends(get_current_user)):
+    """Run an allowlisted command on a VM host."""
+    safe_cmd = _vm_allowlist_check(req.command)
+    if not safe_cmd:
+        raise HTTPException(400, f"Command not allowed: {req.command!r}. "
+                                 f"Allowed: {sorted(_VM_ALLOWED_COMMANDS)}")
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    return await asyncio.to_thread(_vm_ssh_exec, conn, safe_cmd)
+
+
+@router.post("/vm-hosts/{host_id}/update")
+async def vm_update(host_id: str, user: str = Depends(get_current_user)):
+    """Run apt update + apt upgrade -y on a VM host (non-interactive)."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    cmd = (
+        "export DEBIAN_FRONTEND=noninteractive && "
+        "sudo apt-get update -qq && "
+        "sudo apt-get upgrade -y -qq 2>&1 | tail -20"
+    )
+    return await asyncio.to_thread(_vm_ssh_exec, conn, cmd)
+
+
+@router.post("/vm-hosts/{host_id}/reboot")
+async def vm_reboot(host_id: str, user: str = Depends(get_current_user)):
+    """Schedule an immediate reboot of a VM host."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    asyncio.create_task(asyncio.to_thread(_vm_ssh_exec, conn, "sudo shutdown -r +0"))
+    return {"ok": True, "message": f"Reboot scheduled for {conn.get('label', host_id)}"}
+
+
+@router.post("/vm-hosts/{host_id}/service/{service_name}/restart")
+async def vm_service_restart(host_id: str, service_name: str,
+                             user: str = Depends(get_current_user)):
+    """Restart a systemd service on a VM host."""
+    if service_name not in _VM_ALLOWED_SERVICES:
+        raise HTTPException(400, f"Service {service_name!r} not in allowlist")
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    return await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")

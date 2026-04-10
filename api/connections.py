@@ -374,6 +374,33 @@ def test_connection(connection_id: str) -> dict:
             update_connection(connection_id, verified=False, last_seen=now)
             return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
 
+    # VM host — SSH connectivity test
+    if platform == 'vm_host':
+        try:
+            from api.collectors.vm_hosts import _ssh_run
+            host = connection.get("host", "")
+            port = connection.get("port") or 22
+            creds = connection.get("credentials", {}) or {}
+            if isinstance(creds, str):
+                import json
+                try: creds = json.loads(creds)
+                except Exception: creds = {}
+            username    = creds.get("username", "ubuntu")
+            password    = creds.get("password") or None
+            private_key = creds.get("private_key") or None
+            out = _ssh_run(host, port, username, password, private_key,
+                           "uptime && hostname && uname -r")
+            update_connection(connection_id, verified=True, last_seen=now)
+            return {
+                "status": "ok",
+                "data": {"output": out[:200]},
+                "timestamp": now,
+                "message": f"SSH OK — {out.strip()[:80]}",
+            }
+        except Exception as e:
+            update_connection(connection_id, verified=False, last_seen=now)
+            return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
+
     # Fallback for platforms not in PLATFORM_HEALTH: generic HTTPS reachability check
     try:
         import httpx
