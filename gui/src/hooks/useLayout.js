@@ -49,7 +49,7 @@ export function useLayout() {
   useEffect(() => { layoutRef.current = layout }, [layout])
 
   const saveLayout = useCallback((l) => {
-    const target = l ?? layoutRef.current
+    const target = (l && typeof l === 'object' && Array.isArray(l.rows)) ? l : layoutRef.current
     fetch(`${BASE}/api/users/me/layout`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },

@@ -660,7 +660,7 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
       </div>
       {onSaveLayout && (
         <button
-          onClick={layoutDirty ? onSaveLayout : undefined}
+          onClick={layoutDirty ? () => onSaveLayout() : undefined}
           disabled={!layoutDirty}
           style={{
             padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
