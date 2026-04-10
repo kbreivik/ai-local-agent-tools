@@ -312,41 +312,56 @@ def delete_connection(connection_id: str) -> dict:
 
 
 def test_connection(connection_id: str) -> dict:
-    """Test a connection by running the platform's validate() function."""
+    """Test a connection by probing its platform health endpoint (same logic as
+    ExternalServicesCollector) so auth, path, and scheme are always correct."""
     connection = get_connection(connection_id)
     if not connection:
         return {"status": "error", "message": "Connection not found"}
 
     platform = connection["platform"]
-    host = connection["host"]
     now = _ts()
 
-    # Try to find a plugin or skill with validate()
+    # Use the platform-specific health check from ExternalServicesCollector
     try:
-        from api.plugin_loader import get_plugins
-        for plugin in get_plugins():
-            if plugin.platform == platform:
-                validate_fn = getattr(plugin, "validate", None)
-                if not validate_fn:
-                    # Use execute as fallback
-                    validate_fn = plugin.execute
-                result = validate_fn(host=host)
-                ok = result.get("status") == "ok"
-                update_connection(connection_id, verified=ok, last_seen=now)
-                return result
-    except Exception:
-        pass
+        from api.collectors.external_services import PLATFORM_HEALTH, ExternalServicesCollector
+        health_cfg = PLATFORM_HEALTH.get(platform)
+        if health_cfg:
+            collector = ExternalServicesCollector()
+            result = collector._probe_connection(connection, health_cfg)
+            ok = result.get("dot") == "green"
+            update_connection(connection_id, verified=ok, last_seen=now)
+            return {
+                "status": "ok" if ok else "error",
+                "data": {
+                    "reachable": result.get("reachable", False),
+                    "latency_ms": result.get("latency_ms"),
+                    "summary": result.get("summary", ""),
+                    "dot": result.get("dot", "red"),
+                },
+                "timestamp": now,
+                "message": result.get("summary") or result.get("problem") or "unreachable",
+            }
+    except Exception as e:
+        log.warning("test_connection platform probe failed (%s): %s", platform, e)
 
-    # Fallback: try HTTP connectivity check
+    # Fallback for platforms not in PLATFORM_HEALTH: generic HTTPS reachability check
     try:
         import httpx
+        host = connection["host"]
         port = connection.get("port", 443)
-        scheme = "https" if port in (443, 8443, 8006, 9443, 5001) else "http"
-        r = httpx.get(f"{scheme}://{host}:{port}/", verify=False, timeout=10)
+        # Treat any port that is known-HTTPS or >1024 and unknown as https
+        https_ports = {443, 8443, 8006, 8007, 9443, 5001, 8001}
+        scheme = "https" if port in https_ports else "http"
+        r = httpx.get(f"{scheme}://{host}:{port}/", verify=False, timeout=10,
+                      follow_redirects=True)
         ok = r.status_code < 500
         update_connection(connection_id, verified=ok, last_seen=now)
-        return {"status": "ok" if ok else "error", "data": {"http_status": r.status_code},
-                "timestamp": now, "message": f"HTTP {r.status_code}"}
+        return {
+            "status": "ok" if ok else "error",
+            "data": {"http_status": r.status_code},
+            "timestamp": now,
+            "message": f"HTTP {r.status_code}",
+        }
     except Exception as e:
         update_connection(connection_id, verified=False, last_seen=now)
         return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
