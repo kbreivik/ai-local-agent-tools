@@ -659,13 +659,20 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
         </div>
       </div>
       {onSaveLayout && (
-        <button onClick={onSaveLayout} style={{
-          padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
-          background: layoutDirty ? 'var(--amber-dim)' : 'transparent',
-          color: layoutDirty ? 'var(--amber)' : 'var(--text-3)',
-          border: `1px solid ${layoutDirty ? 'var(--amber)' : 'var(--border)'}`,
-          borderRadius: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
-        }}>
+        <button
+          onClick={layoutDirty ? onSaveLayout : undefined}
+          disabled={!layoutDirty}
+          style={{
+            padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+            background: layoutDirty ? 'var(--amber-dim)' : 'transparent',
+            color: layoutDirty ? 'var(--amber)' : 'var(--text-3)',
+            border: `1px solid ${layoutDirty ? 'var(--amber)' : 'var(--border)'}`,
+            borderRadius: 2, cursor: layoutDirty ? 'pointer' : 'default',
+            display: 'flex', alignItems: 'center', gap: 4,
+            opacity: layoutDirty ? 1 : 0.4, transition: 'all 0.15s',
+          }}
+          title={layoutDirty ? 'Save current layout to your profile' : 'No unsaved changes'}
+        >
           {layoutDirty && <span className="ds-layout-dirty-dot" />}
           SAVE LAYOUT
         </button>

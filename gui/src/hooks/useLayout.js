@@ -3,7 +3,7 @@
  * Loads layout from server on mount, provides mutation helpers,
  * tracks dirty state, and exposes saveLayout() for persistence.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -44,15 +44,19 @@ export function useLayout() {
       .catch(() => setLoaded(true))
   }, [])
 
+  // Keep a ref to always-current layout so saveLayout never goes stale
+  const layoutRef = useRef(layout)
+  useEffect(() => { layoutRef.current = layout }, [layout])
+
   const saveLayout = useCallback((l) => {
-    const target = l || layout
+    const target = l ?? layoutRef.current
     fetch(`${BASE}/api/users/me/layout`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ layout_json: JSON.stringify(target) }),
     }).catch(() => {})
     setDirty(false)
-  }, [layout])
+  }, [])
 
   const updateRows = useCallback((rows) => {
     setLayout(l => ({ ...l, rows }))
