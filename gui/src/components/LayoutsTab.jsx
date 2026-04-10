@@ -15,8 +15,9 @@ function LayoutPreview({ layout }) {
     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, lineHeight: 1.6, color: 'var(--text-3)' }}>
       {rows.map((row, i) => {
         const collapsed = layout.collapsed || []
+        const isConstrained = row.heightMode === 'constrained'
         return (
-          <div key={i} style={{ display: 'flex', gap: 2 }}>
+          <div key={i} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
             {row.tiles.map((t, j) => {
               const isCollapsed = collapsed.includes(t)
               return (
@@ -34,6 +35,7 @@ function LayoutPreview({ layout }) {
                 </span>
               )
             })}
+            {isConstrained && <span style={{ fontSize: 7, color: 'var(--cyan)', flexShrink: 0 }} title="Constrained height">⊡</span>}
           </div>
         )
       })}

@@ -1,6 +1,6 @@
 /**
  * DashboardLayout — renders a configurable tile grid from layout.rows.
- * Supports drag-reorder, split/unsplit, collapse, and resize.
+ * Supports drag-reorder, split/unsplit, collapse, resize, and heightMode.
  *
  * Props:
  *   layout      — { rows, collapsed, prefs }
@@ -19,8 +19,11 @@ const TILE_META = {
   SECURITY:   { icon: '⊛', badge: 'SOC' },
 }
 
-// All known tiles for split selection
-const ALL_TILES = ['PLATFORM', 'COMPUTE', 'CONTAINERS', 'NETWORK', 'STORAGE', 'SECURITY']
+const ACTION_BTN = {
+  fontSize: 9, cursor: 'pointer', background: 'none', border: 'none',
+  padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+}
 
 function ResizeHandle({ onResize, rowFlex }) {
   const handleRef = useRef(null)
@@ -52,8 +55,11 @@ function ResizeHandle({ onResize, rowFlex }) {
   )
 }
 
-function Tile({ name, flex, collapsed, onDragStart, onDragOver, onDrop, onCollapse, onSplit, onUnsplit, canUnsplit, children, draggingOver }) {
+function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDrop,
+                onCollapse, onSplit, onUnsplit, onHeightModeToggle, canUnsplit,
+                splitCandidates, children, draggingOver }) {
   const meta = TILE_META[name] || { icon: '▪', badge: '' }
+  const [splitMenuOpen, setSplitMenuOpen] = useState(false)
   const classes = [
     'ds-tile',
     collapsed ? 'collapsed' : '',
@@ -85,23 +91,50 @@ function Tile({ name, flex, collapsed, onDragStart, onDragOver, onDrop, onCollap
           </span>
         )}
         <span style={{ flex: 1 }} />
-        {!canUnsplit && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onSplit() }}
-            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-            title="Split — add tile to this row"
-          >⊞</button>
+        {/* Split button with dropdown picker */}
+        {!canUnsplit && splitCandidates?.length > 0 && (
+          <div style={{ position: 'relative', display: 'inline-flex' }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setSplitMenuOpen(o => !o) }}
+              style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
+              title="Split — add tile to this row"
+            >⊞</button>
+            {splitMenuOpen && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, zIndex: 50,
+                background: 'var(--bg-2)', border: '1px solid var(--border)',
+                borderRadius: 2, minWidth: 120, marginTop: 2,
+              }}>
+                {splitCandidates.map(c => (
+                  <button key={c} onClick={(e) => { e.stopPropagation(); onSplit(c); setSplitMenuOpen(false) }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left',
+                             padding: '4px 8px', fontSize: 9, fontFamily: 'var(--font-mono)',
+                             background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer' }}
+                    onMouseOver={e => e.currentTarget.style.background = 'var(--bg-3)'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >{c}</button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {canUnsplit && (
           <button
             onClick={(e) => { e.stopPropagation(); onUnsplit() }}
-            style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
             title="Unsplit — move to own row"
           >⊟</button>
         )}
+        {canUnsplit && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onHeightModeToggle() }}
+            style={{ ...ACTION_BTN, color: heightMode === 'constrained' ? 'var(--cyan)' : 'var(--text-3)' }}
+            title={heightMode === 'constrained' ? 'Switch to auto height' : 'Constrain height (internal scroll)'}
+          >{heightMode === 'constrained' ? '⊡' : '⊞'}</button>
+        )}
         <button
           onClick={(e) => { e.stopPropagation(); onCollapse() }}
-          style={{ fontSize: 9, color: 'var(--text-3)', cursor: 'pointer', background: 'none', border: 'none', padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
           title={collapsed ? 'Expand' : 'Collapse'}
         >{collapsed ? '▶' : '▼'}</button>
       </div>
@@ -118,8 +151,19 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
   const [dragSource, setDragSource] = useState(null)
   const [dragOverTarget, setDragOverTarget] = useState(null)
 
-  // All tiles currently placed in rows
-  const placedTiles = new Set(layout.rows.flatMap(r => r.tiles))
+  // Compute split candidates for each row (tiles in single-tile rows, not in current row)
+  const getSplitCandidates = useCallback((rowIdx) => {
+    const currentRow = layout.rows[rowIdx]
+    const candidates = []
+    for (let ri = 0; ri < layout.rows.length; ri++) {
+      if (ri === rowIdx) continue
+      if (layout.rows[ri].tiles.some(t => currentRow.tiles.includes(t))) continue
+      if (layout.rows[ri].tiles.length === 1) {
+        candidates.push(layout.rows[ri].tiles[0])
+      }
+    }
+    return candidates.sort()
+  }, [layout.rows])
 
   const handleDrop = useCallback((targetTile) => {
     if (!dragSource || dragSource === targetTile) {
@@ -131,9 +175,9 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     const newRows = layout.rows.map(row => ({
       tiles: [...row.tiles],
       ...(row.flex ? { flex: [...row.flex] } : {}),
+      ...(row.heightMode ? { heightMode: row.heightMode } : {}),
     }))
 
-    // Find source and target positions
     let srcRowIdx = -1, srcTileIdx = -1
     let tgtRowIdx = -1, tgtTileIdx = -1
     for (let ri = 0; ri < newRows.length; ri++) {
@@ -150,7 +194,6 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     }
 
     if (srcRowIdx === tgtRowIdx) {
-      // Swap within same row
       const row = newRows[srcRowIdx]
       ;[row.tiles[srcTileIdx], row.tiles[tgtTileIdx]] = [row.tiles[tgtTileIdx], row.tiles[srcTileIdx]]
       if (row.flex) {
@@ -168,32 +211,27 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     setDragOverTarget(null)
   }, [dragSource, layout.rows, onRowsChange])
 
-  const handleSplit = useCallback((rowIdx, tileIdx) => {
-    // Find a tile not in this row to add
+  const handleSplit = useCallback((rowIdx, targetTileName) => {
     const currentRow = layout.rows[rowIdx]
-    // Find tiles that are alone in their row (candidates to merge)
-    const candidates = []
+    // Find which row the target tile is in
+    let pickRowIdx = -1
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) continue
-      if (layout.rows[ri].tiles.some(t => currentRow.tiles.includes(t))) continue
-      if (layout.rows[ri].tiles.length === 1) {
-        candidates.push({ tile: layout.rows[ri].tiles[0], rowIdx: ri })
+      if (layout.rows[ri].tiles.length === 1 && layout.rows[ri].tiles[0] === targetTileName) {
+        pickRowIdx = ri
+        break
       }
     }
-    if (candidates.length === 0) return
-
-    // Pick the next tile alphabetically after current
-    const currentTile = currentRow.tiles[tileIdx]
-    candidates.sort((a, b) => a.tile.localeCompare(b.tile))
-    const pick = candidates.find(c => c.tile > currentTile) || candidates[0]
+    if (pickRowIdx === -1) return
 
     const newRows = layout.rows
-      .filter((_, ri) => ri !== pick.rowIdx) // remove source row
+      .filter((_, ri) => ri !== pickRowIdx)
       .map(row => {
         if (row === currentRow) {
           return {
-            tiles: [...row.tiles, pick.tile],
+            tiles: [...row.tiles, targetTileName],
             flex: [...(row.flex || row.tiles.map(() => 1)), 2],
+            heightMode: row.heightMode || 'auto',
           }
         }
         return { ...row }
@@ -211,20 +249,28 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
 
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) {
-        // Remove tile from this row
         const remainingTiles = row.tiles.filter((_, ti) => ti !== tileIdx)
         const remainingFlex = row.flex ? row.flex.filter((_, ti) => ti !== tileIdx) : undefined
         newRows.push({
           tiles: remainingTiles,
           ...(remainingFlex && remainingFlex.length > 1 ? { flex: remainingFlex } : {}),
+          heightMode: row.heightMode || 'auto',
         })
-        // Insert new row for unsplit tile
-        newRows.push({ tiles: [tileName] })
+        newRows.push({ tiles: [tileName], heightMode: 'auto' })
       } else {
         newRows.push({ ...layout.rows[ri] })
       }
     }
 
+    onRowsChange(newRows)
+  }, [layout.rows, onRowsChange])
+
+  const handleHeightModeToggle = useCallback((rowIdx) => {
+    const newRows = layout.rows.map((r, ri) => {
+      if (ri !== rowIdx) return r
+      const current = r.heightMode || 'auto'
+      return { ...r, heightMode: current === 'constrained' ? 'auto' : 'constrained' }
+    })
     onRowsChange(newRows)
   }, [layout.rows, onRowsChange])
 
@@ -249,7 +295,13 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
   return (
     <div className="ds-layout">
       {layout.rows.map((row, ri) => (
-        <div key={ri} className="ds-row">
+        <div
+          key={ri}
+          className={[
+            'ds-row',
+            row.heightMode === 'constrained' ? 'ds-row--constrained' : '',
+          ].filter(Boolean).join(' ')}
+        >
           {row.tiles.map((tileName, ti) => (
             <span key={tileName} style={{ display: 'contents' }}>
               {ti > 0 && (
@@ -262,13 +314,16 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
                 name={tileName}
                 flex={row.flex?.[ti] ?? 1}
                 collapsed={layout.collapsed?.includes(tileName)}
+                heightMode={row.heightMode || 'auto'}
                 onDragStart={setDragSource}
                 onDragOver={setDragOverTarget}
                 onDrop={handleDrop}
                 onCollapse={() => onCollapsedChange(tileName)}
-                onSplit={() => handleSplit(ri, ti)}
+                onSplit={(target) => handleSplit(ri, target)}
                 onUnsplit={() => handleUnsplit(ri, ti)}
+                onHeightModeToggle={() => handleHeightModeToggle(ri)}
                 canUnsplit={row.tiles.length > 1}
+                splitCandidates={getSplitCandidates(ri)}
                 draggingOver={dragOverTarget === tileName && dragSource !== tileName}
               >
                 {children[tileName] || (

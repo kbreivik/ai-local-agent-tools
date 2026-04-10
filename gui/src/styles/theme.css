@@ -217,7 +217,8 @@ html, body {
 
 /* ── Dashboard layout (drag/split tiles) ────────────────────────────────── */
 .ds-layout { display: flex; flex-direction: column; gap: 5px; padding: 6px; }
-.ds-row { display: flex; gap: 5px; }
+.ds-row { display: flex; gap: 5px; align-items: flex-start; }
+.ds-row--constrained .ds-tile-body { max-height: 60vh; overflow-y: auto; }
 .ds-tile { background: var(--bg-1); border: 1px solid rgba(160,24,40,0.15);
            flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ds-tile.collapsed .ds-tile-body { display: none; }
