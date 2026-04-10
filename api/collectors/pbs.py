@@ -207,12 +207,25 @@ def _collect_datastores(base: str, headers: dict) -> list:
         used = usage.get("used", 0)
         pct = round(used / total * 100, 1) if total > 0 else 0
 
+        # Snapshot count — sum snap-count across all backup groups
+        snapshot_count = None
+        try:
+            gr = httpx.get(f"{base}/admin/datastore/{name}/groups",
+                           headers=headers, verify=False, timeout=10)
+            if gr.status_code == 200:
+                groups = gr.json().get("data", [])
+                snapshot_count = sum(int(g.get("backup-count", g.get("snap-count", 0)) or 0)
+                                     for g in groups)
+        except Exception as e:
+            log.debug("PBS snapshot count for %s failed: %s", name, e)
+
         result.append({
             "name": name,
             "usage_pct": pct,
             "total_gb": round(total / (1024 ** 3), 1) if total else 0,
             "used_gb": round(used / (1024 ** 3), 1) if used else 0,
             "gc_status": usage.get("gc-status", {}).get("state", "") if isinstance(usage.get("gc-status"), dict) else str(usage.get("gc-status", "")),
+            "snapshot_count": snapshot_count,
         })
     return result
 

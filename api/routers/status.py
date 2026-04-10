@@ -208,7 +208,7 @@ async def collector_debug(component: str, _: str = Depends(get_current_user)):
 
     results = {}
     paths_to_test = (
-        ["/version", "/config/datastore", "/admin/datastore", "/nodes/localhost/tasks"]
+        ["/version", "/config/datastore", "/system/tasks"]
         if component == "pbs"
         else ["/version", "/nodes"]
     )

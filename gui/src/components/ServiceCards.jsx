@@ -1688,6 +1688,9 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                           </div>
                         </div>
                         <div>GC status: <span style={{ color: 'var(--text-1)' }}>{ds.gc_status || '—'}</span></div>
+                        {ds.snapshot_count != null && (
+                          <div>Snapshots: <span style={{ color: 'var(--text-1)' }}>{ds.snapshot_count}</span></div>
+                        )}
                         {tasks.recent_count != null && (
                           <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--bg-3)' }}>
                             Tasks (last 20): <span style={{ color: 'var(--green)' }}>{tasks.recent_count - (tasks.failed_count || 0)} OK</span>
