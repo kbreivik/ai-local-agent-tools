@@ -57,6 +57,13 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "CREATE INDEX IF NOT EXISTS idx_oplog_session ON operation_log(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operation_log(timestamp)",
     ]),
+    (7, "Add user_layouts table for per-user dashboard layout storage", [
+        """CREATE TABLE IF NOT EXISTS user_layouts (
+            user_id     TEXT PRIMARY KEY,
+            layout_json TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        )""",
+    ]),
 ]
 
 

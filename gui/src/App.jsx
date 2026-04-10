@@ -28,6 +28,8 @@ import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
+import DashboardLayout from './components/DashboardLayout'
+import { useLayout } from './hooks/useLayout'
 
 const FILTER_KEY = 'hp1_cardFilter'
 
@@ -586,7 +588,7 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare }) {
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout }) {
   const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
   const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
   const _btn = (active) => ({
@@ -656,6 +658,18 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
           ))}
         </div>
       </div>
+      {onSaveLayout && (
+        <button onClick={onSaveLayout} style={{
+          padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+          background: layoutDirty ? 'var(--amber-dim)' : 'transparent',
+          color: layoutDirty ? 'var(--amber)' : 'var(--text-3)',
+          border: `1px solid ${layoutDirty ? 'var(--amber)' : 'var(--border)'}`,
+          borderRadius: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          {layoutDirty && <span className="ds-layout-dirty-dot" />}
+          SAVE LAYOUT
+        </button>
+      )}
       <div style={{ flex: 1 }} />
       <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)', flexShrink: 0 }}>
         <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats?.total_operations ?? '—'}</span></span>
@@ -934,6 +948,8 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [globalMaint, setGlobalMaint] = useState(false)
   const [externalData, setExternalData] = useState([])
+  const { layout, dirty, saveLayout, updateRows, toggleCollapse } = useLayout()
+
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
     const id = setInterval(() => fetchStats().then(setStats).catch(() => {}), 30000)
@@ -948,7 +964,46 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     return () => clearInterval(id)
   }, [])
 
+  // Auto-save layout on unmount if dirty
+  useEffect(() => {
+    return () => { if (dirty) saveLayout() }
+  }, [dirty, saveLayout])
+
   const showSection = (type) => typeFilter === 'ALL' || typeFilter === type
+
+  // Section content map — each key matches a tile name in layout.rows
+  const sectionContent = {
+    PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards /> : null,
+    COMPUTE: showSection('COMPUTE') ? (
+      <ServiceCardsErrorBoundary>
+        <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+      </ServiceCardsErrorBoundary>
+    ) : null,
+    CONTAINERS: showSection('COMPUTE') ? (
+      <ServiceCardsErrorBoundary>
+        <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+      </ServiceCardsErrorBoundary>
+    ) : null,
+    NETWORK: showSection('NETWORK') ? (
+      <>
+        <ServiceCardsErrorBoundary>
+          <ServiceCards activeFilters={['unifi', 'fortigate']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+        </ServiceCardsErrorBoundary>
+        <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
+      </>
+    ) : null,
+    STORAGE: showSection('STORAGE') ? (
+      <>
+        <ServiceCardsErrorBoundary>
+          <ServiceCards activeFilters={['pbs', 'truenas']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+        </ServiceCardsErrorBoundary>
+        <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
+      </>
+    ) : null,
+    SECURITY: showSection('SECURITY') ? (
+      <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="SECURITY" showFilter={showFilter} />
+    ) : null,
+  }
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
@@ -959,6 +1014,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         globalMaint={globalMaint} setGlobalMaint={setGlobalMaint}
         stats={stats}
         compareMode={compareMode} compareSet={compareSet} onToggleCompare={onToggleCompare}
+        layoutDirty={dirty} onSaveLayout={saveLayout}
       />
 
       {globalMaint && (
@@ -969,52 +1025,13 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
       <div className="flex-1 overflow-auto min-h-0">
         <AlertsPanel />
-
-        {showSection('PLATFORM') && (
-          <SectionAccordion icon="⬡" title="DEATHSTAR PLATFORM" badge="INTERNAL" statusText="" defaultOpen={true}>
-            <PlatformCoreCards />
-          </SectionAccordion>
-        )}
-
-        {showSection('COMPUTE') && (
-          <SectionAccordion icon="◈" title="COMPUTE" badge="HYPERVISORS" statusText="" defaultOpen={true}>
-            <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
-            </ServiceCardsErrorBoundary>
-          </SectionAccordion>
-        )}
-
-        {showSection('COMPUTE') && (
-          <SectionAccordion icon="⊟" title="CONTAINERS" badge="DOCKER" statusText="" defaultOpen={true}>
-            <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
-            </ServiceCardsErrorBoundary>
-          </SectionAccordion>
-        )}
-
-        {showSection('NETWORK') && (
-          <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
-            <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['unifi', 'fortigate']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
-            </ServiceCardsErrorBoundary>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
-          </SectionAccordion>
-        )}
-
-        {showSection('STORAGE') && (
-          <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
-            <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['pbs', 'truenas']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
-            </ServiceCardsErrorBoundary>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
-          </SectionAccordion>
-        )}
-
-        {showSection('SECURITY') && (
-          <SectionAccordion icon="⊛" title="SECURITY" badge="SOC" statusText="" defaultOpen={true}>
-            <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="SECURITY" showFilter={showFilter} />
-          </SectionAccordion>
-        )}
+        <DashboardLayout
+          layout={layout}
+          onRowsChange={updateRows}
+          onCollapsedChange={toggleCollapse}
+        >
+          {sectionContent}
+        </DashboardLayout>
       </div>
     </div>
   )

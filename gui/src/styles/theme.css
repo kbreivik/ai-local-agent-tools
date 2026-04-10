@@ -215,6 +215,27 @@ html, body {
 ::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
+/* ── Dashboard layout (drag/split tiles) ────────────────────────────────── */
+.ds-layout { display: flex; flex-direction: column; gap: 5px; padding: 6px; }
+.ds-row { display: flex; gap: 5px; }
+.ds-tile { background: var(--bg-1); border: 1px solid rgba(160,24,40,0.15);
+           flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ds-tile.collapsed .ds-tile-body { display: none; }
+.ds-tile-hdr { background: var(--bg-2); border-bottom: 1px solid rgba(200,204,216,0.07);
+               padding: 5px 8px; display: flex; align-items: center; gap: 7px;
+               cursor: grab; user-select: none; font-size: 10px; }
+.ds-tile-body { overflow-y: auto; padding: 6px; display: flex;
+                flex-direction: column; gap: 4px; }
+.ds-tile-body::-webkit-scrollbar { width: 2px; }
+.ds-tile-body::-webkit-scrollbar-thumb { background: var(--accent); }
+.ds-resize-handle { width: 4px; background: rgba(200,204,216,0.07); cursor: col-resize;
+                    flex-shrink: 0; transition: background 0.15s; }
+.ds-resize-handle:hover { background: var(--accent); }
+.ds-tile.drag-over { border-color: var(--cyan); }
+.ds-tile.dragging { opacity: 0.55; border-color: var(--accent); }
+.ds-layout-dirty-dot { width: 6px; height: 6px; border-radius: 50%;
+                        background: var(--amber); display: inline-block; }
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar { width: 56px; }

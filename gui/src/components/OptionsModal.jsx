@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display', 'Notifications']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display', 'Notifications', 'Layouts']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 

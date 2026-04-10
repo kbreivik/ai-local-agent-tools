@@ -11,6 +11,7 @@ import {
   ConnectionsTab, PermissionsTab, AccessTab, NamingTab,
   DisplayTab, NotificationsTab, UpdateStatus, TABS,
 } from './OptionsModal'
+import LayoutsTab from './LayoutsTab'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -95,12 +96,13 @@ export default function SettingsPage({ initialTab }) {
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
             {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
+            {tab === 'Layouts'       && <LayoutsTab />}
           </>
         )}
       </div>
 
       {/* Footer — save button (hidden on Connections tab) */}
-      {!['Connections', 'Permissions', 'Access'].includes(tab) && (
+      {!['Connections', 'Permissions', 'Access', 'Layouts'].includes(tab) && (
         <div className="flex items-center justify-end gap-3 px-5 py-3 border-t shrink-0" style={{ borderColor: 'var(--border)' }}>
           {saveMsg && (
             <span className={`text-xs mr-auto ${saveMsg.includes('saved') ? 'text-green-400' : 'text-red-400'}`}>{saveMsg}</span>
