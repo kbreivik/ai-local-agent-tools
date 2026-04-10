@@ -107,10 +107,10 @@ def revoke(token_id: str, _: str = Depends(get_current_user)):
 DEFAULT_LAYOUT = {
     "template": "DEFAULT",
     "rows": [
-        {"tiles": ["PLATFORM"], "heightMode": "auto"},
-        {"tiles": ["COMPUTE", "CONTAINERS"], "flex": [3, 2], "heightMode": "auto"},
-        {"tiles": ["NETWORK"], "heightMode": "auto"},
-        {"tiles": ["STORAGE", "SECURITY"], "heightMode": "auto"},
+        {"tiles": ["PLATFORM"]},
+        {"tiles": ["COMPUTE", "CONTAINERS"], "flex": [3, 2]},
+        {"tiles": ["NETWORK"]},
+        {"tiles": ["STORAGE", "SECURITY"]},
     ],
     "collapsed": [],
     "prefs": {
@@ -134,10 +134,10 @@ SYSTEM_TEMPLATES = [
         "layout": {
             "template": "OPS_FOCUS",
             "rows": [
-                {"tiles": ["PLATFORM"], "heightMode": "auto"},
-                {"tiles": ["COMPUTE"], "heightMode": "auto"},
-                {"tiles": ["CONTAINERS"], "heightMode": "auto"},
-                {"tiles": ["NETWORK"], "heightMode": "auto"},
+                {"tiles": ["PLATFORM"]},
+                {"tiles": ["COMPUTE"]},
+                {"tiles": ["CONTAINERS"]},
+                {"tiles": ["NETWORK"]},
             ],
             "collapsed": [],
             "prefs": {"drill_persist": True, "density": "compact", "compare_on_load": False},
@@ -150,12 +150,12 @@ SYSTEM_TEMPLATES = [
         "layout": {
             "template": "SOC_VIEW",
             "rows": [
-                {"tiles": ["SECURITY"], "heightMode": "auto"},
-                {"tiles": ["NETWORK"], "heightMode": "auto"},
-                {"tiles": ["PLATFORM"], "heightMode": "auto"},
-                {"tiles": ["COMPUTE"], "heightMode": "auto"},
-                {"tiles": ["STORAGE"], "heightMode": "auto"},
-                {"tiles": ["CONTAINERS"], "heightMode": "auto"},
+                {"tiles": ["SECURITY"]},
+                {"tiles": ["NETWORK"]},
+                {"tiles": ["PLATFORM"]},
+                {"tiles": ["COMPUTE"]},
+                {"tiles": ["STORAGE"]},
+                {"tiles": ["CONTAINERS"]},
             ],
             "collapsed": ["COMPUTE", "STORAGE", "CONTAINERS"],
             "prefs": {"drill_persist": True, "density": "compact", "compare_on_load": False},
@@ -168,10 +168,10 @@ SYSTEM_TEMPLATES = [
         "layout": {
             "template": "NETWORK_ONLY",
             "rows": [
-                {"tiles": ["NETWORK"], "heightMode": "auto"},
-                {"tiles": ["PLATFORM"], "heightMode": "auto"},
-                {"tiles": ["COMPUTE"], "heightMode": "auto"},
-                {"tiles": ["STORAGE"], "heightMode": "auto"},
+                {"tiles": ["NETWORK"]},
+                {"tiles": ["PLATFORM"]},
+                {"tiles": ["COMPUTE"]},
+                {"tiles": ["STORAGE"]},
             ],
             "collapsed": ["COMPUTE", "STORAGE"],
             "prefs": {"drill_persist": True, "density": "compact", "compare_on_load": False},
@@ -184,11 +184,11 @@ SYSTEM_TEMPLATES = [
         "layout": {
             "template": "COMPUTE_ONLY",
             "rows": [
-                {"tiles": ["COMPUTE"], "heightMode": "auto"},
-                {"tiles": ["CONTAINERS"], "heightMode": "auto"},
-                {"tiles": ["PLATFORM"], "heightMode": "auto"},
-                {"tiles": ["NETWORK"], "heightMode": "auto"},
-                {"tiles": ["STORAGE"], "heightMode": "auto"},
+                {"tiles": ["COMPUTE"]},
+                {"tiles": ["CONTAINERS"]},
+                {"tiles": ["PLATFORM"]},
+                {"tiles": ["NETWORK"]},
+                {"tiles": ["STORAGE"]},
             ],
             "collapsed": ["NETWORK", "STORAGE"],
             "prefs": {"drill_persist": True, "density": "compact", "compare_on_load": False},

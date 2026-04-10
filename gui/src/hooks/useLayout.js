@@ -11,10 +11,10 @@ const BASE = import.meta.env.VITE_API_BASE ?? ''
 export const DEFAULT_LAYOUT = {
   template: 'DEFAULT',
   rows: [
-    { tiles: ['PLATFORM'], heightMode: 'auto' },
-    { tiles: ['COMPUTE', 'CONTAINERS'], flex: [3, 2], heightMode: 'auto' },
-    { tiles: ['NETWORK'], heightMode: 'auto' },
-    { tiles: ['STORAGE', 'SECURITY'], heightMode: 'auto' },
+    { tiles: ['PLATFORM'] },
+    { tiles: ['COMPUTE', 'CONTAINERS'], flex: [3, 2] },
+    { tiles: ['NETWORK'] },
+    { tiles: ['STORAGE', 'SECURITY'] },
   ],
   collapsed: [],
   prefs: {

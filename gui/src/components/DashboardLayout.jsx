@@ -8,7 +8,7 @@
  *   onCollapsedChange(tile)  — called to toggle collapse on a tile
  *   children    — map of tile-name → React node (section content)
  */
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useLayoutEffect } from 'react'
 
 const TILE_META = {
   PLATFORM:   { icon: '⬡', badge: 'INTERNAL' },
@@ -129,7 +129,7 @@ function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDr
           <button
             onClick={(e) => { e.stopPropagation(); onHeightModeToggle() }}
             style={{ ...ACTION_BTN, color: heightMode === 'constrained' ? 'var(--cyan)' : 'var(--text-3)' }}
-            title={heightMode === 'constrained' ? 'Switch to auto height' : 'Constrain height (internal scroll)'}
+            title={heightMode === 'constrained' ? 'Height: capped — click for auto' : 'Height: auto — click to cap'}
           >{heightMode === 'constrained' ? '⊡' : '⊞'}</button>
         )}
         <button
@@ -150,6 +150,43 @@ function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDr
 export default function DashboardLayout({ layout, onRowsChange, onCollapsedChange, children }) {
   const [dragSource, setDragSource] = useState(null)
   const [dragOverTarget, setDragOverTarget] = useState(null)
+
+  // ── Auto-fit height detection ──────────────────────────────────────────
+  // Runs after every structural change (drop/split/unsplit).
+  // Measures natural scroll heights and applies 'auto' or 'stretch'
+  // per row. Only runs when tile arrangement changes, not when
+  // heightMode changes — this prevents infinite re-render loops.
+  const tileArrangementKey = JSON.stringify(layout.rows.map(r => r.tiles.join(',')))
+  useLayoutEffect(() => {
+    const dsRows = document.querySelectorAll('.ds-row')
+    let changed = false
+    const newRows = layout.rows.map((row, ri) => {
+      // Only auto-manage rows without a user-pinned 'constrained' mode
+      if (row.heightMode === 'constrained') return row
+      // Single-tile rows: always auto (no sibling to compare against)
+      if (row.tiles.length < 2) {
+        if ((row.heightMode || 'auto') === 'auto') return row
+        changed = true
+        return { ...row, heightMode: 'auto' }
+      }
+      const rowEl = dsRows[ri]
+      if (!rowEl) return row
+      // Measure natural scroll heights of each tile body
+      const bodies = Array.from(rowEl.querySelectorAll(':scope > span > .ds-tile .ds-tile-body, :scope > .ds-tile .ds-tile-body'))
+      const heights = bodies.map(b => b.scrollHeight).filter(h => h > 0)
+      if (heights.length < 2) return row
+      const maxH = Math.max(...heights)
+      const minH = Math.min(...heights)
+      const ratio = minH > 0 ? maxH / minH : 1
+      // >1.5x difference → use 'auto' so shorter tile stops at content
+      // ≤1.5x → use 'stretch' for clean alignment
+      const computed = ratio > 1.5 ? 'auto' : 'stretch'
+      if ((row.heightMode || 'auto') === computed) return row
+      changed = true
+      return { ...row, heightMode: computed }
+    })
+    if (changed) onRowsChange(newRows)
+  }, [tileArrangementKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Compute split candidates for each row (tiles in single-tile rows, not in current row)
   const getSplitCandidates = useCallback((rowIdx) => {
@@ -299,6 +336,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
           key={ri}
           className={[
             'ds-row',
+            row.heightMode === 'stretch'     ? 'ds-row--stretch'     : '',
             row.heightMode === 'constrained' ? 'ds-row--constrained' : '',
           ].filter(Boolean).join(' ')}
         >
