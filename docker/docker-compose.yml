@@ -32,7 +32,7 @@ services:
   # Start with: --profile dev
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: hp1_postgres
+    container_name: hp1-postgres
     restart: unless-stopped
     profiles: ["dev"]
     networks:

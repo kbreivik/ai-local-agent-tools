@@ -671,11 +671,13 @@ function PlatformCoreCards() {
   const [health, setHealth] = useState(null)
   const [statusData, setStatusData] = useState(null)
   const [memHealth, setMemHealth] = useState(null)
+  const [containers, setContainers] = useState([])
   useEffect(() => {
     const load = () => {
       fetchHealth().then(setHealth).catch(() => {})
       fetchStatus().then(setStatusData).catch(() => {})
       fetchMemoryHealth().then(setMemHealth).catch(() => {})
+      fetchDashboardContainers().then(d => setContainers(d?.containers || [])).catch(() => {})
     }
     load()
     const id = setInterval(load, 30000)
@@ -720,13 +722,26 @@ function PlatformCoreCards() {
   const muninnHealth = muninnOk ? 'healthy' : memHealth ? 'error' : 'unknown'
   const muninnEngrams = memHealth?.engram_count ?? memHealth?.count ?? memHealth?.data?.count ?? ''
 
+  // Find postgres container dynamically — matches hp1-postgres, hp1_postgres, DS-postgres, etc.
+  const pgContainer = containers.find(c =>
+    c.name?.toLowerCase().includes('postgres') && !c.name?.toLowerCase().includes('pgadmin')
+  )
+  const pgDot    = pgContainer ? pgContainer.dot : 'grey'
+  const pgHealth = pgContainer
+    ? (pgContainer.dot === 'green' ? 'HEALTHY' : pgContainer.dot === 'amber' ? 'DEGRADED' : 'ERROR')
+    : 'UNKNOWN'
+  const pgLabel  = pgContainer?.name || 'postgres'
+  const pgVersion = pgContainer?.image?.match(/pg(\d+)/i)?.[1]
+    ? `pg${pgContainer.image.match(/pg(\d+)/i)[1]}`
+    : pgContainer ? 'running' : ''
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
       {/* PLATFORM CORE */}
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${apiOk ? 'var(--green)' : 'var(--red)'}`, borderRadius: 2, padding: '8px 10px' }}>
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>PLATFORM CORE</div>
         {_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
-        {_row('var(--green)', 'DS-postgres', 'HEALTHY', 'green', 'pg16')}
+        {_row(_healthDot(pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'), pgLabel, pgHealth, pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey', pgVersion)}
         {_row(_healthDot(muninnHealth), 'DS-muninndb', muninnHealth.toUpperCase(), _healthTag(muninnHealth), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
         {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
         {_row(_healthDot(esHealth), 'Elasticsearch', esHealth.toUpperCase(), _healthTag(esHealth), esNodes ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '')}
@@ -980,7 +995,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('NETWORK') && (
           <SectionAccordion icon="◉" title="NETWORK" badge="INFRA" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['unifi']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+              <ServiceCards activeFilters={['unifi', 'fortigate']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
             </ServiceCardsErrorBoundary>
             <ConnectionSectionCards platforms={SECTION_PLATFORMS.NETWORK} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="NETWORK" showFilter={showFilter} />
           </SectionAccordion>
@@ -989,7 +1004,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         {showSection('STORAGE') && (
           <SectionAccordion icon="⊠" title="STORAGE" badge="DATA" statusText="" defaultOpen={true}>
             <ServiceCardsErrorBoundary>
-              <ServiceCards activeFilters={['pbs']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
+              <ServiceCards activeFilters={['pbs', 'truenas']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} />
             </ServiceCardsErrorBoundary>
             <ConnectionSectionCards platforms={SECTION_PLATFORMS.STORAGE} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="STORAGE" showFilter={showFilter} />
           </SectionAccordion>
