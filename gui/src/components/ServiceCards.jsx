@@ -1463,56 +1463,93 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
         )}
 
         {/* VMs + LXC · Proxmox */}
+        {/* VMs + LXC · Proxmox — one Section per cluster */}
         {show('vms') && (() => {
-          const allItems = [...(vms?.vms || []), ...(vms?.lxc || [])]
-          const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
-          const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
-          const connLabel = vms?.connection_label || 'Proxmox Cluster'
-          const connHost  = vms?.connection_host || ''
-          const runningCount = allItems.filter(v => v.status === 'running').length
-          const issues = allItems.filter(v => v.dot === 'red' || v.dot === 'amber').length
-          const clusterDot = issues === 0 ? 'green' : issues === allItems.length ? 'red' : 'amber'
-          return (
-            <Section
-              label={connLabel}
-              dot={clusterDot}
-              auth="API"
-              host={connHost}
-              runningCount={runningCount}
-              totalCount={allItems.length}
-              issueCount={issues}
-              compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
-              entityForCompare={{ id: `cluster:proxmox:${connLabel}`, label: connLabel, platform: 'proxmox', section: 'COMPUTE', metadata: { host: connHost, running: runningCount, total: allItems.length, issues } }}
-              filterBar={
-                <ProxmoxFilterBar
-                  items={allItems}
-                  filters={proxmoxFilters}
-                  setFilters={setProxmoxFilters}
-                  sort={{ sortBy, sortDir }}
-                  onSort={(by, dir) => { setSortBy(by); setSortDir(dir) }}
-                />
-              }
-            >
-              {sorted.length === 0 && allItems.length > 0 && (
-                <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
-              )}
-              {sorted.filter(vm => matchesShowFilter(vm.dot) || isPinned(`proxmox:${vm.name}:${vm.vmid}`)).map(vm => (
-                <InfraCard
-                  key={`${vm.type}-${vm.vmid}`}
-                  cardKey={`v-${vm.type}-${vm.vmid}`}
-                  openKey={openKey} setOpenKey={setOpenKey}
-                  dot={vm.dot}
-                  name={vm.name}
-                  sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
-                  net={vm.ip || ''} uptime={vm.uptime || ''}
-                  collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
-                  expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
-                  compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
-                  entityForCompare={{ id: `proxmox:${vm.name}:${vm.vmid}`, label: vm.name, platform: 'proxmox', section: 'COMPUTE', metadata: { vmid: vm.vmid, node: vm.node_api, type: vm.type, status: vm.status, vcpus: vm.vcpus, maxmem_gb: vm.maxmem_gb, cpu_pct: vm.cpu_pct, dot: vm.dot } }}
-                />
-              ))}
-            </Section>
+          const clusters = vms?.clusters || []
+
+          // Backward compat: if no clusters array, fall back to flat vms/lxc
+          const clusterList = clusters.length > 0 ? clusters : (
+            (vms?.vms?.length || vms?.lxc?.length)
+              ? [{
+                  health: vms?.health,
+                  connection_label: vms?.connection_label || 'Proxmox Cluster',
+                  connection_host: vms?.connection_host || '',
+                  connection_id: '',
+                  vms: vms?.vms || [],
+                  lxc: vms?.lxc || [],
+                }]
+              : []
           )
+
+          if (!clusterList.length) return null
+
+          return clusterList.map((cluster, clusterIdx) => {
+            const allItems = [...(cluster.vms || []), ...(cluster.lxc || [])]
+            const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+            const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
+            const connLabel = cluster.connection_label || 'Proxmox Cluster'
+            const connHost  = cluster.connection_host || ''
+            const runningCount = allItems.filter(v => v.status === 'running').length
+            const issues = allItems.filter(v => v.dot === 'red' || v.dot === 'amber').length
+            const clusterDot = cluster.health === 'healthy' ? 'green'
+                             : cluster.health === 'critical' ? 'red'
+                             : cluster.health === 'error' ? 'red'
+                             : issues > 0 ? 'amber' : 'green'
+
+            return (
+              <Section
+                key={cluster.connection_id || clusterIdx}
+                label={connLabel}
+                dot={clusterDot}
+                auth="API"
+                host={connHost}
+                runningCount={runningCount}
+                totalCount={allItems.length}
+                issueCount={issues}
+                compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                entityForCompare={{
+                  id: `cluster:proxmox:${connLabel}`,
+                  label: connLabel, platform: 'proxmox', section: 'COMPUTE',
+                  metadata: { host: connHost, running: runningCount, total: allItems.length, issues }
+                }}
+                filterBar={clusterIdx === 0 ? (
+                  <ProxmoxFilterBar
+                    items={allItems}
+                    filters={proxmoxFilters}
+                    setFilters={setProxmoxFilters}
+                    sort={{ sortBy, sortDir }}
+                    onSort={(by, dir) => { setSortBy(by); setSortDir(dir) }}
+                  />
+                ) : null}
+              >
+                {sorted.length === 0 && allItems.length > 0 && (
+                  <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
+                )}
+                {sorted.filter(vm =>
+                  matchesShowFilter(vm.dot) || isPinned(`proxmox:${vm.name}:${vm.vmid}`)
+                ).map(vm => (
+                  <InfraCard
+                    key={`${vm.type}-${vm.vmid}`}
+                    cardKey={`v-${cluster.connection_id || clusterIdx}-${vm.type}-${vm.vmid}`}
+                    openKey={openKey} setOpenKey={setOpenKey}
+                    dot={vm.dot}
+                    name={vm.name}
+                    sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
+                    net={vm.ip || ''} uptime={vm.uptime || ''}
+                    collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
+                    expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
+                    compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                    entityForCompare={{
+                      id: `proxmox:${vm.name}:${vm.vmid}`,
+                      label: vm.name, platform: 'proxmox', section: 'COMPUTE',
+                      metadata: { vmid: vm.vmid, node: vm.node_api, type: vm.type, status: vm.status,
+                                  vcpus: vm.vcpus, maxmem_gb: vm.maxmem_gb, cpu_pct: vm.cpu_pct, dot: vm.dot }
+                    }}
+                  />
+                ))}
+              </Section>
+            )
+          })
         })()}
 
         {/* External Services */}

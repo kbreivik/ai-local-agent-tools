@@ -432,3 +432,44 @@ def get_connection_for_platform(platform: str) -> dict | None:
         return _decode_creds(dict(row))
     except Exception:
         return None
+
+
+def get_all_connections_for_platform(platform: str) -> list[dict]:
+    """Get ALL enabled connections for a platform with decrypted credentials.
+
+    Used by collectors that support multiple connections (e.g. multiple
+    Proxmox clusters). Works with both PostgreSQL and SQLite.
+    """
+    # PostgreSQL
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM connections WHERE platform = %s AND enabled = true "
+                "AND host != '' ORDER BY created_at",
+                (platform,),
+            )
+            cols = [desc[0] for desc in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            return [_decode_creds(r) for r in rows]
+        except Exception:
+            return []
+
+    # SQLite fallback
+    try:
+        from sqlalchemy import text as _text
+        sa = _get_sa_conn()
+        if not sa:
+            return []
+        rows = sa.execute(
+            _text("SELECT * FROM connections WHERE platform=:p AND enabled=1 "
+                  "AND host!='' ORDER BY created_at"),
+            {"p": platform},
+        ).mappings().fetchall()
+        sa.close()
+        return [_decode_creds(dict(r)) for r in rows]
+    except Exception:
+        return []

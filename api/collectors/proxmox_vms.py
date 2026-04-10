@@ -77,92 +77,140 @@ class ProxmoxVMsCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
-        # Resolve credentials: connections DB first, env vars fallback
-        host, token_id, token_secret, port = "", "", "", 8006
-        conn = None
-        try:
-            from api.connections import get_connection_for_platform
-            conn = get_connection_for_platform("proxmox")
-        except Exception:
-            pass
+        from api.connections import get_all_connections_for_platform
+        connections = get_all_connections_for_platform("proxmox")
 
-        if conn:
-            host = conn.get("host", "")
-            creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
-            pve_user = creds.get("user", "")
-            pve_token_name = creds.get("token_name", "")
-            token_secret = creds.get("secret", "")
-            conn_port = conn.get("port") or 8006
-            port = conn_port if conn_port not in (0, None, 443) else 8006
-        else:
+        # Env var fallback when no DB connections configured
+        if not connections:
             host = os.environ.get("PROXMOX_HOST", "")
-            pve_user = os.environ.get("PROXMOX_USER", "")
-            pve_token_name = os.environ.get("PROXMOX_TOKEN_NAME", "")
-            token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
-            port = int(os.environ.get("PROXMOX_PORT", "8006"))
+            if not host:
+                return {"health": "unconfigured", "vms": [], "lxc": [], "clusters": [],
+                        "message": "No Proxmox connection configured"}
+            connections = [{
+                "id": "", "label": host, "host": host,
+                "port": int(os.environ.get("PROXMOX_PORT", "8006")),
+                "credentials": {
+                    "user": os.environ.get("PROXMOX_USER", ""),
+                    "token_name": os.environ.get("PROXMOX_TOKEN_NAME", ""),
+                    "secret": os.environ.get("PROXMOX_TOKEN_SECRET", ""),
+                },
+            }]
 
-        conn_label = conn.get("label", host) if conn else host
-        conn_id = conn.get("id", "") if conn else ""
+        clusters = []
+        all_vms = []
+        all_lxc = []
 
-        if not host:
-            return {"health": "unconfigured", "vms": [], "lxc": [], "message": "No Proxmox connection configured"}
+        for conn in connections:
+            result = _poll_single_connection(conn)
+            clusters.append(result)
+            all_vms.extend(result.get("vms", []))
+            all_lxc.extend(result.get("lxc", []))
 
-        try:
-            from proxmoxer import ProxmoxAPI
-            prox = ProxmoxAPI(
-                host, port=port,
-                user=pve_user,
-                token_name=pve_token_name,
-                token_value=token_secret,
-                verify_ssl=False,
-                timeout=10,
-            )
+        # Overall health: worst of all clusters
+        healths = [c.get("health", "unknown") for c in clusters]
+        if any(h in ("error", "critical") for h in healths):
+            overall = "critical"
+        elif any(h == "degraded" for h in healths):
+            overall = "degraded"
+        elif all(h == "healthy" for h in healths):
+            overall = "healthy"
+        else:
+            overall = "unknown"
 
-            # Auto-discover nodes from cluster
-            nodes = [n["node"] for n in prox.nodes.get() if n.get("node")]
-            if not nodes:
-                # Fallback to env var
-                nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
-            if not nodes:
-                return {"health": "error", "vms": [], "lxc": [], "error": "No nodes returned from cluster"}
+        # Backward compat: expose first cluster's label/id at top level
+        first = clusters[0] if clusters else {}
+        return {
+            "health": overall,
+            "clusters": clusters,
+            # Flat merged lists — used by to_entities() and legacy code
+            "vms": all_vms,
+            "lxc": all_lxc,
+            "connection_label": first.get("connection_label", ""),
+            "connection_id": first.get("connection_id", ""),
+        }
 
-            vms = []
-            lxc_list = []
-            nodes_ok = 0
 
-            for node in nodes:
-                try:
-                    # QEMU VMs
-                    for vm in prox.nodes(node).qemu.get():
-                        vms.append(_build_vm_card_proxmoxer(prox, node, vm))
-                    # LXC containers
-                    for ct in prox.nodes(node).lxc.get():
-                        lxc_list.append(_build_lxc_card(node, ct))
-                    nodes_ok += 1
-                except Exception as e:
-                    log.warning("Proxmox node %s error: %s", node, e)
+def _poll_single_connection(conn: dict) -> dict:
+    """Poll one Proxmox connection and return a cluster result dict."""
+    host = conn.get("host", "")
+    creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
+    pve_user = creds.get("user", "")
+    pve_token_name = creds.get("token_name", "")
+    token_secret = creds.get("secret", "")
+    conn_port = conn.get("port") or 8006
+    port = conn_port if conn_port not in (0, None, 443) else 8006
+    conn_label = conn.get("label", host)
+    conn_id = str(conn.get("id", ""))
+    conn_host = f"{host}:{port}"
 
-            if nodes_ok == 0:
-                return {"health": "error", "vms": [], "lxc": [],
-                        "error": f"{conn_label} ({host}): No nodes responded",
-                        "connection_label": conn_label, "connection_id": conn_id}
+    if not host:
+        return {"health": "unconfigured", "vms": [], "lxc": [],
+                "connection_label": conn_label, "connection_id": conn_id,
+                "connection_host": conn_host}
 
-            all_items = vms + lxc_list
-            if not all_items or all(v["dot"] == "green" for v in all_items):
-                overall = "healthy"
-            elif all(v["dot"] == "red" for v in all_items):
-                overall = "critical"
-            else:
-                overall = "degraded"
+    try:
+        from proxmoxer import ProxmoxAPI
+        prox = ProxmoxAPI(
+            host, port=port,
+            user=pve_user,
+            token_name=pve_token_name,
+            token_value=token_secret,
+            verify_ssl=False,
+            timeout=10,
+        )
 
-            return {"health": overall, "vms": vms, "lxc": lxc_list,
-                    "connection_label": conn_label, "connection_id": conn_id}
-
-        except Exception as e:
-            log.error("ProxmoxVMsCollector error: %s", e)
+        nodes = [n["node"] for n in prox.nodes.get() if n.get("node")]
+        if not nodes:
+            nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
+        if not nodes:
             return {"health": "error", "vms": [], "lxc": [],
-                    "error": f"{conn_label} ({host}): {e}",
-                    "connection_label": conn_label, "connection_id": conn_id}
+                    "error": "No nodes returned from cluster",
+                    "connection_label": conn_label, "connection_id": conn_id,
+                    "connection_host": conn_host}
+
+        vms = []
+        lxc_list = []
+        nodes_ok = 0
+
+        for node in nodes:
+            try:
+                for vm in prox.nodes(node).qemu.get():
+                    vms.append(_build_vm_card_proxmoxer(prox, node, vm))
+                for ct in prox.nodes(node).lxc.get():
+                    lxc_list.append(_build_lxc_card(node, ct))
+                nodes_ok += 1
+            except Exception as e:
+                log.warning("Proxmox node %s error: %s", node, e)
+
+        if nodes_ok == 0:
+            return {"health": "error", "vms": [], "lxc": [],
+                    "error": f"{conn_label} ({host}): No nodes responded",
+                    "connection_label": conn_label, "connection_id": conn_id,
+                    "connection_host": conn_host}
+
+        all_items = vms + lxc_list
+        if not all_items or all(v["dot"] == "green" for v in all_items):
+            health = "healthy"
+        elif all(v["dot"] == "red" for v in all_items):
+            health = "critical"
+        else:
+            health = "degraded"
+
+        return {
+            "health": health,
+            "vms": vms,
+            "lxc": lxc_list,
+            "connection_label": conn_label,
+            "connection_id": conn_id,
+            "connection_host": conn_host,
+        }
+
+    except Exception as e:
+        log.error("ProxmoxVMsCollector error for %s: %s", conn_label, e)
+        return {"health": "error", "vms": [], "lxc": [],
+                "error": f"{conn_label} ({host}): {e}",
+                "connection_label": conn_label, "connection_id": conn_id,
+                "connection_host": conn_host}
 
 
 def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:

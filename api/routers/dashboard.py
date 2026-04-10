@@ -142,30 +142,44 @@ async def get_containers_swarm(user: str = Depends(get_current_user)):
 
 @router.get("/vms")
 async def get_vms(user: str = Depends(get_current_user)):
-    """Proxmox VM and LXC list from latest snapshot."""
+    """Proxmox VM and LXC list from latest snapshot. Supports multiple clusters."""
     async with get_engine().connect() as conn:
         snap = await q.get_latest_snapshot(conn, "proxmox_vms")
 
     state = _parse_state(snap)
+    clusters = state.get("clusters", [])
 
-    # Connection metadata for header display
-    conn_label = state.get("connection_label", "Proxmox Cluster")
-    conn_host = ""
-    try:
-        from api.connections import get_connection_for_platform
-        pconn = get_connection_for_platform("proxmox")
-        if pconn:
-            conn_label = pconn.get("label", conn_label)
-            conn_host = f"{pconn.get('host', '')}:{pconn.get('port', 8006)}"
-    except Exception:
-        pass
+    # If snapshot predates multi-cluster support (no clusters key),
+    # synthesise a single-cluster response from the flat fields for compat.
+    if not clusters and (state.get("vms") or state.get("lxc")):
+        conn_label = state.get("connection_label", "Proxmox Cluster")
+        conn_host = ""
+        try:
+            from api.connections import get_connection_for_platform
+            pconn = get_connection_for_platform("proxmox")
+            if pconn:
+                conn_label = pconn.get("label", conn_label)
+                conn_host = f"{pconn.get('host', '')}:{pconn.get('port', 8006)}"
+        except Exception:
+            pass
+        clusters = [{
+            "health": state.get("health", "unknown"),
+            "connection_label": conn_label,
+            "connection_id": state.get("connection_id", ""),
+            "connection_host": conn_host,
+            "vms": state.get("vms", []),
+            "lxc": state.get("lxc", []),
+        }]
 
     return {
+        "clusters": clusters,
+        # Keep flat lists for any code still using vms/lxc directly
         "vms": state.get("vms", []),
         "lxc": state.get("lxc", []),
         "health": state.get("health", "unknown"),
-        "connection_label": conn_label,
-        "connection_host": conn_host,
+        # Legacy single-cluster fields — first cluster's values
+        "connection_label": clusters[0].get("connection_label", "") if clusters else "",
+        "connection_host": clusters[0].get("connection_host", "") if clusters else "",
         "last_updated": snap.get("timestamp") if snap else None,
     }
 
