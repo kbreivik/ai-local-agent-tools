@@ -126,7 +126,7 @@ function VerticalResizeHandle({ onResize, colFlex }) {
 // ── Tile component ───────────────────────────────────────────────────────
 
 function Tile({ name, flex, collapsed, heightMode, dragDropSide,
-                onDragStart, onDragOver, onDrop,
+                onDragStart, onDragOver, onDrop, onDragEnd,
                 onCollapse, onSplit, onUnsplit, onHeightModeToggle, canUnsplit,
                 splitCandidates, children, draggingOver }) {
   const meta = TILE_META[name] || { icon: '▪', badge: '' }
@@ -156,6 +156,7 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
       }}
       onDragOver={(e) => { e.preventDefault(); onDragOver?.(name, detectSide(e)) }}
       onDrop={(e) => { e.preventDefault(); onDrop?.(name, detectSide(e)) }}
+      onDragEnd={() => onDragEnd?.()}
     >
       {/* 5-zone drop overlay */}
       {draggingOver && (
@@ -238,13 +239,30 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
   const [dragSource, setDragSource] = useState(null)
   const [dragOverTarget, setDragOverTarget] = useState(null)
   const [dragDropSide, setDragDropSide] = useState('center')
+  const dragSourceRef = useRef(null)
+  const dragOverTargetRef = useRef(null)
+  const dragDropSideRef = useRef('center')
+
+  const startDrag = useCallback((name) => {
+    dragSourceRef.current = name
+    setDragSource(name)
+  }, [])
+
+  const clearDrag = useCallback(() => {
+    dragSourceRef.current = null
+    setDragSource(null)
+    setDragOverTarget(null)
+    setDragDropSide('center')
+    dragOverTargetRef.current = null
+    dragDropSideRef.current = 'center'
+  }, [])
 
   // ── Auto-scroll during drag ────────────────────────────────────────────
   const scrollIntervalRef = useRef(null)
   useEffect(() => {
     const CONTAINER_SEL = '.flex-1.overflow-auto.min-h-0'
-    const SCROLL_ZONE = 100
-    const SCROLL_SPEED = 12
+    const SCROLL_ZONE = 200
+    const SCROLL_SPEED = 30
 
     const onDragOver = (e) => {
       const container = document.querySelector(CONTAINER_SEL)
@@ -254,10 +272,12 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       const fromBottom = rect.height - relY
       clearInterval(scrollIntervalRef.current)
       if (relY < SCROLL_ZONE && relY >= 0) {
-        const speed = Math.round(SCROLL_SPEED * (1 - relY / SCROLL_ZONE))
+        const t = 1 - relY / SCROLL_ZONE
+        const speed = Math.round(SCROLL_SPEED * t * t * 3)
         scrollIntervalRef.current = setInterval(() => container.scrollBy({ top: -speed, behavior: 'instant' }), 16)
       } else if (fromBottom < SCROLL_ZONE && fromBottom >= 0) {
-        const speed = Math.round(SCROLL_SPEED * (1 - fromBottom / SCROLL_ZONE))
+        const t = 1 - fromBottom / SCROLL_ZONE
+        const speed = Math.round(SCROLL_SPEED * t * t * 3)
         scrollIntervalRef.current = setInterval(() => container.scrollBy({ top: speed, behavior: 'instant' }), 16)
       }
     }
@@ -275,7 +295,10 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
 
   // ── Auto-fit height detection ──────────────────────────────────────────
   const tileArrangementKey = rowArrangementKey(layout.rows)
+  const autoFitRunningRef = useRef(false)
   useLayoutEffect(() => {
+    if (autoFitRunningRef.current) return
+    autoFitRunningRef.current = true
     const dsRows = document.querySelectorAll('.ds-row')
     let changed = false
     const newRows = layout.rows.map((row, ri) => {
@@ -300,6 +323,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       return { ...row, heightMode: computed }
     })
     if (changed) onRowsChange(newRows)
+    setTimeout(() => { autoFitRunningRef.current = false }, 100)
   }, [tileArrangementKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Split candidates ───────────────────────────────────────────────────
@@ -323,15 +347,19 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
 
   // ── Drag handlers ──────────────────────────────────────────────────────
   const handleDragOver = useCallback((tileName, side) => {
-    setDragOverTarget(tileName)
-    setDragDropSide(side)
+    if (dragOverTargetRef.current !== tileName) {
+      dragOverTargetRef.current = tileName
+      setDragOverTarget(tileName)
+    }
+    if (dragDropSideRef.current !== side) {
+      dragDropSideRef.current = side
+      setDragDropSide(side)
+    }
   }, [])
 
   const handleDrop = useCallback((targetTile, side) => {
-    if (!dragSource || dragSource === targetTile) {
-      setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
-      return
-    }
+    const src = dragSourceRef.current
+    if (!src || src === targetTile) { clearDrag(); return }
 
     // Deep-copy rows preserving col-group objects
     const newRows = layout.rows.map(row => ({
@@ -342,70 +370,65 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
 
     if (side === 'left' || side === 'right') {
       // ── Horizontal auto-split ──────────────────────────────────────
-      const cleaned = removeTileFromRows(newRows, dragSource)
+      const cleaned = removeTileFromRows(newRows, src)
       const found = findTileInRows(cleaned, targetTile)
-      if (!found) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
+      if (!found) { onRowsChange(cleaned); clearDrag(); return }
 
       const { rowIdx } = found
-      // Find the item index that contains targetTile (could be inside col group)
       let tgtItemIdx = -1
       for (let ii = 0; ii < cleaned[rowIdx].tiles.length; ii++) {
         const item = cleaned[rowIdx].tiles[ii]
         if (typeof item === 'string' && item === targetTile) { tgtItemIdx = ii; break }
         if (typeof item === 'object' && item.col?.includes(targetTile)) { tgtItemIdx = ii; break }
       }
-      if (tgtItemIdx === -1) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
+      if (tgtItemIdx === -1) { onRowsChange(cleaned); clearDrag(); return }
 
       const insertAt = side === 'left' ? tgtItemIdx : tgtItemIdx + 1
-      cleaned[rowIdx].tiles.splice(insertAt, 0, dragSource)
+      cleaned[rowIdx].tiles.splice(insertAt, 0, src)
       cleaned[rowIdx].flex = Array(cleaned[rowIdx].tiles.length).fill(1)
       delete cleaned[rowIdx].heightMode
       onRowsChange(cleaned)
 
     } else if (side === 'top' || side === 'bottom') {
       // ── Vertical split: create or extend col group ─────────────────
-      const cleaned = removeTileFromRows(newRows, dragSource)
+      const cleaned = removeTileFromRows(newRows, src)
       const found = findTileInRows(cleaned, targetTile)
-      if (!found) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
+      if (!found) { onRowsChange(cleaned); clearDrag(); return }
 
       const { rowIdx, itemIdx, colIdx, inCol } = found
 
       if (inCol) {
-        // Target is already inside a col group — insert at correct position
         const col = cleaned[rowIdx].tiles[itemIdx]
         const insertAt = side === 'top' ? colIdx : colIdx + 1
         const newCol = [...col.col]
-        newCol.splice(insertAt, 0, dragSource)
+        newCol.splice(insertAt, 0, src)
         cleaned[rowIdx].tiles[itemIdx] = { ...col, col: newCol, flex: Array(newCol.length).fill(1) }
       } else {
-        // Target is a plain tile — wrap into a col group
         const colGroup = side === 'top'
-          ? { col: [dragSource, targetTile], flex: [1, 1] }
-          : { col: [targetTile, dragSource], flex: [1, 1] }
+          ? { col: [src, targetTile], flex: [1, 1] }
+          : { col: [targetTile, src], flex: [1, 1] }
         cleaned[rowIdx].tiles[itemIdx] = colGroup
       }
       onRowsChange(cleaned)
 
     } else {
       // ── Center: row reorder ────────────────────────────────────────
-      // Find source and target by scanning for the tile name in plain tiles and col groups
       let srcRowIdx = -1, tgtRowIdx = -1
       for (let ri = 0; ri < newRows.length; ri++) {
         for (const item of newRows[ri].tiles) {
           if (typeof item === 'string') {
-            if (item === dragSource) srcRowIdx = ri
+            if (item === src) srcRowIdx = ri
             if (item === targetTile) tgtRowIdx = ri
           } else if (item?.col) {
-            if (item.col.includes(dragSource)) srcRowIdx = ri
+            if (item.col.includes(src)) srcRowIdx = ri
             if (item.col.includes(targetTile)) tgtRowIdx = ri
           }
         }
       }
       if (srcRowIdx === -1 || tgtRowIdx === -1 || srcRowIdx === tgtRowIdx) {
-        // Same row or not found — swap tile positions within row if same row
         if (srcRowIdx === tgtRowIdx && srcRowIdx !== -1) {
           const row = newRows[srcRowIdx]
-          const si = row.tiles.findIndex(t => (typeof t === 'string' && t === dragSource) || (t?.col?.includes(dragSource)))
+          const si = row.tiles.findIndex(t => (typeof t === 'string' && t === src) || (t?.col?.includes(src)))
           const ti = row.tiles.findIndex(t => (typeof t === 'string' && t === targetTile) || (t?.col?.includes(targetTile)))
           if (si !== -1 && ti !== -1) {
             ;[row.tiles[si], row.tiles[ti]] = [row.tiles[ti], row.tiles[si]]
@@ -421,10 +444,8 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       }
     }
 
-    setDragSource(null)
-    setDragOverTarget(null)
-    setDragDropSide('center')
-  }, [dragSource, layout.rows, onRowsChange])
+    clearDrag()
+  }, [layout.rows, onRowsChange, clearDrag])
 
   // ── Button-triggered split (dropdown picker) ───────────────────────────
   const handleSplit = useCallback((rowIdx, targetTileName) => {
@@ -520,9 +541,10 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     name: tileName,
     collapsed: layout.collapsed?.includes(tileName),
     heightMode: row.heightMode || 'auto',
-    onDragStart: setDragSource,
+    onDragStart: startDrag,
     onDragOver: handleDragOver,
     onDrop: handleDrop,
+    onDragEnd: clearDrag,
     onCollapse: () => onCollapsedChange(tileName),
     onSplit: (target) => handleSplit(ri, target),
     onHeightModeToggle: () => handleHeightModeToggle(ri),
