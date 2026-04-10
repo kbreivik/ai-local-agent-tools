@@ -16,6 +16,11 @@ import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
 
+const UNIFI_FILTER_FIELDS = [
+  { key: 'type_label', label: 'type' },
+  { key: 'state',      label: 'status' },
+]
+
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 // Platform slug → connection test helper
@@ -883,6 +888,79 @@ function ProxmoxCardCollapsed({ vm, onEntityDetail }) {
   )
 }
 
+// ── Generic connection filter bar ──────────────────────────────────────────────
+
+function ConnectionFilterBar({ items, filters, setFilters, fields = [] }) {
+  if (!items?.length) return null
+
+  const chipBase = 'text-[9px] px-1.5 py-px rounded border cursor-pointer select-none transition-colors'
+  const chip = (active) => active
+    ? `${chipBase} bg-violet-600/30 text-violet-300 border-violet-500/40`
+    : `${chipBase} bg-[#0d0d1a] text-gray-600 border-[#1a1a30] hover:text-gray-400`
+
+  const toggle = (key, val) =>
+    setFilters(f => ({ ...f, [key]: f[key] === val ? null : val }))
+
+  const hasAnyFilter = fields.some(f => filters[f.key]) || filters.name
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 px-0.5">
+      {fields.map(({ key, label }) => {
+        const values = [...new Set(items.map(i => i[key]).filter(Boolean))].sort()
+        if (values.length < 2) return null
+        return (
+          <div key={key} className="flex items-center gap-1">
+            <span className="text-[9px] text-gray-700">{label}</span>
+            {values.map(v => (
+              <button
+                key={v}
+                className={chip(filters[key] === v)}
+                onClick={() => toggle(key, v)}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )
+      })}
+
+      <div className="flex items-center gap-1">
+        <span className="text-[9px] text-gray-700">name</span>
+        <input
+          type="text"
+          placeholder="filter..."
+          value={filters.name || ''}
+          onChange={e => setFilters(f => ({ ...f, name: e.target.value || '' }))}
+          className="text-[9px] w-20 bg-[#0d0d1a] border border-[#1a1a30] rounded px-1.5 py-px text-gray-400 placeholder-gray-700 focus:outline-none focus:border-violet-500/40"
+        />
+        {filters.name && (
+          <button className="text-[9px] text-gray-700 hover:text-gray-500"
+            onClick={() => setFilters(f => ({ ...f, name: '' }))}>✕</button>
+        )}
+      </div>
+
+      {hasAnyFilter && (
+        <button
+          className="text-[9px] text-gray-700 hover:text-violet-400 ml-1"
+          onClick={() => setFilters({})}
+        >clear</button>
+      )}
+    </div>
+  )
+}
+
+function applyConnectionFilters(items, filters, fields = []) {
+  return items.filter(item => {
+    for (const { key } of fields) {
+      if (filters[key] && item[key] !== filters[key]) return false
+    }
+    if (filters.name && !item.name?.toLowerCase().includes(filters.name.toLowerCase())) {
+      return false
+    }
+    return true
+  })
+}
+
 // ── Proxmox filter bar ────────────────────────────────────────────────────────
 
 function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
@@ -1323,6 +1401,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   // UniFi + PBS collector data (60s poll, separate from 30s base)
   const [unifiData, setUnifiData] = useState(null)
   const [unifiConn, setUnifiConn] = useState(null)
+  const [unifiFilters, setUnifiFilters] = useState({})
   const [pbsData, setPbsData]     = useState(null)
   const [pbsConn, setPbsConn]     = useState(null)
   useEffect(() => {
@@ -1590,6 +1669,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                           : unifiData?.health === 'degraded' ? 'amber'
                           : unifiData ? 'red' : 'grey'
           const clientTot = unifiData?.client_count ?? 0
+          const filteredDevices = applyConnectionFilters(devices, unifiFilters, UNIFI_FILTER_FIELDS)
           return (
             <Section
               label={unifiConn.label || unifiConn.host}
@@ -1607,8 +1687,16 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 platform: 'unifi', section: 'NETWORK',
                 metadata: { host: `${unifiConn.host}:${unifiConn.port || 443}`, devices: devices.length, clients: clientTot }
               }}
+              filterBar={
+                <ConnectionFilterBar
+                  items={devices}
+                  filters={unifiFilters}
+                  setFilters={setUnifiFilters}
+                  fields={UNIFI_FILTER_FIELDS}
+                />
+              }
             >
-              {devices.filter(d => {
+              {filteredDevices.filter(d => {
                 const devDot = d.state === 'connected' ? 'green' : 'amber'
                 const eid = `unifi:device:${d.mac || d.name}`
                 return matchesShowFilter(devDot) || isPinned(eid)
@@ -1654,7 +1742,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   />
                 )
               })}
-              {devices.length === 0 && unifiData && (
+              {filteredDevices.length === 0 && unifiData && (
                 <div className="col-span-full text-[10px] text-gray-700 py-2">No devices found</div>
               )}
               {!unifiData && (
