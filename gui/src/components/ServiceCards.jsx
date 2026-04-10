@@ -1276,7 +1276,14 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   const [external, setExternal]     = useState(null)
   const [openKey, setOpenKey]       = useState(null)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
-  const [proxmoxFilters, setProxmoxFilters] = useState({})
+  // Per-cluster filter state keyed by connection_id (or cluster index fallback)
+  const [proxmoxFilterMap, setProxmoxFilterMap] = useState({})
+
+  const getClusterFilters = (key) => proxmoxFilterMap[key] || {}
+  const setClusterFilters = (key, updater) => setProxmoxFilterMap(prev => ({
+    ...prev,
+    [key]: typeof updater === 'function' ? updater(prev[key] || {}) : updater,
+  }))
   const [sortBy, setSortBy] = useState(() => {
     try {
       const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
@@ -1485,7 +1492,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
 
           return clusterList.map((cluster, clusterIdx) => {
             const allItems = [...(cluster.vms || []), ...(cluster.lxc || [])]
-            const filtered = applyProxmoxFilters(allItems, proxmoxFilters)
+            const clusterFilters = getClusterFilters(cluster.connection_id || clusterIdx)
+            const filtered = applyProxmoxFilters(allItems, clusterFilters)
             const sorted   = sortProxmoxItems(filtered, sortBy, sortDir)
             const connLabel = cluster.connection_label || 'Proxmox Cluster'
             const connHost  = cluster.connection_host || ''
@@ -1512,15 +1520,15 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   label: connLabel, platform: 'proxmox', section: 'COMPUTE',
                   metadata: { host: connHost, running: runningCount, total: allItems.length, issues }
                 }}
-                filterBar={clusterIdx === 0 ? (
+                filterBar={
                   <ProxmoxFilterBar
                     items={allItems}
-                    filters={proxmoxFilters}
-                    setFilters={setProxmoxFilters}
+                    filters={getClusterFilters(cluster.connection_id || clusterIdx)}
+                    setFilters={(updater) => setClusterFilters(cluster.connection_id || clusterIdx, updater)}
                     sort={{ sortBy, sortDir }}
                     onSort={(by, dir) => { setSortBy(by); setSortDir(dir) }}
                   />
-                ) : null}
+                }
               >
                 {sorted.length === 0 && allItems.length > 0 && (
                   <div className="col-span-full text-[10px] text-gray-700 py-2">no items match filter</div>
