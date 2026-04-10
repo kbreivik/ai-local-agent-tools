@@ -1,6 +1,7 @@
 /**
  * DashboardLayout — renders a configurable tile grid from layout.rows.
- * Supports drag-reorder, split/unsplit, collapse, resize, and heightMode.
+ * Supports drag-reorder, drag-to-split (position-aware drop zones),
+ * split/unsplit, collapse, resize, and auto-fit heightMode.
  *
  * Props:
  *   layout      — { rows, collapsed, prefs }
@@ -55,7 +56,8 @@ function ResizeHandle({ onResize, rowFlex }) {
   )
 }
 
-function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDrop,
+function Tile({ name, flex, collapsed, heightMode, dragDropSide,
+                onDragStart, onDragOver, onDrop,
                 onCollapse, onSplit, onUnsplit, onHeightModeToggle, canUnsplit,
                 splitCandidates, children, draggingOver }) {
   const meta = TILE_META[name] || { icon: '▪', badge: '' }
@@ -63,22 +65,58 @@ function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDr
   const classes = [
     'ds-tile',
     collapsed ? 'collapsed' : '',
-    draggingOver ? 'drag-over' : '',
   ].filter(Boolean).join(' ')
 
   return (
     <div
       className={classes}
-      style={{ flex: flex ?? 1 }}
+      style={{ flex: flex ?? 1, position: 'relative' }}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', name)
         e.dataTransfer.effectAllowed = 'move'
         onDragStart(name)
       }}
-      onDragOver={(e) => { e.preventDefault(); onDragOver?.(name) }}
-      onDrop={(e) => { e.preventDefault(); onDrop?.(name) }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const relX = (e.clientX - rect.left) / rect.width
+        const side = relX < 0.3 ? 'left' : relX > 0.7 ? 'right' : 'center'
+        onDragOver?.(name, side)
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const relX = (e.clientX - rect.left) / rect.width
+        const side = relX < 0.3 ? 'left' : relX > 0.7 ? 'right' : 'center'
+        onDrop?.(name, side)
+      }}
     >
+      {/* Drop zone overlay */}
+      {draggingOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
+          display: 'flex', borderRadius: 0,
+        }}>
+          <div style={{
+            width: '30%', height: '100%',
+            background: dragDropSide === 'left' ? 'rgba(0,200,238,0.18)' : 'transparent',
+            borderLeft: dragDropSide === 'left' ? '3px solid var(--cyan)' : 'none',
+            transition: 'all 0.1s',
+          }} />
+          <div style={{
+            flex: 1, height: '100%',
+            background: dragDropSide === 'center' ? 'rgba(0,200,238,0.07)' : 'transparent',
+            transition: 'all 0.1s',
+          }} />
+          <div style={{
+            width: '30%', height: '100%',
+            background: dragDropSide === 'right' ? 'rgba(0,200,238,0.18)' : 'transparent',
+            borderRight: dragDropSide === 'right' ? '3px solid var(--cyan)' : 'none',
+            transition: 'all 0.1s',
+          }} />
+        </div>
+      )}
       <div className="ds-tile-hdr">
         <span style={{ cursor: 'grab', color: 'var(--text-3)', fontSize: 11 }}>⠿</span>
         <span style={{ fontSize: 11 }}>{meta.icon}</span>
@@ -150,20 +188,15 @@ function Tile({ name, flex, collapsed, heightMode, onDragStart, onDragOver, onDr
 export default function DashboardLayout({ layout, onRowsChange, onCollapsedChange, children }) {
   const [dragSource, setDragSource] = useState(null)
   const [dragOverTarget, setDragOverTarget] = useState(null)
+  const [dragDropSide, setDragDropSide] = useState('center')
 
   // ── Auto-fit height detection ──────────────────────────────────────────
-  // Runs after every structural change (drop/split/unsplit).
-  // Measures natural scroll heights and applies 'auto' or 'stretch'
-  // per row. Only runs when tile arrangement changes, not when
-  // heightMode changes — this prevents infinite re-render loops.
   const tileArrangementKey = JSON.stringify(layout.rows.map(r => r.tiles.join(',')))
   useLayoutEffect(() => {
     const dsRows = document.querySelectorAll('.ds-row')
     let changed = false
     const newRows = layout.rows.map((row, ri) => {
-      // Only auto-manage rows without a user-pinned 'constrained' mode
       if (row.heightMode === 'constrained') return row
-      // Single-tile rows: always auto (no sibling to compare against)
       if (row.tiles.length < 2) {
         if ((row.heightMode || 'auto') === 'auto') return row
         changed = true
@@ -171,15 +204,12 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       }
       const rowEl = dsRows[ri]
       if (!rowEl) return row
-      // Measure natural scroll heights of each tile body
       const bodies = Array.from(rowEl.querySelectorAll(':scope > span > .ds-tile .ds-tile-body, :scope > .ds-tile .ds-tile-body'))
       const heights = bodies.map(b => b.scrollHeight).filter(h => h > 0)
       if (heights.length < 2) return row
       const maxH = Math.max(...heights)
       const minH = Math.min(...heights)
       const ratio = minH > 0 ? maxH / minH : 1
-      // >1.5x difference → use 'auto' so shorter tile stops at content
-      // ≤1.5x → use 'stretch' for clean alignment
       const computed = ratio > 1.5 ? 'auto' : 'stretch'
       if ((row.heightMode || 'auto') === computed) return row
       changed = true
@@ -188,7 +218,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     if (changed) onRowsChange(newRows)
   }, [tileArrangementKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Compute split candidates for each row (tiles in single-tile rows, not in current row)
+  // Compute split candidates for each row
   const getSplitCandidates = useCallback((rowIdx) => {
     const currentRow = layout.rows[rowIdx]
     const candidates = []
@@ -202,17 +232,21 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     return candidates.sort()
   }, [layout.rows])
 
-  const handleDrop = useCallback((targetTile) => {
+  const handleDragOver = useCallback((tileName, side) => {
+    setDragOverTarget(tileName)
+    setDragDropSide(side)
+  }, [])
+
+  const handleDrop = useCallback((targetTile, side) => {
     if (!dragSource || dragSource === targetTile) {
-      setDragSource(null)
-      setDragOverTarget(null)
+      setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
       return
     }
 
     const newRows = layout.rows.map(row => ({
       tiles: [...row.tiles],
-      ...(row.flex ? { flex: [...row.flex] } : {}),
-      ...(row.heightMode ? { heightMode: row.heightMode } : {}),
+      ...(row.flex       ? { flex: [...row.flex] }             : {}),
+      ...(row.heightMode ? { heightMode: row.heightMode }       : {}),
     }))
 
     let srcRowIdx = -1, srcTileIdx = -1
@@ -225,32 +259,67 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     }
 
     if (srcRowIdx === -1 || tgtRowIdx === -1) {
-      setDragSource(null)
-      setDragOverTarget(null)
+      setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
       return
     }
 
-    if (srcRowIdx === tgtRowIdx) {
-      const row = newRows[srcRowIdx]
-      ;[row.tiles[srcTileIdx], row.tiles[tgtTileIdx]] = [row.tiles[tgtTileIdx], row.tiles[srcTileIdx]]
-      if (row.flex) {
-        ;[row.flex[srcTileIdx], row.flex[tgtTileIdx]] = [row.flex[tgtTileIdx], row.flex[srcTileIdx]]
+    if (side === 'left' || side === 'right') {
+      // ── Auto-split: pull source out, insert into target's row ──────────
+      // 1. Remove source tile from its origin row
+      newRows[srcRowIdx].tiles.splice(srcTileIdx, 1)
+      if (newRows[srcRowIdx].flex) newRows[srcRowIdx].flex.splice(srcTileIdx, 1)
+
+      // 2. Drop empty origin rows
+      const filtered = newRows.filter(r => r.tiles.length > 0)
+
+      // 3. Find updated target row index after possible row removal
+      let newTgtRowIdx = -1, newTgtTileIdx = -1
+      for (let ri = 0; ri < filtered.length; ri++) {
+        const ti = filtered[ri].tiles.indexOf(targetTile)
+        if (ti !== -1) { newTgtRowIdx = ri; newTgtTileIdx = ti; break }
       }
+      if (newTgtRowIdx === -1) {
+        onRowsChange(filtered)
+        setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
+        return
+      }
+
+      // 4. Insert source into target row at correct side
+      const insertAt = side === 'left' ? newTgtTileIdx : newTgtTileIdx + 1
+      filtered[newTgtRowIdx].tiles.splice(insertAt, 0, dragSource)
+
+      // 5. Recalculate flex — equal distribution across all tiles in row
+      const tileCount = filtered[newTgtRowIdx].tiles.length
+      filtered[newTgtRowIdx].flex = Array(tileCount).fill(1)
+      delete filtered[newTgtRowIdx].heightMode // auto-fit will recalculate
+
+      onRowsChange(filtered)
+
     } else {
-      // Move source row to target row's position
-      const [srcRow] = newRows.splice(srcRowIdx, 1)
-      const adjustedTgt = tgtRowIdx > srcRowIdx ? tgtRowIdx - 1 : tgtRowIdx
-      newRows.splice(adjustedTgt, 0, srcRow)
+      // ── Center zone: row reorder (existing behaviour) ───────────────────
+      if (srcRowIdx === tgtRowIdx) {
+        const row = newRows[srcRowIdx]
+        ;[row.tiles[srcTileIdx], row.tiles[tgtTileIdx]] =
+          [row.tiles[tgtTileIdx], row.tiles[srcTileIdx]]
+        if (row.flex) {
+          ;[row.flex[srcTileIdx], row.flex[tgtTileIdx]] =
+            [row.flex[tgtTileIdx], row.flex[srcTileIdx]]
+        }
+      } else {
+        const [srcRow] = newRows.splice(srcRowIdx, 1)
+        const adjustedTgt = tgtRowIdx > srcRowIdx ? tgtRowIdx - 1 : tgtRowIdx
+        newRows.splice(adjustedTgt, 0, srcRow)
+      }
+      onRowsChange(newRows)
     }
 
-    onRowsChange(newRows)
     setDragSource(null)
     setDragOverTarget(null)
+    setDragDropSide('center')
   }, [dragSource, layout.rows, onRowsChange])
 
   const handleSplit = useCallback((rowIdx, targetTileName) => {
     const currentRow = layout.rows[rowIdx]
-    // Find which row the target tile is in
     let pickRowIdx = -1
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) continue
@@ -268,7 +337,6 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
           return {
             tiles: [...row.tiles, targetTileName],
             flex: [...(row.flex || row.tiles.map(() => 1)), 2],
-            heightMode: row.heightMode || 'auto',
           }
         }
         return { ...row }
@@ -291,9 +359,8 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
         newRows.push({
           tiles: remainingTiles,
           ...(remainingFlex && remainingFlex.length > 1 ? { flex: remainingFlex } : {}),
-          heightMode: row.heightMode || 'auto',
         })
-        newRows.push({ tiles: [tileName], heightMode: 'auto' })
+        newRows.push({ tiles: [tileName] })
       } else {
         newRows.push({ ...layout.rows[ri] })
       }
@@ -354,7 +421,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
                 collapsed={layout.collapsed?.includes(tileName)}
                 heightMode={row.heightMode || 'auto'}
                 onDragStart={setDragSource}
-                onDragOver={setDragOverTarget}
+                onDragOver={handleDragOver}
                 onDrop={handleDrop}
                 onCollapse={() => onCollapsedChange(tileName)}
                 onSplit={(target) => handleSplit(ri, target)}
@@ -363,6 +430,8 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
                 canUnsplit={row.tiles.length > 1}
                 splitCandidates={getSplitCandidates(ri)}
                 draggingOver={dragOverTarget === tileName && dragSource !== tileName}
+                dragDropSide={dragOverTarget === tileName && dragSource !== tileName
+                  ? dragDropSide : 'center'}
               >
                 {children[tileName] || (
                   <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>

@@ -233,7 +233,7 @@ html, body {
 .ds-resize-handle { width: 4px; background: rgba(200,204,216,0.07); cursor: col-resize;
                     flex-shrink: 0; transition: background 0.15s; }
 .ds-resize-handle:hover { background: var(--accent); }
-.ds-tile.drag-over { border-color: var(--cyan); }
+/* drag-over handled by inline overlay in DashboardLayout */
 .ds-tile.dragging { opacity: 0.55; border-color: var(--accent); }
 .ds-layout-dirty-dot { width: 6px; height: 6px; border-radius: 50%;
                         background: var(--amber); display: inline-block; }
