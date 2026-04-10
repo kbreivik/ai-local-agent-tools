@@ -67,7 +67,7 @@ export default function SettingsPage({ initialTab, layoutState }) {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-2.5 text-xs font-medium transition-colors border-b-2 ${
+              className={`px-3 py-2 text-[11px] font-medium transition-colors border-b-2 ${
                 tab === t
                   ? 'border-blue-500 text-blue-400'
                   : 'border-transparent hover:text-[color:var(--text-1)]'
