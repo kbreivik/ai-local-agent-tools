@@ -918,6 +918,87 @@ def _do_scale(service_name: str, replicas: int) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+class UpdateImageRequest(BaseModel):
+    image: str
+
+
+@router.post("/services/{service_name}/update-image")
+async def update_service_image(service_name: str, body: UpdateImageRequest,
+                               user: str = Depends(get_current_user)):
+    """Rolling update a Swarm service to a new image."""
+    return await asyncio.to_thread(_do_update_image, service_name, body.image)
+
+
+def _do_update_image(service_name, image):
+    try:
+        client = _docker_client()
+        svc = client.services.get(service_name)
+        old_image = (svc.attrs["Spec"]["TaskTemplate"]
+                     ["ContainerSpec"].get("Image", "unknown"))
+        svc.update(image=image)
+        return {"ok": True, "previous_image": old_image.split("@")[0], "new_image": image}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/services/{service_name}/tasks")
+async def get_service_tasks(service_name: str, user: str = Depends(get_current_user)):
+    """Get current task list for a Swarm service."""
+    return await asyncio.to_thread(_do_get_tasks, service_name)
+
+
+def _do_get_tasks(service_name):
+    try:
+        client = _docker_client()
+        svc = client.services.get(service_name)
+        result = []
+        for t in svc.tasks():
+            result.append({
+                "id": t.get("ID", "")[:12],
+                "state": t.get("Status", {}).get("State", "unknown"),
+                "desired": t.get("DesiredState", "unknown"),
+                "node": t.get("NodeID", "")[:12],
+                "started": t.get("Status", {}).get("Timestamp", ""),
+                "image": (t.get("Spec", {}).get("ContainerSpec", {})
+                           .get("Image", "").split("@")[0]),
+                "error": t.get("Status", {}).get("Err", ""),
+            })
+        return {"ok": True, "service": service_name, "tasks": result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/swarm/nodes/{node_id}/drain")
+async def drain_node(node_id: str, user: str = Depends(get_current_user)):
+    """Set a Swarm node to drain — stops scheduling new tasks."""
+    return await asyncio.to_thread(_do_node_availability, node_id, "drain")
+
+
+@router.post("/swarm/nodes/{node_id}/activate")
+async def activate_node(node_id: str, user: str = Depends(get_current_user)):
+    """Restore a drained Swarm node to active."""
+    return await asyncio.to_thread(_do_node_availability, node_id, "active")
+
+
+def _do_node_availability(node_id, availability):
+    try:
+        client = _docker_client()
+        node = None
+        for n in client.nodes.list():
+            attrs = n.attrs
+            if (attrs.get("ID", "").startswith(node_id) or
+                attrs.get("Description", {}).get("Hostname", "") == node_id or
+                attrs.get("Spec", {}).get("Name", "") == node_id):
+                node = n
+                break
+        if not node:
+            return {"ok": False, "error": f"Node {node_id!r} not found"}
+        node.update(availability=availability)
+        return {"ok": True, "node": node_id, "availability": availability}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @router.post("/vms/{node}/{vmid}/start")
 async def start_vm(node: str, vmid: int, user: str = Depends(get_current_user)):
     return await asyncio.to_thread(_do_proxmox_action, "qemu", node, vmid, "start")

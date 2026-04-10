@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# DEATHSTAR — deployment variables
+# Copy to vars.sh and edit. vars.sh is gitignored.
+
+# ── Node IPs ──────────────────────────────────────────────────────────────────
+export MANAGER_01=192.168.199.21
+export MANAGER_02=192.168.199.22
+export MANAGER_03=192.168.199.23
+export WORKER_01=192.168.199.31
+export WORKER_02=192.168.199.32
+export WORKER_03=192.168.199.33
+export AGENT_01=192.168.199.10
+
+export ALL_NODES="$MANAGER_01 $MANAGER_02 $MANAGER_03 $WORKER_01 $WORKER_02 $WORKER_03"
+export WORKER_NODES="$WORKER_01 $WORKER_02 $WORKER_03"
+export MANAGER_NODES="$MANAGER_01 $MANAGER_02 $MANAGER_03"
+
+# ── SSH ────────────────────────────────────────────────────────────────────────
+export SSH_USER=ubuntu
+export SSH_KEY=~/.ssh/id_rsa
+export SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i $SSH_KEY"
+
+# ── ELK ────────────────────────────────────────────────────────────────────────
+export ELASTIC_VERSION=8.13.4
+export ELASTIC_PASSWORD=changeme_elastic
+export KIBANA_PASSWORD=changeme_kibana
+
+# ── DEATHSTAR ─────────────────────────────────────────────────────────────────
+export DEATHSTAR_ADMIN_PASSWORD=changeme_admin
+export DEATHSTAR_IMAGE=ghcr.io/kbreivik/hp1-ai-agent:latest
+export LM_STUDIO_URL=http://192.168.199.51:1234
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+export DOCKER_EXPOSE_TCP=true

@@ -82,6 +82,21 @@ def create_token(username: str) -> str:
     return _pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_internal_token(expires_minutes: int = 5) -> str:
+    """Create a short-lived internal JWT for skill → API calls.
+    Uses the same secret as user JWTs. Skills should call this fresh each time."""
+    try:
+        payload = {
+            "sub": "internal_skill",
+            "role": "sith_lord",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=expires_minutes),
+            "iat": datetime.now(timezone.utc),
+        }
+        return _pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    except Exception:
+        return ""
+
+
 def decode_token(token: str) -> str:
     """Return username or raise HTTPException 401.
 

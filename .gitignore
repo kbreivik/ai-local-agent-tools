@@ -1,3 +1,6 @@
+# Deploy secrets
+scripts/deploy/vars.sh
+
 # Python
 __pycache__/
 *.py[cod]
