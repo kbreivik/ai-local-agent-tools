@@ -237,6 +237,11 @@ html, body {
 .ds-tile.dragging { opacity: 0.55; border-color: var(--accent); }
 .ds-layout-dirty-dot { width: 6px; height: 6px; border-radius: 50%;
                         background: var(--amber); display: inline-block; }
+.ds-col-group { min-height: 0; }
+.ds-col-group > span > .ds-tile { min-height: 0; }
+.ds-col-resize-handle { height: 4px; background: rgba(200,204,216,0.07); cursor: row-resize;
+                         flex-shrink: 0; transition: background 0.15s; width: 100%; }
+.ds-col-resize-handle:hover { background: var(--accent); }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {

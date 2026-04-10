@@ -1,7 +1,8 @@
 /**
  * DashboardLayout — renders a configurable tile grid from layout.rows.
- * Supports drag-reorder, drag-to-split (position-aware drop zones),
- * split/unsplit, collapse, resize, and auto-fit heightMode.
+ * Supports drag-reorder, drag-to-split (5-zone: left/top/center/bottom/right),
+ * vertical column groups, split/unsplit, collapse, resize, auto-fit heightMode,
+ * and auto-scroll during drag.
  *
  * Props:
  *   layout      — { rows, collapsed, prefs }
@@ -9,7 +10,7 @@
  *   onCollapsedChange(tile)  — called to toggle collapse on a tile
  *   children    — map of tile-name → React node (section content)
  */
-import { useState, useRef, useCallback, useLayoutEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 
 const TILE_META = {
   PLATFORM:   { icon: '⬡', badge: 'INTERNAL' },
@@ -26,9 +27,64 @@ const ACTION_BTN = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
 }
 
+// ── Helpers for tiles that can be strings or col-group objects ────────────
+
+function tileKey(item) {
+  if (typeof item === 'string') return item
+  if (item?.col) return `col:${item.col.join('+')}`
+  return String(item)
+}
+
+function rowArrangementKey(rows) {
+  return JSON.stringify(rows.map(r =>
+    r.tiles.map(t => typeof t === 'string' ? t : `col(${t.col?.join(',')})`).join('|')
+  ))
+}
+
+// Remove a tile from wherever it is (plain or inside col group).
+// Cleans up empty col groups and empty rows automatically.
+function removeTileFromRows(rows, tileName) {
+  return rows.map(row => ({
+    ...row,
+    tiles: row.tiles
+      .map(item => {
+        if (typeof item === 'string') return item === tileName ? null : item
+        if (typeof item === 'object' && item.col) {
+          const newCol = item.col.filter(t => t !== tileName)
+          if (newCol.length === 0) return null
+          if (newCol.length === 1) return newCol[0]
+          const newFlex = item.flex
+            ? item.flex.filter((_, i) => item.col[i] !== tileName)
+            : undefined
+          return { ...item, col: newCol, ...(newFlex ? { flex: newFlex } : {}) }
+        }
+        return item
+      })
+      .filter(Boolean),
+  })).filter(row => row.tiles.length > 0)
+}
+
+// Find a tile (string) in rows — returns { rowIdx, itemIdx, colIdx, inCol }
+function findTileInRows(rows, tileName) {
+  for (let ri = 0; ri < rows.length; ri++) {
+    for (let ii = 0; ii < rows[ri].tiles.length; ii++) {
+      const item = rows[ri].tiles[ii]
+      if (typeof item === 'string' && item === tileName) {
+        return { rowIdx: ri, itemIdx: ii, colIdx: -1, inCol: false }
+      }
+      if (typeof item === 'object' && item.col) {
+        const ci = item.col.indexOf(tileName)
+        if (ci !== -1) return { rowIdx: ri, itemIdx: ii, colIdx: ci, inCol: true }
+      }
+    }
+  }
+  return null
+}
+
+// ── Resize handles ───────────────────────────────────────────────────────
+
 function ResizeHandle({ onResize, rowFlex }) {
   const handleRef = useRef(null)
-
   const onMouseDown = useCallback((e) => {
     e.preventDefault()
     const startX = e.clientX
@@ -36,9 +92,7 @@ function ResizeHandle({ onResize, rowFlex }) {
     const rowWidth = rowEl ? rowEl.getBoundingClientRect().width : 1000
     const totalFlex = (rowFlex || []).reduce((a, b) => a + b, 0) || 1
     const pixelPerFlex = rowWidth / totalFlex
-    const onMove = (me) => {
-      onResize(me.clientX - startX, pixelPerFlex)
-    }
+    const onMove = (me) => onResize(me.clientX - startX, pixelPerFlex)
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
@@ -46,15 +100,30 @@ function ResizeHandle({ onResize, rowFlex }) {
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [onResize, rowFlex])
-
-  return (
-    <div
-      ref={handleRef}
-      className="ds-resize-handle"
-      onMouseDown={onMouseDown}
-    />
-  )
+  return <div ref={handleRef} className="ds-resize-handle" onMouseDown={onMouseDown} />
 }
+
+function VerticalResizeHandle({ onResize, colFlex }) {
+  const ref = useRef(null)
+  const onMouseDown = useCallback((e) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const colEl = ref.current?.closest('.ds-col-group')
+    const colH = colEl ? colEl.getBoundingClientRect().height : 600
+    const total = (colFlex || []).reduce((a, b) => a + b, 0) || 1
+    const pxPerFlex = colH / total
+    const onMove = (me) => onResize(me.clientY - startY, pxPerFlex)
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [onResize, colFlex])
+  return <div ref={ref} className="ds-col-resize-handle" onMouseDown={onMouseDown} />
+}
+
+// ── Tile component ───────────────────────────────────────────────────────
 
 function Tile({ name, flex, collapsed, heightMode, dragDropSide,
                 onDragStart, onDragOver, onDrop,
@@ -62,10 +131,18 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
                 splitCandidates, children, draggingOver }) {
   const meta = TILE_META[name] || { icon: '▪', badge: '' }
   const [splitMenuOpen, setSplitMenuOpen] = useState(false)
-  const classes = [
-    'ds-tile',
-    collapsed ? 'collapsed' : '',
-  ].filter(Boolean).join(' ')
+  const classes = ['ds-tile', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')
+
+  const detectSide = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relX = (e.clientX - rect.left) / rect.width
+    const relY = (e.clientY - rect.top) / rect.height
+    if (relX < 0.25) return 'left'
+    if (relX > 0.75) return 'right'
+    if (relY < 0.25) return 'top'
+    if (relY > 0.75) return 'bottom'
+    return 'center'
+  }
 
   return (
     <div
@@ -77,44 +154,32 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
         e.dataTransfer.effectAllowed = 'move'
         onDragStart(name)
       }}
-      onDragOver={(e) => {
-        e.preventDefault()
-        const rect = e.currentTarget.getBoundingClientRect()
-        const relX = (e.clientX - rect.left) / rect.width
-        const side = relX < 0.3 ? 'left' : relX > 0.7 ? 'right' : 'center'
-        onDragOver?.(name, side)
-      }}
-      onDrop={(e) => {
-        e.preventDefault()
-        const rect = e.currentTarget.getBoundingClientRect()
-        const relX = (e.clientX - rect.left) / rect.width
-        const side = relX < 0.3 ? 'left' : relX > 0.7 ? 'right' : 'center'
-        onDrop?.(name, side)
-      }}
+      onDragOver={(e) => { e.preventDefault(); onDragOver?.(name, detectSide(e)) }}
+      onDrop={(e) => { e.preventDefault(); onDrop?.(name, detectSide(e)) }}
     >
-      {/* Drop zone overlay */}
+      {/* 5-zone drop overlay */}
       {draggingOver && (
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
-          display: 'flex', borderRadius: 0,
-        }}>
-          <div style={{
-            width: '30%', height: '100%',
+        <div style={{ position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none',
+                      display: 'grid', gridTemplate: '25% 50% 25% / 25% 50% 25%' }}>
+          <div style={{ gridColumn: '1/4', gridRow: '1',
+            background: dragDropSide === 'top' ? 'rgba(0,200,238,0.18)' : 'transparent',
+            borderTop: dragDropSide === 'top' ? '3px solid var(--cyan)' : 'none',
+            transition: 'all 0.08s' }} />
+          <div style={{ gridColumn: '1', gridRow: '1/4',
             background: dragDropSide === 'left' ? 'rgba(0,200,238,0.18)' : 'transparent',
             borderLeft: dragDropSide === 'left' ? '3px solid var(--cyan)' : 'none',
-            transition: 'all 0.1s',
-          }} />
-          <div style={{
-            flex: 1, height: '100%',
+            transition: 'all 0.08s' }} />
+          <div style={{ gridColumn: '2', gridRow: '2',
             background: dragDropSide === 'center' ? 'rgba(0,200,238,0.07)' : 'transparent',
-            transition: 'all 0.1s',
-          }} />
-          <div style={{
-            width: '30%', height: '100%',
+            transition: 'all 0.08s' }} />
+          <div style={{ gridColumn: '3', gridRow: '1/4',
             background: dragDropSide === 'right' ? 'rgba(0,200,238,0.18)' : 'transparent',
             borderRight: dragDropSide === 'right' ? '3px solid var(--cyan)' : 'none',
-            transition: 'all 0.1s',
-          }} />
+            transition: 'all 0.08s' }} />
+          <div style={{ gridColumn: '1/4', gridRow: '3',
+            background: dragDropSide === 'bottom' ? 'rgba(0,200,238,0.18)' : 'transparent',
+            borderBottom: dragDropSide === 'bottom' ? '3px solid var(--cyan)' : 'none',
+            transition: 'all 0.08s' }} />
         </div>
       )}
       <div className="ds-tile-hdr">
@@ -129,25 +194,17 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
           </span>
         )}
         <span style={{ flex: 1 }} />
-        {/* Split button with dropdown picker */}
         {!canUnsplit && splitCandidates?.length > 0 && (
           <div style={{ position: 'relative', display: 'inline-flex' }}>
-            <button
-              onClick={(e) => { e.stopPropagation(); setSplitMenuOpen(o => !o) }}
-              style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
-              title="Split — add tile to this row"
-            >⊞</button>
+            <button onClick={(e) => { e.stopPropagation(); setSplitMenuOpen(o => !o) }}
+              style={{ ...ACTION_BTN, color: 'var(--text-3)' }} title="Split — add tile to this row">⊞</button>
             {splitMenuOpen && (
-              <div style={{
-                position: 'absolute', top: '100%', right: 0, zIndex: 50,
-                background: 'var(--bg-2)', border: '1px solid var(--border)',
-                borderRadius: 2, minWidth: 120, marginTop: 2,
-              }}>
+              <div style={{ position: 'absolute', top: '100%', right: 0, zIndex: 50,
+                background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2, minWidth: 120, marginTop: 2 }}>
                 {splitCandidates.map(c => (
                   <button key={c} onClick={(e) => { e.stopPropagation(); onSplit(c); setSplitMenuOpen(false) }}
-                    style={{ display: 'block', width: '100%', textAlign: 'left',
-                             padding: '4px 8px', fontSize: 9, fontFamily: 'var(--font-mono)',
-                             background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer' }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '4px 8px', fontSize: 9,
+                      fontFamily: 'var(--font-mono)', background: 'none', border: 'none', color: 'var(--text-2)', cursor: 'pointer' }}
                     onMouseOver={e => e.currentTarget.style.background = 'var(--bg-3)'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >{c}</button>
@@ -157,46 +214,73 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
           </div>
         )}
         {canUnsplit && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onUnsplit() }}
-            style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
-            title="Unsplit — move to own row"
-          >⊟</button>
+          <button onClick={(e) => { e.stopPropagation(); onUnsplit() }}
+            style={{ ...ACTION_BTN, color: 'var(--text-3)' }} title="Unsplit — move to own row">⊟</button>
         )}
         {canUnsplit && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onHeightModeToggle() }}
+          <button onClick={(e) => { e.stopPropagation(); onHeightModeToggle() }}
             style={{ ...ACTION_BTN, color: heightMode === 'constrained' ? 'var(--cyan)' : 'var(--text-3)' }}
             title={heightMode === 'constrained' ? 'Height: capped — click for auto' : 'Height: auto — click to cap'}
           >{heightMode === 'constrained' ? '⊡' : '⊞'}</button>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); onCollapse() }}
+        <button onClick={(e) => { e.stopPropagation(); onCollapse() }}
           style={{ ...ACTION_BTN, color: 'var(--text-3)' }}
-          title={collapsed ? 'Expand' : 'Collapse'}
-        >{collapsed ? '▶' : '▼'}</button>
+          title={collapsed ? 'Expand' : 'Collapse'}>{collapsed ? '▶' : '▼'}</button>
       </div>
-      {!collapsed && (
-        <div className="ds-tile-body">
-          {children}
-        </div>
-      )}
+      {!collapsed && <div className="ds-tile-body">{children}</div>}
     </div>
   )
 }
+
+// ── Main layout component ────────────────────────────────────────────────
 
 export default function DashboardLayout({ layout, onRowsChange, onCollapsedChange, children }) {
   const [dragSource, setDragSource] = useState(null)
   const [dragOverTarget, setDragOverTarget] = useState(null)
   const [dragDropSide, setDragDropSide] = useState('center')
 
+  // ── Auto-scroll during drag ────────────────────────────────────────────
+  const scrollIntervalRef = useRef(null)
+  useEffect(() => {
+    const CONTAINER_SEL = '.flex-1.overflow-auto.min-h-0'
+    const SCROLL_ZONE = 100
+    const SCROLL_SPEED = 12
+
+    const onDragOver = (e) => {
+      const container = document.querySelector(CONTAINER_SEL)
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const relY = e.clientY - rect.top
+      const fromBottom = rect.height - relY
+      clearInterval(scrollIntervalRef.current)
+      if (relY < SCROLL_ZONE && relY >= 0) {
+        const speed = Math.round(SCROLL_SPEED * (1 - relY / SCROLL_ZONE))
+        scrollIntervalRef.current = setInterval(() => container.scrollBy({ top: -speed, behavior: 'instant' }), 16)
+      } else if (fromBottom < SCROLL_ZONE && fromBottom >= 0) {
+        const speed = Math.round(SCROLL_SPEED * (1 - fromBottom / SCROLL_ZONE))
+        scrollIntervalRef.current = setInterval(() => container.scrollBy({ top: speed, behavior: 'instant' }), 16)
+      }
+    }
+    const stopScroll = () => clearInterval(scrollIntervalRef.current)
+    document.addEventListener('dragover', onDragOver)
+    document.addEventListener('dragend', stopScroll)
+    document.addEventListener('drop', stopScroll)
+    return () => {
+      document.removeEventListener('dragover', onDragOver)
+      document.removeEventListener('dragend', stopScroll)
+      document.removeEventListener('drop', stopScroll)
+      clearInterval(scrollIntervalRef.current)
+    }
+  }, [])
+
   // ── Auto-fit height detection ──────────────────────────────────────────
-  const tileArrangementKey = JSON.stringify(layout.rows.map(r => r.tiles.join(',')))
+  const tileArrangementKey = rowArrangementKey(layout.rows)
   useLayoutEffect(() => {
     const dsRows = document.querySelectorAll('.ds-row')
     let changed = false
     const newRows = layout.rows.map((row, ri) => {
       if (row.heightMode === 'constrained') return row
+      // Count actual tile slots (col groups count as 1)
       if (row.tiles.length < 2) {
         if ((row.heightMode || 'auto') === 'auto') return row
         changed = true
@@ -204,7 +288,7 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       }
       const rowEl = dsRows[ri]
       if (!rowEl) return row
-      const bodies = Array.from(rowEl.querySelectorAll(':scope > span > .ds-tile .ds-tile-body, :scope > .ds-tile .ds-tile-body'))
+      const bodies = Array.from(rowEl.querySelectorAll(':scope > span > .ds-tile .ds-tile-body, :scope > .ds-tile .ds-tile-body, :scope > span > .ds-col-group .ds-tile-body'))
       const heights = bodies.map(b => b.scrollHeight).filter(h => h > 0)
       if (heights.length < 2) return row
       const maxH = Math.max(...heights)
@@ -218,20 +302,26 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     if (changed) onRowsChange(newRows)
   }, [tileArrangementKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Compute split candidates for each row
+  // ── Split candidates ───────────────────────────────────────────────────
   const getSplitCandidates = useCallback((rowIdx) => {
     const currentRow = layout.rows[rowIdx]
+    const currentTileNames = currentRow.tiles.flatMap(t =>
+      typeof t === 'string' ? [t] : t.col || []
+    )
     const candidates = []
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) continue
-      if (layout.rows[ri].tiles.some(t => currentRow.tiles.includes(t))) continue
-      if (layout.rows[ri].tiles.length === 1) {
-        candidates.push(layout.rows[ri].tiles[0])
+      const row = layout.rows[ri]
+      if (row.tiles.length === 1 && typeof row.tiles[0] === 'string') {
+        if (!currentTileNames.includes(row.tiles[0])) {
+          candidates.push(row.tiles[0])
+        }
       }
     }
     return candidates.sort()
   }, [layout.rows])
 
+  // ── Drag handlers ──────────────────────────────────────────────────────
   const handleDragOver = useCallback((tileName, side) => {
     setDragOverTarget(tileName)
     setDragDropSide(side)
@@ -243,74 +333,92 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
       return
     }
 
+    // Deep-copy rows preserving col-group objects
     const newRows = layout.rows.map(row => ({
-      tiles: [...row.tiles],
-      ...(row.flex       ? { flex: [...row.flex] }             : {}),
-      ...(row.heightMode ? { heightMode: row.heightMode }       : {}),
+      ...row,
+      tiles: row.tiles.map(t => typeof t === 'object' && t.col ? { ...t, col: [...t.col], flex: t.flex ? [...t.flex] : undefined } : t),
+      ...(row.flex ? { flex: [...row.flex] } : {}),
     }))
 
-    let srcRowIdx = -1, srcTileIdx = -1
-    let tgtRowIdx = -1, tgtTileIdx = -1
-    for (let ri = 0; ri < newRows.length; ri++) {
-      const si = newRows[ri].tiles.indexOf(dragSource)
-      if (si !== -1) { srcRowIdx = ri; srcTileIdx = si }
-      const ti = newRows[ri].tiles.indexOf(targetTile)
-      if (ti !== -1) { tgtRowIdx = ri; tgtTileIdx = ti }
-    }
-
-    if (srcRowIdx === -1 || tgtRowIdx === -1) {
-      setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
-      return
-    }
-
     if (side === 'left' || side === 'right') {
-      // ── Auto-split: pull source out, insert into target's row ──────────
-      // 1. Remove source tile from its origin row
-      newRows[srcRowIdx].tiles.splice(srcTileIdx, 1)
-      if (newRows[srcRowIdx].flex) newRows[srcRowIdx].flex.splice(srcTileIdx, 1)
+      // ── Horizontal auto-split ──────────────────────────────────────
+      const cleaned = removeTileFromRows(newRows, dragSource)
+      const found = findTileInRows(cleaned, targetTile)
+      if (!found) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
 
-      // 2. Drop empty origin rows
-      const filtered = newRows.filter(r => r.tiles.length > 0)
-
-      // 3. Find updated target row index after possible row removal
-      let newTgtRowIdx = -1, newTgtTileIdx = -1
-      for (let ri = 0; ri < filtered.length; ri++) {
-        const ti = filtered[ri].tiles.indexOf(targetTile)
-        if (ti !== -1) { newTgtRowIdx = ri; newTgtTileIdx = ti; break }
+      const { rowIdx } = found
+      // Find the item index that contains targetTile (could be inside col group)
+      let tgtItemIdx = -1
+      for (let ii = 0; ii < cleaned[rowIdx].tiles.length; ii++) {
+        const item = cleaned[rowIdx].tiles[ii]
+        if (typeof item === 'string' && item === targetTile) { tgtItemIdx = ii; break }
+        if (typeof item === 'object' && item.col?.includes(targetTile)) { tgtItemIdx = ii; break }
       }
-      if (newTgtRowIdx === -1) {
-        onRowsChange(filtered)
-        setDragSource(null); setDragOverTarget(null); setDragDropSide('center')
-        return
+      if (tgtItemIdx === -1) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
+
+      const insertAt = side === 'left' ? tgtItemIdx : tgtItemIdx + 1
+      cleaned[rowIdx].tiles.splice(insertAt, 0, dragSource)
+      cleaned[rowIdx].flex = Array(cleaned[rowIdx].tiles.length).fill(1)
+      delete cleaned[rowIdx].heightMode
+      onRowsChange(cleaned)
+
+    } else if (side === 'top' || side === 'bottom') {
+      // ── Vertical split: create or extend col group ─────────────────
+      const cleaned = removeTileFromRows(newRows, dragSource)
+      const found = findTileInRows(cleaned, targetTile)
+      if (!found) { onRowsChange(cleaned); setDragSource(null); setDragOverTarget(null); setDragDropSide('center'); return }
+
+      const { rowIdx, itemIdx, colIdx, inCol } = found
+
+      if (inCol) {
+        // Target is already inside a col group — insert at correct position
+        const col = cleaned[rowIdx].tiles[itemIdx]
+        const insertAt = side === 'top' ? colIdx : colIdx + 1
+        const newCol = [...col.col]
+        newCol.splice(insertAt, 0, dragSource)
+        cleaned[rowIdx].tiles[itemIdx] = { ...col, col: newCol, flex: Array(newCol.length).fill(1) }
+      } else {
+        // Target is a plain tile — wrap into a col group
+        const colGroup = side === 'top'
+          ? { col: [dragSource, targetTile], flex: [1, 1] }
+          : { col: [targetTile, dragSource], flex: [1, 1] }
+        cleaned[rowIdx].tiles[itemIdx] = colGroup
       }
-
-      // 4. Insert source into target row at correct side
-      const insertAt = side === 'left' ? newTgtTileIdx : newTgtTileIdx + 1
-      filtered[newTgtRowIdx].tiles.splice(insertAt, 0, dragSource)
-
-      // 5. Recalculate flex — equal distribution across all tiles in row
-      const tileCount = filtered[newTgtRowIdx].tiles.length
-      filtered[newTgtRowIdx].flex = Array(tileCount).fill(1)
-      delete filtered[newTgtRowIdx].heightMode // auto-fit will recalculate
-
-      onRowsChange(filtered)
+      onRowsChange(cleaned)
 
     } else {
-      // ── Center zone: row reorder (existing behaviour) ───────────────────
-      if (srcRowIdx === tgtRowIdx) {
-        const row = newRows[srcRowIdx]
-        ;[row.tiles[srcTileIdx], row.tiles[tgtTileIdx]] =
-          [row.tiles[tgtTileIdx], row.tiles[srcTileIdx]]
-        if (row.flex) {
-          ;[row.flex[srcTileIdx], row.flex[tgtTileIdx]] =
-            [row.flex[tgtTileIdx], row.flex[srcTileIdx]]
+      // ── Center: row reorder ────────────────────────────────────────
+      // Find source and target by scanning for the tile name in plain tiles and col groups
+      let srcRowIdx = -1, tgtRowIdx = -1
+      for (let ri = 0; ri < newRows.length; ri++) {
+        for (const item of newRows[ri].tiles) {
+          if (typeof item === 'string') {
+            if (item === dragSource) srcRowIdx = ri
+            if (item === targetTile) tgtRowIdx = ri
+          } else if (item?.col) {
+            if (item.col.includes(dragSource)) srcRowIdx = ri
+            if (item.col.includes(targetTile)) tgtRowIdx = ri
+          }
         }
+      }
+      if (srcRowIdx === -1 || tgtRowIdx === -1 || srcRowIdx === tgtRowIdx) {
+        // Same row or not found — swap tile positions within row if same row
+        if (srcRowIdx === tgtRowIdx && srcRowIdx !== -1) {
+          const row = newRows[srcRowIdx]
+          const si = row.tiles.findIndex(t => (typeof t === 'string' && t === dragSource) || (t?.col?.includes(dragSource)))
+          const ti = row.tiles.findIndex(t => (typeof t === 'string' && t === targetTile) || (t?.col?.includes(targetTile)))
+          if (si !== -1 && ti !== -1) {
+            ;[row.tiles[si], row.tiles[ti]] = [row.tiles[ti], row.tiles[si]]
+            if (row.flex) [row.flex[si], row.flex[ti]] = [row.flex[ti], row.flex[si]]
+          }
+        }
+        onRowsChange(newRows)
       } else {
         const [srcRow] = newRows.splice(srcRowIdx, 1)
         const adjustedTgt = tgtRowIdx > srcRowIdx ? tgtRowIdx - 1 : tgtRowIdx
         newRows.splice(adjustedTgt, 0, srcRow)
+        onRowsChange(newRows)
       }
-      onRowsChange(newRows)
     }
 
     setDragSource(null)
@@ -318,62 +426,68 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
     setDragDropSide('center')
   }, [dragSource, layout.rows, onRowsChange])
 
+  // ── Button-triggered split (dropdown picker) ───────────────────────────
   const handleSplit = useCallback((rowIdx, targetTileName) => {
     const currentRow = layout.rows[rowIdx]
     let pickRowIdx = -1
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) continue
       if (layout.rows[ri].tiles.length === 1 && layout.rows[ri].tiles[0] === targetTileName) {
-        pickRowIdx = ri
-        break
+        pickRowIdx = ri; break
       }
     }
     if (pickRowIdx === -1) return
-
     const newRows = layout.rows
       .filter((_, ri) => ri !== pickRowIdx)
       .map(row => {
         if (row === currentRow) {
-          return {
-            tiles: [...row.tiles, targetTileName],
-            flex: [...(row.flex || row.tiles.map(() => 1)), 2],
-          }
+          return { tiles: [...row.tiles, targetTileName], flex: [...(row.flex || row.tiles.map(() => 1)), 2] }
         }
         return { ...row }
       })
-
     onRowsChange(newRows)
   }, [layout.rows, onRowsChange])
 
+  // ── Unsplit from horizontal row ────────────────────────────────────────
   const handleUnsplit = useCallback((rowIdx, tileIdx) => {
     const row = layout.rows[rowIdx]
     if (row.tiles.length <= 1) return
-
-    const tileName = row.tiles[tileIdx]
+    const item = row.tiles[tileIdx]
+    const tileName = typeof item === 'string' ? item : null
+    if (!tileName) return // can't unsplit a col group this way
     const newRows = []
-
     for (let ri = 0; ri < layout.rows.length; ri++) {
       if (ri === rowIdx) {
         const remainingTiles = row.tiles.filter((_, ti) => ti !== tileIdx)
         const remainingFlex = row.flex ? row.flex.filter((_, ti) => ti !== tileIdx) : undefined
-        newRows.push({
-          tiles: remainingTiles,
-          ...(remainingFlex && remainingFlex.length > 1 ? { flex: remainingFlex } : {}),
-        })
+        newRows.push({ tiles: remainingTiles, ...(remainingFlex && remainingFlex.length > 1 ? { flex: remainingFlex } : {}) })
         newRows.push({ tiles: [tileName] })
       } else {
         newRows.push({ ...layout.rows[ri] })
       }
     }
+    onRowsChange(newRows)
+  }, [layout.rows, onRowsChange])
 
+  // ── Unsplit from vertical col group ────────────────────────────────────
+  const handleUnsplitFromCol = useCallback((rowIdx, itemIdx, colIdx) => {
+    const row = layout.rows[rowIdx]
+    const colGroup = row.tiles[itemIdx]
+    if (!colGroup?.col || colGroup.col.length <= 1) return
+    const tileName = colGroup.col[colIdx]
+    const newCol = colGroup.col.filter((_, i) => i !== colIdx)
+    const newFlex = (colGroup.flex || colGroup.col.map(() => 1)).filter((_, i) => i !== colIdx)
+    const newItem = newCol.length === 1 ? newCol[0] : { ...colGroup, col: newCol, flex: newFlex }
+    const newTiles = row.tiles.map((t, i) => i === itemIdx ? newItem : t)
+    const newRows = layout.rows.map((r, ri) => ri === rowIdx ? { ...r, tiles: newTiles } : r)
+    newRows.splice(rowIdx + 1, 0, { tiles: [tileName] })
     onRowsChange(newRows)
   }, [layout.rows, onRowsChange])
 
   const handleHeightModeToggle = useCallback((rowIdx) => {
     const newRows = layout.rows.map((r, ri) => {
       if (ri !== rowIdx) return r
-      const current = r.heightMode || 'auto'
-      return { ...r, heightMode: current === 'constrained' ? 'auto' : 'constrained' }
+      return { ...r, heightMode: (r.heightMode || 'auto') === 'constrained' ? 'auto' : 'constrained' }
     })
     onRowsChange(newRows)
   }, [layout.rows, onRowsChange])
@@ -381,21 +495,43 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
   const handleFlexChange = useCallback((rowIdx, tileIdx, delta, pixelPerFlex) => {
     const row = layout.rows[rowIdx]
     if (row.tiles.length < 2) return
-
     const flex = row.flex ? [...row.flex] : row.tiles.map(() => 1)
     const flexDelta = delta / (pixelPerFlex || 100)
-
     flex[tileIdx] = Math.max(0.5, flex[tileIdx] + flexDelta)
-    if (tileIdx + 1 < flex.length) {
-      flex[tileIdx + 1] = Math.max(0.5, flex[tileIdx + 1] - flexDelta)
-    }
-
-    const newRows = layout.rows.map((r, ri) =>
-      ri === rowIdx ? { ...r, flex } : r
-    )
-    onRowsChange(newRows)
+    if (tileIdx + 1 < flex.length) flex[tileIdx + 1] = Math.max(0.5, flex[tileIdx + 1] - flexDelta)
+    onRowsChange(layout.rows.map((r, ri) => ri === rowIdx ? { ...r, flex } : r))
   }, [layout.rows, onRowsChange])
 
+  const handleColFlexChange = useCallback((rowIdx, itemIdx, tileIdx, delta, pixelPerFlex) => {
+    const row = layout.rows[rowIdx]
+    const item = row.tiles[itemIdx]
+    if (!item?.col || item.col.length < 2) return
+    const flex = item.flex ? [...item.flex] : item.col.map(() => 1)
+    const flexDelta = delta / (pixelPerFlex || 100)
+    flex[tileIdx] = Math.max(0.5, flex[tileIdx] + flexDelta)
+    if (tileIdx + 1 < flex.length) flex[tileIdx + 1] = Math.max(0.5, flex[tileIdx + 1] - flexDelta)
+    onRowsChange(layout.rows.map((r, ri) =>
+      ri !== rowIdx ? r : { ...r, tiles: r.tiles.map((t, ii) => ii !== itemIdx ? t : { ...item, flex }) }
+    ))
+  }, [layout.rows, onRowsChange])
+
+  // ── Shared tile props builder ──────────────────────────────────────────
+  const tileProps = (tileName, ri, row) => ({
+    name: tileName,
+    collapsed: layout.collapsed?.includes(tileName),
+    heightMode: row.heightMode || 'auto',
+    onDragStart: setDragSource,
+    onDragOver: handleDragOver,
+    onDrop: handleDrop,
+    onCollapse: () => onCollapsedChange(tileName),
+    onSplit: (target) => handleSplit(ri, target),
+    onHeightModeToggle: () => handleHeightModeToggle(ri),
+    splitCandidates: getSplitCandidates(ri),
+    draggingOver: dragOverTarget === tileName && dragSource !== tileName,
+    dragDropSide: dragOverTarget === tileName && dragSource !== tileName ? dragDropSide : 'center',
+  })
+
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="ds-layout">
       {layout.rows.map((row, ri) => (
@@ -407,40 +543,52 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
             row.heightMode === 'constrained' ? 'ds-row--constrained' : '',
           ].filter(Boolean).join(' ')}
         >
-          {row.tiles.map((tileName, ti) => (
-            <span key={tileName} style={{ display: 'contents' }}>
-              {ti > 0 && (
-                <ResizeHandle
-                  rowFlex={row.flex || row.tiles.map(() => 1)}
-                  onResize={(delta, ppf) => handleFlexChange(ri, ti - 1, delta, ppf)}
-                />
-              )}
-              <Tile
-                name={tileName}
-                flex={row.flex?.[ti] ?? 1}
-                collapsed={layout.collapsed?.includes(tileName)}
-                heightMode={row.heightMode || 'auto'}
-                onDragStart={setDragSource}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onCollapse={() => onCollapsedChange(tileName)}
-                onSplit={(target) => handleSplit(ri, target)}
-                onUnsplit={() => handleUnsplit(ri, ti)}
-                onHeightModeToggle={() => handleHeightModeToggle(ri)}
-                canUnsplit={row.tiles.length > 1}
-                splitCandidates={getSplitCandidates(ri)}
-                draggingOver={dragOverTarget === tileName && dragSource !== tileName}
-                dragDropSide={dragOverTarget === tileName && dragSource !== tileName
-                  ? dragDropSide : 'center'}
-              >
-                {children[tileName] || (
-                  <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
-                    No content for {tileName}
+          {row.tiles.map((item, ti) => {
+            // ── Column group (vertical stack) ────────────────────────
+            if (typeof item === 'object' && item.col) {
+              const colFlex = item.flex || item.col.map(() => 1)
+              return (
+                <span key={tileKey(item)} style={{ display: 'contents' }}>
+                  {ti > 0 && <ResizeHandle rowFlex={row.flex || row.tiles.map(() => 1)}
+                    onResize={(d, ppf) => handleFlexChange(ri, ti - 1, d, ppf)} />}
+                  <div className="ds-col-group"
+                    style={{ flex: row.flex?.[ti] ?? 1, display: 'flex', flexDirection: 'column', minWidth: 0, gap: 0 }}>
+                    {item.col.map((tileName, ci) => (
+                      <span key={tileName} style={{ display: 'contents' }}>
+                        {ci > 0 && <VerticalResizeHandle colFlex={colFlex}
+                          onResize={(d, ppf) => handleColFlexChange(ri, ti, ci - 1, d, ppf)} />}
+                        <Tile
+                          {...tileProps(tileName, ri, row)}
+                          flex={colFlex[ci] ?? 1}
+                          onUnsplit={() => handleUnsplitFromCol(ri, ti, ci)}
+                          canUnsplit={item.col.length > 1}
+                        >
+                          {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                        </Tile>
+                      </span>
+                    ))}
                   </div>
-                )}
-              </Tile>
-            </span>
-          ))}
+                </span>
+              )
+            }
+
+            // ── Plain tile ───────────────────────────────────────────
+            const tileName = item
+            return (
+              <span key={tileName} style={{ display: 'contents' }}>
+                {ti > 0 && <ResizeHandle rowFlex={row.flex || row.tiles.map(() => 1)}
+                  onResize={(d, ppf) => handleFlexChange(ri, ti - 1, d, ppf)} />}
+                <Tile
+                  {...tileProps(tileName, ri, row)}
+                  flex={row.flex?.[ti] ?? 1}
+                  onUnsplit={() => handleUnsplit(ri, ti)}
+                  canUnsplit={row.tiles.length > 1}
+                >
+                  {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                </Tile>
+              </span>
+            )
+          })}
         </div>
       ))}
     </div>
