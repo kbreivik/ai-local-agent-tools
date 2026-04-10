@@ -14,6 +14,9 @@ const INFRA_SECTION_KEYS = [
   { key: 'containers_swarm', label: 'Swarm',    group: 'infra' },
   { key: 'vms',              label: 'VMs',      group: 'infra' },
   { key: 'external',         label: 'External', group: 'infra' },
+  { key: 'unifi',            label: 'UniFi',    group: 'infra' },
+  { key: 'pbs',              label: 'PBS',      group: 'infra' },
+  { key: 'truenas',          label: 'TrueNAS',  group: 'infra' },
 ]
 
 export const ALL_CARD_KEYS = [...STATUS_CARD_KEYS, ...INFRA_SECTION_KEYS]

@@ -1332,6 +1332,20 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
     const id = setInterval(loadPbs, 60000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // TrueNAS pools
+  const [truenasData, setTruenasData] = useState(null)
+  const [truenasConn, setTruenasConn] = useState(null)
+  useEffect(() => {
+    if (!show('truenas')) return
+    const loadTruenas = () => {
+      fetchCollectorData('truenas').then(r => r?.data ? setTruenasData(r.data) : null).catch(() => {})
+      fetch(`${BASE}/api/connections?platform=truenas`, { headers: { ...authHeaders() } })
+        .then(r => r.json()).then(d => setTruenasConn((d.data || []).find(c => c.host))).catch(() => {})
+    }
+    loadTruenas()
+    const id = setInterval(loadTruenas, 60000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(async () => {
     const [c, s, v, e] = await Promise.allSettled([
@@ -1674,6 +1688,98 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               )}
               {!pbsData && (
                 <div className="col-span-full text-[10px] text-gray-700 py-2">Loading PBS datastores…</div>
+              )}
+            </Section>
+          )
+        })()}
+        {/* TrueNAS Pools */}
+        {show('truenas') && truenasConn && (() => {
+          const pools   = truenasData?.pools || []
+          const poolsOk = pools.filter(p => p.healthy && p.status === 'ONLINE' && p.usage_pct <= 85).length
+          const issues  = pools.filter(p => !p.healthy || p.status !== 'ONLINE' || p.usage_pct > 85).length
+          const dot     = truenasData?.health === 'healthy' ? 'green'
+                        : truenasData?.health === 'degraded' ? 'amber'
+                        : truenasData ? 'red' : 'grey'
+          return (
+            <Section
+              label={truenasConn.label || truenasConn.host}
+              dot={dot}
+              auth="API KEY"
+              host={`${truenasConn.host}:${truenasConn.port || 443}`}
+              runningCount={poolsOk}
+              totalCount={pools.length}
+              issueCount={issues}
+              countLabels={['ok', 'total', 'issues']}
+              compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+              entityForCompare={{
+                id: `truenas:${truenasConn.label || truenasConn.host}`,
+                label: truenasConn.label || truenasConn.host,
+                platform: 'truenas', section: 'STORAGE',
+                metadata: { host: `${truenasConn.host}:${truenasConn.port || 443}`, pools: pools.length }
+              }}
+            >
+              {pools.filter(pool => {
+                const poolDot = !pool.healthy || pool.status !== 'ONLINE' ? 'red'
+                              : pool.usage_pct > 85 ? 'amber' : 'green'
+                return matchesShowFilter(poolDot) || isPinned(`truenas:pool:${pool.name}`)
+              }).map(pool => {
+                const pct      = pool.usage_pct ?? 0
+                const healthy  = pool.healthy && pool.status === 'ONLINE'
+                const poolDot  = !healthy ? 'red' : pct > 85 ? 'amber' : 'green'
+                const barColor = !healthy ? 'var(--red)' : pct > 85 ? 'var(--amber)' : 'var(--green)'
+                return (
+                  <InfraCard
+                    key={pool.name}
+                    cardKey={`truenas-${pool.name}`}
+                    openKey={openKey} setOpenKey={setOpenKey}
+                    dot={poolDot}
+                    name={pool.name}
+                    sub={`${Math.round(pct)}% used`}
+                    net={''}
+                    uptime={`${pool.size_gb} GB`}
+                    collapsed={
+                      <div style={{ marginTop: 4 }}>
+                        <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 2 }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginTop: 2, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+                          <span>{pool.allocated_gb} GB used</span>
+                          <span>{pool.size_gb} GB total</span>
+                        </div>
+                      </div>
+                    }
+                    expanded={
+                      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+                        <div style={{ marginBottom: 6 }}>
+                          <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden', marginBottom: 4 }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 2 }} />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>{pool.allocated_gb} GB used</span>
+                            <span style={{ color: 'var(--text-1)' }}>{Math.round(pct)}%</span>
+                            <span>{pool.size_gb} GB total</span>
+                          </div>
+                        </div>
+                        <div>Status: <span style={{ color: poolDot === 'green' ? 'var(--green)' : 'var(--red)' }}>{pool.status}</span></div>
+                        <div>Free: <span style={{ color: 'var(--text-1)' }}>{pool.free_gb} GB</span></div>
+                        <div>vDevs: <span style={{ color: 'var(--text-1)' }}>{pool.vdev_count}</span></div>
+                        <div>Scan: <span style={{ color: 'var(--text-1)' }}>{pool.scan_state || '—'}{pool.scan_errors > 0 ? ` (${pool.scan_errors} errors)` : ''}</span></div>
+                      </div>
+                    }
+                    compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                    entityForCompare={{
+                      id: `truenas:pool:${pool.name}`,
+                      label: pool.name, platform: 'truenas', section: 'STORAGE',
+                      metadata: { status: pool.status, healthy: pool.healthy, usage_pct: pct, allocated_gb: pool.allocated_gb, size_gb: pool.size_gb, free_gb: pool.free_gb, scan_state: pool.scan_state }
+                    }}
+                  />
+                )
+              })}
+              {pools.length === 0 && truenasData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">No pools found</div>
+              )}
+              {!truenasData && (
+                <div className="col-span-full text-[10px] text-gray-700 py-2">Loading TrueNAS pools…</div>
               )}
             </Section>
           )
