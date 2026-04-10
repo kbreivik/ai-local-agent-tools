@@ -538,7 +538,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
     <>
       <StatRow stats={[
         { v: c.last_pull_at ? _pulledAgo(c.last_pull_at) : 'unknown', l: 'Pulled', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
-        { v: c.uptime || (c.replicas_running != null ? `${c.replicas_running}/${c.replicas_desired}` : '—'), l: isSwarm ? 'Replicas' : 'Uptime' },
+        { v: c.uptime || (c.running_replicas != null ? `${c.running_replicas}/${c.desired_replicas}` : '—'), l: isSwarm ? 'Replicas' : 'Uptime' },
       ]} />
       {c.ports?.length > 0 && (
         <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
@@ -701,7 +701,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
         !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
         !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
-        isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.replicas_desired ?? 1); setScaleOpen(true) }} />,
+        isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.desired_replicas ?? 1); setScaleOpen(true) }} />,
       ].filter(Boolean)} />
       {scaleOpen && (
         <div className="mt-3 flex items-center gap-2">
@@ -1543,11 +1543,11 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
-                uptime={s.replicas_running != null ? `${s.replicas_running}/${s.replicas_desired} replicas` : ''}
+                uptime={s.running_replicas != null ? `${s.running_replicas}/${s.desired_replicas} replicas` : ''}
                 collapsed={<ContainerCardCollapsed c={s} />}
                 expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
-                entityForCompare={{ id: `swarm:${s.name}`, label: s.name, platform: 'docker', section: 'COMPUTE', metadata: { replicas: `${s.replicas_running}/${s.replicas_desired}`, dot: s.dot, image: s.image } }}
+                entityForCompare={{ id: `swarm:${s.name}`, label: s.name, platform: 'docker', section: 'COMPUTE', metadata: { replicas: `${s.running_replicas}/${s.desired_replicas}`, dot: s.dot, image: s.image } }}
               />
             ))}
           </Section>
