@@ -48,7 +48,7 @@ done
 
 
 def _ssh_run(host, port, username, password, private_key, script,
-             jump_host=None):
+             jump_host=None, _log_meta=None):
     """Run script on remote host via paramiko. If jump_host dict provided,
     connect via ProxyJump: transport to bastion, direct-tcpip channel to target.
 
@@ -104,6 +104,19 @@ def _ssh_run(host, port, username, password, private_key, script,
             j_transport.close()
         elapsed = int((_time.monotonic() - t0) * 1000)
         log.debug("SSH exec ← %s@%s:%d | %d bytes | %dms", username, host, port, len(output), elapsed)
+        try:
+            from api.db.ssh_log import write_log as _wl
+            _wl(target_host=host, target_port=port, username=username or "", outcome="success",
+                duration_ms=elapsed, bytes_received=len(output),
+                connection_id=(_log_meta or {}).get("connection_id", ""),
+                credential_source_id=(_log_meta or {}).get("credential_source_id", ""),
+                jump_host=jump_host["host"] if jump_host else "",
+                resolved_label=(_log_meta or {}).get("resolved_label", ""),
+                triggered_by=(_log_meta or {}).get("triggered_by", "collector"),
+                operation_id=(_log_meta or {}).get("operation_id", ""),
+                command_preview=script[:120] if script else "")
+        except Exception:
+            pass
         return output
     else:
         client = paramiko.SSHClient()
@@ -123,11 +136,40 @@ def _ssh_run(host, port, username, password, private_key, script,
             output = stdout.read().decode("utf-8", errors="replace")
         except Exception as e:
             log.debug("SSH exec FAILED %s@%s:%d: %s", username, host, port, e, exc_info=True)
+            try:
+                from api.db.ssh_log import write_log as _wl
+                _outcome = "timeout" if "timed out" in str(e).lower() else \
+                           "auth_fail" if "authentication" in str(e).lower() else \
+                           "refused" if "refused" in str(e).lower() else "error"
+                _wl(target_host=host, target_port=port, username=username or "", outcome=_outcome,
+                    duration_ms=int((_time.monotonic() - t0) * 1000), error_message=str(e),
+                    connection_id=(_log_meta or {}).get("connection_id", ""),
+                    credential_source_id=(_log_meta or {}).get("credential_source_id", ""),
+                    jump_host=jump_host["host"] if jump_host else "",
+                    resolved_label=(_log_meta or {}).get("resolved_label", ""),
+                    triggered_by=(_log_meta or {}).get("triggered_by", "collector"),
+                    operation_id=(_log_meta or {}).get("operation_id", ""),
+                    command_preview=script[:120] if script else "")
+            except Exception:
+                pass
             raise
         finally:
             client.close()
         elapsed = int((_time.monotonic() - t0) * 1000)
         log.debug("SSH exec ← %s@%s:%d | %d bytes | %dms", username, host, port, len(output), elapsed)
+        try:
+            from api.db.ssh_log import write_log as _wl
+            _wl(target_host=host, target_port=port, username=username or "", outcome="success",
+                duration_ms=elapsed, bytes_received=len(output),
+                connection_id=(_log_meta or {}).get("connection_id", ""),
+                credential_source_id=(_log_meta or {}).get("credential_source_id", ""),
+                jump_host=jump_host["host"] if jump_host else "",
+                resolved_label=(_log_meta or {}).get("resolved_label", ""),
+                triggered_by=(_log_meta or {}).get("triggered_by", "collector"),
+                operation_id=(_log_meta or {}).get("operation_id", ""),
+                command_preview=script[:120] if script else "")
+        except Exception:
+            pass
         return output
 
 
@@ -312,7 +354,9 @@ def _poll_one_vm(conn, all_conns):
 
     try:
         output = _ssh_run(host, port, username, password, private_key,
-                          script, jump_host=jump_host)
+                          script, jump_host=jump_host,
+                          _log_meta={"connection_id": str(conn.get("id", "")),
+                                     "resolved_label": label, "triggered_by": "collector"})
         result = _parse_poll_output(output, label, host)
         result["connection_id"] = str(conn.get("id", ""))
         result["config"] = cfg

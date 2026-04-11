@@ -115,6 +115,12 @@ async def lifespan(app: FastAPI):
         init_inventory()
     except Exception as e:
         _log.debug("Infra inventory init skipped: %s", e)
+    # Initialize SSH connection log table
+    try:
+        from api.db.ssh_log import init_ssh_log
+        init_ssh_log()
+    except Exception as e:
+        _log.debug("SSH log init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection

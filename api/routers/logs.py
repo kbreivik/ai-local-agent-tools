@@ -1,7 +1,8 @@
 """Logs API — all read/write endpoints for operations, tool calls, escalations, audit, stats."""
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import text
 
+from api.auth import get_current_user
 from api.db.base import get_engine
 from api.db import queries as q
 
@@ -163,3 +164,56 @@ async def get_stats():
     async with get_engine().connect() as conn:
         stats = await q.get_stats(conn)
     return stats
+
+
+# ── SSH Connection Log ────────────────────────────────────────────────────────
+
+@router.get("/ssh")
+async def get_ssh_log(
+    connection_id: str = Query(""),
+    target_host:   str = Query(""),
+    outcome:       str = Query(""),
+    limit:         int = Query(100, ge=1, le=500),
+    _: str = Depends(get_current_user),
+):
+    """Query SSH connection attempt log."""
+    from api.db.ssh_log import query_log
+    rows = query_log(connection_id=connection_id, target_host=target_host,
+                     outcome=outcome, limit=limit)
+    for r in rows:
+        for k, v in r.items():
+            if hasattr(v, 'isoformat'):
+                r[k] = v.isoformat()
+    return {"ssh_log": rows, "count": len(rows)}
+
+
+@router.get("/ssh/summary")
+async def get_ssh_summary(_: str = Depends(get_current_user)):
+    """Summary of SSH connection health: success rate, recent failures."""
+    from api.db.ssh_log import query_log
+    from collections import defaultdict
+    recent = query_log(limit=200)
+    if not recent:
+        return {"summary": [], "total": 0}
+    by_host = defaultdict(lambda: {"success": 0, "fail": 0, "last_outcome": "", "last_at": "", "last_error": ""})
+    for r in recent:
+        host = r.get("resolved_label") or r.get("target_host", "?")
+        if r.get("outcome") == "success":
+            by_host[host]["success"] += 1
+        else:
+            by_host[host]["fail"] += 1
+        at = str(r.get("attempted_at", ""))
+        if hasattr(r.get("attempted_at"), "isoformat"):
+            at = r["attempted_at"].isoformat()
+        if not by_host[host]["last_at"] or at > by_host[host]["last_at"]:
+            by_host[host]["last_outcome"] = r.get("outcome", "")
+            by_host[host]["last_at"] = at
+            by_host[host]["last_error"] = r.get("error_message", "")
+    summary = [
+        {"host": host, "success": v["success"], "fail": v["fail"],
+         "success_rate": round(v["success"] / max(v["success"] + v["fail"], 1) * 100),
+         "last_outcome": v["last_outcome"], "last_at": v["last_at"],
+         "last_error": v["last_error"]}
+        for host, v in sorted(by_host.items())
+    ]
+    return {"summary": summary, "total": len(recent)}

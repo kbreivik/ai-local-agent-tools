@@ -177,6 +177,9 @@ def vm_exec(host: str, command: str) -> dict:
             conn["host"], conn.get("port") or 22,
             username, password, private_key,
             safe_cmd, jump_host=jump_host,
+            _log_meta={"connection_id": str(conn.get("id", "")),
+                       "resolved_label": conn.get("label", host),
+                       "triggered_by": "vm_exec"},
         )
         label = conn.get("label", host)
         jump_note = f" (via {jump_host['host']})" if jump_host else ""
