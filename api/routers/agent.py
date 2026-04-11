@@ -647,6 +647,17 @@ async def _run_single_agent_step(
                     final_status = "escalated"
                     break
 
+            # Trim message history to cap token growth
+            def _trim_messages(msgs, keep_system=2, max_total=18):
+                if len(msgs) <= max_total:
+                    return msgs
+                fixed = msgs[:keep_system]
+                rolling = msgs[keep_system:]
+                while len(fixed) + len(rolling) > max_total and len(rolling) >= 2:
+                    rolling = rolling[2:]
+                return fixed + rolling
+            messages = _trim_messages(messages)
+
             if halt:
                 await manager.send_line("halt", "Agent halted — human review required.",
                                         status="escalated", session_id=session_id)
@@ -669,10 +680,37 @@ async def _run_single_agent_step(
                 break
 
         else:
+            # Max steps reached — force one final LLM call without tools
+            try:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have used all available tool call steps. "
+                        "Write your final summary NOW as plain text — no more tool calls allowed. "
+                        "Format: first line = most important finding, "
+                        "then 3-5 bullet points of key data, "
+                        "then one recommended action or 'no action needed'."
+                    ),
+                })
+                force_response = client.chat.completions.create(
+                    model=_lm_model(),
+                    messages=messages,
+                    tools=None,
+                    tool_choice=None,
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+                forced_text = force_response.choices[0].message.content or ""
+                if forced_text:
+                    last_reasoning = forced_text
+                    await manager.send_line("reasoning", forced_text, session_id=session_id)
+            except Exception as _fe:
+                log.debug("Force summary call failed: %s", _fe)
+
             if is_final_step:
                 await manager.broadcast({
                     "type": "done", "session_id": session_id, "agent_type": agent_type,
-                    "content": last_reasoning if last_reasoning else f"Agent reached max steps ({max_steps}).",
+                    "content": last_reasoning or f"Agent reached max steps ({max_steps}).",
                     "status": "ok", "choices": [],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
