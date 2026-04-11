@@ -363,6 +363,18 @@ async def _run_single_agent_step(
             # batch without plan_action already called, block it and inject a reminder.
             _req_tools = {tc.function.name for tc in msg.tool_calls}
             _destructive_req = _req_tools & DESTRUCTIVE_TOOLS
+            # Check vm_exec write commands (prune, autoremove, vacuum, etc.)
+            _VM_WRITE_PATTERNS = ['prune', 'autoremove', 'vacuum', 'clean', 'purge', 'remove']
+            for _btc in msg.tool_calls:
+                if _btc.function.name == 'vm_exec':
+                    try:
+                        _vargs = json.loads(_btc.function.arguments)
+                        _vcmd = _vargs.get('command', '').lower()
+                        if any(p in _vcmd for p in _VM_WRITE_PATTERNS):
+                            if 'plan_action' not in tools_used_names:
+                                _destructive_req = _destructive_req | {'vm_exec(write)'}
+                    except Exception:
+                        pass
             if _destructive_req and "plan_action" not in tools_used_names:
                 block_msg = (
                     "STOP. You requested destructive tool(s) "
