@@ -37,17 +37,14 @@ export function useLayout() {
       .then(d => {
         if (d.layout_json) {
           try {
-            setLayout(JSON.parse(d.layout_json))
-            // Ensure new tiles are present in saved layouts
-            setLayout(prev => {
-              const allTiles = prev.rows.flatMap(r =>
-                r.tiles.flatMap(t => typeof t === 'string' ? [t] : (t.col || []))
-              )
-              if (!allTiles.includes('VM_HOSTS')) {
-                return { ...prev, rows: [...prev.rows, { tiles: ['VM_HOSTS'] }] }
-              }
-              return prev
-            })
+            const parsed = JSON.parse(d.layout_json)
+            const allTiles = (parsed.rows || []).flatMap(r =>
+              (r.tiles || []).flatMap(t => typeof t === 'string' ? [t] : (t.col || []))
+            )
+            if (!allTiles.includes('VM_HOSTS')) {
+              parsed.rows = [...(parsed.rows || []), { tiles: ['VM_HOSTS'] }]
+            }
+            setLayout(parsed)
           } catch { /* use default */ }
         }
         setLoaded(true)
