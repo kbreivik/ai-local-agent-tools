@@ -69,6 +69,24 @@ du -sh /var/lib/postgresql 2>/dev/null || \
 du -sh $(docker volume ls -q 2>/dev/null | grep -i postgres | head -1 | xargs -r docker volume inspect --format '{{.Mountpoint}}' 2>/dev/null) 2>/dev/null || \
 echo "not found"
 
+echo "=OVERLAY2_SIZE="
+du -sh /var/lib/docker/overlay2 2>/dev/null || echo "unavailable"
+
+echo "=DOCKER_VOLUMES_DETAIL="
+docker system df -v 2>/dev/null | grep -A 100 "Local Volumes" | head -30
+
+echo "=POSTGRES_CONTAINERS="
+docker ps --format "{{.Names}}\t{{.Image}}\t{{.Mounts}}" 2>/dev/null \
+  | grep -i postgres | head -5
+
+echo "=TOP_DOCKER_VOLUMES="
+for v in $(docker volume ls -q 2>/dev/null); do
+  mp=$(docker volume inspect "$v" --format '{{.Mountpoint}}' 2>/dev/null)
+  if [ -n "$mp" ]; then
+    du -sh "$mp" 2>/dev/null | awk -v name="$v" '{print $1, name}'
+  fi
+done 2>/dev/null | sort -hr | head -10
+
 echo "=LARGE_FILES="
 find /var /home /opt -size +100M -type f 2>/dev/null | head -10
 
@@ -137,6 +155,28 @@ def _top_culprits(sections):
                                      "severity": "high" if size_gb > 1.0 else "medium"})
             break
 
+    # Docker overlay2 (layer storage — accumulates with image builds)
+    for line in (sections.get("OVERLAY2_SIZE") or []):
+        parts = line.split()
+        if parts and parts[0] not in ("unavailable",):
+            size_gb = _parse_size_to_gb(parts[0])
+            if size_gb > 5.0:
+                culprits.append({"name": f"Docker overlay2 layers ({parts[0]})",
+                                 "action": "docker system prune -f  # removes stopped containers + dangling images",
+                                 "severity": "high" if size_gb > 20 else "medium"})
+            break
+
+    # Top Docker volumes by actual measured size
+    for line in (sections.get("TOP_DOCKER_VOLUMES") or []):
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            size_gb = _parse_size_to_gb(parts[0])
+            vol_name = parts[1].strip()
+            if size_gb > 5.0:
+                culprits.append({"name": f"Docker volume '{vol_name}' ({parts[0]})",
+                                 "action": f"Inspect contents: docker volume inspect {vol_name}",
+                                 "severity": "high" if size_gb > 20 else "medium"})
+
     # Postgres
     for line in (sections.get("POSTGRES_DATA") or []):
         parts = line.split()
@@ -145,17 +185,19 @@ def _top_culprits(sections):
             if size_gb > 1.0:
                 culprits.append({"name": f"PostgreSQL data ({parts[0]})",
                                  "action": "Run VACUUM FULL on large tables; consider pg_dump + restore",
-                                 "severity": "medium"})
+                                 "severity": "high" if size_gb > 10 else "medium"})
             break
 
-    # Docker volumes by size
+    # Docker volumes by size (from old DOCKER_VOLUME_SIZES section — kept for compat)
     for line in (sections.get("DOCKER_VOLUME_SIZES") or []):
         parts = line.split(None, 1)
         if len(parts) == 2:
             size_gb = _parse_size_to_gb(parts[0])
-            if size_gb > 2.0:
-                culprits.append({"name": f"Docker volume {parts[1].strip()} ({parts[0]})",
-                                 "action": f"Inspect: docker volume inspect {parts[1].strip()}",
+            vol_name = parts[1].strip()
+            # Skip if already covered by TOP_DOCKER_VOLUMES
+            if size_gb > 2.0 and not any(vol_name in c.get("name", "") for c in culprits):
+                culprits.append({"name": f"Docker volume {vol_name} ({parts[0]})",
+                                 "action": f"Inspect: docker volume inspect {vol_name}",
                                  "severity": "medium"})
 
     # Large files
@@ -230,7 +272,11 @@ def execute(**kwargs):
             "journal": (sections.get("JOURNAL_SIZE") or ["unavailable"])[0],
             "docker_summary": sections.get("DOCKER_SUMMARY", []),
             "docker_volume_sizes": sections.get("DOCKER_VOLUME_SIZES", [])[:10],
+            "overlay2_size": (sections.get("OVERLAY2_SIZE") or ["unavailable"])[0],
+            "top_docker_volumes": sections.get("TOP_DOCKER_VOLUMES", [])[:10],
+            "docker_volumes_detail": sections.get("DOCKER_VOLUMES_DETAIL", [])[:15],
             "postgres_data": (sections.get("POSTGRES_DATA") or ["not found"])[0],
+            "postgres_containers": sections.get("POSTGRES_CONTAINERS", [])[:5],
             "large_files": sections.get("LARGE_FILES", [])[:10],
             "dangling_images": (sections.get("DANGLING_IMAGES") or ["0"])[0],
             "culprits": culprits,
