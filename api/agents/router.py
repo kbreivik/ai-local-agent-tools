@@ -88,7 +88,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "storage_health",
     "agent_status", "postgres_health",
-    "vm_exec", "infra_lookup", "vm_disk_investigate",
+    "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -107,7 +107,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
-    "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate",
+    "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -130,7 +130,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_upgrade",
     "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
-    "vm_exec", "infra_lookup", "vm_disk_investigate",
+    "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -141,6 +141,7 @@ EXECUTE_PROXMOX_TOOLS = frozenset({
 EXECUTE_GENERAL_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "docker_engine_update", "vm_exec", "infra_lookup",
+    "vm_disk_investigate", "vm_service_discover",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -355,7 +356,9 @@ RULES:
     These target a VM host via SSH — they are NOT Swarm service
     operations. Do NOT call service_health or pre_upgrade_check
     for VM-level tasks. Instead:
-    - Use vm_exec to gather state (docker system df, df -h)
+    - Call vm_service_discover(host=...) first to see what cleanup
+      operations are available and recommended for each service
+    - Use vm_exec to gather additional state if needed (docker system df, df -h)
     - Call plan_action with the SSH command as the action
     - After approval, call vm_exec with the approved command
 
