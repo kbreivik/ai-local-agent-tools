@@ -54,6 +54,12 @@ _DOMAIN_KEYWORDS: dict = {
                           "snapshot", "qemu", "kvm", "ha", "cluster"}),
     "elastic": frozenset({"elastic", "elasticsearch", "kibana", "index",
                           "shard", "mapping", "filebeat"}),
+    "vm_host": frozenset({"disk", "space", "filesystem", "storage", "full",
+                          "memory", "ram", "load", "cpu", "uptime",
+                          "agent-01", "manager-01", "worker", "vm", "host",
+                          "ssh", "server", "machine", "node",
+                          "journal", "log", "process", "package", "apt",
+                          "large", "files", "folder", "directory"}),
 }
 
 
@@ -80,6 +86,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "storage_health",
     "agent_status", "postgres_health",
+    "vm_exec",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -98,7 +105,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
-    "search_docs",
+    "search_docs", "vm_exec",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -130,7 +137,7 @@ EXECUTE_PROXMOX_TOOLS = frozenset({
 
 EXECUTE_GENERAL_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
-    "docker_engine_update",
+    "docker_engine_update", "vm_exec",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)

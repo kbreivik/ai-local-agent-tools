@@ -687,7 +687,7 @@ async def _run_single_agent_step(
 async def _stream_agent(task: str, session_id: str, operation_id: str, owner_user: str = "admin"):
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
-    from api.agents.router import classify_task, filter_tools, get_prompt
+    from api.agents.router import classify_task, filter_tools, get_prompt, detect_domain
     from api.agents.orchestrator import build_step_plan, format_step_header, verdict_from_text
 
     base_url = _lm_base()
@@ -699,6 +699,25 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         first_intent = "action"
 
     system_prompt = get_prompt(first_intent)
+
+    # ── Domain-specific capability injection (e.g. available VM hosts) ────────
+    try:
+        domain = detect_domain(task)
+        if domain == "vm_host":
+            from api.connections import get_all_connections_for_platform
+            vms = get_all_connections_for_platform("vm_host")
+            if vms:
+                labels = [f"{c.get('label', c.get('host'))} ({c.get('host', '')})" for c in vms[:6]]
+                cap_hint = (
+                    "AVAILABLE VM HOSTS (use vm_exec tool to query these directly):\n"
+                    + "\n".join(f"  - {l}" for l in labels)
+                    + "\n\nvm_exec commands: df -h (disk), free -m (memory), "
+                    + "journalctl -n 50 (logs), find / -size +100M -type f (large files), "
+                    + "docker system df (Docker storage), apt list --upgradable (updates)\n\n"
+                )
+                system_prompt = cap_hint + system_prompt
+    except Exception:
+        pass
 
     # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
     try:

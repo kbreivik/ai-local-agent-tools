@@ -644,5 +644,62 @@ def storage_health() -> dict:
     }
 
 
+@mcp.tool()
+def vm_exec(host: str, command: str) -> dict:
+    """Execute a read-only command on a registered VM host via SSH.
+    Resolves credentials and jump hosts automatically from the connections database.
+    Use host='agent-01' (label) or IP.
+    Useful for: disk usage (df -h), large files (find / -size +100M), memory (free -m),
+    logs (journalctl -n 50), Docker storage (docker system df).
+    Always call this instead of asking the user to SSH manually.
+    """
+    import re
+    from datetime import datetime, timezone
+    _now = lambda: datetime.now(timezone.utc).isoformat()
+
+    READ_ALLOWLIST = [
+        r'^df\b', r'^du\b', r'^free\b', r'^uptime$', r'^uname\b',
+        r'^journalctl\b', r'^find\b', r'^ps\b', r'^docker system df$',
+        r'^apt list --upgradable', r'^systemctl list-units\b',
+        r'^cat /etc/os-release$', r'^hostname$', r'^whoami$',
+    ]
+    safe_cmd = re.sub(r'[;&|><`$]', '', command).strip()
+    if not any(re.match(p, safe_cmd) for p in READ_ALLOWLIST):
+        return {"status": "error", "timestamp": _now(),
+                "message": f"Command not in allowlist: {safe_cmd!r}. "
+                           "Use: df, du, free, uptime, journalctl, find, docker system df, apt list --upgradable",
+                "data": None}
+
+    from api.connections import get_all_connections_for_platform
+    from api.collectors.vm_hosts import _ssh_run, _resolve_credentials, _resolve_jump_host
+
+    all_conns = get_all_connections_for_platform("vm_host")
+    conn = None
+    for c in all_conns:
+        if (c.get("label", "").lower() == host.lower() or
+            c.get("host", "") == host or
+            host.lower() in c.get("label", "").lower()):
+            conn = c; break
+
+    if not conn:
+        labels = [c.get("label", c.get("host")) for c in all_conns]
+        return {"status": "error", "timestamp": _now(),
+                "message": f"No vm_host for {host!r}. Available: {labels}", "data": None}
+
+    username, password, private_key = _resolve_credentials(conn, all_conns)
+    jump_host = _resolve_jump_host(conn, all_conns)
+
+    try:
+        output = _ssh_run(conn["host"], conn.get("port") or 22,
+                          username, password, private_key, safe_cmd, jump_host=jump_host)
+        return {"status": "ok", "timestamp": _now(),
+                "message": f"Executed on {conn.get('label', host)}",
+                "data": {"host": conn.get("label", host), "command": safe_cmd,
+                         "output": output.strip()[:3000], "truncated": len(output) > 3000}}
+    except Exception as e:
+        return {"status": "error", "timestamp": _now(),
+                "message": f"SSH failed on {host}: {e}", "data": None}
+
+
 if __name__ == "__main__":
     mcp.run()
