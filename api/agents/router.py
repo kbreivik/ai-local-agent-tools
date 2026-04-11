@@ -59,7 +59,9 @@ _DOMAIN_KEYWORDS: dict = {
                           "agent-01", "manager-01", "worker", "vm", "host",
                           "ssh", "server", "machine", "node",
                           "journal", "log", "process", "package", "apt",
-                          "large", "files", "folder", "directory"}),
+                          "large", "files", "folder", "directory",
+                          "prune", "image", "images", "dangling",
+                          "vacuum", "cleanup", "clean", "clear"}),
 }
 
 
@@ -128,6 +130,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_upgrade",
     "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
+    "vm_exec", "infra_lookup", "vm_disk_investigate",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -348,6 +351,24 @@ RULES:
 10. If the task is vague (single word, no action verb, or ambiguous scope), call
    clarifying_question() BEFORE taking any mutating action. Do NOT assume.
    Examples of vague tasks: "services", "kafka", "upgrade", "check".
+11. VM-LEVEL OPERATIONS (docker prune, apt, journalctl vacuum):
+    These target a VM host via SSH — they are NOT Swarm service
+    operations. Do NOT call service_health or pre_upgrade_check
+    for VM-level tasks. Instead:
+    - Use vm_exec to gather state (docker system df, df -h)
+    - Call plan_action with the SSH command as the action
+    - After approval, call vm_exec with the approved command
+
+    vm_exec WRITE commands (require plan_action first):
+      docker image prune -f
+      docker image prune -a -f
+      docker container prune -f
+      docker volume prune -f
+      docker system prune -f
+      journalctl --vacuum-size=<N>
+      journalctl --vacuum-time=<N>d
+      apt-get autoremove -y
+      apt-get clean
 
 CLARIFICATION RULES (use clarifying_question tool):
 - If task mentions "kafka" without specifying which broker and action is destructive: ASK

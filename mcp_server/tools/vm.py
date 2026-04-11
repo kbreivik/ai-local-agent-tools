@@ -42,17 +42,32 @@ def _validate_command(command):
         r'^xargs\b',
     ]
 
-    for part in parts:
-        if not any(re.match(p, part) for p in _READ_ALLOWLIST):
-            return False, (
-                f"Command segment not in allowlist: {part!r}. "
-                "Allowed: df, du, free, uptime, journalctl, find, ps, "
-                "docker system df, docker volume ls, docker ps, apt list, "
-                "systemctl, cat /etc/os-release, ls, stat, sort, head, tail, "
-                "grep, awk, cut. Pipes and '2>/dev/null' are supported."
-            )
+    # Check read allowlist (all pipe segments must match)
+    read_ok = all(any(re.match(p, part) for p in _READ_ALLOWLIST) for part in parts)
+    if read_ok:
+        return True, sanitized
 
-    return True, sanitized  # return sanitized (2>/dev/null stripped)
+    # Write allowlist — single command only, no pipes. Requires plan_action approval.
+    _WRITE_ALLOWLIST = [
+        r'^docker image prune\b',
+        r'^docker container prune\b',
+        r'^docker volume prune\b',
+        r'^docker system prune\b',
+        r'^journalctl --vacuum',
+        r'^apt-get autoremove\b',
+        r'^apt-get clean$',
+        r'^apt-get autoclean$',
+    ]
+    if len(parts) == 1 and any(re.match(p, sanitized) for p in _WRITE_ALLOWLIST):
+        return True, f"WRITE:{sanitized}"
+
+    return False, (
+        f"Command not in allowlist: {sanitized!r}. "
+        "Read: df, du, free, uptime, journalctl, find, ps, docker system df, "
+        "docker volume ls, docker ps, apt list, systemctl, ls, stat, sort, head, "
+        "tail, grep, awk, cut. Write (require plan_action): docker image/container/"
+        "volume/system prune, journalctl --vacuum, apt-get autoremove/clean."
+    )
 
 
 def _resolve_connection(host, all_conns):
@@ -88,15 +103,18 @@ def _resolve_connection(host, all_conns):
 
 
 def vm_exec(host: str, command: str) -> dict:
-    """Execute a read-only command on a registered VM host via SSH.
+    """Execute a command on a registered VM host via SSH.
 
-    Resolves credentials, shared keys, and jump hosts automatically from
-    the connections database. No manual credential management needed.
+    Read-only commands execute immediately. Write commands (docker prune,
+    journalctl vacuum, apt-get clean) return status='plan_required' —
+    call plan_action() first, then vm_exec again after approval.
 
     Use for: disk usage (df -h), large dirs (du -sh /* | sort -hr | head -20),
     memory (free -m), logs (journalctl -n 50), Docker storage (docker system df),
     large files (find / -size +100M -type f 2>/dev/null | head -20),
     package updates (apt list --upgradable).
+    Write: docker image/container/volume/system prune, journalctl --vacuum,
+    apt-get autoremove/clean (all require plan_action approval).
 
     Args:
         host: VM host label, discovered hostname, or IP address.
@@ -123,7 +141,20 @@ def vm_exec(host: str, command: str) -> dict:
     if not valid:
         return {"status": "error", "message": result_or_error, "data": None, "timestamp": _ts()}
 
-    safe_cmd = result_or_error
+    is_write = result_or_error.startswith("WRITE:")
+    safe_cmd = result_or_error.removeprefix("WRITE:")
+
+    if is_write:
+        return {
+            "status": "plan_required",
+            "message": (
+                f"Write command requires approval: {safe_cmd!r}. "
+                "Call plan_action() first with this command as the action, "
+                "then call vm_exec again after approval."
+            ),
+            "data": {"command": safe_cmd, "host": host, "requires_plan": True},
+            "timestamp": _ts(),
+        }
 
     try:
         from api.connections import get_all_connections_for_platform
