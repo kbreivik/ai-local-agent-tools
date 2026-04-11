@@ -15,6 +15,12 @@ _CHECK_PREFIXES = frozenset({
     "before", "after checking", "make sure",
 })
 
+# Words indicating a cleanup/destructive disk operation
+_CLEANUP_WORDS = frozenset({
+    "prune", "vacuum", "autoremove", "clean", "purge",
+    "remove", "delete", "wipe", "free", "reclaim",
+})
+
 
 def build_step_plan(task: str) -> list:
     """
@@ -24,7 +30,7 @@ def build_step_plan(task: str) -> list:
       {"intent": str, "domain": str|None, "task": str, "step": int}
 
     Single-domain tasks return one step. Tasks with explicit pre-check
-    language get an observe step prepended before the execute step.
+    language or cleanup keywords get observe steps around the execute step.
     """
     from api.agents.router import classify_task, detect_domain
 
@@ -35,25 +41,50 @@ def build_step_plan(task: str) -> list:
     domain = detect_domain(task) if intent in ("execute", "action") else None
 
     words = set(re.findall(r'\b\w+\b', task.lower()))
+    is_cleanup = bool(words & _CLEANUP_WORDS)
+    has_precheck = bool(words & _CHECK_PREFIXES)
 
-    # Prepend an observe step when task explicitly asks for a pre-check
-    if intent in ("execute", "action") and words & _CHECK_PREFIXES:
-        steps = [
-            {
-                "step":   1,
+    if intent in ("execute", "action"):
+        steps = []
+
+        # Pre-check step: gather baseline before cleanup, or verify pre-conditions
+        if has_precheck or is_cleanup:
+            steps.append({
                 "intent": "observe",
-                "domain": None,
-                "task":   f"Check pre-conditions before: {task}",
-            },
-            {
-                "step":   2,
-                "intent": intent,
                 "domain": domain,
-                "task":   task,
-            },
-        ]
+                "task": (
+                    f"Gather baseline before: {task}. "
+                    "Report current disk usage, Docker df, and what will be affected. "
+                    "Output structured summary: current_state={{disk_used, docker_images_gb, "
+                    "docker_volumes_gb, dangling_count}}"
+                ) if is_cleanup else f"Check pre-conditions before: {task}",
+            })
+
+        # Main execute step
+        steps.append({
+            "intent": intent,
+            "domain": domain,
+            "task": task,
+        })
+
+        # Verify step after cleanup operations
+        if is_cleanup:
+            steps.append({
+                "intent": "observe",
+                "domain": domain,
+                "task": (
+                    f"Verify result of: {task}. "
+                    "Report current disk usage and compare to baseline if available. "
+                    "Output: after_state={{disk_used, docker_images_gb, reclaimed_gb}}. "
+                    "State clearly how much space was reclaimed."
+                ),
+            })
     else:
-        steps = [{"step": 1, "intent": intent, "domain": domain, "task": task}]
+        steps = [{"intent": intent, "domain": domain, "task": task}]
+
+    # Number steps
+    for i, s in enumerate(steps):
+        s["step"] = i + 1
 
     return steps
 
@@ -68,14 +99,13 @@ def verdict_from_text(text: str) -> dict:
     """
     Extract a minimal verdict from an agent's final output text.
 
-    Returns {"verdict": "GO"|"ASK"|"HALT", "summary": str}
+    Returns {"verdict": "GO"|"ASK"|"HALT", "summary": str, "state": dict|None}
     Used to pass minimal context from one step to the next.
     """
     lower = text.lower()
     words = set(re.findall(r'\b\w+\b', lower))
 
     # Check for negation patterns that would make halt signals false positives
-    # e.g. "no errors", "zero failed", "not degraded", "previously failed"
     _negation_re = re.compile(
         r'\b(no|zero|0|not|never|previously|resolved|fixed|cleared|recovered)\s+'
         r'(error|errors|failed|failure|offline|degraded|unhealthy|critical)',
@@ -85,15 +115,13 @@ def verdict_from_text(text: str) -> dict:
     # Explicit failure / degraded keywords → HALT (unless negated)
     halt_signals = {"degraded", "critical", "offline", "failed", "unhealthy", "halt"}
     if halt_signals & words:
-        # Check if all matches are negated
         matches_in_text = halt_signals & words
         negated = {m for m in matches_in_text if _negation_re.search(lower)}
-        if matches_in_text - negated:  # At least one non-negated halt signal
+        if matches_in_text - negated:
             return {"verdict": "HALT", "summary": text[:300]}
 
-    # "error" is checked separately with stricter context to avoid "no errors" false positives
+    # "error" checked with stricter context
     if re.search(r'\b(error|errors)\b', lower) and not _negation_re.search(lower):
-        # Only flag HALT if "error" appears in a clearly negative context
         if re.search(r'\b(tool error|status.*error|error.*status|failed with error|error occurred)\b', lower):
             return {"verdict": "HALT", "summary": text[:300]}
 
@@ -102,4 +130,16 @@ def verdict_from_text(text: str) -> dict:
     if ask_signals & words:
         return {"verdict": "ASK", "summary": text[:300]}
 
-    return {"verdict": "GO", "summary": text[:300]}
+    result = {"verdict": "GO", "summary": text[:300]}
+
+    # Extract structured state for passing between steps (observe → execute → verify)
+    state = {}
+    for key in ("current_state", "after_state", "disk_used", "reclaimed_gb",
+                "docker_images_gb", "docker_volumes_gb", "dangling_count"):
+        m = re.search(rf'{key}[=:]\s*([0-9.]+\s*(?:GB|MB|TB|%)?)', text, re.IGNORECASE)
+        if m:
+            state[key] = m.group(1).strip()
+    if state:
+        result["state"] = state
+
+    return result
