@@ -472,7 +472,7 @@ const PLATFORM_AUTH = {
   cisco:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'cisco_ios' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'RESTCONF key (optional — future use)' }] },
   juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'Junos REST API key (optional — future use)' }] },
   aruba:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'aruba_os' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'AOS-CX API key (optional — future use)' }] },
-  docker_host:     { auth_type: 'tcp', defaultPort: 2375, fields: [{ key: 'role', label: 'Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'standalone', label: 'Standalone' }], placeholder: 'swarm_manager' }] },
+  docker_host:     { auth_type: 'tcp', defaultPort: 2375, fields: [], _dockerHost: true },
   vm_host:         {
     auth_type: 'ssh', defaultPort: 22,
     fields: [
@@ -506,6 +506,22 @@ function ConnectionsTab() {
   const [testing, setTesting] = useState({})
   const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ds_conn_advanced_open') === 'true')
   const [jumpHosts, setJumpHosts] = useState([])
+  const [vmHostConns, setVmHostConns] = useState([])
+
+  const DOCKER_AUTH_MODES = [
+    { value: 'tcp', label: 'TCP (plain)', port: 2375, hint: 'Unauthenticated — Docker daemon on port 2375. Private LAN only.', warning: '⚠ No authentication. Use only on trusted private networks.', warningColor: 'var(--amber)', fields: [] },
+    { value: 'tls', label: 'TLS (mutual)', port: 2376, hint: 'Docker daemon with --tlsverify. Client presents a signed certificate.', fields: [
+      { key: 'ca_cert', label: 'CA Certificate', type: 'textarea', placeholder: '-----BEGIN CERTIFICATE-----', hint: 'ca.pem — the CA that signed both server and client certs' },
+      { key: 'client_cert', label: 'Client Certificate', type: 'textarea', placeholder: '-----BEGIN CERTIFICATE-----', hint: 'cert.pem — your client certificate' },
+      { key: 'client_key', label: 'Client Key', type: 'textarea', placeholder: '-----BEGIN RSA PRIVATE KEY-----', hint: 'key.pem — your client private key. Stored encrypted at rest.' },
+    ]},
+    { value: 'ssh', label: 'SSH tunnel', port: 22, hint: 'Connects via SSH and forwards the remote Docker socket. No daemon reconfiguration needed.', fields: [
+      { key: '_ssh_source', label: 'Credentials from', type: 'ssh_source_select', hint: 'Pick an existing vm_host connection or enter creds below' },
+      { key: 'username', label: 'SSH User', placeholder: 'ubuntu', hint: 'Leave blank to inherit from vm_host' },
+      { key: 'private_key', label: 'Private Key', type: 'textarea', placeholder: '-----BEGIN RSA PRIVATE KEY-----', hint: 'PEM key. Leave blank to inherit from vm_host.' },
+      { key: 'password', label: 'Password', type: 'password', hint: 'Note: Docker SDK SSH transport does not support password auth — key preferred.' },
+    ]},
+  ]
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
   const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
@@ -556,6 +572,7 @@ function ConnectionsTab() {
         const all = d.data || []
         setConns(all)
         setJumpHosts(all.filter(c => c.platform === 'vm_host' && c.config?.is_jump_host).map(c => ({ id: c.id, label: c.label, host: c.host })))
+        setVmHostConns(all.filter(c => c.platform === 'vm_host'))
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -678,7 +695,61 @@ function ConnectionsTab() {
                      value={form.port} onChange={e => updateForm('port', parseInt(e.target.value) || 443)} />
             </div>
           </div>
-          {platAuth.fields.map(f => (
+          {/* Docker host — custom 3-mode form */}
+          {form.platform === 'docker_host' && (() => {
+            const mode = DOCKER_AUTH_MODES.find(m => m.value === form.auth_type) || DOCKER_AUTH_MODES[0]
+            return (<>
+              <div>
+                {_FL('Connection Mode')}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {DOCKER_AUTH_MODES.map(m => (
+                    <button key={m.value} onClick={() => setForm(f => ({ ...f, auth_type: m.value, port: m.port, credentials: {} }))}
+                      style={{ flex: 1, fontSize: 9, padding: '4px 0', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em', borderRadius: 2, cursor: 'pointer', border: '1px solid',
+                        background: form.auth_type === m.value ? 'var(--accent-dim)' : 'var(--bg-2)', color: form.auth_type === m.value ? 'var(--accent)' : 'var(--text-3)', borderColor: form.auth_type === m.value ? 'var(--accent)' : 'var(--border)' }}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 4 }}>{mode.hint}</div>
+                {mode.warning && <div style={{ fontSize: 9, marginTop: 3, padding: '3px 6px', borderRadius: 2, border: `1px solid ${mode.warningColor}`, color: mode.warningColor, background: 'var(--bg-3)' }}>{mode.warning}</div>}
+              </div>
+              <div>
+                {_FL('Swarm Role')}
+                <select className="input text-[10px]" value={form.config?.role || 'swarm_manager'} onChange={e => updateConfig('role', e.target.value)}>
+                  <option value="swarm_manager">Swarm Manager</option>
+                  <option value="swarm_worker">Swarm Worker</option>
+                  <option value="standalone">Standalone</option>
+                </select>
+              </div>
+              {mode.fields.map(f => f.type === 'ssh_source_select' ? (
+                <div key={f.key}>
+                  {_FL(f.label)}
+                  {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+                  <select className="input text-[10px] w-full" value={form.config?._ssh_source || ''} onChange={e => { updateConfig('_ssh_source', e.target.value); const vmc = vmHostConns.find(c => c.id === e.target.value); if (vmc && !form.host) updateForm('host', vmc.host) }}>
+                    <option value="">— enter credentials directly —</option>
+                    {vmHostConns.map(vmc => <option key={vmc.id} value={vmc.id}>{vmc.label} ({vmc.host})</option>)}
+                  </select>
+                  {vmHostConns.length === 0 && <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}>No vm_host connections found — add one first or enter SSH credentials directly</div>}
+                </div>
+              ) : f.type === 'textarea' ? (
+                <div key={f.key}>
+                  {_FL(f.label)}
+                  {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+                  <textarea className="input text-[10px] w-full" style={{ minHeight: 70, fontFamily: 'var(--font-mono)', fontSize: 9, resize: 'vertical', whiteSpace: 'pre' }}
+                    placeholder={editingId ? '••• (saved)' : (f.placeholder || '')} value={form.credentials[f.key] ?? ''} onChange={e => updateCred(f.key, e.target.value)} />
+                </div>
+              ) : (
+                <div key={f.key}>
+                  {_FL(f.label)}
+                  {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+                  <input className="input text-[10px] w-full" type={f.type || 'text'}
+                    placeholder={editingId ? '••• (saved)' : (f.placeholder || '')} value={form.credentials[f.key] ?? ''} onChange={e => updateCred(f.key, e.target.value)} />
+                </div>
+              ))}
+            </>)
+          })()}
+          {/* Standard platform fields */}
+          {form.platform !== 'docker_host' && platAuth.fields.map(f => (
             <div key={f.key}>
               {_FL(f.label + (f.hint ? ' ↓' : ''))}
               {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
@@ -778,7 +849,7 @@ function ConnectionsTab() {
             <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]">
               <div>
                 <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label || c.host}</span>
-                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.auth_type}</span>
+                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.platform === 'docker_host' ? ({ tcp: '⊘ plain TCP', tls: '⚿ TLS', ssh: '⇢ SSH' }[c.auth_type] || c.auth_type) : c.auth_type}</span>
                 {c.verified && <span className="ml-2" style={{ color: 'var(--green)' }}>✓</span>}
                 {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
                 {c.config?.is_jump_host && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--amber-dim)', color: 'var(--amber)' }}>⇢ BASTION</span>}

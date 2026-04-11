@@ -18,23 +18,96 @@ from api.collectors.base import BaseCollector
 log = logging.getLogger(__name__)
 
 
-def _get_swarm_docker_host() -> str:
-    """Get Docker host URL for Swarm. DB first, env var fallback."""
+def _build_docker_client_for_conn(conn):
+    """Build a Docker client for a single docker_host connection.
+    Supports tcp (plain), tls (mutual auth), and ssh (tunnel) modes.
+    TLS/SSH keys written to tempfile with chmod 600, deleted in finally."""
+    import docker
+    import tempfile
+
+    host  = conn.get("host", "")
+    port  = conn.get("port") or 2375
+    mode  = conn.get("auth_type", "tcp")
+    creds = conn.get("credentials") or {}
+    cfg   = conn.get("config") or {}
+
+    if host.startswith("unix://") or host.startswith("/"):
+        return docker.DockerClient(base_url=host, timeout=10)
+
+    if mode == "ssh":
+        ssh_user = creds.get("username", "ubuntu")
+        pkey = creds.get("private_key")
+        # Try vm_host reference for SSH creds
+        if not pkey:
+            ssh_ref = cfg.get("_ssh_source")
+            if ssh_ref:
+                try:
+                    from api.connections import get_all_connections_for_platform
+                    vmc = next((c for c in get_all_connections_for_platform("vm_host")
+                                if str(c.get("id")) == ssh_ref), None)
+                    if vmc:
+                        vc = vmc.get("credentials") or {}
+                        ssh_user = vc.get("username", ssh_user)
+                        pkey = vc.get("private_key")
+                except Exception:
+                    pass
+        if pkey:
+            tf = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+            tf.write(pkey); tf.flush(); tf.close()
+            os.chmod(tf.name, 0o600)
+            try:
+                return docker.DockerClient(
+                    base_url=f"ssh://{ssh_user}@{host}",
+                    use_ssh_client=True, timeout=15)
+            finally:
+                os.unlink(tf.name)
+        # Password SSH not supported by Docker SDK SSH transport
+        log.warning("docker_host SSH: no private key for %s, falling back to TCP", conn.get("label"))
+        return docker.DockerClient(base_url=f"tcp://{host}:{port}", timeout=10)
+
+    elif mode == "tls":
+        ca   = creds.get("ca_cert", "")
+        cert = creds.get("client_cert", "")
+        key  = creds.get("client_key", "")
+        if ca and cert and key:
+            paths = []
+            for content, suffix in [(ca, "-ca.pem"), (cert, "-cert.pem"), (key, "-key.pem")]:
+                tf = tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False)
+                tf.write(content); tf.flush(); tf.close()
+                paths.append(tf.name)
+            try:
+                tls_config = docker.tls.TLSConfig(
+                    client_cert=(paths[1], paths[2]), ca_cert=paths[0], verify=True)
+                return docker.DockerClient(base_url=f"tcp://{host}:{port}", tls=tls_config, timeout=10)
+            finally:
+                for p in paths:
+                    try: os.unlink(p)
+                    except Exception: pass
+        log.warning("docker_host TLS: missing certs for %s, falling back to TCP", conn.get("label"))
+
+    # tcp — plain, no auth. Port 2375 is unauthenticated —
+    # secure only on private LANs. Use TLS or SSH for internet-facing hosts.
+    return docker.DockerClient(base_url=f"tcp://{host}:{port}", timeout=10)
+
+
+def _build_swarm_docker_client():
+    """Build a Docker client for the Swarm manager connection.
+    Falls back to DOCKER_HOST env var if no DB connection found."""
+    import docker
+
     try:
         from api.connections import get_all_connections_for_platform
-        conns = get_all_connections_for_platform('docker_host')
+        conns = get_all_connections_for_platform("docker_host")
         managers = [c for c in conns
-                    if (c.get('config') or {}).get('role') in ('swarm_manager', 'manager')
-                    or 'manager' in c.get('label', '').lower()]
+                    if (c.get("config") or {}).get("role") in ("swarm_manager", "manager")
+                    or "manager" in c.get("label", "").lower()]
         if managers:
-            c = managers[0]
-            host = c['host']
-            if host.startswith('unix://') or host.startswith('/'):
-                return host
-            return f"tcp://{host}:{c.get('port', 2375)}"
+            return _build_docker_client_for_conn(managers[0])
     except Exception:
         pass
-    return os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
+
+    fallback = os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
+    return docker.DockerClient(base_url=fallback, timeout=10)
 
 
 class SwarmCollector(BaseCollector):
@@ -52,9 +125,8 @@ class SwarmCollector(BaseCollector):
         import docker
         from docker.errors import DockerException
 
-        host = _get_swarm_docker_host()
         try:
-            client = docker.DockerClient(base_url=host, timeout=10)
+            client = _build_swarm_docker_client()
         except Exception as e:
             return {
                 "health": "error",

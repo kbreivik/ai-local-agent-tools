@@ -344,31 +344,30 @@ def test_connection(connection_id: str) -> dict:
     except Exception as e:
         log.warning("test_connection platform probe failed (%s): %s", platform, e)
 
-    # Docker host — direct Docker API test
+    # Docker host — auth-aware test (TCP, TLS, SSH modes)
     if platform == 'docker_host':
         try:
-            import docker
-            host = connection["host"]
-            port = connection.get("port", 2375)
-            if host.startswith("unix://") or host.startswith("/"):
-                url = host
-            else:
-                url = f"tcp://{host}:{port}"
-            client = docker.DockerClient(base_url=url, timeout=5)
+            from api.collectors.swarm import _build_docker_client_for_conn
+            client = _build_docker_client_for_conn(connection)
             info = client.info()
             client.close()
             is_swarm = info.get("Swarm", {}).get("LocalNodeState") == "active"
+            is_manager = info.get("Swarm", {}).get("ControlAvailable", False)
+            mode = connection.get("auth_type", "tcp")
+            mode_label = {"tcp": "plain TCP", "tls": "TLS", "ssh": "SSH tunnel"}.get(mode, mode)
             update_connection(connection_id, verified=True, last_seen=now)
             return {
                 "status": "ok",
                 "data": {
                     "docker_version": info.get("ServerVersion"),
                     "is_swarm": is_swarm,
+                    "is_manager": is_manager,
                     "containers": info.get("Containers", 0),
-                    "swarm_role": "manager" if info.get("Swarm", {}).get("ControlAvailable") else "worker",
+                    "auth_mode": mode_label,
                 },
                 "timestamp": now,
-                "message": f"Docker {info.get('ServerVersion')} — {'swarm manager' if is_swarm else 'standalone'}",
+                "message": f"Docker {info.get('ServerVersion')} via {mode_label} — "
+                           f"{'swarm manager' if is_manager else 'swarm worker' if is_swarm else 'standalone'}",
             }
         except Exception as e:
             update_connection(connection_id, verified=False, last_seen=now)
