@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from api.auth import get_current_user
+from api.auth import get_current_user, get_current_user_and_role, role_meets
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 log = logging.getLogger(__name__)
@@ -121,3 +121,35 @@ def test(connection_id: str, _: str = Depends(get_current_user)):
     """Test connectivity for a connection."""
     from api.connections import test_connection
     return test_connection(connection_id)
+
+
+@router.post("/{connection_id}/pause")
+def pause(connection_id: str, user_role: tuple = Depends(get_current_user_and_role)):
+    """Pause a connection — stops collectors from polling it.
+    Requires imperial_officer role or above."""
+    username, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "Insufficient permissions — imperial_officer or above required")
+    from api.connections import pause_connection, get_connection
+    result = pause_connection(connection_id, paused_by=username)
+    if result["status"] != "ok":
+        raise HTTPException(400, result["message"])
+    conn = get_connection(connection_id)
+    _trigger_collector_repoll(conn.get("platform", "") if conn else "")
+    return result
+
+
+@router.post("/{connection_id}/resume")
+def resume(connection_id: str, user_role: tuple = Depends(get_current_user_and_role)):
+    """Resume a paused connection — collectors will poll it again.
+    Requires imperial_officer role or above."""
+    username, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "Insufficient permissions — imperial_officer or above required")
+    from api.connections import resume_connection, get_connection
+    result = resume_connection(connection_id)
+    if result["status"] != "ok":
+        raise HTTPException(400, result["message"])
+    conn = get_connection(connection_id)
+    _trigger_collector_repoll(conn.get("platform", "") if conn else "")
+    return result

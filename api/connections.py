@@ -311,6 +311,94 @@ def delete_connection(connection_id: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def pause_connection(connection_id: str, paused_by: str = "") -> dict:
+    """Set config.paused=true on a connection. Collectors will skip it."""
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT config FROM connections WHERE id = %s", (connection_id,))
+            row = cur.fetchone()
+            if not row:
+                cur.close(); conn.close()
+                return {"status": "error", "message": "Connection not found"}
+            cfg = row[0] or {}
+            if isinstance(cfg, str):
+                try: cfg = json.loads(cfg)
+                except Exception: cfg = {}
+            cfg["paused"] = True
+            cfg["paused_by"] = paused_by
+            cfg["paused_at"] = _ts()
+            cur.execute("UPDATE connections SET config = %s WHERE id = %s",
+                        (json.dumps(cfg), connection_id))
+            conn.commit(); cur.close(); conn.close()
+            log.info("Connection %s paused by %s", connection_id, paused_by)
+            return {"status": "ok", "message": "Connection paused"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    try:
+        from sqlalchemy import text as _text
+        sa = _get_sa_conn()
+        if not sa:
+            return {"status": "error", "message": "No database"}
+        row = sa.execute(_text("SELECT config FROM connections WHERE id = :id"), {"id": connection_id}).fetchone()
+        if not row:
+            sa.close(); return {"status": "error", "message": "Connection not found"}
+        cfg = row[0] or {}
+        if isinstance(cfg, str):
+            try: cfg = json.loads(cfg)
+            except Exception: cfg = {}
+        cfg["paused"] = True; cfg["paused_by"] = paused_by; cfg["paused_at"] = _ts()
+        sa.execute(_text("UPDATE connections SET config = :c WHERE id = :id"), {"c": json.dumps(cfg), "id": connection_id})
+        sa.commit(); sa.close()
+        return {"status": "ok", "message": "Connection paused"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def resume_connection(connection_id: str) -> dict:
+    """Clear config.paused on a connection, resuming polling."""
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT config FROM connections WHERE id = %s", (connection_id,))
+            row = cur.fetchone()
+            if not row:
+                cur.close(); conn.close()
+                return {"status": "error", "message": "Connection not found"}
+            cfg = row[0] or {}
+            if isinstance(cfg, str):
+                try: cfg = json.loads(cfg)
+                except Exception: cfg = {}
+            cfg.pop("paused", None); cfg.pop("paused_by", None); cfg.pop("paused_at", None)
+            cur.execute("UPDATE connections SET config = %s WHERE id = %s",
+                        (json.dumps(cfg), connection_id))
+            conn.commit(); cur.close(); conn.close()
+            log.info("Connection %s resumed", connection_id)
+            return {"status": "ok", "message": "Connection resumed"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    try:
+        from sqlalchemy import text as _text
+        sa = _get_sa_conn()
+        if not sa:
+            return {"status": "error", "message": "No database"}
+        row = sa.execute(_text("SELECT config FROM connections WHERE id = :id"), {"id": connection_id}).fetchone()
+        if not row:
+            sa.close(); return {"status": "error", "message": "Connection not found"}
+        cfg = row[0] or {}
+        if isinstance(cfg, str):
+            try: cfg = json.loads(cfg)
+            except Exception: cfg = {}
+        cfg.pop("paused", None); cfg.pop("paused_by", None); cfg.pop("paused_at", None)
+        sa.execute(_text("UPDATE connections SET config = :c WHERE id = :id"), {"c": json.dumps(cfg), "id": connection_id})
+        sa.commit(); sa.close()
+        return {"status": "ok", "message": "Connection resumed"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def test_connection(connection_id: str) -> dict:
     """Test a connection by probing its platform health endpoint (same logic as
     ExternalServicesCollector) so auth, path, and scheme are always correct."""
@@ -467,7 +555,14 @@ def get_connection_for_platform(platform: str) -> dict | None:
             conn.close()
             if not row:
                 return None
-            return _decode_creds(dict(zip(cols, row)))
+            decoded = _decode_creds(dict(zip(cols, row)))
+            cfg = decoded.get("config") or {}
+            if isinstance(cfg, str):
+                try: cfg = json.loads(cfg)
+                except Exception: cfg = {}
+            if cfg.get("paused"):
+                return None
+            return decoded
         except Exception:
             return None
 
@@ -484,7 +579,14 @@ def get_connection_for_platform(platform: str) -> dict | None:
         sa.close()
         if not row:
             return None
-        return _decode_creds(dict(row))
+        decoded = _decode_creds(dict(row))
+        cfg = decoded.get("config") or {}
+        if isinstance(cfg, str):
+            try: cfg = json.loads(cfg)
+            except Exception: cfg = {}
+        if cfg.get("paused"):
+            return None
+        return decoded
     except Exception:
         return None
 
@@ -509,7 +611,9 @@ def get_all_connections_for_platform(platform: str) -> list[dict]:
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
             cur.close()
             conn.close()
-            return [_decode_creds(r) for r in rows]
+            return [d for d in (_decode_creds(r) for r in rows)
+                    if not ((d.get("config") or {}) if isinstance(d.get("config"), dict)
+                            else {}).get("paused")]
         except Exception:
             return []
 
@@ -525,6 +629,8 @@ def get_all_connections_for_platform(platform: str) -> list[dict]:
             {"p": platform},
         ).mappings().fetchall()
         sa.close()
-        return [_decode_creds(dict(r)) for r in rows]
+        return [d for d in (_decode_creds(dict(r)) for r in rows)
+                if not ((d.get("config") or {}) if isinstance(d.get("config"), dict)
+                        else {}).get("paused")]
     except Exception:
         return []

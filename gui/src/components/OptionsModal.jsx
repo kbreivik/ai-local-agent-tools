@@ -504,6 +504,7 @@ function ConnectionsTab() {
   const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {}, config: {} })
   const [formError, setFormError] = useState('')
   const [testing, setTesting] = useState({})
+  const [pausing, setPausing] = useState({})
   const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ds_conn_advanced_open') === 'true')
   const [jumpHosts, setJumpHosts] = useState([])
   const [vmHostConns, setVmHostConns] = useState([])
@@ -845,32 +846,44 @@ function ConnectionsTab() {
       {Object.entries(grouped).map(([platform, items]) => (
         <div key={platform} className="space-y-1">
           <div className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>{platform}</div>
-          {items.map(c => (
-            <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]">
-              <div>
+          {items.map(c => {
+            const isPaused = c.config?.paused === true
+            const pauseConn = async (id, paused) => {
+              const action = paused ? 'resume' : 'pause'
+              setPausing(p => ({ ...p, [id]: true }))
+              const r = await fetch(`${BASE}/api/connections/${id}/${action}`, { method: 'POST', headers: { ...authHeaders() } })
+              if (!r.ok) { setTesting(t => ({ ...t, [id]: 'fail' })); setTimeout(() => setTesting(t => ({ ...t, [id]: null })), 3000) }
+              setPausing(p => ({ ...p, [id]: false }))
+              fetchConns()
+            }
+            return (
+            <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]" style={{ opacity: isPaused ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
                 <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label || c.host}</span>
-                <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.platform === 'docker_host' ? ({ tcp: '⊘ plain TCP', tls: '⚿ TLS', ssh: '⇢ SSH' }[c.auth_type] || c.auth_type) : c.auth_type}</span>
-                {c.verified && <span className="ml-2" style={{ color: 'var(--green)' }}>✓</span>}
-                {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
-                {c.config?.is_jump_host && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--amber-dim)', color: 'var(--amber)' }}>⇢ BASTION</span>}
-                {c.config?.shared_credentials && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--cyan-dim)', color: 'var(--cyan)' }}>⊕ SHARED</span>}
-                {c.config?.os_type && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}
+                <span className="mono" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.platform === 'docker_host' ? ({ tcp: '⊘ plain TCP', tls: '⚿ TLS', ssh: '⇢ SSH' }[c.auth_type] || c.auth_type) : c.auth_type}</span>
+                {c.verified && <span style={{ color: 'var(--green)' }}>✓</span>}
+                {c.verified === false && c.last_seen && <span style={{ color: 'var(--red)' }}>✕</span>}
+                {c.config?.is_jump_host && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--amber-dim)', color: 'var(--amber)' }}>⇢ BASTION</span>}
+                {c.config?.shared_credentials && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--cyan-dim)', color: 'var(--cyan)' }}>⊕ SHARED</span>}
+                {c.config?.os_type && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}
+                {isPaused && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(100,100,120,0.2)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>⏸ PAUSED{c.config.paused_by ? ` · ${c.config.paused_by}` : ''}</span>}
               </div>
-              <div className="flex gap-1">
-                <button className="btn text-[9px] px-1.5 py-0.5"
-                        onClick={() => startEdit(c)}>Edit</button>
-                <button className={`btn text-[9px] px-1.5 py-0.5 ${
-                  testing[c.id] === 'ok' ? 'pill-green' :
-                  testing[c.id] === 'fail' ? 'pill-red' :
-                  testing[c.id] === 'testing' ? 'pill-amber' : ''}`}
-                  onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing'}>
+              <div className="flex gap-1" style={{ flexShrink: 0 }}>
+                <button className="btn text-[9px] px-1.5 py-0.5" onClick={() => startEdit(c)}>Edit</button>
+                <button className={`btn text-[9px] px-1.5 py-0.5 ${testing[c.id] === 'ok' ? 'pill-green' : testing[c.id] === 'fail' ? 'pill-red' : testing[c.id] === 'testing' ? 'pill-amber' : ''}`}
+                  onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing' || isPaused}
+                  title={isPaused ? 'Resume before testing' : 'Test connection'}>
                   {testing[c.id] === 'testing' ? '…' : testing[c.id] === 'ok' ? '✓' : testing[c.id] === 'fail' ? '✕' : 'Test'}
                 </button>
-                <button className="btn text-[9px] px-1.5 py-0.5 text-red-400"
-                        onClick={() => deleteConn(c.id)}>✕</button>
+                <button className="btn text-[9px] px-1.5 py-0.5" onClick={() => pauseConn(c.id, isPaused)} disabled={!!pausing[c.id]}
+                  title={isPaused ? 'Resume — collectors will poll again' : 'Pause — stop polling'}
+                  style={{ color: isPaused ? 'var(--green)' : 'var(--text-3)', opacity: pausing[c.id] ? 0.5 : 1 }}>
+                  {pausing[c.id] ? '…' : isPaused ? '▶' : '⏸'}
+                </button>
+                <button className="btn text-[9px] px-1.5 py-0.5 text-red-400" onClick={() => deleteConn(c.id)}>✕</button>
               </div>
             </div>
-          ))}
+          )})}
         </div>
       ))}
 

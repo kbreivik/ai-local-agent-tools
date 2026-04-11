@@ -125,6 +125,46 @@ def decode_token(token: str) -> str:
 _bearer = HTTPBearer(auto_error=False)
 
 
+_ROLE_RANK = {"sith_lord": 4, "imperial_officer": 3, "stormtrooper": 2, "droid": 1}
+
+
+def get_user_role(token: str) -> str:
+    """Extract role from JWT. Returns 'stormtrooper' on failure."""
+    try:
+        payload = _pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        role = payload.get("role", "")
+        if role:
+            return role
+        sub = payload.get("sub", "")
+        if sub and sub != "internal_skill":
+            try:
+                from api.users import get_user_by_username
+                user = get_user_by_username(sub)
+                if user:
+                    return user.get("role", "stormtrooper")
+            except Exception:
+                pass
+        return "stormtrooper"
+    except Exception:
+        return "droid"
+
+
+def role_meets(role: str, minimum: str) -> bool:
+    """Return True if role >= minimum in the hierarchy."""
+    return _ROLE_RANK.get(role, 0) >= _ROLE_RANK.get(minimum, 99)
+
+
+async def get_current_user_and_role(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> tuple[str, str]:
+    """FastAPI dependency — returns (username, role). Raises 401 if not authenticated."""
+    if not creds:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = decode_token(creds.credentials)
+    role = get_user_role(creds.credentials)
+    return username, role
+
+
 async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> str:
