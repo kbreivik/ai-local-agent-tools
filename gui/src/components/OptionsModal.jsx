@@ -441,7 +441,8 @@ const PLATFORMS = [
   'wazuh', 'grafana', 'portainer', 'kibana', 'netbox', 'synology',
   'security_onion', 'syncthing', 'caddy', 'traefik', 'opnsense',
   'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
-  'cisco', 'juniper',
+  'cisco', 'juniper', 'aruba',
+  'docker_host', 'vm_host', 'elasticsearch', 'logstash',
 ]
 
 const PLATFORM_AUTH = {
@@ -473,6 +474,8 @@ const PLATFORM_AUTH = {
   aruba:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'aruba_os' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'AOS-CX API key (optional — future use)' }] },
   docker_host:     { auth_type: 'tcp', defaultPort: 2375, fields: [{ key: 'role', label: 'Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'standalone', label: 'Standalone' }], placeholder: 'swarm_manager' }] },
   vm_host:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'SSH User', placeholder: 'ubuntu' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'private_key', label: 'Private Key', type: 'textarea', hint: 'PEM format — paste full key including -----BEGIN/END----- lines' }, { key: 'role', label: 'VM Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'storage', label: 'Storage' }, { value: 'monitoring', label: 'Monitoring' }, { value: 'general', label: 'General' }] }] },
+  elasticsearch:   { auth_type: 'basic', defaultPort: 9200, fields: [{ key: 'username', label: 'Username', placeholder: 'elastic' }, { key: 'password', label: 'Password', type: 'password' }] },
+  logstash:        { auth_type: 'none', defaultPort: 9600, fields: [] },
 }
 const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{txt}</label>
 
@@ -643,11 +646,30 @@ function ConnectionsTab() {
           </div>
           {platAuth.fields.map(f => (
             <div key={f.key}>
-              {_FL(f.label)}
-              <input className="input text-[10px] w-full" type={f.type ?? 'text'}
-                placeholder={editingId ? '••••••• (saved)' : (f.placeholder ?? '')}
-                value={form.credentials[f.key] ?? ''}
-                onChange={e => updateCred(f.key, e.target.value)} />
+              {_FL(f.label + (f.hint ? ' ↓' : ''))}
+              {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+              {f.type === 'select' ? (
+                <select className="input text-[10px] w-full"
+                  value={form.credentials[f.key] ?? (f.options?.[0]?.value ?? '')}
+                  onChange={e => updateCred(f.key, e.target.value)}>
+                  {(f.options || []).map(opt =>
+                    typeof opt === 'string'
+                      ? <option key={opt} value={opt}>{opt}</option>
+                      : <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  )}
+                </select>
+              ) : f.type === 'textarea' ? (
+                <textarea className="input text-[10px] w-full"
+                  style={{ minHeight: 80, fontFamily: 'var(--font-mono)', fontSize: 9, resize: 'vertical', whiteSpace: 'pre' }}
+                  placeholder={editingId ? '••• (saved — leave blank to keep)' : (f.placeholder ?? '')}
+                  value={form.credentials[f.key] ?? ''}
+                  onChange={e => updateCred(f.key, e.target.value)} />
+              ) : (
+                <input className="input text-[10px] w-full" type={f.type ?? 'text'}
+                  placeholder={editingId ? '••••••• (saved)' : (f.placeholder ?? '')}
+                  value={form.credentials[f.key] ?? ''}
+                  onChange={e => updateCred(f.key, e.target.value)} />
+              )}
             </div>
           ))}
           {formError && <div className="text-[10px]" style={{ color: 'var(--red)' }}>{formError}</div>}

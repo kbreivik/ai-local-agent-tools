@@ -109,6 +109,21 @@ async def lifespan(app: FastAPI):
         init_connections()
     except Exception as e:
         _log.debug("Connections table init skipped: %s", e)
+    # Auto-register local Docker socket as docker_host connection (idempotent)
+    try:
+        from api.connections import list_connections, create_connection
+        existing = list_connections("docker_host")
+        labels = [c.get("label", "") for c in existing]
+        if "agent-01" not in labels:
+            create_connection(
+                platform="docker_host", label="agent-01",
+                host="unix:///var/run/docker.sock", port=0,
+                auth_type="tcp", credentials={},
+                config={"role": "standalone"}, enabled=True,
+            )
+            _log.info("Auto-created agent-01 docker_host connection")
+    except Exception as e:
+        _log.debug("agent-01 auto-register skipped: %s", e)
     # Initialize users + API tokens tables
     try:
         from api.users import init_users_tables

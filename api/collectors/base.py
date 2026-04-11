@@ -159,6 +159,10 @@ PLATFORM_SECTION: dict[str, str] = {
     "adguard": "NETWORK", "bookstack": "PLATFORM",
     "trilium": "PLATFORM",
     "lm_studio": "PLATFORM",
+    "docker_host": "CONTAINERS",
+    "vm_host": "COMPUTE",
+    "elasticsearch": "SECURITY",
+    "logstash": "SECURITY",
 }
 
 

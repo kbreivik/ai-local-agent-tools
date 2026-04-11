@@ -43,6 +43,8 @@ PLATFORM_HEALTH = {
     "technitium":      {"path": "/api/zones/list", "scheme": "http", "auth": "apikey_query"},
     "bookstack":       {"path": "/api/docs.json", "scheme": "https", "auth": "token_header"},
     "trilium":         {"path": "/etapi/app-info", "scheme": "http", "port": 8080, "auth": "token_header"},
+    "elasticsearch":   {"path": "/_cluster/health", "scheme": "http", "port": 9200, "auth": "basic"},
+    "logstash":        {"path": "/", "scheme": "http", "port": 9600, "auth": "none"},
 }
 
 # LM Studio — not a connection, uses env var directly
