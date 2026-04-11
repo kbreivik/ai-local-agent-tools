@@ -16,9 +16,12 @@ def _validate_command(command):
     'docker system df -v' is supported (the pattern matches 'docker system df' prefix).
     Returns (is_valid, cleaned_command_or_error_message).
     """
-    # Strip '2>/dev/null' before metachar check — safe stderr discard,
-    # extremely common in disk/find commands to suppress permission errors.
-    sanitized = re.sub(r'\s*2>/dev/null', '', command).strip()
+    # Strip '2>/dev/null' before metachar check — safe stderr discard.
+    cleaned = re.sub(r'\s*2>/dev/null', '', command).strip()
+
+    # Strip Go template --format arguments before metachar check.
+    # Pattern: --format '{{...}}' or --format "{{...}}" — safe, read-only Docker inspect option.
+    sanitized = re.sub(r"""--format\s+['"]?\{\{[^'"]*\}\}['"]?""", '--format TEMPLATE', cleaned)
 
     # Block remaining shell injection chars (stdout redirects, chaining, subshells)
     if any(c in sanitized for c in [';', '`', '$', '>', '<', '&&', '||']):
@@ -33,7 +36,9 @@ def _validate_command(command):
         # Read-only
         r'^df\b', r'^du\b', r'^free\b', r'^uptime$', r'^uname\b',
         r'^journalctl\b', r'^find\b', r'^ps\b',
-        r'^docker system df', r'^docker volume ls', r'^docker ps\b', r'^docker images\b',
+        r'^docker system df', r'^docker volume ls', r'^docker volume inspect\b',
+        r'^docker container inspect\b', r'^docker inspect\b',
+        r'^docker ps\b', r'^docker images\b',
         r'^apt list', r'^apt-cache\b',
         r'^systemctl list', r'^systemctl status\b',
         r'^cat /etc/os-release$', r'^cat /proc/[\w/]+$',
@@ -58,13 +63,15 @@ def _validate_command(command):
             return False, (
                 f"Command segment not in allowlist: {part!r}. "
                 "Allowed: df, du, free, uptime, journalctl, find, ps, "
-                "docker system df, docker volume ls, docker ps, apt list, "
+                "docker system df, docker volume ls, docker volume inspect, "
+                "docker container inspect, docker inspect, docker ps, apt list, "
                 "systemctl, ls, stat, sort, head, tail, grep, awk, cut, "
                 "docker image/container/volume/system/builder prune, "
-                "journalctl --vacuum, apt-get autoremove/clean."
+                "journalctl --vacuum, apt-get autoremove/clean. "
+                "Tip: use docker_df tool for structured Docker disk data instead."
             )
 
-    return True, sanitized
+    return True, cleaned  # return cleaned (2>/dev/null stripped), NOT sanitized (template replaced)
 
 
 def _resolve_connection(host, all_conns):
