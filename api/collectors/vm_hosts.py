@@ -69,6 +69,13 @@ def _ssh_run(host, port, username, password, private_key, script,
                 continue
         raise ValueError("Could not parse private key (tried RSA, Ed25519, ECDSA)")
 
+    import time as _time
+    t0 = _time.monotonic()
+    log.debug("SSH exec → %s@%s:%d%s | cmd: %s",
+              username, host, port,
+              f" via {jump_host['host']}" if jump_host else "",
+              script[:80].replace('\n', ' '))
+
     if jump_host:
         # Step 1: connect to bastion
         j_transport = paramiko.Transport((jump_host["host"], jump_host["port"]))
@@ -95,6 +102,8 @@ def _ssh_run(host, port, username, password, private_key, script,
         finally:
             client.close()
             j_transport.close()
+        elapsed = int((_time.monotonic() - t0) * 1000)
+        log.debug("SSH exec ← %s@%s:%d | %d bytes | %dms", username, host, port, len(output), elapsed)
         return output
     else:
         client = paramiko.SSHClient()
@@ -112,8 +121,13 @@ def _ssh_run(host, port, username, password, private_key, script,
         try:
             _, stdout, _ = client.exec_command(script, timeout=30)
             output = stdout.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            log.debug("SSH exec FAILED %s@%s:%d: %s", username, host, port, e, exc_info=True)
+            raise
         finally:
             client.close()
+        elapsed = int((_time.monotonic() - t0) * 1000)
+        log.debug("SSH exec ← %s@%s:%d | %d bytes | %dms", username, host, port, len(output), elapsed)
         return output
 
 
@@ -322,7 +336,7 @@ def _poll_one_vm(conn, all_conns):
             pass
         return result
     except Exception as e:
-        log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e)
+        log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e, exc_info=True)
         return {
             "id": label, "label": label, "host": host,
             "connection_id": str(conn.get("id", "")),

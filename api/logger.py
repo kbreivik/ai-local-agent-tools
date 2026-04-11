@@ -136,6 +136,45 @@ async def log_tool_call(
     )
 
 
+async def log_llm_exchange(
+    operation_id,
+    step,
+    messages,
+    response_text,
+    tool_calls,
+    prompt_tokens,
+    completion_tokens,
+    model,
+    duration_ms,
+):
+    """Store full LLM input/output for a single step. Opt-in via LOG_LLM_EXCHANGES=1."""
+    _enqueue(
+        q.create_tool_call,
+        operation_id=operation_id,
+        tool_name="_llm_exchange",
+        params={
+            "step": step,
+            "message_count": len(messages),
+            "messages": messages,
+            "model": model,
+        },
+        result={
+            "status": "ok",
+            "data": {
+                "response_text": response_text[:2000],
+                "tool_calls_requested": [tc.get("function", {}).get("name") for tc in tool_calls] if tool_calls else [],
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        },
+        status="ok",
+        model_used=model,
+        duration_ms=duration_ms,
+        error_detail=None,
+    )
+
+
 async def log_status_snapshot(
     component: str,
     state: dict,

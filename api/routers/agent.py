@@ -253,6 +253,8 @@ async def _run_single_agent_step(
             step += 1
             await manager.send_line("step", f"── Step {step} ──", session_id=session_id)
 
+            import time as _time
+            _step_t0 = _time.monotonic()
             try:
                 response = client.chat.completions.create(
                     model=_lm_model(),
@@ -277,6 +279,19 @@ async def _run_single_agent_step(
 
             msg = response.choices[0].message
             finish = response.choices[0].finish_reason
+
+            # Opt-in full LLM exchange logging (LOG_LLM_EXCHANGES=1)
+            if os.environ.get("LOG_LLM_EXCHANGES", "").lower() in ("1", "true", "yes"):
+                from api.logger import log_llm_exchange
+                await log_llm_exchange(
+                    operation_id, step, messages,
+                    response_text=msg.content or "",
+                    tool_calls=[{"function": {"name": tc.function.name}} for tc in (msg.tool_calls or [])],
+                    prompt_tokens=getattr(response.usage, 'prompt_tokens', 0) or 0 if hasattr(response, 'usage') and response.usage else 0,
+                    completion_tokens=getattr(response.usage, 'completion_tokens', 0) or 0 if hasattr(response, 'usage') and response.usage else 0,
+                    model=_lm_model(),
+                    duration_ms=int((_time.monotonic() - _step_t0) * 1000),
+                )
 
             if msg.content:
                 last_reasoning = msg.content
@@ -558,6 +573,7 @@ async def _run_single_agent_step(
                 except Exception as e:
                     result = {"status": "error", "message": str(e), "data": None,
                               "timestamp": datetime.now(timezone.utc).isoformat()}
+                    log.debug("Tool %r raised exception:", fn_name, exc_info=True)
                     negative_signals += 1
                     from api.memory.feedback import record_feedback_signal as _rfs
                     asyncio.create_task(_rfs(task, "tool_error", f"{fn_name}: {str(e)[:80]}"))
