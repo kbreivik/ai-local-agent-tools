@@ -571,8 +571,16 @@ async def _run_single_agent_step(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
                 except Exception as e:
-                    result = {"status": "error", "message": str(e), "data": None,
+                    err_str = str(e)
+                    result = {"status": "error", "message": err_str, "data": None,
                               "timestamp": datetime.now(timezone.utc).isoformat()}
+                    if "401" in err_str or "403" in err_str or "Unauthorized" in err_str:
+                        await manager.send_line(
+                            "step",
+                            f"[auth] Token may have expired — tool {fn_name!r} got auth error. "
+                            "Try stopping and re-running the task.",
+                            status="error", session_id=session_id,
+                        )
                     log.debug("Tool %r raised exception:", fn_name, exc_info=True)
                     negative_signals += 1
                     from api.memory.feedback import record_feedback_signal as _rfs

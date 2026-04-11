@@ -58,6 +58,64 @@ async def get_operation(op_id: str):
     return {"operation": op, "tool_calls": tool_calls}
 
 
+@router.get("/operations/{op_id}/correlate")
+async def correlate_operation(op_id: str, window_minutes: int = Query(10, ge=1, le=60)):
+    """Return log entries from Elasticsearch that overlap with the operation's time window."""
+    async with get_engine().connect() as conn:
+        op = await q.get_operation(conn, op_id)
+        if not op:
+            raise HTTPException(404, f"Operation '{op_id}' not found")
+
+    start_ts = op.get("created_at") or op.get("started_at")
+    end_ts   = op.get("completed_at") or op.get("updated_at")
+
+    if not start_ts:
+        return {"logs": [], "message": "No timestamp on operation"}
+
+    try:
+        import os
+        import httpx
+        from datetime import datetime, timedelta
+
+        es_url = os.environ.get("ELASTIC_URL", "")
+        if not es_url:
+            return {"logs": [], "operation_id": op_id, "message": "ELASTIC_URL not configured"}
+
+        # Build time range
+        if isinstance(start_ts, str):
+            start_dt = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
+        else:
+            start_dt = start_ts
+        end_dt = None
+        if end_ts:
+            end_dt = datetime.fromisoformat(str(end_ts).replace("Z", "+00:00")) if isinstance(end_ts, str) else end_ts
+        else:
+            end_dt = start_dt + timedelta(minutes=window_minutes)
+
+        query = {
+            "size": 50,
+            "sort": [{"@timestamp": "desc"}],
+            "query": {
+                "range": {
+                    "@timestamp": {
+                        "gte": start_dt.isoformat(),
+                        "lte": end_dt.isoformat(),
+                    }
+                }
+            }
+        }
+        r = httpx.post(f"{es_url}/filebeat-*/_search", json=query, verify=False, timeout=10)
+        if not r.is_success:
+            return {"logs": [], "operation_id": op_id, "message": f"Elasticsearch returned {r.status_code}"}
+        hits = r.json().get("hits", {}).get("hits", [])
+        logs = [{"timestamp": h["_source"].get("@timestamp"), "message": h["_source"].get("message", ""),
+                 "host": h["_source"].get("host", {}).get("name", ""), "source": h["_source"].get("log", {}).get("file", {}).get("path", "")}
+                for h in hits]
+        return {"logs": logs, "operation_id": op_id, "window_minutes": window_minutes}
+    except Exception as e:
+        return {"logs": [], "operation_id": op_id, "message": f"Log correlation unavailable: {e}", "window_minutes": window_minutes}
+
+
 # ── Escalations ───────────────────────────────────────────────────────────────
 
 @router.get("/escalations")

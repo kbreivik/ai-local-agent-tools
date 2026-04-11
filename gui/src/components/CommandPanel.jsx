@@ -341,6 +341,15 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       </div>
       {/* Inline agent feed — below Run button, above tool list */}
       <AgentFeed />
+      {runState !== 'running' && runState !== 'idle' && (
+        <div className="px-3 pb-1">
+          <button onClick={() => { /* navigate to Output tab */ }}
+            className="w-full text-xs text-slate-500 hover:text-slate-300 border border-slate-700 rounded px-2 py-0.5 transition-colors"
+            style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', fontSize: 9 }}>
+            ◫ View full trace in Output →
+          </button>
+        </div>
+      )}
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
       <ClarificationWidget dark />
 

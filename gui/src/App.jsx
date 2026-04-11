@@ -1274,7 +1274,7 @@ function AppShell() {
           {activeTab === 'Output' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden">
-                <OutputPanel />
+                <OutputPanel onTab={setActiveTab} />
               </div>
             </div>
           )}

@@ -52,7 +52,7 @@ const AGENT_BADGE = {
   research: { label: 'Research', cls: 'bg-purple-900 text-purple-300' },
 }
 
-export default function OutputPanel() {
+export default function OutputPanel({ onTab }) {
   const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
@@ -125,6 +125,20 @@ export default function OutputPanel() {
           .map((m, i) => <Line key={i} msg={m} />)
         }
         <div ref={bottomRef} />
+        {/* View in logs — shown after run completes */}
+        {runState !== 'running' && outputLines.some(m => m.type === 'done' || m.type === 'error') && (
+          <button
+            onClick={() => onTab && onTab('Logs')}
+            style={{
+              fontSize: 9, color: 'var(--text-3)', background: 'none',
+              border: '1px solid var(--border)', borderRadius: 2,
+              padding: '2px 8px', cursor: 'pointer', marginTop: 8,
+              fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
+            }}
+          >
+            ⊞ View full log →
+          </button>
+        )}
       </div>
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
     </div>
