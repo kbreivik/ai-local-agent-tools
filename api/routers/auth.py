@@ -1,10 +1,12 @@
 """Auth endpoints: login, me, logout."""
 import time
+from typing import Optional
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-from api.auth import authenticate, create_token, get_current_user
+from api.auth import authenticate, create_token, get_current_user, get_user_role
 
 _login_attempts: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT = 10
@@ -35,10 +37,14 @@ async def login(req: LoginRequest, request: Request):
     user = authenticate(req.username, req.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user)
-    return LoginResponse(access_token=token, username=user)
+    token = create_token(user["username"], role=user["role"])
+    return LoginResponse(access_token=token, username=user["username"])
 
 
 @router.get("/me")
-async def me(user: str = Depends(get_current_user)):
-    return {"username": user, "role": "admin"}
+async def me(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    user: str = Depends(get_current_user),
+):
+    role = get_user_role(creds.credentials) if creds else "stormtrooper"
+    return {"username": user, "role": role}

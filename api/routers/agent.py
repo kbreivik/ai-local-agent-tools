@@ -228,7 +228,7 @@ async def _run_single_agent_step(
     _last_blocked_tool = None    # name of most recently blocked tool
 
     step = 0
-    _MAX_STEPS_BY_TYPE = {"status": 8, "observe": 8, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
+    _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
     max_steps = _MAX_STEPS_BY_TYPE.get(agent_type, 20)
     final_status = "completed"
     last_reasoning = ""

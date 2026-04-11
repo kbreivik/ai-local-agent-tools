@@ -57,28 +57,26 @@ def verify_password(plain: str) -> bool:
     return bcrypt.checkpw(plain.encode(), _STORED_HASH)
 
 
-def authenticate(username: str, password: str) -> Optional[str]:
-    """Return username if credentials valid, else None.
+def authenticate(username: str, password: str) -> Optional[dict]:
+    """Return {"username": str, "role": str} if valid, else None.
 
     Checks users table first (multi-user), falls back to env var admin.
     """
-    # Try users table first
     try:
         from api.users import authenticate_user
         user = authenticate_user(username, password)
         if user:
-            return user["username"]
+            return {"username": user["username"], "role": user.get("role", "stormtrooper")}
     except Exception:
         pass
-    # Fallback: env var admin
     if username == _ADMIN_USER and verify_password(password):
-        return username
+        return {"username": username, "role": "sith_lord"}
     return None
 
 
-def create_token(username: str) -> str:
+def create_token(username: str, role: str = "stormtrooper") -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=EXPIRE_HOURS)
-    payload = {"sub": username, "exp": expire}
+    payload = {"sub": username, "exp": expire, "role": role}
     return _pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
