@@ -76,6 +76,10 @@ def _ssh_run(host, port, username, password, private_key, script,
               f" via {jump_host['host']}" if jump_host else "",
               script[:80].replace('\n', ' '))
 
+    # Dynamic timeout: write/cleanup commands need longer than reads
+    _WRITE_INDICATORS = ('prune', 'vacuum', 'autoremove', 'autoclean', 'upgrade')
+    _exec_timeout = 180 if any(w in script.lower() for w in _WRITE_INDICATORS) else 30
+
     if jump_host:
         # Step 1: connect to bastion
         j_transport = paramiko.Transport((jump_host["host"], jump_host["port"]))
@@ -97,8 +101,11 @@ def _ssh_run(host, port, username, password, private_key, script,
                           {"password": password} if password else
                           {"look_for_keys": True, "allow_agent": True}))
         try:
-            _, stdout, _ = client.exec_command(script, timeout=30)
+            _, stdout, stderr = client.exec_command(script, timeout=_exec_timeout)
             output = stdout.read().decode("utf-8", errors="replace")
+            err_out = stderr.read().decode("utf-8", errors="replace").strip()
+            if not output.strip() and err_out:
+                output = f"[stderr]: {err_out}"
         finally:
             client.close()
             j_transport.close()
@@ -132,8 +139,11 @@ def _ssh_run(host, port, username, password, private_key, script,
             kw["allow_agent"] = True
         client.connect(**kw)
         try:
-            _, stdout, _ = client.exec_command(script, timeout=30)
+            _, stdout, stderr = client.exec_command(script, timeout=_exec_timeout)
             output = stdout.read().decode("utf-8", errors="replace")
+            err_out = stderr.read().decode("utf-8", errors="replace").strip()
+            if not output.strip() and err_out:
+                output = f"[stderr]: {err_out}"
         except Exception as e:
             log.debug("SSH exec FAILED %s@%s:%d: %s", username, host, port, e, exc_info=True)
             try:
