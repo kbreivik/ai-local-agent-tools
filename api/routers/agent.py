@@ -223,6 +223,8 @@ async def _run_single_agent_step(
     tools_used_names: list = []
     positive_signals = 0
     negative_signals = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
     _audit_logged = False        # allow at most one audit_log call per run
     plan_action_called = False   # track if plan_action was called this run
     _last_blocked_tool = None    # name of most recently blocked tool
@@ -268,6 +270,10 @@ async def _run_single_agent_step(
                 })
                 final_status = "error"
                 break
+
+            if hasattr(response, 'usage') and response.usage:
+                total_prompt_tokens     += getattr(response.usage, 'prompt_tokens', 0) or 0
+                total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
 
             msg = response.choices[0].message
             finish = response.choices[0].finish_reason
@@ -674,13 +680,23 @@ async def _run_single_agent_step(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
+    if total_prompt_tokens or total_completion_tokens:
+        await manager.send_line(
+            "step",
+            f"[tokens] prompt={total_prompt_tokens} completion={total_completion_tokens} "
+            f"total={total_prompt_tokens + total_completion_tokens}",
+            status="ok", session_id=session_id,
+        )
+
     return {
-        "output":           last_reasoning,
-        "tools_used":       tools_used_names,
-        "final_status":     final_status,
-        "positive_signals": positive_signals,
-        "negative_signals": negative_signals,
-        "steps_taken":      step,
+        "output":              last_reasoning,
+        "tools_used":          tools_used_names,
+        "final_status":        final_status,
+        "positive_signals":    positive_signals,
+        "negative_signals":    negative_signals,
+        "steps_taken":         step,
+        "prompt_tokens":       total_prompt_tokens,
+        "completion_tokens":   total_completion_tokens,
     }
 
 
@@ -838,6 +854,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     agg_positive = 0
     agg_negative = 0
     agg_steps = 0
+    agg_prompt_tokens = 0
+    agg_completion_tokens = 0
     final_status = "completed"
     halted_early = False
     all_tools = _build_tools_spec()
@@ -890,6 +908,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         agg_positive += step_result["positive_signals"]
         agg_negative += step_result["negative_signals"]
         agg_steps    += step_result["steps_taken"]
+        agg_prompt_tokens     += step_result.get("prompt_tokens", 0)
+        agg_completion_tokens += step_result.get("completion_tokens", 0)
         final_status  = step_result["final_status"]
 
         prior_verdict = verdict_from_text(step_result["output"])
