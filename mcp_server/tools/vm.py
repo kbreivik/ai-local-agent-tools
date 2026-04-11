@@ -259,3 +259,55 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
     except Exception as e:
         return {"status": "error", "message": f"infra_lookup error: {e}",
                 "data": None, "timestamp": _ts()}
+
+
+def ssh_capabilities(host: str = "", days: int = 7) -> dict:
+    """Query the SSH capability map — which credentials can reach which hosts.
+
+    Returns verified credential→host pairs with success rates and latency.
+    Use to understand available SSH access before planning operations,
+    or to audit which credentials have broad access.
+
+    Args:
+        host: optional target host to filter by (label or IP). Blank = all.
+        days: look-back window in days (default 7, max 90).
+    """
+    try:
+        from api.db.ssh_capabilities import query_capabilities, get_capability_summary
+        if host:
+            target = host
+            try:
+                from api.db.infra_inventory import resolve_host
+                entry = resolve_host(host)
+                if entry and entry.get("ips"):
+                    target = entry["ips"][0]
+            except Exception:
+                pass
+            rows = query_capabilities(target_host=target, days=days)
+            if not rows:
+                rows = [r for r in query_capabilities(days=days)
+                        if host.lower() in (r.get("resolved_label", "") or "").lower()
+                        or host.lower() in (r.get("target_host", "") or "").lower()]
+        else:
+            rows = query_capabilities(verified_only=True, days=days)
+
+        summary = get_capability_summary()
+        return {
+            "status": "ok",
+            "message": f"{len(rows)} credential→host pair(s)" + (f" for {host!r}" if host else "") + f" (last {days}d)",
+            "data": {
+                "pairs": [{"credential_label": r.get("resolved_label") or r.get("target_host"),
+                           "target_host": r.get("target_host"), "username": r.get("username"),
+                           "verified": r.get("verified"),
+                           "last_success": str(r.get("last_success", ""))[:19],
+                           "success_rate_pct": r.get("success_rate_pct", 0),
+                           "avg_latency_ms": r.get("avg_latency_ms"),
+                           "jump_host": r.get("jump_host"),
+                           "new_host_alert": r.get("new_host_alert", False),
+                           "attempts_7d": r.get("attempts_7d", 0)} for r in rows[:20]],
+                "summary": summary,
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"ssh_capabilities error: {e}", "data": None, "timestamp": _ts()}

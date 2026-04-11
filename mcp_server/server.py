@@ -698,5 +698,15 @@ def docker_images(host: str = "", include_dangling: bool = True) -> dict:
     return _docker_images(host=host, include_dangling=include_dangling)
 
 
+@mcp.tool()
+def ssh_capabilities(host: str = "", days: int = 7) -> dict:
+    """Query SSH capability map — which credentials can reach which hosts.
+    Returns verified pairs with success rates and latency. Use to audit
+    SSH access or check connectivity before operations.
+    """
+    from mcp_server.tools.vm import ssh_capabilities as _ssh_caps
+    return _ssh_caps(host=host, days=days)
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -217,3 +217,34 @@ async def get_ssh_summary(_: str = Depends(get_current_user)):
         for host, v in sorted(by_host.items())
     ]
     return {"summary": summary, "total": len(recent)}
+
+
+# ── SSH Capability Map ────────────────────────────────────────────────────────
+
+@router.get("/ssh/capabilities")
+async def get_ssh_capabilities(
+    connection_id: str = Query(""), target_host: str = Query(""),
+    verified_only: bool = Query(False), days: int = Query(7, ge=1, le=90),
+    alerts_only: bool = Query(False), _: str = Depends(get_current_user),
+):
+    """Query SSH capability map — which credentials work on which hosts."""
+    from api.db.ssh_capabilities import query_capabilities
+    rows = query_capabilities(connection_id=connection_id, target_host=target_host,
+                              verified_only=verified_only, days=days, alerts_only=alerts_only)
+    return {"capabilities": rows, "count": len(rows)}
+
+
+@router.get("/ssh/capabilities/summary")
+async def get_ssh_capabilities_summary(_: str = Depends(get_current_user)):
+    """High-level SSH capability summary."""
+    from api.db.ssh_capabilities import get_capability_summary
+    return {"summary": get_capability_summary()}
+
+
+@router.get("/ssh/capabilities/alerts")
+async def get_ssh_capability_alerts(_: str = Depends(get_current_user)):
+    """Credentials that gained access to new/unexpected hosts."""
+    from api.db.ssh_capabilities import query_capabilities
+    alerts = query_capabilities(alerts_only=True, days=30)
+    return {"alerts": alerts, "count": len(alerts),
+            "message": f"{len(alerts)} credential(s) gained access to new host(s)" if alerts else "No new host alerts."}

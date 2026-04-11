@@ -121,6 +121,11 @@ async def lifespan(app: FastAPI):
         init_ssh_log()
     except Exception as e:
         _log.debug("SSH log init skipped: %s", e)
+    try:
+        from api.db.ssh_capabilities import init_capabilities
+        init_capabilities()
+    except Exception as e:
+        _log.debug("SSH capabilities init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection

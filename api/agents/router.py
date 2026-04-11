@@ -89,7 +89,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "storage_health",
     "agent_status", "postgres_health",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images",
+    "docker_df", "docker_images", "ssh_capabilities",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -109,7 +109,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
     "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images",
+    "docker_df", "docker_images", "ssh_capabilities",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -133,7 +133,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "docker_prune",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -145,7 +145,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "docker_engine_update", "vm_exec", "infra_lookup",
     "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "docker_prune",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)

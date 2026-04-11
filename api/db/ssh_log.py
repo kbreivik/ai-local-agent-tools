@@ -158,6 +158,19 @@ def write_log(*, target_host, target_port=22, username="", outcome,
     except Exception as e:
         log.debug("ssh_log write_log failed (non-fatal): %s", e)
 
+    # Update capability map (fire-and-forget)
+    try:
+        from api.db.ssh_capabilities import upsert_capability
+        upsert_capability(
+            connection_id=connection_id or "", target_host=target_host,
+            target_port=target_port, outcome=outcome, duration_ms=duration_ms or 0,
+            error_message=error_message or "", credential_source_id=credential_source_id or "",
+            username=username or "", jump_host=jump_host or "",
+            jump_connection_id=jump_connection_id or "", resolved_label=resolved_label or "",
+        )
+    except Exception:
+        pass
+
 
 def query_log(connection_id="", target_host="", outcome="", limit=50):
     """Query recent SSH log entries."""
