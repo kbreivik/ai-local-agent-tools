@@ -707,13 +707,27 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             from api.connections import get_all_connections_for_platform
             vms = get_all_connections_for_platform("vm_host")
             if vms:
-                labels = [f"{c.get('label', c.get('host'))} ({c.get('host', '')})" for c in vms[:6]]
+                inv = {}
+                try:
+                    from api.db.infra_inventory import list_inventory
+                    inv = {e["connection_id"]: e for e in list_inventory("vm_host")}
+                except Exception:
+                    pass
+                lines = []
+                for c in vms[:8]:
+                    cid = str(c.get("id", ""))
+                    label = c.get("label", c.get("host", "?"))
+                    ip = c.get("host", "")
+                    entry = inv.get(cid)
+                    hostname = entry.get("hostname", "") if entry else ""
+                    display = f"{label} (hostname: {hostname})" if hostname and hostname != label else f"{label} ({ip})"
+                    lines.append(f"  - {display}")
                 cap_hint = (
-                    "AVAILABLE VM HOSTS (use vm_exec tool to query these directly):\n"
-                    + "\n".join(f"  - {l}" for l in labels)
-                    + "\n\nvm_exec commands: df -h (disk), free -m (memory), "
-                    + "journalctl -n 50 (logs), find / -size +100M -type f (large files), "
-                    + "docker system df (Docker storage), apt list --upgradable (updates)\n\n"
+                    "AVAILABLE VM HOSTS (use vm_exec to query, infra_lookup to resolve names):\n"
+                    + "\n".join(lines)
+                    + "\n\nvm_exec commands: df -h, free -m, journalctl -n 50, "
+                    + "find / -size +100M -type f, docker system df, "
+                    + "docker volume ls | head -20, apt list --upgradable\n\n"
                 )
                 system_prompt = cap_hint + system_prompt
     except Exception:

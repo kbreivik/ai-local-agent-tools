@@ -109,6 +109,12 @@ async def lifespan(app: FastAPI):
         init_connections()
     except Exception as e:
         _log.debug("Connections table init skipped: %s", e)
+    # Initialize infra inventory table
+    try:
+        from api.db.infra_inventory import init_inventory
+        init_inventory()
+    except Exception as e:
+        _log.debug("Infra inventory init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection

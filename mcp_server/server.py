@@ -657,5 +657,16 @@ def vm_exec(host: str, command: str) -> dict:
     return _vm_exec(host=host, command=command)
 
 
+@mcp.tool()
+def infra_lookup(query: str = "", platform: str = "") -> dict:
+    """Look up infrastructure entities by hostname, IP, alias, or label.
+    Searches the auto-populated infra_inventory. Use to resolve names,
+    find IPs, or list all known hosts for a platform.
+    Leave query blank to list all known entities.
+    """
+    from mcp_server.tools.vm import infra_lookup as _infra_lookup
+    return _infra_lookup(query=query, platform=platform)
+
+
 if __name__ == "__main__":
     mcp.run()

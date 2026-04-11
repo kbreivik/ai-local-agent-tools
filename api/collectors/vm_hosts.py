@@ -306,6 +306,20 @@ def _poll_one_vm(conn, all_conns):
             (c.get("label") for c in all_conns if str(c.get("id")) == cfg.get("jump_via", "")),
             None
         )
+        # Write discovered facts to infra_inventory (non-blocking)
+        try:
+            from api.db.infra_inventory import upsert_entity
+            upsert_entity(
+                connection_id=str(conn.get("id", "")),
+                platform="vm_host", label=label,
+                hostname=result.get("hostname", ""),
+                ips=[conn.get("host", "")] if conn.get("host") else [],
+                meta={"os": result.get("os", ""), "kernel": result.get("kernel", ""),
+                      "role": cfg.get("role", ""), "os_type": cfg.get("os_type", ""),
+                      "docker_version": result.get("docker_version", "")},
+            )
+        except Exception:
+            pass
         return result
     except Exception as e:
         log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e)
