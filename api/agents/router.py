@@ -256,6 +256,16 @@ STOPPING RULES (MANDATORY):
 - Never call audit_log() more than once per session.
 - Do NOT keep calling tools after you have the answer.
 
+BLOCKED COMMAND RULE:
+If vm_exec returns a "not in allowlist" error, do NOT retry the
+same command or variations of it. Instead:
+1. Accept that the command is not available via vm_exec
+2. Try an alternative approach (e.g. use docker_df tool instead
+   of complex docker inspect chains, use 'docker system df -v'
+   for per-volume sizes, use 'docker volume inspect <name>' for paths)
+3. If no alternative exists, note the limitation in your summary
+   and move on. Never call the same blocked command twice.
+
 VM HOST COMMANDS — IMPORTANT RESTRICTIONS:
 For disk investigations, call vm_disk_investigate(host=...) first.
 It runs a complete analysis in one step and returns culprits + actions.
@@ -453,6 +463,16 @@ STOPPING RULES (MANDATORY):
 - After completing all steps and writing your final summary, call audit_log() ONCE, then STOP.
 - Do not call audit_log() more than once per session.
 - After audit_log(), output NOTHING MORE — the run ends immediately.
+
+BLOCKED COMMAND RULE:
+If vm_exec returns a "not in allowlist" error, do NOT retry the
+same command or variations of it. Instead:
+1. Accept that the command is not available via vm_exec
+2. Try an alternative approach (e.g. use docker_df tool instead
+   of complex docker inspect chains, use 'docker system df -v'
+   for per-volume sizes, use 'docker volume inspect <name>' for paths)
+3. If no alternative exists, note the limitation in your summary
+   and move on. Never call the same blocked command twice.
 
 RESPONSE STYLE — Professional IT Support:
 - Lead with what you did: "I checked X and found..."

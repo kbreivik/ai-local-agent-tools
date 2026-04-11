@@ -123,7 +123,14 @@ def vm_exec(host: str, command: str) -> dict:
     Args:
         host: VM host label, discovered hostname, or IP address.
               The error message lists available hosts if not found.
-        command: Read-only shell command. Rules:
+        command: IMPORTANT: If vm_exec returns "not in allowlist", do NOT retry.
+                 Use these alternatives instead:
+                 - docker volume sizes → docker system df -v
+                 - docker volume path  → docker volume inspect <name> --format '{{.Mountpoint}}'
+                 - docker container details → docker container inspect <name>
+                 - structured Docker data → use docker_df tool (preferred)
+
+                 Read-only shell command. Rules:
                  - Up to two pipes supported (cmd | cmd | cmd)
                  - '2>/dev/null' allowed (stderr discard)
                  - NO shell variables ($var), NO while/for loops,
