@@ -5,7 +5,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useAgentOutput } from '../context/AgentOutputContext'
-import { sendConfirmation } from '../api'
+import { sendConfirmation, authHeaders } from '../api'
 
 const TIMEOUT_SECONDS = 300
 
@@ -38,26 +38,49 @@ function Countdown({ seconds, onExpire }) {
 export default function PlanConfirmModal() {
   const { pendingPlan, clearPlan } = useAgentOutput()
   const [sending,   setSending]   = useState(false)
+  const [retryable, setRetryable] = useState(false)
   const [confirmed, setConfirmed] = useState(false)  // required checkbox for HIGH risk
 
-  // Reset checkbox whenever a new plan arrives
+  // Reset state whenever a new plan arrives
   useEffect(() => {
-    if (pendingPlan) setConfirmed(false)
+    if (pendingPlan) { setConfirmed(false); setSending(false); setRetryable(false) }
   }, [pendingPlan?.summary])
 
-  const respond = useCallback(async (approved) => {
-    if (sending || !pendingPlan) return
+  const handleConfirm = useCallback(async () => {
+    if ((sending && !retryable) || !pendingPlan) return
     setSending(true)
+    setRetryable(false)
     try {
-      await sendConfirmation(pendingPlan.sessionId, approved)
+      await sendConfirmation(pendingPlan.sessionId, true)
       clearPlan()
+      // Safety timeout — if modal reappears (WS reconnect re-broadcast),
+      // allow retry after 5s in case approval was lost
+      setTimeout(() => { setSending(false); setRetryable(true) }, 5000)
     } catch (e) {
-      console.error('[PlanConfirmModal] send failed:', e)
+      console.error('[PlanConfirmModal] confirm failed:', e)
       setSending(false)
+      setRetryable(true)
     }
-  }, [sending, pendingPlan, clearPlan])
+  }, [sending, retryable, pendingPlan, clearPlan])
 
-  const onTimeout = useCallback(() => respond(false), [respond])
+  const handleCancel = useCallback(async () => {
+    if (!pendingPlan) return
+    // Send rejection
+    try {
+      await sendConfirmation(pendingPlan.sessionId, false)
+    } catch { /* best effort */ }
+    // Also stop the agent session in case it's already running
+    try {
+      await fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/agent/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ session_id: pendingPlan.sessionId }),
+      })
+    } catch { /* best effort */ }
+    clearPlan()
+  }, [pendingPlan, clearPlan])
+
+  const onTimeout = useCallback(() => handleCancel(), [handleCancel])
 
   if (!pendingPlan) return null
 
@@ -165,15 +188,15 @@ export default function PlanConfirmModal() {
         {/* Actions */}
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
           <button
-            onClick={() => respond(false)}
-            disabled={sending}
+            onClick={handleCancel}
+            disabled={sending && !retryable}
             className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors bg-slate-700 hover:bg-slate-600 text-slate-200 disabled:opacity-50"
           >
             ✕ Cancel
           </button>
           <button
-            onClick={() => respond(true)}
-            disabled={sending || (riskLevel === 'high' && !confirmed)}
+            onClick={handleConfirm}
+            disabled={(sending && !retryable) || (riskLevel === 'high' && !confirmed)}
             title={riskLevel === 'high' && !confirmed ? 'Check the confirmation box first' : ''}
             className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               riskLevel === 'high'
@@ -181,7 +204,7 @@ export default function PlanConfirmModal() {
                 : 'bg-green-700 hover:bg-green-600 text-white'
             }`}
           >
-            {sending ? '⏳ Sending…' : '✓ Confirm & Run'}
+            {sending && !retryable ? '⏳ Sending…' : retryable ? '↺ Retry confirm' : '✓ Confirm & Run'}
           </button>
         </div>
       </div>
