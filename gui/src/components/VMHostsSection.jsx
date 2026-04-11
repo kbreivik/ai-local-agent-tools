@@ -92,6 +92,9 @@ function VMCard({ vm, onAction }) {
         <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-1)', flex: 1 }}>{vm.hostname || vm.label}</span>
         <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{vm.host}</span>
+        {vm.config?.is_jump_host && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(204,136,0,0.15)', color: 'var(--amber)', border: '1px solid rgba(204,136,0,0.3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⇢ BASTION</span>}
+        {vm.config?.shared_credentials && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,238,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,200,238,0.25)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⊕ SHARED</span>}
+        {vm.jump_via_label && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)' }}>via {vm.jump_via_label}</span>}
         {vm.uptime_fmt && <span style={{ fontSize: 9, color: 'var(--text-3)' }}>↑ {vm.uptime_fmt}</span>}
         {vm.problem && <span style={{ fontSize: 9, color: dot === 'red' ? 'var(--red)' : 'var(--amber)', padding: '1px 5px', borderRadius: 2, background: dot === 'red' ? 'var(--red-dim)' : 'var(--amber-dim)' }}>⚠ {vm.problem}</span>}
         <span style={{ fontSize: 8, color: 'var(--text-3)', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.1s' }}>▶</span>
@@ -112,6 +115,12 @@ function VMCard({ vm, onAction }) {
             {vm.os && <span>{vm.os} · </span>}
             {vm.kernel && <span>kernel {vm.kernel}</span>}
           </div>
+          {vm.config?.os_type && (
+            <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
+              {vm.config.pkg_manager && `pkg: ${vm.config.pkg_manager}`}
+              {vm.config.init_system && ` · init: ${vm.config.init_system}`}
+            </div>
+          )}
           {vm.load_1 !== undefined && (
             <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 6 }}>
               Load avg: <span style={{ color: vm.load_1 > 4 ? 'var(--red)' : 'var(--text-1)' }}>{vm.load_1?.toFixed(2)}</span>

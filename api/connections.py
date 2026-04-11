@@ -374,28 +374,27 @@ def test_connection(connection_id: str) -> dict:
             update_connection(connection_id, verified=False, last_seen=now)
             return {"status": "error", "data": None, "timestamp": now, "message": str(e)}
 
-    # VM host — SSH connectivity test
+    # VM host — SSH connectivity test (supports jump hosts + shared creds)
     if platform == 'vm_host':
         try:
-            from api.collectors.vm_hosts import _ssh_run
+            from api.collectors.vm_hosts import _ssh_run, _resolve_credentials, _resolve_jump_host
             host = connection.get("host", "")
             port = connection.get("port") or 22
-            creds = connection.get("credentials", {}) or {}
-            if isinstance(creds, str):
-                import json
-                try: creds = json.loads(creds)
-                except Exception: creds = {}
-            username    = creds.get("username", "ubuntu")
-            password    = creds.get("password") or None
-            private_key = creds.get("private_key") or None
+            try:
+                all_conns = get_all_connections_for_platform("vm_host")
+            except Exception:
+                all_conns = [connection]
+            username, password, private_key = _resolve_credentials(connection, all_conns)
+            jump_host = _resolve_jump_host(connection, all_conns)
+            jump_label = f" via {jump_host['host']}" if jump_host else ""
             out = _ssh_run(host, port, username, password, private_key,
-                           "uptime && hostname && uname -r")
+                           "uptime && hostname && uname -r", jump_host=jump_host)
             update_connection(connection_id, verified=True, last_seen=now)
             return {
                 "status": "ok",
                 "data": {"output": out[:200]},
                 "timestamp": now,
-                "message": f"SSH OK — {out.strip()[:80]}",
+                "message": f"SSH OK{jump_label} — {out.strip()[:80]}",
             }
         except Exception as e:
             update_connection(connection_id, verified=False, last_seen=now)

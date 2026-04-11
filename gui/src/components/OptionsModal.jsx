@@ -473,7 +473,23 @@ const PLATFORM_AUTH = {
   juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'Junos REST API key (optional — future use)' }] },
   aruba:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'aruba_os' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'AOS-CX API key (optional — future use)' }] },
   docker_host:     { auth_type: 'tcp', defaultPort: 2375, fields: [{ key: 'role', label: 'Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'standalone', label: 'Standalone' }], placeholder: 'swarm_manager' }] },
-  vm_host:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'SSH User', placeholder: 'ubuntu' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'private_key', label: 'Private Key', type: 'textarea', hint: 'PEM format — paste full key including -----BEGIN/END----- lines' }, { key: 'role', label: 'VM Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'storage', label: 'Storage' }, { value: 'monitoring', label: 'Monitoring' }, { value: 'general', label: 'General' }] }] },
+  vm_host:         {
+    auth_type: 'ssh', defaultPort: 22,
+    fields: [
+      { key: 'username', label: 'SSH User', placeholder: 'ubuntu' },
+      { key: 'password', label: 'Password', type: 'password' },
+      { key: 'private_key', label: 'Private Key', type: 'textarea', hint: 'PEM format — paste full key including -----BEGIN/END----- lines. Encrypted at rest. Leave blank to use password.' },
+    ],
+    configFields: [
+      { key: 'role', label: 'VM Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'storage', label: 'Storage' }, { value: 'monitoring', label: 'Monitoring' }, { value: 'general', label: 'General' }] },
+      { key: 'os_type', label: 'OS', type: 'select', hint: 'Auto-detected on first poll if left as Unknown', options: [{ value: '', label: 'Unknown (auto-detect)' }, { value: 'debian', label: 'Ubuntu / Debian' }, { value: 'rhel', label: 'RHEL / CentOS / Fedora' }, { value: 'alpine', label: 'Alpine' }, { value: 'windows', label: 'Windows Server' }, { value: 'coreos', label: 'CoreOS / Flatcar' }] },
+    ],
+    advancedConfigFields: [
+      { key: 'shared_credentials', label: 'Shared credentials', type: 'toggle', hint: 'Try these credentials on VMs with no key or password of their own. Tried last, never overwrites machine-specific credentials.' },
+      { key: 'is_jump_host', label: 'This is a jump host / bastion', type: 'toggle', hint: 'Marks this machine as a relay. Not polled as a compute node.' },
+      { key: 'jump_via', label: 'Connect via jump host', type: 'jump_select', hint: 'Route SSH through a bastion. Cannot be set if this connection is itself a jump host.' },
+    ],
+  },
   elasticsearch:   { auth_type: 'basic', defaultPort: 9200, fields: [{ key: 'username', label: 'Username', placeholder: 'elastic' }, { key: 'password', label: 'Password', type: 'password' }] },
   logstash:        { auth_type: 'none', defaultPort: 9600, fields: [] },
 }
@@ -485,21 +501,32 @@ function ConnectionsTab() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {} })
+  const [form, setForm] = useState({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {}, config: {} })
   const [formError, setFormError] = useState('')
   const [testing, setTesting] = useState({})
+  const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ds_conn_advanced_open') === 'true')
+  const [jumpHosts, setJumpHosts] = useState([])
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
   const updateCred = (key, val) => setForm(f => ({ ...f, credentials: { ...f.credentials, [key]: val } }))
+  const updateConfig = (key, val) => {
+    setForm(f => {
+      const cfg = { ...f.config, [key]: val }
+      // Mutual exclusion: jump host ↔ jump via
+      if (key === 'is_jump_host' && val) cfg.jump_via = ''
+      if (key === 'jump_via' && val) cfg.is_jump_host = false
+      return { ...f, config: cfg }
+    })
+  }
   const resetForm = () => {
-    setForm({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {} })
+    setForm({ platform: 'proxmox', label: '', host: '', port: 8006, auth_type: 'token', credentials: {}, config: {} })
     setEditingId(null)
     setShowForm(false)
     setFormError('')
   }
   const setPlatform = (p) => {
     const pa = PLATFORM_AUTH[p] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
-    setForm(f => ({ ...f, platform: p, port: pa.defaultPort || 443, auth_type: pa.auth_type, credentials: {} }))
+    setForm(f => ({ ...f, platform: p, port: pa.defaultPort || 443, auth_type: pa.auth_type, credentials: {}, config: {} }))
     setFormError('')
   }
   const startEdit = (c) => {
@@ -511,6 +538,7 @@ function ConnectionsTab() {
       port: c.port || pa.defaultPort || 443,
       auth_type: c.auth_type || pa.auth_type || 'token',
       credentials: {},
+      config: c.config || {},
     })
     setEditingId(c.id)
     setShowForm(true)
@@ -524,7 +552,12 @@ function ConnectionsTab() {
   const fetchConns = () => {
     fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
       .then(r => r.ok ? r.json() : { data: [] })
-      .then(d => { setConns(d.data || []); setLoading(false) })
+      .then(d => {
+        const all = d.data || []
+        setConns(all)
+        setJumpHosts(all.filter(c => c.platform === 'vm_host' && c.config?.is_jump_host).map(c => ({ id: c.id, label: c.label, host: c.host })))
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
@@ -542,9 +575,10 @@ function ConnectionsTab() {
         const body = { label: form.label, host: form.host, port: form.port, auth_type: form.auth_type }
         const creds = {}
         for (const [k, v] of Object.entries(form.credentials)) {
-          if (v && v.trim()) creds[k] = v
+          if (v && String(v).trim()) creds[k] = v
         }
         if (Object.keys(creds).length > 0) body.credentials = creds
+        if (form.config && Object.keys(form.config).length > 0) body.config = form.config
         const r = await fetch(`${BASE}/api/connections/${editingId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -672,6 +706,64 @@ function ConnectionsTab() {
               )}
             </div>
           ))}
+          {/* Config fields (role, os_type, etc.) */}
+          {(platAuth.configFields || []).map(f => (
+            <div key={f.key}>
+              {_FL(f.label)}
+              {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+              {f.type === 'select' ? (
+                <select className="input text-[10px] w-full"
+                  value={form.config[f.key] ?? (f.options?.[0]?.value ?? '')}
+                  onChange={e => updateConfig(f.key, e.target.value)}>
+                  {(f.options || []).map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                </select>
+              ) : (
+                <input className="input text-[10px] w-full" type={f.type ?? 'text'}
+                  value={form.config[f.key] ?? ''} onChange={e => updateConfig(f.key, e.target.value)} />
+              )}
+            </div>
+          ))}
+          {/* Advanced config accordion */}
+          {(platAuth.advancedConfigFields || []).length > 0 && (
+            <>
+              <button onClick={() => { const next = !advancedOpen; setAdvancedOpen(next); localStorage.setItem('ds_conn_advanced_open', String(next)) }}
+                style={{ width: '100%', textAlign: 'left', fontSize: 9, color: 'var(--text-3)', background: 'none', border: 'none', borderTop: '1px solid var(--border)', padding: '5px 0', cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ transform: advancedOpen ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.15s' }}>▶</span>
+                ADVANCED
+              </button>
+              {advancedOpen && platAuth.advancedConfigFields.map(f => (
+                <div key={f.key} style={{ marginBottom: 6 }}>
+                  {_FL(f.label)}
+                  {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
+                  {f.type === 'toggle' ? (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <div onClick={() => updateConfig(f.key, !form.config[f.key])}
+                        style={{ width: 32, height: 18, borderRadius: 9, flexShrink: 0, background: form.config[f.key] ? 'var(--green)' : 'var(--bg-3)', border: '1px solid var(--border)', cursor: 'pointer', position: 'relative', transition: 'background 0.15s' }}>
+                        <div style={{ position: 'absolute', top: 2, left: form.config[f.key] ? 14 : 2, width: 12, height: 12, borderRadius: '50%', background: 'var(--text-1)', transition: 'left 0.15s' }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: 'var(--text-2)' }}>{form.config[f.key] ? 'Enabled' : 'Disabled'}</span>
+                    </label>
+                  ) : f.type === 'jump_select' ? (
+                    !form.config.is_jump_host && (
+                      <>
+                        <select className="input text-[10px] w-full" value={form.config[f.key] || ''} onChange={e => updateConfig(f.key, e.target.value)}>
+                          <option value="">— direct connection —</option>
+                          {jumpHosts.filter(jh => jh.id !== editingId).map(jh => <option key={jh.id} value={jh.id}>{jh.label} ({jh.host})</option>)}
+                        </select>
+                        {jumpHosts.length === 0 && <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}>No jump hosts configured — mark another vm_host as a jump host first</div>}
+                      </>
+                    )
+                  ) : f.type === 'select' ? (
+                    <select className="input text-[10px] w-full" value={form.config[f.key] ?? ''} onChange={e => updateConfig(f.key, e.target.value)}>
+                      {(f.options || []).map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                  ) : (
+                    <input className="input text-[10px] w-full" type="text" value={form.config[f.key] ?? ''} onChange={e => updateConfig(f.key, e.target.value)} />
+                  )}
+                </div>
+              ))}
+            </>
+          )}
           {formError && <div className="text-[10px]" style={{ color: 'var(--red)' }}>{formError}</div>}
           <button className="btn btn-primary w-full text-[10px]" onClick={saveConn} disabled={saving}>
             {saving ? 'Saving…' : editingId ? 'Update Connection' : 'Save Connection'}
@@ -689,6 +781,9 @@ function ConnectionsTab() {
                 <span className="mono ml-2" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.auth_type}</span>
                 {c.verified && <span className="ml-2" style={{ color: 'var(--green)' }}>✓</span>}
                 {c.verified === false && c.last_seen && <span className="ml-2" style={{ color: 'var(--red)' }}>✕</span>}
+                {c.config?.is_jump_host && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--amber-dim)', color: 'var(--amber)' }}>⇢ BASTION</span>}
+                {c.config?.shared_credentials && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--cyan-dim)', color: 'var(--cyan)' }}>⊕ SHARED</span>}
+                {c.config?.os_type && <span className="ml-2" style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}
               </div>
               <div className="flex gap-1">
                 <button className="btn text-[9px] px-1.5 py-0.5"
