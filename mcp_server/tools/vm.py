@@ -13,6 +13,7 @@ def _validate_command(command):
     Allows pipes (cmd1 | cmd2 | cmd3) where ALL segments match the allowlist.
     Allows '2>/dev/null' (stderr discard only — not file writes).
     Blocks semicolons, backticks, $(), stdout redirects, file writes.
+    'docker system df -v' is supported (the pattern matches 'docker system df' prefix).
     Returns (is_valid, cleaned_command_or_error_message).
     """
     # Strip '2>/dev/null' before metachar check — safe stderr discard,
@@ -100,8 +101,23 @@ def vm_exec(host: str, command: str) -> dict:
     Args:
         host: VM host label, discovered hostname, or IP address.
               The error message lists available hosts if not found.
-        command: Read-only shell command. Up to two pipes supported.
-                 '2>/dev/null' is allowed to suppress permission errors.
+        command: Read-only shell command. Rules:
+                 - Up to two pipes supported (cmd | cmd | cmd)
+                 - '2>/dev/null' allowed (stderr discard)
+                 - NO shell variables ($var), NO while/for loops,
+                   NO subshells $(), NO stdout redirects (>)
+
+                 For Docker volume sizes use: docker system df -v
+                 NOT: docker volume ls | xargs docker inspect...
+
+                 Good examples:
+                   df -h
+                   du -sh /* 2>/dev/null | sort -hr | head -20
+                   find /var -size +100M -type f 2>/dev/null | head -20
+                   docker system df -v
+                   journalctl -n 50 --no-pager
+                   free -m
+                   ps aux | sort -k3 -rn | head -20
     """
     valid, result_or_error = _validate_command(command)
     if not valid:
