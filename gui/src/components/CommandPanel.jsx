@@ -239,7 +239,7 @@ function ToolCard({ tool, onResult }) {
 export default function CommandPanel({ onResult, mode = 'panel' }) {
   const { markRunning, markDone } = useAgent()
   const { task, setTask }         = useTask()
-  const { pendingChoices, clearChoices, runState, setRunState, stopAgent } = useAgentOutput()
+  const { pendingChoices, clearChoices, runState, setRunState, stopAgent, isRunning, outputLines } = useAgentOutput()
   const [items,    setItems]   = useState([])
   const [loading,  setLoading] = useState(true)
   const [selectedTags, setSelectedTags] = useState(new Set())
@@ -341,13 +341,34 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       </div>
       {/* Inline agent feed — below Run button, above tool list */}
       <AgentFeed />
-      {runState !== 'running' && runState !== 'idle' && (
-        <div className="px-3 pb-1">
-          <button onClick={() => { /* navigate to Output tab */ }}
-            className="w-full text-xs text-slate-500 hover:text-slate-300 border border-slate-700 rounded px-2 py-0.5 transition-colors"
-            style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', fontSize: 9 }}>
-            ◫ View full trace in Output →
+      {/* Full output shortcut — shown when not running and output exists */}
+      {!isRunning && outputLines.length > 0 && (
+        <div style={{ padding: '4px 12px 0', flexShrink: 0 }}>
+          <button onClick={() => onResult && onResult('Output')}
+            style={{ width: '100%', fontSize: 9, color: 'var(--text-3)', background: 'none',
+                     border: '1px solid var(--border)', borderRadius: 2, padding: '3px 8px',
+                     cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', textAlign: 'left' }}>
+            ◫ View full output trace →
           </button>
+        </div>
+      )}
+      {/* Live trace — shown while running */}
+      {isRunning && (
+        <div style={{ margin: '4px 12px 0', padding: '6px 8px', background: 'var(--bg-2)',
+                      border: '1px solid var(--border)', borderRadius: 2, fontFamily: 'var(--font-mono)',
+                      fontSize: 9, color: 'var(--text-3)', maxHeight: 100, overflowY: 'auto', flexShrink: 0 }}>
+          {outputLines.slice(-5).map((line, i) => (
+            <div key={i} style={{
+              color: line.type === 'tool' ? (line.status === 'error' ? 'var(--red)' : line.status === 'ok' ? 'var(--green)' : 'var(--text-2)')
+                   : line.type === 'halt' ? 'var(--red)' : 'var(--text-3)',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 1,
+            }}>
+              {line.type === 'tool' ? `⚙ ${line.content}` : line.type === 'step' ? `── ${line.content}`
+               : line.type === 'reasoning' ? `💭 ${line.content?.slice(0, 80)}`
+               : line.type === 'halt' ? `⚠ ${line.content}` : line.content}
+            </div>
+          ))}
+          <div style={{ color: 'var(--accent)' }}>▋</div>
         </div>
       )}
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
