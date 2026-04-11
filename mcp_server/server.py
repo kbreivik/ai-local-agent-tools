@@ -699,6 +699,25 @@ def docker_images(host: str = "", include_dangling: bool = True) -> dict:
 
 
 @mcp.tool()
+def result_fetch(ref: str, offset: int = 0, limit: int = 100) -> dict:
+    """Retrieve items from a stored result by reference token.
+    Use when a previous tool returned a ref token (rs-...) instead of full data.
+    """
+    from mcp_server.tools.result_tools import result_fetch as _rf
+    return _rf(ref=ref, offset=offset, limit=limit)
+
+
+@mcp.tool()
+def result_query(ref: str, where: str = "", columns: str = "",
+                 order_by: str = "", limit: int = 50) -> dict:
+    """Filter/sort a stored result using SQL-like syntax.
+    Example: result_query(ref="rs-abc", where="type='wireless'", order_by="signal ASC")
+    """
+    from mcp_server.tools.result_tools import result_query as _rq
+    return _rq(ref=ref, where=where, columns=columns, order_by=order_by, limit=limit)
+
+
+@mcp.tool()
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query SSH capability map — which credentials can reach which hosts.
     Returns verified pairs with success rates and latency. Use to audit

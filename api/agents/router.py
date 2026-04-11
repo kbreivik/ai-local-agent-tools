@@ -90,6 +90,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "agent_status", "postgres_health",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities",
+    "result_fetch", "result_query",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -110,6 +111,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
     "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities",
+    "result_fetch", "result_query",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -134,6 +136,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "service_current_version", "service_resolve_image",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
+    "result_fetch", "result_query",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -146,6 +149,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "docker_engine_update", "vm_exec", "infra_lookup",
     "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
+    "result_fetch", "result_query",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -265,6 +269,16 @@ same command or variations of it. Instead:
    for per-volume sizes, use 'docker volume inspect <name>' for paths)
 3. If no alternative exists, note the limitation in your summary
    and move on. Never call the same blocked command twice.
+
+RESULT REFERENCES:
+When a tool returns a result containing {"ref": "rs-...", "count": N,
+"preview": [...]} instead of full data, the data is stored by reference.
+- To retrieve all items: call result_fetch(ref="rs-...")
+- To filter/sort: call result_query(ref="rs-...", where="column='value'",
+  order_by="column DESC")
+- The preview already contains the first 5 items — use those for
+  quick answers without an extra tool call.
+- References expire after 2 hours.
 
 VM HOST COMMANDS — IMPORTANT RESTRICTIONS:
 For disk investigations, call vm_disk_investigate(host=...) first.

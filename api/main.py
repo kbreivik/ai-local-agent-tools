@@ -126,6 +126,11 @@ async def lifespan(app: FastAPI):
         init_capabilities()
     except Exception as e:
         _log.debug("SSH capabilities init skipped: %s", e)
+    try:
+        from api.db.result_store import init_result_store
+        init_result_store()
+    except Exception as e:
+        _log.debug("Result store init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection
@@ -177,6 +182,17 @@ async def lifespan(app: FastAPI):
         start_auto_update()
     except Exception as e:
         _log.warning("Auto-update start skipped: %s", e)
+    # Result store cleanup every 30 minutes
+    import asyncio as _aio
+    async def _result_store_cleanup_loop():
+        while True:
+            await _aio.sleep(1800)
+            try:
+                from api.db.result_store import cleanup_expired
+                n = cleanup_expired()
+                if n: _log.info("result_store: purged %d expired rows", n)
+            except Exception: pass
+    _aio.create_task(_result_store_cleanup_loop())
     yield
     try:
         stop_auto_update()

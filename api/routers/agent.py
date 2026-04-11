@@ -115,47 +115,74 @@ def _extract_choices(text: str) -> list[str] | None:
     return choices[:5] if len(choices) >= 2 else None
 
 
-_MAX_TOOL_RESULT_TOKENS = 800  # ~3200 chars in LLM context per tool result
+_MAX_TOOL_RESULT_TOKENS = 800
+_LARGE_RESULT_BYTES = 3000
+
+_LIST_KEYS = frozenset({
+    "clients", "devices", "hosts", "images", "volumes", "vms",
+    "entities", "pairs", "containers", "services", "nodes",
+    "entries", "results", "items", "alerts", "snapshots",
+    "backups", "pools", "disks", "capabilities",
+})
 
 
-def _summarize_tool_result(tool_name: str, result: dict, status: str, message: str) -> str:
-    """Summarize a tool result for LLM conversation history.
-
-    Full result is stored in DB (audit trail). LLM gets a compact summary
-    to preserve context window space.
+def _summarize_tool_result(tool_name, result, status, message,
+                           *, operation_id="", session_id=""):
+    """Summarize large tool results for LLM context.
+    Small results: pass through. Large with lists: store in result_store,
+    return compact reference. Large without lists: keep scalars, truncate nested.
     """
     if not isinstance(result, dict):
         return str(result)[:_MAX_TOOL_RESULT_TOKENS * 4]
 
-    # For errors, the message is usually enough
     if status in ("error", "blocked", "locked"):
         return json.dumps({"status": status, "message": message[:200]})
 
-    # For small results, pass through as-is
     full = json.dumps(result, default=str)
-    if len(full) <= _MAX_TOOL_RESULT_TOKENS * 4:
+    if len(full) <= _LARGE_RESULT_BYTES:
         return full
 
-    # Large results: keep status + message + truncated data
-    summary = {
-        "status": status,
-        "message": message[:200],
-    }
     data = result.get("data")
+    list_data = None
+    list_key = None
+
     if isinstance(data, dict):
-        # Keep scalar values, truncate lists/dicts
+        for k in _LIST_KEYS:
+            if k in data and isinstance(data[k], list) and len(data[k]) > 5:
+                list_data = data[k]; list_key = k; break
+    elif isinstance(data, list) and len(data) > 5:
+        list_data = data; list_key = "items"
+
+    if list_data is not None:
+        try:
+            from api.db.result_store import store_result
+            ref_summary = store_result(tool_name, list_data,
+                                       operation_id=operation_id, session_id=session_id)
+            return json.dumps({
+                "status": status, "message": message[:200],
+                "data": {
+                    **{k: v for k, v in (data.items() if isinstance(data, dict) else {}.items())
+                       if not isinstance(v, list)},
+                    list_key: ref_summary,
+                },
+            }, default=str)
+        except Exception:
+            return json.dumps({
+                "status": status, "message": message[:200],
+                "data": {list_key: list_data[:10], f"{list_key}_total": len(list_data),
+                         f"{list_key}_truncated": True},
+            }, default=str)
+
+    summary = {"status": status, "message": message[:200]}
+    if isinstance(data, dict):
         compact = {}
         for k, v in data.items():
-            if isinstance(v, (str, int, float, bool, type(None))):
-                compact[k] = v
-            elif isinstance(v, list):
-                compact[k] = f"[{len(v)} items]"
-            elif isinstance(v, dict):
-                compact[k] = f"{{{len(v)} keys}}"
+            if isinstance(v, (str, int, float, bool, type(None))): compact[k] = v
+            elif isinstance(v, list): compact[k] = f"[{len(v)} items]"
+            elif isinstance(v, dict): compact[k] = f"{{{len(v)} keys}}"
         summary["data"] = compact
     elif isinstance(data, list):
         summary["data"] = f"[{len(data)} items]"
-
     return json.dumps(summary, default=str)
 
 
@@ -619,7 +646,8 @@ async def _run_single_agent_step(
                 )
 
                 # Summarize tool result for LLM context (full result in DB audit trail)
-                tool_content = _summarize_tool_result(fn_name, result, result_status, result_msg)
+                tool_content = _summarize_tool_result(fn_name, result, result_status, result_msg,
+                                                     operation_id=operation_id, session_id=session_id)
 
                 messages.append({
                     "role": "tool",
