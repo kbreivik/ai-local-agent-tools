@@ -86,7 +86,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "storage_health",
     "agent_status", "postgres_health",
-    "vm_exec", "infra_lookup",
+    "vm_exec", "infra_lookup", "vm_disk_investigate",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -105,7 +105,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
-    "search_docs", "vm_exec", "infra_lookup",
+    "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -249,7 +249,10 @@ STOPPING RULES (MANDATORY):
 - Do NOT keep calling tools after you have the answer.
 
 VM HOST COMMANDS — IMPORTANT RESTRICTIONS:
-When using vm_exec to investigate disk usage:
+For disk investigations, call vm_disk_investigate(host=...) first.
+It runs a complete analysis in one step and returns culprits + actions.
+Only use vm_exec for follow-up checks after vm_disk_investigate.
+When using vm_exec:
 - Use 'docker system df' for overall Docker storage summary
 - Use 'docker system df -v' for per-volume breakdown
 - Do NOT use 'docker volume inspect ... && ...' — && and || are blocked
