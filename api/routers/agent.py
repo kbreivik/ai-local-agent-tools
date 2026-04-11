@@ -42,7 +42,7 @@ def _build_tools_spec() -> list[dict]:
 DESTRUCTIVE_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "checkpoint_restore", "kafka_rolling_restart_safe",
-    "docker_engine_update",
+    "docker_engine_update", "docker_prune",
     # Skill write-tools — modify persistent state (modules on disk + DB)
     "skill_create", "skill_regenerate", "skill_disable", "skill_enable", "skill_import",
 })

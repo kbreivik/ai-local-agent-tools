@@ -668,5 +668,35 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
     return _infra_lookup(query=query, platform=platform)
 
 
+@mcp.tool()
+def docker_df(host: str = "") -> dict:
+    """Get Docker disk usage: images, containers, volumes, build cache.
+    Returns structured breakdown with sizes. Use before/after prune to measure reclaimed space.
+    Uses Docker SDK directly — faster and more accurate than 'docker system df' via SSH.
+    """
+    from mcp_server.tools.docker_api import docker_df as _docker_df
+    return _docker_df(host=host)
+
+
+@mcp.tool()
+def docker_prune(host: str = "", target: str = "images", force: bool = True) -> dict:
+    """Prune unused Docker resources and return before/after disk delta.
+    ALWAYS call plan_action() before this tool.
+    target: images, images_all, containers, volumes, cache, system.
+    Returns exact bytes reclaimed with before/after snapshots.
+    """
+    from mcp_server.tools.docker_api import docker_prune as _docker_prune
+    return _docker_prune(host=host, target=target, force=force)
+
+
+@mcp.tool()
+def docker_images(host: str = "", include_dangling: bool = True) -> dict:
+    """List Docker images with sizes, tags, and age. Sorted by size descending.
+    Useful before pruning to see what is present and what would be removed.
+    """
+    from mcp_server.tools.docker_api import docker_images as _docker_images
+    return _docker_images(host=host, include_dangling=include_dangling)
+
+
 if __name__ == "__main__":
     mcp.run()
