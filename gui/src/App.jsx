@@ -1092,7 +1092,17 @@ function AppShell() {
   const [compareSet, setCompareSet]       = useState([])
   const [compareChats, setCompareChats]   = useState({})
   const [bcTargets, setBcTargets]         = useState({})
-  const { panelOpen } = useCommandPanel()
+  const { panelOpen, togglePanel } = useCommandPanel()
+  const { user: authUser, logout: handleLogout } = useAuth()
+  const [userRole, setUserRole] = useState('')
+
+  // Fetch user role on mount
+  useEffect(() => {
+    fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/auth/me`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d?.role && setUserRole(d.role))
+      .catch(() => {})
+  }, [])
 
   const addToCompare = (entity) => {
     setCompareSet(prev => {
@@ -1178,7 +1188,12 @@ function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg-0)' }}>
       {/* Sidebar navigation */}
-      <Sidebar activeTab={activeTab} onTab={setActiveTab} onSettingsTab={setSettingsTab} activeSettingsTab={settingsTab} />
+      <Sidebar activeTab={activeTab} onTab={setActiveTab} onSettingsTab={setSettingsTab} activeSettingsTab={settingsTab}
+        onToggleCommandPanel={togglePanel} commandPanelOpen={panelOpen}
+        username={authUser} userRole={userRole} onLogout={handleLogout}
+        onLayoutsTab={() => { setActiveTab('Settings'); setSettingsTab('Layouts') }}
+        onNotificationsTab={() => { setActiveTab('Settings'); setSettingsTab('Notifications') }}
+      />
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">

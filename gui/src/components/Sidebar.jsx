@@ -1,8 +1,8 @@
 /**
  * Sidebar — V3a Imperial Ops navigation.
- * Visual-only redesign — all routing/click handlers unchanged.
+ * Collapsible, with command panel toggle and user menu.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAgentOutput } from '../context/AgentOutputContext'
 import { fetchHealth } from '../api'
 import LockBadge from './LockBadge'
@@ -37,7 +37,6 @@ const NAV = [
   ]},
 ]
 
-// DS orb styles
 const orbStyle = {
   width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
   background: 'radial-gradient(circle at 40% 35%, #c44 0%, #700 50%, #100 100%)',
@@ -49,15 +48,31 @@ const orbBandStyle = {
   height: 2, background: '#200', display: 'flex', alignItems: 'center', justifyContent: 'center',
 }
 
-export default function Sidebar({ activeTab, onTab, onSettingsTab, activeSettingsTab }) {
-  const { isRunning, wsState } = useAgentOutput()
+export default function Sidebar({
+  activeTab, onTab, onSettingsTab, activeSettingsTab,
+  onToggleCommandPanel, commandPanelOpen,
+  username, userRole, onLogout, onLayoutsTab, onNotificationsTab,
+}) {
+  const { isRunning } = useAgentOutput()
   const [health, setHealth] = useState(null)
   const [collapsed, setCollapsed] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef(null)
 
   useEffect(() => {
     fetchHealth().then(setHealth).catch(() => {})
     const id = setInterval(() => fetchHealth().then(setHealth).catch(() => {}), 30000)
     return () => clearInterval(id)
+  }, [])
+
+  // Close user menu on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target))
+        setUserMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [])
 
   const w = collapsed ? 44 : 200
@@ -70,31 +85,34 @@ export default function Sidebar({ activeTab, onTab, onSettingsTab, activeSetting
     }}>
       {/* Brand */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: collapsed ? '12px 10px' : '12px 12px',
+        display: 'flex',
+        flexDirection: collapsed ? 'column' : 'row',
+        alignItems: 'center',
+        gap: collapsed ? 4 : 8,
+        padding: collapsed ? '8px 0' : '12px 12px',
         borderBottom: '1px solid var(--border)',
       }}>
-        {/* DS Orb */}
         <div style={orbStyle}>
           <div style={orbBandStyle}>
             <span style={{ fontSize: 7, color: '#fff', fontFamily: 'var(--font-mono)', lineHeight: 1, letterSpacing: 1 }}>DS</span>
           </div>
         </div>
         {!collapsed && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13, letterSpacing: 1.5, color: 'var(--text-1)', lineHeight: 1 }}>DEATHSTAR</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 7, color: 'var(--accent)', letterSpacing: 1, marginTop: 2 }}>IMPERIAL OPS</div>
-          </div>
-        )}
-        {!collapsed && (
-          <button onClick={() => setCollapsed(true)} style={{
-            background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer',
-            fontSize: 12, padding: 0, lineHeight: 1,
-          }} title="Collapse sidebar">‹</button>
+          <>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13, letterSpacing: 1.5, color: 'var(--text-1)', lineHeight: 1 }}>DEATHSTAR</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 7, color: 'var(--accent)', letterSpacing: 1, marginTop: 2 }}>IMPERIAL OPS</div>
+            </div>
+            <button onClick={() => setCollapsed(true)} style={{
+              background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer',
+              fontSize: 14, padding: 0, lineHeight: 1,
+            }} title="Collapse sidebar">‹</button>
+          </>
         )}
         {collapsed && (
           <button onClick={() => setCollapsed(false)} style={{
             background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer',
-            fontSize: 12, padding: 0, lineHeight: 1, position: 'absolute', right: 4, top: 14,
+            fontSize: 14, padding: 0, lineHeight: 1, width: '100%', textAlign: 'center',
           }} title="Expand sidebar">›</button>
         )}
       </div>
@@ -103,15 +121,31 @@ export default function Sidebar({ activeTab, onTab, onSettingsTab, activeSetting
       <nav style={{ flex: 1, paddingTop: 8, overflowY: 'auto' }}>
         {NAV.map(group => (
           <div key={group.section}>
-            {/* Section label */}
+            {/* Section label row */}
             <div style={{
-              fontFamily: 'var(--font-mono)', fontSize: 7, letterSpacing: 2, color: 'var(--text-3)',
-              textTransform: 'uppercase', padding: collapsed ? '10px 4px 4px' : '10px 12px 4px',
-              opacity: collapsed ? 0 : 1, transition: 'opacity 0.1s ease',
-              whiteSpace: 'nowrap', overflow: 'hidden',
-            }}>{group.section}</div>
+              display: 'flex', alignItems: 'center',
+              padding: collapsed ? '10px 4px 4px' : '10px 12px 4px',
+            }}>
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 7, letterSpacing: 2, color: 'var(--text-3)',
+                textTransform: 'uppercase', flex: 1,
+                opacity: collapsed ? 0 : 1, transition: 'opacity 0.1s ease',
+                whiteSpace: 'nowrap', overflow: 'hidden',
+              }}>{group.section}</div>
+              {group.section === 'OPERATE' && !collapsed && onToggleCommandPanel && (
+                <button onClick={onToggleCommandPanel} title="Toggle command panel (Ctrl+Shift+C)"
+                  style={{
+                    background: commandPanelOpen ? 'var(--accent-dim)' : 'none',
+                    border: `1px solid ${commandPanelOpen ? 'var(--accent)' : 'transparent'}`,
+                    color: commandPanelOpen ? 'var(--accent)' : 'var(--text-3)',
+                    borderRadius: 2, padding: '1px 4px', cursor: 'pointer',
+                    fontSize: 9, fontFamily: 'var(--font-mono)', lineHeight: 1,
+                    transition: 'all 0.1s',
+                  }}>⌨</button>
+              )}
+            </div>
 
-            {group.items.map((item, idx) => {
+            {group.items.map((item) => {
               const isActive = item.key === activeTab && (!item.settingsTab || item.settingsTab === activeSettingsTab)
               const navKey = item.settingsTab ? `${item.key}-${item.settingsTab}` : item.key
               return (
@@ -147,19 +181,75 @@ export default function Sidebar({ activeTab, onTab, onSettingsTab, activeSetting
         ))}
       </nav>
 
-      {/* Footer */}
-      <div style={{ borderTop: '1px solid var(--border)', padding: collapsed ? '8px 0' : '8px 12px', display: 'flex', alignItems: 'center', gap: 6, justifyContent: collapsed ? 'center' : 'flex-start' }}>
-        <span style={{
-          width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
-          background: health?.status === 'ok' ? 'var(--green)' : 'var(--red)',
-          boxShadow: health?.status === 'ok' ? '0 0 3px var(--green)' : '0 0 3px var(--red)',
-          animation: 'pulse 2s ease-in-out infinite',
-        }} />
-        {!collapsed && (
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
-            DS-AGENT-01 · v{health?.version || '—'}
-          </span>
+      {/* Footer — user menu */}
+      <div ref={userMenuRef} style={{ borderTop: '1px solid var(--border)', position: 'relative' }}>
+        {/* User menu popup */}
+        {userMenuOpen && !collapsed && (
+          <div style={{
+            position: 'absolute', bottom: '100%', left: 0, right: 0,
+            background: 'var(--bg-2)', border: '1px solid var(--border)',
+            borderRadius: 2, marginBottom: 2, zIndex: 100,
+            fontFamily: 'var(--font-mono)', fontSize: 9,
+          }}>
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ color: 'var(--text-1)', fontWeight: 600 }}>{username || 'admin'}</div>
+              <div style={{
+                fontSize: 8, marginTop: 2, padding: '1px 5px', display: 'inline-block',
+                borderRadius: 2, letterSpacing: 0.5,
+                background: userRole === 'sith_lord' ? 'rgba(160,24,40,0.2)' : userRole === 'imperial_officer' ? 'rgba(204,136,0,0.15)' : 'var(--bg-3)',
+                color: userRole === 'sith_lord' ? 'var(--accent)' : userRole === 'imperial_officer' ? 'var(--amber)' : 'var(--text-3)',
+              }}>
+                {userRole === 'sith_lord' ? 'SITH LORD' : userRole === 'imperial_officer' ? 'IMPERIAL OFFICER' : userRole === 'stormtrooper' ? 'STORMTROOPER' : (userRole || 'DROID').toUpperCase()}
+              </div>
+            </div>
+            {[
+              { icon: '⊞', label: 'Layouts', action: () => { onLayoutsTab?.(); setUserMenuOpen(false) } },
+              { icon: '◈', label: 'Notifications', action: () => { onNotificationsTab?.(); setUserMenuOpen(false) } },
+              { divider: true },
+              { icon: '⏻', label: 'Log out', action: () => { onLogout?.(); setUserMenuOpen(false) }, style: { color: 'var(--red)' } },
+            ].map((item, i) => item.divider
+              ? <div key={i} style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+              : (
+                <button key={i} onClick={item.action} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '6px 12px', background: 'none', border: 'none',
+                  color: item.style?.color || 'var(--text-2)', cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: 0.5, textAlign: 'left',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  <span style={{ width: 14, textAlign: 'center' }}>{item.icon}</span>
+                  {item.label}
+                </button>
+              )
+            )}
+          </div>
         )}
+
+        {/* Footer trigger */}
+        <button onClick={() => !collapsed && setUserMenuOpen(o => !o)} style={{
+          width: '100%', display: 'flex', alignItems: 'center',
+          gap: 6, padding: collapsed ? '8px 0' : '8px 12px',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          background: userMenuOpen ? 'var(--bg-2)' : 'none',
+          border: 'none', cursor: collapsed ? 'default' : 'pointer',
+        }}>
+          <span style={{
+            width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+            background: health?.status === 'ok' ? 'var(--green)' : 'var(--red)',
+            boxShadow: health?.status === 'ok' ? '0 0 3px var(--green)' : '0 0 3px var(--red)',
+            animation: 'pulse 2s ease-in-out infinite',
+          }} />
+          {!collapsed && (
+            <>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', whiteSpace: 'nowrap', flex: 1 }}>
+                {username || 'DS-AGENT-01'} · v{health?.version || '—'}
+              </span>
+              <span style={{ fontSize: 8, color: 'var(--text-3)' }}>{userMenuOpen ? '▾' : '▴'}</span>
+            </>
+          )}
+        </button>
       </div>
     </div>
   )
