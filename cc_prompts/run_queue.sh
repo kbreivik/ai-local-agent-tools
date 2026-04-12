@@ -38,17 +38,22 @@ err()  { echo "[queue] ERROR: $*" >&2; exit 1; }
 warn() { echo "[queue] WARN:  $*"; }
 
 pending_count() {
-    grep -c "| PENDING" "$INDEX_FILE" 2>/dev/null || echo 0
+    # grep -c on Git Bash (CRLF files) can return "3\r" — strip all non-digits
+    local raw
+    raw=$(grep -c "| PENDING" "$INDEX_FILE" 2>/dev/null) || raw=0
+    echo "$raw" | tr -dc '0-9'
 }
 
 next_pending_file() {
     grep "| PENDING" "$INDEX_FILE" | head -1 \
-        | sed 's/.*|\s*\(CC_PROMPT[^|]*\.md\)\s*|.*/\1/' | tr -d ' '
+        | sed 's/.*|\s*\(CC_PROMPT[^|]*\.md\)\s*|.*/\1/' \
+        | tr -dc 'A-Za-z0-9_.'
 }
 
 next_pending_version() {
     grep "| PENDING" "$INDEX_FILE" | head -1 \
-        | sed 's/.*|\s*\(v[0-9][0-9.]*\)\s*|.*/\1/' | tr -d ' '
+        | sed 's/.*|\s*\(v[0-9][0-9.]*\)\s*|.*/\1/' \
+        | tr -dc 'A-Za-z0-9.'
 }
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
@@ -70,7 +75,7 @@ log "Git branch: $(git branch --show-current)"
 
 MODIFIED_TRACKED=$(git diff --name-only)
 if [[ -n "$MODIFIED_TRACKED" ]]; then
-    warn "Modified tracked files detected before queue run:"
+    warn "Modified tracked files:"
     echo "$MODIFIED_TRACKED"
     read -p "[queue] Continue anyway? (y/N) " -n 1 -r
     echo
@@ -81,7 +86,7 @@ fi
 
 if $DRY_RUN; then
     COUNT=$(pending_count)
-    log "Queue status — $COUNT prompt(s) PENDING:"
+    log "Queue status — ${COUNT} prompt(s) PENDING:"
     echo ""
     printf "  %-10s %-73s %-9s\n" "Version" "Theme" "Status"
     printf "  %-10s %-73s %-9s\n" "-------" "-----" "------"
@@ -102,12 +107,13 @@ MAX_RUNS=10
 
 while true; do
     COUNT=$(pending_count)
-    if [[ "$COUNT" -eq 0 ]]; then
+
+    if [ "$COUNT" -eq 0 ]; then
         log "Queue complete — all prompts done."
         break
     fi
 
-    if [[ $RUN_COUNT -ge $MAX_RUNS ]]; then
+    if [ "$RUN_COUNT" -ge "$MAX_RUNS" ]; then
         log "Safety cap reached ($MAX_RUNS runs). Re-run to continue."
         break
     fi
@@ -116,23 +122,23 @@ while true; do
     NEXT_VER=$(next_pending_version)
     PROMPT_PATH="$SCRIPT_DIR/$NEXT_FILE"
 
-    if [[ -z "$NEXT_FILE" ]]; then
+    if [ -z "$NEXT_FILE" ]; then
         err "Could not parse next PENDING file from INDEX.md."
     fi
 
-    if [[ ! -f "$PROMPT_PATH" ]]; then
+    if [ ! -f "$PROMPT_PATH" ]; then
         err "Prompt file not found: $PROMPT_PATH"
     fi
 
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log "Running: $NEXT_VER — $NEXT_FILE  ($((COUNT)) pending)"
+    log "Running: $NEXT_VER — $NEXT_FILE  (${COUNT} pending)"
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     BEFORE_HASH=$(git rev-parse HEAD)
 
     # Write task to temp file and pipe via stdin with --print.
-    # Passing task as a positional arg leaves claude in interactive REPL mode
-    # (requiring "exit" to continue). --print + stdin is the non-interactive mode.
+    # Passing task as a positional arg leaves claude in interactive REPL mode.
+    # --print + stdin is non-interactive — exits cleanly when done.
     TMPFILE=$(mktemp /tmp/deathstar_queue_XXXXXX.txt)
 
     cat > "$TMPFILE" << TASK_EOF
@@ -156,7 +162,7 @@ TASK_EOF
     if claude --dangerously-skip-permissions --print < "$TMPFILE"; then
         rm -f "$TMPFILE"
         AFTER_HASH=$(git rev-parse HEAD)
-        if [[ "$BEFORE_HASH" == "$AFTER_HASH" ]]; then
+        if [ "$BEFORE_HASH" = "$AFTER_HASH" ]; then
             warn "Git hash unchanged after CC run — $NEXT_FILE may not have committed."
             warn "Check: git log --oneline -5"
             warn "Queue paused. Fix and re-run."
