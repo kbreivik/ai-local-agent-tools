@@ -38,7 +38,7 @@ prompting each action. Remove that flag from `run_queue.sh` if you want interact
 | File | Version | Theme | Status |
 |---|---|---|---|
 | CC_PROMPT_v2.8.0.md | v2.8.0 | AI loop: semantic tool routing + thinking memory + feedback pre-ranking | DONE (69b4e7d) |
-| CC_PROMPT_v2.8.1.md | v2.8.1 | LLM temperature profile + /no_think for cheap steps | PENDING |
+| CC_PROMPT_v2.8.1.md | v2.8.1 | LLM temperature profile + /no_think for cheap steps | DONE (6bd67ea) |
 | CC_PROMPT_v2.9.0.md | v2.9.0 | Entity state DB: change tracking + event log + image digest | PENDING |
 | CC_PROMPT_v2.9.1.md | v2.9.1 | Entity history agent tools + context injection + GUI badge | PENDING |
 | CC_PROMPT_v2.10.0.md | v2.10.0 | Lightweight coordinator pattern between agent steps | PENDING |
