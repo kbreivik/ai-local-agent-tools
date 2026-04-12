@@ -1009,14 +1009,14 @@ function AccessTab() {
     <div onClick={e => e.stopPropagation()}>
       {/* Header: sub-tab buttons + action button in one row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        {['users', 'tokens'].map(t => (
+        {['users', 'tokens', 'ssh'].map(t => (
           <button key={t} onClick={() => { setSubTab(t); setGeneratedToken(null); setShowAddUser(false); setShowAddToken(false) }} style={{
             fontSize: 9, fontFamily: 'var(--font-mono)', padding: '3px 10px',
             background: subTab === t ? 'var(--accent-dim)' : 'transparent',
             color: subTab === t ? 'var(--accent)' : 'var(--text-3)',
             border: `1px solid ${subTab === t ? 'var(--accent)' : 'var(--border)'}`,
             borderRadius: 2, cursor: 'pointer', letterSpacing: 1,
-          }}>{t === 'users' ? 'USERS' : 'API TOKENS'}</button>
+          }}>{t === 'users' ? 'USERS' : t === 'tokens' ? 'API TOKENS' : 'SSH ACCESS'}</button>
         ))}
         {subTab === 'users' && (
           <button className="btn btn-primary text-[9px] px-2 py-1" style={{ marginLeft: 'auto' }} onClick={() => setShowAddUser(!showAddUser)}>
@@ -1132,7 +1132,135 @@ function AccessTab() {
           </table>
         </>
       )}
+      {subTab === 'ssh' && <SSHAccessSubTab _td={_td} _th={_th} _relTime={_relTime} />}
     </div>
+  )
+}
+
+function SSHAccessSubTab({ _td, _th, _relTime }) {
+  const [summary, setSummary] = useState(null)
+  const [capabilities, setCapabilities] = useState([])
+  const [sshLogs, setSshLogs] = useState([])
+  const [showLogs, setShowLogs] = useState(false)
+
+  const fetchAll = () => {
+    fetch(`${BASE}/api/logs/ssh/capabilities/summary`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setSummary(d.summary) }).catch(() => {})
+    fetch(`${BASE}/api/logs/ssh/capabilities`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setCapabilities(d.capabilities || d.data || []) }).catch(() => {})
+  }
+
+  useEffect(() => { fetchAll() }, [])
+
+  const markReviewed = (connId, host) => {
+    fetch(`${BASE}/api/logs/ssh/capabilities/alerts/${connId}/reviewed?target_host=${encodeURIComponent(host)}`, {
+      method: 'POST', headers: { ...authHeaders() },
+    }).then(() => fetchAll()).catch(() => {})
+  }
+
+  const loadLogs = () => {
+    setShowLogs(true)
+    fetch(`${BASE}/api/logs/ssh?limit=50`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d) setSshLogs(d.entries || d.data || []) }).catch(() => {})
+  }
+
+  const OUTCOME_STYLE = {
+    success:   { bg: 'rgba(0,170,68,0.12)', color: 'var(--green)', label: 'OK' },
+    auth_fail: { bg: 'rgba(204,40,40,0.15)', color: 'var(--red)', label: 'AUTH FAIL' },
+    timeout:   { bg: 'rgba(204,136,0,0.12)', color: 'var(--amber)', label: 'TIMEOUT' },
+    refused:   { bg: 'rgba(204,40,40,0.15)', color: 'var(--red)', label: 'REFUSED' },
+    error:     { bg: 'rgba(204,40,40,0.15)', color: 'var(--red)', label: 'ERROR' },
+  }
+
+  return (
+    <>
+      {/* Summary bar */}
+      {summary && (
+        <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+          <span style={{ color: 'var(--text-3)' }}>Verified pairs: <span style={{ color: 'var(--text-1)' }}>{summary.total_pairs ?? 0}</span></span>
+          <span style={{ color: 'var(--text-3)' }}>Active 24h: <span style={{ color: 'var(--green)' }}>{summary.active_24h ?? 0}</span></span>
+          {(summary.stale ?? 0) > 0 && <span style={{ color: 'var(--amber)' }}>Stale: {summary.stale}</span>}
+          {(summary.new_host_alerts ?? 0) > 0 && <span style={{ color: 'var(--red)' }}>New host alerts: {summary.new_host_alerts}</span>}
+        </div>
+      )}
+
+      {/* New host alert banner */}
+      {summary && (summary.new_host_alerts ?? 0) > 0 && (
+        <div style={{
+          padding: '8px 12px', marginBottom: 12,
+          background: 'rgba(204,40,40,0.1)', border: '1px solid var(--red)',
+          borderRadius: 2, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--red)',
+        }}>
+          ⚠ {summary.new_host_alerts} credential(s) gained access to new host(s). Review below.
+        </div>
+      )}
+
+      {/* Capability table */}
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+        <thead><tr>
+          <th style={_th}>CREDENTIAL</th><th style={_th}>HOST</th><th style={_th}>USER</th>
+          <th style={_th}>LAST SUCCESS</th><th style={_th}>RATE</th><th style={_th}>LATENCY</th><th style={_th}>ALERT</th>
+        </tr></thead>
+        <tbody>
+          {capabilities.map((c, i) => {
+            const rate = c.success_rate ?? c.success_pct ?? 0
+            const rateColor = rate < 50 ? 'var(--red)' : rate < 80 ? 'var(--amber)' : 'var(--green)'
+            return (
+              <tr key={i} style={c.new_host_alert ? { background: 'rgba(204,40,40,0.05)' } : undefined}>
+                <td style={{ ..._td, color: 'var(--text-1)' }}>{c.connection_label || c.credential_label || '?'}</td>
+                <td style={{ ..._td, fontFamily: 'var(--font-mono)' }}>{c.target_host || c.host}</td>
+                <td style={_td}>{c.username || '?'}</td>
+                <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(c.last_success)}</td>
+                <td style={{ ..._td, color: rateColor }}>{rate}%</td>
+                <td style={{ ..._td, color: 'var(--text-3)' }}>{c.avg_latency_ms ? `${c.avg_latency_ms}ms` : '—'}</td>
+                <td style={_td}>
+                  {c.new_host_alert ? (
+                    <button onClick={() => markReviewed(c.connection_id, c.target_host || c.host)}
+                      style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(204,40,40,0.15)', color: 'var(--red)', border: '1px solid var(--red)', cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
+                      🆕 NEW — Mark reviewed
+                    </button>
+                  ) : '—'}
+                </td>
+              </tr>
+            )
+          })}
+          {capabilities.length === 0 && <tr><td colSpan={7} style={{ ..._td, color: 'var(--text-3)', textAlign: 'center' }}>No SSH capabilities recorded</td></tr>}
+        </tbody>
+      </table>
+
+      {/* SSH log viewer */}
+      {!showLogs ? (
+        <button onClick={loadLogs} style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--accent)', background: 'none', border: '1px solid var(--border)', padding: '3px 10px', borderRadius: 2, cursor: 'pointer' }}>
+          Show recent SSH attempts
+        </button>
+      ) : (
+        <>
+          <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', letterSpacing: 1, marginBottom: 6 }}>RECENT SSH ATTEMPTS</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={_th}>TIME</th><th style={_th}>HOST</th><th style={_th}>USER</th>
+              <th style={_th}>OUTCOME</th><th style={_th}>DURATION</th><th style={_th}>TRIGGERED BY</th>
+            </tr></thead>
+            <tbody>
+              {sshLogs.map((l, i) => {
+                const os = OUTCOME_STYLE[l.outcome] || OUTCOME_STYLE.error
+                return (
+                  <tr key={i}>
+                    <td style={{ ..._td, color: 'var(--text-3)' }}>{_relTime(l.timestamp || l.attempted_at)}</td>
+                    <td style={{ ..._td, fontFamily: 'var(--font-mono)' }}>{l.host || l.target_host}</td>
+                    <td style={_td}>{l.username || '?'}</td>
+                    <td style={_td}><span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: os.bg, color: os.color }}>{os.label}</span></td>
+                    <td style={{ ..._td, color: 'var(--text-3)' }}>{l.duration_ms ? `${l.duration_ms}ms` : '—'}</td>
+                    <td style={{ ..._td, color: 'var(--text-3)' }}>{l.triggered_by || '—'}</td>
+                  </tr>
+                )
+              })}
+              {sshLogs.length === 0 && <tr><td colSpan={6} style={{ ..._td, color: 'var(--text-3)', textAlign: 'center' }}>No SSH attempts logged</td></tr>}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
   )
 }
 

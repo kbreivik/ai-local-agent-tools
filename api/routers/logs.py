@@ -279,3 +279,30 @@ async def get_entity_events(
     return {"events": get_events(entity_id, hours=hours, event_type=event_type,
                                   severity=severity, limit=limit),
             "entity_id": entity_id, "hours": hours}
+
+
+# ── SSH Capability Alert Management ──────────────────────────────────────────
+
+@router.post("/ssh/capabilities/alerts/{connection_id}/reviewed")
+async def mark_capability_reviewed(
+    connection_id: str,
+    target_host: str = Query(...),
+    _: str = Depends(get_current_user),
+):
+    """Clear the new_host_alert flag after operator review."""
+    import os
+    if "postgres" not in os.environ.get("DATABASE_URL", ""):
+        return {"status": "error", "message": "Postgres required"}
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE ssh_capabilities
+            SET new_host_alert = false
+            WHERE connection_id = %s AND target_host = %s
+        """, (connection_id, target_host))
+        conn.commit(); cur.close(); conn.close()
+        return {"status": "ok", "message": "Alert cleared"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
