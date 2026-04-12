@@ -16,6 +16,31 @@ import { useOptions } from '../context/OptionsContext'
 
 const POLL_MS = 30_000
 
+// Filter loopback/placeholder IPs from compact display — show real addresses only
+function _displayIp(ip) {
+  if (!ip) return ''
+  const host = ip.split(':')[0]
+  if (host === '127.0.0.1' || host === 'localhost' || host === '0.0.0.0') return ''
+  return ip
+}
+
+// Format port mapping for compact display: "8000→8000/tcp" → "8000"
+function _compactPort(portStr) {
+  if (!portStr) return ''
+  const host = portStr.split('→')[0]?.trim()
+  return host ? `:${host}` : ''
+}
+
+// Format container ip:port for compact — filter loopback, show first mapping
+function _containerNet(c) {
+  // Try ip_port first (from collector)
+  const filtered = _displayIp(c.ip_port)
+  if (filtered) return filtered
+  // Fallback: first port mapping without IP
+  if (c.ports?.length) return _compactPort(c.ports[0])
+  return ''
+}
+
 const UNIFI_FILTER_FIELDS = [
   { key: 'type_label', label: 'type' },
   { key: 'state',      label: 'status' },
@@ -1519,7 +1544,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             {(containers?.containers || []).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={c.ip_port} uptime={c.uptime}
+                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
                 collapsed={<ContainerCardCollapsed c={c} onEntityDetail={onEntityDetail} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
@@ -1542,7 +1567,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             {(swarm?.services || []).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
-                dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? `:${s.ports[0].split('→')[0]}` : ''}
+                dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? _compactPort(s.ports[0]) : ''}
                 uptime={s.running_replicas != null ? `${s.running_replicas}/${s.desired_replicas} replicas` : ''}
                 collapsed={<ContainerCardCollapsed c={s} />}
                 expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
@@ -1722,7 +1747,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     dot={devDot}
                     name={dev.name}
                     sub={`${dev.type_label} · ${dev.model}`}
-                    net={''}
+                    net={_displayIp(dev.ip) || ''}
                     uptime={uptimeFmt}
                     collapsed={
                       <div className="text-[10px] mt-1" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>

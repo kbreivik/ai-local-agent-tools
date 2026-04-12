@@ -9,6 +9,13 @@ const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 const WATCHED = ['docker', 'elasticsearch', 'logstash', 'kibana', 'filebeat', 'kafka', 'nginx']
 
+// Filter loopback from compact display
+function _showIp(ip) {
+  if (!ip) return ''
+  if (ip === '127.0.0.1' || ip === 'localhost' || ip === '0.0.0.0') return ''
+  return ip
+}
+
 function MemBar({ usedBytes, totalBytes, pct }) {
   const color = pct > 90 ? 'var(--red)' : pct > 80 ? 'var(--amber)' : 'var(--green)'
   const usedGb  = usedBytes  ? (usedBytes  / 1e9).toFixed(1) : '?'
@@ -91,7 +98,7 @@ function VMCard({ vm, onAction }) {
            onClick={() => setOpen(o => !o)}>
         <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-1)', flex: 1 }}>{vm.hostname || vm.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{vm.host}</span>
+        {_showIp(vm.host) && <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{vm.host}{vm.port && vm.port !== 22 ? `:${vm.port}` : ''}</span>}
         {vm.config?.is_jump_host && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(204,136,0,0.15)', color: 'var(--amber)', border: '1px solid rgba(204,136,0,0.3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⇢ BASTION</span>}
         {vm.config?.shared_credentials && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,238,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,200,238,0.25)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⊕ SHARED</span>}
         {vm.jump_via_label && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)' }}>via {vm.jump_via_label}</span>}
@@ -115,6 +122,15 @@ function VMCard({ vm, onAction }) {
             {vm.os && <span>{vm.os} · </span>}
             {vm.kernel && <span>kernel {vm.kernel}</span>}
           </div>
+          {vm.host && (
+            <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
+              IP: <span style={{ color: 'var(--text-1)' }}>{vm.host}</span>
+              {vm.port && vm.port !== 22 && <span> :{vm.port}</span>}
+              {vm.hostname && vm.hostname !== vm.label && vm.hostname !== vm.host && (
+                <span> · hostname: <span style={{ color: 'var(--text-1)' }}>{vm.hostname}</span></span>
+              )}
+            </div>
+          )}
           {vm.config?.os_type && (
             <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
               {vm.config.pkg_manager && `pkg: ${vm.config.pkg_manager}`}
