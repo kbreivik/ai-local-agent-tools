@@ -586,6 +586,115 @@ def classify_task(task: str) -> str:
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
 
+# ── Semantic tool ranking ─────────────────────────────────────────────────────
+
+# Module-level cache: tool_name → embedding vector
+_tool_embedding_cache: dict[str, list[float]] = {}
+_tool_embedding_cache_ts: float = 0.0
+_TOOL_EMBED_CACHE_TTL = 300  # 5 minutes
+
+
+def _embed_text(text: str) -> list[float] | None:
+    """Embed text using the RAG model. Returns None if embedding unavailable."""
+    try:
+        from api.rag.doc_search import embed
+        return embed(text)
+    except Exception:
+        return None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length vectors."""
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = math.sqrt(sum(x * x for x in a))
+    nb  = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _get_tool_embeddings(tools_spec: list[dict]) -> dict[str, list[float]]:
+    """Return cached embeddings for all tools in the spec. Updates stale cache."""
+    import time as _t
+    global _tool_embedding_cache, _tool_embedding_cache_ts
+
+    now = _t.monotonic()
+    if now - _tool_embedding_cache_ts < _TOOL_EMBED_CACHE_TTL:
+        return _tool_embedding_cache
+
+    new_cache = {}
+    for tool in tools_spec:
+        name = tool.get("function", {}).get("name", "")
+        desc = tool.get("function", {}).get("description", "")
+        if not name or not desc:
+            continue
+        text_to_embed = f"{name}: {desc}"[:512]
+        vec = _embed_text(text_to_embed)
+        if vec:
+            new_cache[name] = vec
+
+    _tool_embedding_cache = new_cache
+    _tool_embedding_cache_ts = now
+    return new_cache
+
+
+def rank_tools_for_task(
+    task: str,
+    tools_spec: list[dict],
+    top_n: int = 8,
+    boost_names: list[str] | None = None,
+) -> list[dict]:
+    """Rank tools by semantic similarity to task, return top_n.
+
+    Combines two signals:
+      1. Cosine similarity between task embedding and tool description embedding
+      2. Boost score for tools that appeared in recent successful sequences (boost_names)
+
+    Always includes plan_action, escalate, audit_log if in the spec.
+    Falls back to returning all tools if embedding unavailable.
+
+    Args:
+        task:        User task string
+        tools_spec:  Already-filtered tools list from filter_tools()
+        top_n:       Max tools to return (default 8)
+        boost_names: Tool names to boost (from MuninnDB successful sequences)
+    """
+    # Always include these structural tools regardless of ranking
+    _ALWAYS_INCLUDE = {"plan_action", "escalate", "audit_log", "clarifying_question",
+                       "result_fetch", "result_query"}
+
+    if len(tools_spec) <= top_n:
+        return tools_spec   # small enough — no filtering needed
+
+    task_vec = _embed_text(task[:512])
+    if task_vec is None:
+        return tools_spec   # embedding unavailable — pass all through
+
+    tool_embeddings = _get_tool_embeddings(tools_spec)
+    boost_set = set(boost_names or [])
+
+    scored = []
+    always = []
+    for tool in tools_spec:
+        name = tool.get("function", {}).get("name", "")
+        if name in _ALWAYS_INCLUDE:
+            always.append(tool)
+            continue
+        vec = tool_embeddings.get(name)
+        if vec is None:
+            scored.append((0.0, tool))
+            continue
+        sim = _cosine(task_vec, vec)
+        # Boost: +0.2 for historically successful tools, capped at 1.0
+        if name in boost_set:
+            sim = min(1.0, sim + 0.2)
+        scored.append((sim, tool))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [t for _, t in scored[:max(0, top_n - len(always))]]
+
+    return always + top
+
+
 def filter_tools(tools_spec: list, agent_type: str, domain: str = "general") -> list:
     """Return filtered copy of tools_spec for the given agent type and optional domain."""
     if agent_type in ('action', 'execute'):

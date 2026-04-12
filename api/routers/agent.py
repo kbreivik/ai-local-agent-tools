@@ -186,6 +186,52 @@ def _summarize_tool_result(tool_name, result, status, message,
     return json.dumps(summary, default=str)
 
 
+def _extract_working_memory(think_text: str, step: int) -> str:
+    """Extract key facts from a model <think> block for inter-step continuity.
+
+    Parses numbers, hostnames, ref tokens, status words, and tool plans
+    from the model's reasoning. Returns a compact string (≤120 chars)
+    suitable for prepending to the next step's user message.
+
+    Returns empty string if nothing useful found.
+    """
+    if not think_text or len(think_text) < 20:
+        return ""
+
+    facts = []
+
+    # Result store refs
+    refs = re.findall(r'rs-[a-f0-9]{8,}', think_text)
+    if refs:
+        facts.append(f"ref={refs[0]}")
+
+    # Numbers with units (disk, memory, counts)
+    nums = re.findall(
+        r'(\d+(?:\.\d+)?)\s*(GB|MB|TB|%|clients?|devices?|images?|containers?)',
+        think_text, re.IGNORECASE
+    )
+    for val, unit in nums[:3]:
+        facts.append(f"{val}{unit.lower()}")
+
+    # Hostnames / labels in quotes or after "on "
+    hosts = re.findall(r'(?:on|host|label)\s+["\']?([\w-]{3,30})["\']?', think_text, re.IGNORECASE)
+    if hosts:
+        facts.append(f"host={hosts[0]}")
+
+    # Status findings
+    statuses = re.findall(
+        r'\b(healthy|degraded|critical|error|ok|success|failed|stopped|running)\b',
+        think_text, re.IGNORECASE
+    )
+    if statuses:
+        facts.append(f"status={statuses[0].lower()}")
+
+    if not facts:
+        return ""
+
+    return f"[Step {step} found: {', '.join(facts[:5])}]"
+
+
 class RunRequest(BaseModel):
     task: str = Field(
         default="Perform a full infrastructure health check and report status.",
@@ -255,6 +301,7 @@ async def _run_single_agent_step(
     _audit_logged = False        # allow at most one audit_log call per run
     plan_action_called = False   # track if plan_action was called this run
     _last_blocked_tool = None    # name of most recently blocked tool
+    _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
 
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
@@ -278,6 +325,18 @@ async def _run_single_agent_step(
                 break
 
             step += 1
+
+            # Inject working memory into context for step > 1
+            if step > 1 and _working_memory and len(messages) >= 2:
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i]["role"] == "user" and isinstance(messages[i].get("content"), str):
+                        if not messages[i]["content"].startswith("[Step"):
+                            messages[i] = {
+                                **messages[i],
+                                "content": f"{_working_memory}\n{messages[i]['content']}",
+                            }
+                        break
+
             await manager.send_line("step", f"── Step {step} ──", session_id=session_id)
 
             import time as _time
@@ -323,6 +382,10 @@ async def _run_single_agent_step(
             if msg.content:
                 last_reasoning = msg.content
                 await manager.send_line("reasoning", msg.content, session_id=session_id)
+                # Extract working memory from <think> content for inter-step continuity
+                _wm = _extract_working_memory(msg.content, step)
+                if _wm:
+                    _working_memory = _wm
 
             if finish == "stop" or not msg.tool_calls:
                 # Safety guard: action agent with destructive task must call plan_action
@@ -852,6 +915,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         pass
 
     # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
+    boost_tools: list[str] = []  # populated from successful past outcomes below
     try:
         from api.memory.feedback import get_past_outcomes, build_outcome_prompt_section
         from api.memory.client import get_client as _get_mem_client
@@ -865,6 +929,23 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         outcome_section = build_outcome_prompt_section(past_outcomes)
         if outcome_section:
             injected_sections.append(outcome_section)
+
+        # Extract tool boost list from successful past outcomes
+        _boost_tools: list[str] = []
+        for o in past_outcomes:
+            content = o.get("content", "")
+            _bt_m = re.search(r"Tools:\s*(.+)", content)
+            if _bt_m and "completed" in content.lower():
+                names = [n.strip() for n in _bt_m.group(1).split(",") if n.strip()]
+                _boost_tools.extend(names[:4])
+        # Deduplicate preserving order, cap at 8
+        seen = set()
+        boost_tools: list[str] = []
+        for n in _boost_tools:
+            if n not in seen:
+                seen.add(n); boost_tools.append(n)
+            if len(boost_tools) >= 8:
+                break
 
         # pgvector documentation (tiered by agent type — DOCUMENTATION)
         _RAG_BUDGETS = {
@@ -990,10 +1071,17 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             # First step: use the already-injected memory prompt
             step_system_prompt = system_prompt
 
-        step_tools = filter_tools(all_tools, step_agent_type, domain=step_domain or "general")
+        from api.agents.router import rank_tools_for_task
+        step_tools_filtered = filter_tools(all_tools, step_agent_type, domain=step_domain or "general")
+        step_tools = rank_tools_for_task(
+            step_task,
+            step_tools_filtered,
+            top_n=10,           # leave room for always-include tools
+            boost_names=boost_tools,
+        )
         log.info(
-            "Agent=%s domain=%s filtered manifest: %d tools — %s",
-            step_agent_type, step_domain, len(step_tools),
+            "Agent=%s ranked tools (%d→%d): %s",
+            step_agent_type, len(step_tools_filtered), len(step_tools),
             [t["function"]["name"] for t in step_tools],
         )
 
