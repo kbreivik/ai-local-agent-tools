@@ -283,6 +283,12 @@ same command or variations of it. Instead:
 3. If no alternative exists, note the limitation in your summary
    and move on. Never call the same blocked command twice.
 
+DYNAMIC SKILLS:
+Dynamic skills are not listed in the tool manifest individually.
+To use a skill: first call skill_search(query=...) to find it,
+then call skill_execute(name=..., params={...}) to run it.
+Never guess skill names — always search first.
+
 ENTITY HISTORY TOOLS:
 Use entity_history(entity_id=..., hours=24) to see what fields changed recently.
 Use entity_events(entity_id=..., hours=24) to see discrete events (restarts, version
