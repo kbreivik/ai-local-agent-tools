@@ -198,6 +198,32 @@ async def lifespan(app: FastAPI):
                 if n: _log.info("result_store: purged %d expired rows", n)
             except Exception: pass
     _aio.create_task(_result_store_cleanup_loop())
+    # status_snapshots retention cleanup: once on startup, then daily
+    try:
+        from api.db.base import get_engine as _get_eng
+        from sqlalchemy import text as _sqlt
+        async with _get_eng().begin() as _conn:
+            await _conn.execute(_sqlt(
+                "DELETE FROM status_snapshots WHERE timestamp < NOW() - INTERVAL '30 days'"
+            ))
+    except Exception:
+        pass
+    async def _snapshot_cleanup_loop():
+        while True:
+            await _aio.sleep(86400)
+            try:
+                from api.db.base import get_engine as _get_eng2
+                from sqlalchemy import text as _sqlt2
+                async with _get_eng2().begin() as _conn2:
+                    result = await _conn2.execute(_sqlt2(
+                        "DELETE FROM status_snapshots WHERE timestamp < NOW() - INTERVAL '30 days'"
+                    ))
+                    deleted = result.rowcount
+                    if deleted:
+                        _log.info("status_snapshots cleanup: deleted %d rows older than 30 days", deleted)
+            except Exception as _e:
+                _log.debug("status_snapshots cleanup error: %s", _e)
+    _aio.create_task(_snapshot_cleanup_loop())
     yield
     try:
         stop_auto_update()

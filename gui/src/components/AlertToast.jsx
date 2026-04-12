@@ -38,7 +38,23 @@ function Toast({ alert, onDismiss }) {
     <div className={`flex items-start gap-2 px-3 py-2.5 rounded border text-xs max-w-xs shadow-lg ${style} animate-fade-in`}>
       <span className="shrink-0 text-sm">{SEVERITY_ICON[alert.severity] ?? '⚪'}</span>
       <div className="flex-1 min-w-0">
-        <div className="font-semibold font-mono">{alert.component}</div>
+        <div className="font-semibold font-mono">
+          {alert.component}
+          {alert.prev_health && alert.health && alert.prev_health !== alert.health && (
+            <span style={{
+              fontSize: 8, fontFamily: 'var(--font-mono)', padding: '1px 5px',
+              borderRadius: 2, marginLeft: 6,
+              background: alert.health === 'critical' ? 'rgba(204,40,40,0.15)' :
+                          alert.health === 'degraded'  ? 'rgba(204,136,0,0.12)' :
+                          alert.health === 'healthy'   ? 'rgba(0,170,68,0.12)'  : 'var(--bg-3)',
+              color:      alert.health === 'critical' ? 'var(--red)' :
+                          alert.health === 'degraded'  ? 'var(--amber)' :
+                          alert.health === 'healthy'   ? 'var(--green)'  : 'var(--text-3)',
+            }}>
+              {alert.prev_health} → {alert.health}
+            </span>
+          )}
+        </div>
         <div className="opacity-90 mt-0.5 leading-tight">{alert.message}</div>
         <div className="opacity-60 mt-1">{fmtTs(alert.timestamp)}</div>
       </div>

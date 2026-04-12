@@ -46,6 +46,11 @@ const UNIFI_FILTER_FIELDS = [
   { key: 'state',      label: 'status' },
 ]
 
+const FG_FILTER_FIELDS = [
+  { key: 'type',   label: 'type' },
+  { key: 'status', label: 'status' },
+]
+
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
 // Platform slug → connection test helper
@@ -1432,6 +1437,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   const [unifiData, setUnifiData] = useState(null)
   const [unifiConn, setUnifiConn] = useState(null)
   const [unifiFilters, setUnifiFilters] = useState({})
+  const [fgFilters, setFgFilters] = useState({})
   const [pbsData, setPbsData]     = useState(null)
   const [pbsConn, setPbsConn]     = useState(null)
   useEffect(() => {
@@ -1997,16 +2003,26 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               totalCount={ifaces.length}
               issueCount={issues}
               countLabels={['up', 'total', 'issues']}
-              filterBar={version ? (
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)',
-                              display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <span>{version}</span>
-                  {haMode && haMode !== 'standalone' && (
-                    <span style={{ color: 'var(--amber)' }}>HA: {haMode}</span>
+              filterBar={
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {version && (
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)',
+                                  display: 'flex', gap: 12, alignItems: 'center' }}>
+                      <span>{version}</span>
+                      {haMode && haMode !== 'standalone' && (
+                        <span style={{ color: 'var(--amber)' }}>HA: {haMode}</span>
+                      )}
+                      {fgData?.serial && <span>{fgData.serial}</span>}
+                    </div>
                   )}
-                  {fgData?.serial && <span>{fgData.serial}</span>}
+                  <ConnectionFilterBar
+                    items={ifaces.map(i => ({ ...i, status: i.link ? 'up' : 'down' }))}
+                    filters={fgFilters}
+                    setFilters={setFgFilters}
+                    fields={FG_FILTER_FIELDS}
+                  />
                 </div>
-              ) : null}
+              }
               compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
               entityForCompare={{
                 id: `fortigate:${fgConn.label || fgConn.host}`,
@@ -2015,7 +2031,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 metadata: { host: `${fgConn.host}:${fgConn.port || 443}`, version, ha_mode: haMode, interfaces: ifaces.length }
               }}
             >
-              {ifaces.filter(i => {
+              {applyConnectionFilters(ifaces.map(i => ({ ...i, status: i.link ? 'up' : 'down' })), fgFilters, FG_FILTER_FIELDS).filter(i => {
                 const errors = (i.rx_errors || 0) + (i.tx_errors || 0)
                 const ifDot = !i.link ? 'red' : errors > 0 ? 'amber' : 'green'
                 const eid = `fortigate:iface:${i.name}`
