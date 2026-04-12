@@ -776,7 +776,9 @@ function ConnectionsTab() {
     fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
       .then(r => r.ok ? r.json() : { data: [] })
       .then(d => {
-        const all = d.data || []
+        const all = (d.data || []).sort((a, b) =>
+          (a.label || a.host || '').localeCompare(b.label || b.host || '')
+        )
         setConns(all)
         setJumpHosts(all.filter(c => c.platform === 'vm_host' && c.config?.is_jump_host).map(c => ({ id: c.id, label: c.label, host: c.host })))
         setVmHostConns(all.filter(c => c.platform === 'vm_host'))

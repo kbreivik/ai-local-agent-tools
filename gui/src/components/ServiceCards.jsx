@@ -1400,8 +1400,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   const [sortBy, setSortBy] = useState(() => {
     try {
       const s = JSON.parse(localStorage.getItem('hp1_proxmox_sort') || '{}')
-      return s.sortBy || 'vmid'
-    } catch { return 'vmid' }
+      return s.sortBy || 'name'
+    } catch { return 'name' }
   })
   const [sortDir, setSortDir] = useState(() => {
     try {
@@ -1547,7 +1547,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
             errorCount={errorCount(containers?.containers)}
           >
-            {(containers?.containers || []).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
+            {[...(containers?.containers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
@@ -1570,7 +1570,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
             errorCount={errorCount(swarm?.services)}
           >
-            {(swarm?.services || []).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
+            {[...(swarm?.services || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? _compactPort(s.ports[0]) : ''}

@@ -729,8 +729,8 @@ function PlatformCoreCards() {
     <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6 }}>
       <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
       <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
-      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2 }}>{tag}</span>}
       {value && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>}
+      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2, letterSpacing: 0.5 }}>{tag}</span>}
     </div>
   )
 
@@ -834,7 +834,11 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
     const load = () => {
       fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections`, { headers: { ...authHeaders() } })
         .then(r => r.ok ? r.json() : { data: [] })
-        .then(d => setConns((d.data || []).filter(c => platforms.includes(c.platform) && c.host)))
+        .then(d => setConns(
+          (d.data || [])
+            .filter(c => platforms.includes(c.platform) && c.host)
+            .sort((a, b) => (a.label || a.host || '').localeCompare(b.label || b.host || ''))
+        ))
         .catch(() => {})
     }
     load()
