@@ -112,12 +112,13 @@ class ExternalServicesCollector(BaseCollector):
 
         # 2. Probe all connections from DB
         try:
-            from api.connections import get_connection_for_platform
+            from api.connections import get_all_connections_for_platform
             for platform, health_cfg in PLATFORM_HEALTH.items():
-                conn = get_connection_for_platform(platform)
-                if not conn:
+                conns = get_all_connections_for_platform(platform)
+                if not conns:
                     continue
-                cards.append(self._probe_connection(conn, health_cfg))
+                for conn in conns:
+                    cards.append(self._probe_connection(conn, health_cfg))
         except Exception as e:
             log.warning("ExternalServicesCollector DB read failed: %s", e)
 

@@ -134,11 +134,11 @@ class NetworkSSHCollector(BaseCollector):
         # Get decrypted connections per SSH platform
         ssh_conns = []
         try:
-            from api.connections import get_connection_for_platform
+            from api.connections import get_all_connections_for_platform
             for platform in SSH_PLATFORMS:
-                conn = get_connection_for_platform(platform)
-                if conn and conn.get("host"):
-                    ssh_conns.append(conn)
+                for conn in get_all_connections_for_platform(platform):
+                    if conn and conn.get("host"):
+                        ssh_conns.append(conn)
         except Exception as e:
             return {"health": "error", "devices": [], "error": str(e)}
 
