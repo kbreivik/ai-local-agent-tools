@@ -27,6 +27,7 @@ from api.routers.ingest import router as ingest_router
 from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
 from api.routers.connections import router as connections_router
+from api.routers.notifications import router as notifications_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
@@ -136,6 +137,11 @@ async def lifespan(app: FastAPI):
         init_entity_history()
     except Exception as e:
         _log.debug("Entity history init skipped: %s", e)
+    try:
+        from api.db.notifications import init_notifications
+        init_notifications()
+    except Exception as e:
+        _log.debug("Notifications init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection
@@ -267,6 +273,7 @@ app.include_router(ingest_router)
 app.include_router(skills_router)
 app.include_router(dashboard_router)
 app.include_router(connections_router)
+app.include_router(notifications_router)
 app.include_router(users_router)
 app.include_router(entities_router)
 
