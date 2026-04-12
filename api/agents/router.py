@@ -91,6 +91,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities",
     "result_fetch", "result_query",
+    "entity_history", "entity_events",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -112,6 +113,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities",
     "result_fetch", "result_query",
+    "entity_history", "entity_events",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -137,6 +139,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
     "result_fetch", "result_query",
+    "entity_history", "entity_events",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -150,6 +153,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
     "result_fetch", "result_query",
+    "entity_history", "entity_events",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -269,6 +273,14 @@ same command or variations of it. Instead:
    for per-volume sizes, use 'docker volume inspect <name>' for paths)
 3. If no alternative exists, note the limitation in your summary
    and move on. Never call the same blocked command twice.
+
+ENTITY HISTORY TOOLS:
+Use entity_history(entity_id=..., hours=24) to see what fields changed recently.
+Use entity_events(entity_id=..., hours=24) to see discrete events (restarts, version
+changes, image digest changes, disk threshold crossings).
+entity_id format: VM hosts use their label (e.g. "hp1-ai-agent-lab"),
+  Swarm services use "swarm:service:<name>".
+These tools answer "what changed?" questions without additional SSH commands.
 
 RESULT REFERENCES:
 When a tool returns a result containing {"ref": "rs-...", "count": N,

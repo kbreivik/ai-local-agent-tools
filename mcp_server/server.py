@@ -727,5 +727,25 @@ def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     return _ssh_caps(host=host, days=days)
 
 
+@mcp.tool()
+def entity_history(entity_id: str, hours: int = 24, field: str = "") -> dict:
+    """Get field-level change history for an infrastructure entity.
+    Returns what changed (old → new values) within the time window.
+    entity_id: VM hosts use label, swarm services use "swarm:service:<name>".
+    """
+    from mcp_server.tools.entity_history_tools import entity_history as _eh
+    return _eh(entity_id=entity_id, hours=hours, field=field)
+
+
+@mcp.tool()
+def entity_events(entity_id: str, hours: int = 24, event_type: str = "", severity: str = "") -> dict:
+    """Get named event log for an infrastructure entity.
+    Events: restarts, version changes, digest changes, threshold crossings.
+    Severity filter: info | warning | error | critical.
+    """
+    from mcp_server.tools.entity_history_tools import entity_events as _ee
+    return _ee(entity_id=entity_id, hours=hours, event_type=event_type, severity=severity)
+
+
 if __name__ == "__main__":
     mcp.run()

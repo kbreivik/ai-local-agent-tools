@@ -73,6 +73,16 @@ function VMCard({ vm, onAction }) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState({})
   const [output, setOutput] = useState(null)
+  const [historyData, setHistoryData] = useState(null)
+
+  const entityId = vm.label || vm.hostname || ''
+  useEffect(() => {
+    if (!entityId) return
+    fetch(`${BASE}/api/dashboard/entity-history/${encodeURIComponent(entityId)}?hours=24`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setHistoryData(d) })
+      .catch(() => {})
+  }, [entityId])
 
   const dot = vm.dot || 'grey'
   const dotColor = dot === 'green' ? 'var(--green)' : dot === 'amber' ? 'var(--amber)' : dot === 'red' ? 'var(--red)' : 'var(--text-3)'
@@ -103,6 +113,24 @@ function VMCard({ vm, onAction }) {
         {vm.config?.shared_credentials && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(0,200,238,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,200,238,0.25)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⊕ SHARED</span>}
         {vm.jump_via_label && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)' }}>via {vm.jump_via_label}</span>}
         {vm.uptime_fmt && <span style={{ fontSize: 9, color: 'var(--text-3)' }}>↑ {vm.uptime_fmt}</span>}
+        {historyData && (historyData.change_count > 0 || historyData.event_count > 0) && (
+          <span
+            style={{
+              fontSize: 8,
+              fontFamily: 'var(--font-mono)',
+              padding: '1px 5px',
+              borderRadius: 2,
+              background: historyData.has_critical ? 'rgba(204,40,40,0.2)' :
+                          historyData.has_warning  ? 'rgba(204,136,0,0.15)' :
+                          'var(--bg-3)',
+              color: historyData.has_critical ? 'var(--red)' :
+                     historyData.has_warning  ? 'var(--amber)' : 'var(--text-3)',
+            }}
+            title={`${historyData.change_count} changes, ${historyData.event_count} events (24h)`}
+          >
+            {historyData.change_count + historyData.event_count} changes
+          </span>
+        )}
         {vm.problem && <span style={{ fontSize: 9, color: dot === 'red' ? 'var(--red)' : 'var(--amber)', padding: '1px 5px', borderRadius: 2, background: dot === 'red' ? 'var(--red-dim)' : 'var(--amber-dim)' }}>⚠ {vm.problem}</span>}
         <span style={{ fontSize: 8, color: 'var(--text-3)', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.1s' }}>▶</span>
       </div>

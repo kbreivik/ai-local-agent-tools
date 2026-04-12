@@ -14,7 +14,7 @@ import queue as _queue
 import threading
 import time as _time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.responses import JSONResponse, StreamingResponse
 
 from api.auth import get_current_user
@@ -1588,3 +1588,25 @@ async def vm_service_restart(host_id: str, service_name: str,
     if not conn:
         raise HTTPException(404, f"VM host not found: {host_id}")
     return await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")
+
+
+@router.get("/entity-history/{entity_id}")
+async def entity_history_summary(
+    entity_id: str,
+    hours: int = Query(24, ge=1, le=720),
+    _: str = Depends(get_current_user),
+):
+    """Combined change + event summary for entity drawer / card badge."""
+    from api.db.entity_history import get_changes, get_events
+    changes = get_changes(entity_id, hours=hours, limit=20)
+    events  = get_events(entity_id, hours=hours, limit=20)
+    return {
+        "entity_id": entity_id,
+        "hours": hours,
+        "change_count": len(changes),
+        "event_count": len(events),
+        "changes": changes[:10],
+        "events":  events[:10],
+        "has_critical": any(e["severity"] == "critical" for e in events),
+        "has_warning":  any(e["severity"] == "warning"  for e in events),
+    }

@@ -957,6 +957,37 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     except Exception:
         pass
 
+    # ── Entity history context injection ──────────────────────────────────────
+    # If task mentions a known entity, inject recent changes/events as context
+    try:
+        from api.db.entity_history import get_recent_changes_summary, get_events
+        from api.db.infra_inventory import resolve_host
+
+        _entity_hints = []
+        task_words = task.split()
+        for word in task_words:
+            if len(word) < 4:
+                continue
+            entry = resolve_host(word)
+            if entry:
+                entity_id = entry.get("label", word)
+                summary = get_recent_changes_summary(entity_id, hours=48)
+                if summary:
+                    _entity_hints.append(f"  {entity_id}: {summary}")
+                recent_events = get_events(entity_id, hours=48, severity="warning", limit=3)
+                critical_events = get_events(entity_id, hours=48, severity="critical", limit=3)
+                all_events = critical_events + recent_events
+                if all_events:
+                    ev_str = "; ".join(e["description"][:80] for e in all_events[:3])
+                    _entity_hints.append(f"  {entity_id} events: {ev_str}")
+                break   # one entity per task is enough
+
+        if _entity_hints:
+            history_hint = "RECENT ENTITY ACTIVITY (last 48h):\n" + "\n".join(_entity_hints) + "\n\n"
+            system_prompt = history_hint + system_prompt
+    except Exception:
+        pass
+
     # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
     boost_tools: list[str] = []  # populated from successful past outcomes below
     try:
