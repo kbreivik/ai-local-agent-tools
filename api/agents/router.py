@@ -258,6 +258,15 @@ RULES:
 NETWORK QUERIES: For questions about IP addresses, hostnames, ports, or how to
 connect to this agent from other machines: call get_host_network() tool first.
 
+COORDINATOR CONTEXT:
+You may receive a [Context from previous step: ...] note in your task.
+This contains structured facts found by the prior step. Use it to avoid
+re-fetching data you already have. Only call tools for information not
+yet in the context.
+
+You may also receive [Suggested next tool: ...] — call that tool first
+unless you have a clear reason not to.
+
 STOPPING RULES (MANDATORY):
 - Once you have gathered all data and written your summary, output it as plain text with NO tool calls.
 - After you call audit_log(), output NOTHING MORE — the run ends immediately after.

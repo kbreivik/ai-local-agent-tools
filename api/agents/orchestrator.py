@@ -143,3 +143,108 @@ def verdict_from_text(text: str) -> dict:
         result["state"] = state
 
     return result
+
+
+def extract_structured_verdict(text: str, step_info: dict) -> dict:
+    """Extract verdict with structured context. Alias for verdict_from_text for now."""
+    return verdict_from_text(text or "")
+
+
+# ── Coordinator ───────────────────────────────────────────────────────────────
+
+_COORDINATOR_SYSTEM = """You are a task coordinator for an infrastructure AI system.
+
+Given a task and the result of the last step, decide what to do next.
+Respond ONLY with valid JSON — no prose, no markdown, no explanation outside the JSON.
+
+Available next values:
+  "done"      — task is fully answered, no more steps needed
+  "continue"  — run another tool/step (specify which in context)
+  "query"     — need more data before deciding (specify what in context)
+  "escalate"  — something went wrong or needs human review
+
+Response format (strict JSON):
+{
+  "next": "done|continue|query|escalate",
+  "reason": "one sentence, max 80 chars",
+  "context": "what to tell the next agent step (max 150 chars)",
+  "tool_hint": "optional: name of tool the next step should try first"
+}"""
+
+
+def run_coordinator(
+    task: str,
+    step_summary: str,
+    step_verdict: str,
+    available_tools: list[str],
+    client,
+    model: str,
+) -> dict:
+    """Run a lightweight coordinator to decide the next action.
+
+    Args:
+        task:           Original user task
+        step_summary:   Compact summary of what the last step found (≤200 chars)
+        step_verdict:   GO | ASK | HALT from verdict_from_text()
+        available_tools: Names of tools available to the next step
+        client:         OpenAI-compat client (LM Studio)
+        model:          Model name string
+
+    Returns coordinator decision dict with keys: next, reason, context, tool_hint
+    Falls back to {"next": "done", "reason": "coordinator unavailable", ...} on error.
+    """
+    import json as _json
+
+    # If verdict is already HALT, don't even call the coordinator
+    if step_verdict == "HALT":
+        return {"next": "escalate", "reason": "step returned HALT",
+                "context": step_summary[:150], "tool_hint": ""}
+
+    tools_str = ", ".join(available_tools[:15]) if available_tools else "none"
+
+    user_msg = (
+        f"Task: {task[:200]}\n"
+        f"Last step result: {step_summary[:200]}\n"
+        f"Verdict: {step_verdict}\n"
+        f"Available tools: {tools_str}\n\n"
+        "What should happen next?"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _COORDINATOR_SYSTEM},
+                {"role": "user",   "content": user_msg + "\n/no_think"},
+            ],
+            tools=None,
+            temperature=0.1,
+            max_tokens=200,
+        )
+        text = response.choices[0].message.content or ""
+        # Strip any markdown fences
+        text = text.strip().strip("```json").strip("```").strip()
+        decision = _json.loads(text)
+        # Validate required keys
+        if "next" not in decision:
+            raise ValueError("missing 'next' key")
+        return decision
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).debug("coordinator failed: %s", e)
+        # Safe fallback: if verdict was GO, continue; otherwise done
+        return {
+            "next": "continue" if step_verdict == "GO" else "done",
+            "reason": f"coordinator unavailable ({type(e).__name__})",
+            "context": step_summary[:150],
+            "tool_hint": "",
+        }
+
+
+def should_use_coordinator(steps: list[dict]) -> bool:
+    """Return True if this task warrants coordinator-guided multi-step execution.
+
+    Single-step tasks skip the coordinator (no overhead needed).
+    Multi-step tasks or tasks with check/cleanup words use coordinator.
+    """
+    return len(steps) > 1

@@ -912,7 +912,10 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
     from api.agents.router import classify_task, filter_tools, get_prompt, detect_domain
-    from api.agents.orchestrator import build_step_plan, format_step_header, verdict_from_text
+    from api.agents.orchestrator import (
+        build_step_plan, format_step_header, verdict_from_text,
+        extract_structured_verdict, run_coordinator, should_use_coordinator,
+    )
 
     base_url = _lm_base()
     api_key  = _lm_key()
@@ -1117,6 +1120,10 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     halted_early = False
     all_tools = _build_tools_spec()
 
+    use_coordinator = should_use_coordinator(steps)
+    coordinator_step = 0
+    MAX_COORDINATOR_STEPS = 5   # prevent coordinator from looping forever
+
     for step_info in steps:
         step_intent = step_info["intent"]
         step_domain = step_info.get("domain")
@@ -1165,7 +1172,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             tools_spec=step_tools,
             agent_type=step_agent_type,
             client=client,
-            is_final_step=(step_num == total_steps),
+            is_final_step=(step_num == total_steps and not use_coordinator),
         )
 
         all_tools_used.extend(step_result["tools_used"])
@@ -1176,18 +1183,73 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         agg_completion_tokens += step_result.get("completion_tokens", 0)
         final_status  = step_result["final_status"]
 
-        prior_verdict = verdict_from_text(step_result["output"])
+        # ── Coordinator decision ───────────────────────────────────────────────
+        prior_verdict = extract_structured_verdict(step_result["output"], step_info)
 
-        # If step halted and there are more steps, stop the plan
-        if prior_verdict["verdict"] == "HALT" and step_num < total_steps:
-            await manager.send_line(
-                "agent",
-                f"⛔ Step {step_num} returned HALT — stopping plan. "
-                f"Reason: {prior_verdict['summary'][:200]}",
-                session_id=session_id,
+        if use_coordinator and coordinator_step < MAX_COORDINATOR_STEPS:
+            coordinator_step += 1
+            available_tool_names = [t["function"]["name"] for t in step_tools]
+
+            decision = run_coordinator(
+                task=task,
+                step_summary=prior_verdict.get("summary", "")[:200],
+                step_verdict=prior_verdict["verdict"],
+                available_tools=available_tool_names,
+                client=client,
+                model=_lm_model(),
             )
-            halted_early = True
-            break
+
+            await manager.send_line(
+                "step",
+                f"[coordinator] next={decision['next']} — {decision.get('reason', '')}",
+                status="ok", session_id=session_id,
+            )
+
+            if decision["next"] == "done":
+                await manager.broadcast({
+                    "type": "done", "session_id": session_id,
+                    "agent_type": first_intent,
+                    "content": step_result["output"] or "Task complete.",
+                    "status": "ok", "choices": [],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                break
+
+            elif decision["next"] == "escalate":
+                halted_early = True
+                final_status = "escalated"
+                break
+
+            elif decision["next"] in ("continue", "query"):
+                context_for_next = decision.get("context", "")
+                tool_hint = decision.get("tool_hint", "")
+                next_task = (
+                    f"{task}"
+                    + (f"\n[Context from previous step: {context_for_next}]" if context_for_next else "")
+                    + (f"\n[Suggested next tool: {tool_hint}]" if tool_hint else "")
+                )
+                next_step_info = {
+                    "step":   step_num + 1,
+                    "intent": step_intent,
+                    "domain": step_domain,
+                    "task":   next_task,
+                }
+                steps.append(next_step_info)
+                total_steps = len(steps)
+                prior_verdict = {"verdict": "GO", "summary": context_for_next}
+                continue
+
+        else:
+            # No coordinator — use static verdict (existing behavior)
+            if prior_verdict["verdict"] == "HALT" and step_num < total_steps:
+                await manager.send_line(
+                    "agent",
+                    f"⛔ Step {step_num} returned HALT — stopping. "
+                    f"Reason: {prior_verdict['summary'][:200]}",
+                    session_id=session_id,
+                )
+                halted_early = True
+                break
 
     if halted_early:
         await manager.broadcast({
