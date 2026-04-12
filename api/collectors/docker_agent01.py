@@ -104,6 +104,16 @@ class DockerAgent01Collector(BaseCollector):
                 first_port = ports[0].split("→")[0] if ports else ""
                 ip_port = f"{VM_IP}:{first_port}" if first_port else ""
 
+                # Docker networks and container IP addresses
+                net_settings = attrs.get("NetworkSettings", {})
+                networks_dict = net_settings.get("Networks", {})
+                network_names = list(networks_dict.keys())
+                ip_addresses = [
+                    net_data.get("IPAddress")
+                    for net_data in networks_dict.values()
+                    if net_data.get("IPAddress")
+                ]
+
                 cards.append({
                     "id": c.short_id,
                     "name": name,
@@ -119,6 +129,8 @@ class DockerAgent01Collector(BaseCollector):
                     "built_at": built_at,
                     "dot": dot,
                     "problem": problem,
+                    "networks": network_names,
+                    "ip_addresses": ip_addresses,
                 })
 
             if not cards or all(c["dot"] == "green" for c in cards):
@@ -127,7 +139,29 @@ class DockerAgent01Collector(BaseCollector):
                 overall = "critical"
             else:
                 overall = "degraded"
-            return {"health": overall, "containers": cards, "agent01_ip": VM_IP}
+
+            # Connection metadata for frontend Section header
+            connection_id = ""
+            connection_label = "agent-01"
+            connection_host = VM_IP
+            try:
+                from api.connections import get_connection_for_platform
+                docker_conn = get_connection_for_platform("docker_host")
+                if docker_conn:
+                    connection_id = str(docker_conn.get("id", ""))
+                    connection_label = docker_conn.get("label", "agent-01")
+                    connection_host = docker_conn.get("host", VM_IP)
+            except Exception:
+                pass
+
+            return {
+                "health": overall,
+                "containers": cards,
+                "agent01_ip": VM_IP,
+                "connection_id": connection_id,
+                "connection_label": connection_label,
+                "connection_host": connection_host,
+            }
 
         except DockerException as e:
             return {"health": "error", "error": str(e), "containers": [], "agent01_ip": VM_IP}

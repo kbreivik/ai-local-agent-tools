@@ -33,11 +33,19 @@ function _compactPort(portStr) {
 
 // Format container ip:port for compact — filter loopback, show first mapping
 function _containerNet(c) {
-  // Try ip_port first (from collector)
+  // Try ip_port first (from collector) — _displayIp strips loopback
   const filtered = _displayIp(c.ip_port)
   if (filtered) return filtered
-  // Fallback: first port mapping without IP
-  if (c.ports?.length) return _compactPort(c.ports[0])
+  // Try ports array — strip loopback prefix, keep port
+  if (c.ports?.length) {
+    for (const p of c.ports) {
+      const host = p.split('→')[0]?.trim()
+      if (host && !host.startsWith('127.') && !host.startsWith('0.0.0')) return host
+      // If loopback, show just the port number prefixed with :
+      const portOnly = p.split(':').pop()?.split('/')[0]?.split('→')[0]?.trim()
+      if (portOnly && /^\d+$/.test(portOnly)) return `:${portOnly}`
+    }
+  }
   return ''
 }
 
@@ -573,6 +581,20 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
       {c.ports?.length > 0 && (
         <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
           <span className="text-[9px] text-gray-700">ports </span>{c.ports.join(' · ')}
+        </div>
+      )}
+      {/* Docker networks */}
+      {c.networks?.length > 0 && (
+        <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
+          <span className="text-[9px] text-gray-700">networks </span>
+          {c.networks.join(' · ')}
+        </div>
+      )}
+      {/* All IP addresses */}
+      {c.ip_addresses?.length > 0 && (
+        <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
+          <span className="text-[9px] text-gray-700">ips </span>
+          {c.ip_addresses.join(' · ')}
         </div>
       )}
       <Divider />
@@ -1299,12 +1321,15 @@ function _pulledAgo(iso) {
 
 function _computeContainerSub(c, knownLatest) {
   const latestTag = knownLatest[c.id]
-  if (!latestTag || !c.running_version) return c.image
+  // Shorten image to just the repo:tag part (strip registry host)
+  const imageParts = (c.image || '').split('/')
+  const shortImage = imageParts[imageParts.length - 1] || c.image || ''
+
+  if (!latestTag || !c.running_version) return shortImage
   const severity = compareBuildTag(c.running_version, latestTag)
-  const imageName = c.image.split('/').pop().split(':')[0]
-  if (severity === 'major') return { text: `${imageName}: not latest`, cls: 'text-[#b04020]' }
-  if (severity === 'minor' || severity === 'patch') return { text: `${imageName}: not latest`, cls: 'text-[#92601a]' }
-  return c.image
+  if (severity === 'major') return { text: `${shortImage} — update avail`, cls: 'text-[#b04020]' }
+  if (severity === 'minor' || severity === 'patch') return { text: `${shortImage} — update avail`, cls: 'text-[#92601a]' }
+  return shortImage
 }
 
 // ── Auto-update toggle (agent container only) ────────────────────────────────
@@ -1540,17 +1565,22 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
       )}
 
       {!isInitialLoad && <>
-        {/* Containers · agent-01 */}
+        {/* Containers · agent-01 — cluster Section header */}
         {show('containers_local') && (
           <Section
-            label="Containers · agent-01"
-            meta={`${containers?.agent01_ip || ''} · ${containers?.containers?.length ?? '…'} running`}
-            errorCount={errorCount(containers?.containers)}
+            label={containers?.connection_label || 'agent-01'}
+            dot={containers?.containers?.some(c => c.dot === 'red') ? 'red'
+               : containers?.containers?.some(c => c.dot === 'amber') ? 'amber' : 'green'}
+            auth="DOCKER"
+            host={containers?.connection_host || containers?.agent01_ip || ''}
+            runningCount={containers?.containers?.filter(c => c.status === 'running' || c.dot === 'green').length ?? 0}
+            totalCount={containers?.containers?.length ?? 0}
+            issueCount={errorCount(containers?.containers)}
           >
             {[...(containers?.containers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
-                dot={c.dot} name={c.name} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
+                dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
                 collapsed={<ContainerCardCollapsed c={c} onEntityDetail={onEntityDetail} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
@@ -1563,12 +1593,17 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
           </Section>
         )}
 
-        {/* Containers · Swarm */}
+        {/* Containers · Swarm — cluster Section header */}
         {show('containers_swarm') && (
           <Section
-            label="Containers · Swarm"
-            meta={`${swarm?.swarm_managers ?? '…'} managers · ${swarm?.swarm_workers ?? '…'} workers · ${swarm?.services?.length ?? '…'} services`}
-            errorCount={errorCount(swarm?.services)}
+            label={swarm?.cluster_label || 'Docker Swarm'}
+            dot={swarm?.services?.some(s => (s.dot || 'green') === 'red') ? 'red'
+               : swarm?.services?.some(s => (s.dot || 'green') === 'amber') ? 'amber' : 'green'}
+            auth="SWARM"
+            host={`${swarm?.swarm_managers ?? '?'} mgr · ${swarm?.swarm_workers ?? '?'} wkr`}
+            runningCount={swarm?.services?.filter(s => s.running_replicas === s.desired_replicas).length ?? 0}
+            totalCount={swarm?.services?.length ?? 0}
+            issueCount={errorCount(swarm?.services)}
           >
             {[...(swarm?.services || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard

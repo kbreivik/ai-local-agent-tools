@@ -215,6 +215,12 @@ class SwarmCollector(BaseCollector):
                 if "@sha256:" in image_full:
                     image_digest = "sha256:" + image_full.split("@sha256:")[1][:16]
 
+                # Service networks from task template
+                svc_networks = [
+                    net.get("Target") or net.get("NetworkID", "")[:12]
+                    for net in task_tmpl.get("Networks", [])
+                ]
+
                 svc_data.append({
                     "id": attrs.get("ID", "")[:12],
                     "name": name,
@@ -224,6 +230,7 @@ class SwarmCollector(BaseCollector):
                     "running_replicas": running,
                     "mode": "replicated" if replicated else "global",
                     "update_state": update_st.get("State", ""),
+                    "networks": svc_networks,
                 })
 
             client.close()

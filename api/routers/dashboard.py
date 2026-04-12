@@ -94,6 +94,9 @@ async def get_containers_agent01(user: str = Depends(get_current_user)):
         "agent01_ip": state.get("agent01_ip", ""),
         "health": state.get("health", "unknown"),
         "last_updated": snap.get("timestamp") if snap else None,
+        "connection_id": state.get("connection_id", ""),
+        "connection_label": state.get("connection_label", "agent-01"),
+        "connection_host": state.get("connection_host", ""),
     }
 
 
