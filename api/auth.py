@@ -7,7 +7,7 @@ from typing import Optional
 
 import bcrypt
 import jwt as _pyjwt  # PyJWT — already installed
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, Request, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 _auth_log = _log_module.getLogger(__name__)
@@ -153,31 +153,57 @@ def role_meets(role: str, minimum: str) -> bool:
 
 
 async def get_current_user_and_role(
+    request: Request = None,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> tuple[str, str]:
     """FastAPI dependency — returns (username, role). Raises 401 if not authenticated."""
-    if not creds:
+    token = None
+    if request:
+        token = request.cookies.get("hp1_auth")
+    if not token and creds:
+        token = creds.credentials
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    username = decode_token(creds.credentials)
-    role = get_user_role(creds.credentials)
+    username = decode_token(token)
+    role = get_user_role(token)
     return username, role
 
 
 async def get_current_user(
+    request: Request = None,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> str:
-    if not creds:
+    """Accept JWT from httpOnly cookie OR Authorization: Bearer header.
+    Cookie takes priority. Header is fallback for API clients/scripts.
+    """
+    token = None
+
+    # 1. Check cookie first (browser sessions)
+    if request:
+        token = request.cookies.get("hp1_auth")
+
+    # 2. Fall back to Authorization header (API clients, scripts)
+    if not token and creds:
+        token = creds.credentials
+
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return decode_token(creds.credentials)
+    return decode_token(token)
 
 
 async def optional_user(
+    request: Request = None,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> Optional[str]:
     """Return username or None (for endpoints that work with or without auth)."""
-    if not creds:
+    token = None
+    if request:
+        token = request.cookies.get("hp1_auth")
+    if not token and creds:
+        token = creds.credentials
+    if not token:
         return None
     try:
-        return decode_token(creds.credentials)
+        return decode_token(token)
     except HTTPException:
         return None
