@@ -73,7 +73,18 @@ class KafkaCollector(BaseCollector):
             metadata = admin.describe_cluster()
             brokers_raw = metadata.get("brokers", [])
             controller = metadata.get("controller", {})
-            controller_id = controller.get("node_id", controller.get("id", -1))
+            # KRaft clusters return controller differently from ZK-based clusters.
+            # Try multiple known field paths before falling back to -1.
+            controller_id = (
+                controller.get("node_id")
+                or controller.get("id")
+                or metadata.get("controller_id")
+                or -1
+            )
+            # If controller_id is -1 but we have brokers, this is a KRaft detection gap
+            # in kafka-python — not a real missing controller. Mark as unknown, not -1.
+            if controller_id == -1 and len(brokers_raw) > 0:
+                controller_id = None
 
             broker_data = []
             for b in brokers_raw:
@@ -82,7 +93,7 @@ class KafkaCollector(BaseCollector):
                     "id": bid,
                     "host": b.get("host", "unknown"),
                     "port": b.get("port", 0),
-                    "is_controller": bid == controller_id,
+                    "is_controller": controller_id is not None and bid == controller_id,
                     "status": "up",
                 })
 
@@ -99,17 +110,27 @@ class KafkaCollector(BaseCollector):
                         continue
                     topic_meta = desc[0] if isinstance(desc, list) else {}
                     partitions = topic_meta.get("partitions", [])
-                    under_rep = sum(
-                        1 for p in partitions
-                        if len(p.get("isr", [])) < len(p.get("replicas", []))
-                    )
+                    under_rep_partitions = []
+                    for p in partitions:
+                        isr_count = len(p.get("isr", []))
+                        replica_count = len(p.get("replicas", []))
+                        if isr_count < replica_count:
+                            under_rep_partitions.append({
+                                "partition": p.get("partition", p.get("id", -1)),
+                                "leader": p.get("leader", {}).get("node_id", -1) if isinstance(p.get("leader"), dict) else p.get("leader", -1),
+                                "replicas": [r.get("node_id", r) if isinstance(r, dict) else r for r in p.get("replicas", [])],
+                                "isr": [r.get("node_id", r) if isinstance(r, dict) else r for r in p.get("isr", [])],
+                                "missing": replica_count - isr_count,
+                            })
+                    under_rep = len(under_rep_partitions)
                     under_replicated_total += under_rep
                     rf = len(partitions[0].get("replicas", [])) if partitions else 0
                     topic_data.append({
                         "name": topic,
-                        "partitions": len(partitions),
+                        "partition_count": len(partitions),
                         "replication_factor": rf,
                         "under_replicated": under_rep,
+                        "under_replicated_partitions": under_rep_partitions,
                     })
                 except Exception:
                     pass
@@ -160,6 +181,7 @@ class KafkaCollector(BaseCollector):
             admin.close()
 
             # ── Health ─────────────────────────────────────────────────────────
+            under_rep_threshold = int(os.environ.get("KAFKA_UNDER_REPLICATED_THRESHOLD", "0"))
             alive = len(broker_data)
             if alive == 0:
                 health = "critical"
@@ -167,11 +189,15 @@ class KafkaCollector(BaseCollector):
             elif alive < (expected + 1) // 2:  # less than majority
                 health = "critical"
                 message = f"Majority brokers down: {alive}/{expected}"
-            elif alive < expected or under_replicated_total > 0:
+            elif alive < expected:
+                health = "degraded"
+                message = f"{alive}/{expected} brokers up"
+            elif under_replicated_total > under_rep_threshold:
                 health = "degraded"
                 message = (
                     f"{alive}/{expected} brokers up, "
                     f"{under_replicated_total} under-replicated partitions"
+                    + (f" (threshold: {under_rep_threshold})" if under_rep_threshold > 0 else "")
                 )
             else:
                 max_lag = max(
@@ -192,6 +218,7 @@ class KafkaCollector(BaseCollector):
                 "message": message,
                 "brokers": broker_data,
                 "controller_id": controller_id,
+                "controller_detected": controller_id is not None and controller_id != -1,
                 "broker_count": alive,
                 "expected_brokers": expected,
                 "topics": topic_data,
