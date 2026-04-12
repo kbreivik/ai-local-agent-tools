@@ -162,6 +162,20 @@ def query_result(ref, where="", columns=None, order_by="", limit=50, session_id=
         sql = f"SELECT {sel} FROM {tmp}"
         if where:
             safe = where.replace(";", "").strip()
+
+            # All temp table columns are TEXT. Coerce bare boolean literals to quoted strings
+            # so the agent can write: WHERE dangling = true  (not: WHERE dangling = 'true')
+            import re as _re
+            safe = _re.sub(
+                r'=\s*(true|false)\b',
+                lambda m: f"= '{m.group(1)}'",
+                safe,
+                flags=_re.IGNORECASE,
+            )
+            # Also handle IS TRUE / IS FALSE
+            safe = _re.sub(r'\bIS\s+TRUE\b',  "= 'true'",  safe, flags=_re.IGNORECASE)
+            safe = _re.sub(r'\bIS\s+FALSE\b', "= 'false'", safe, flags=_re.IGNORECASE)
+
             for kw in ("DROP", "DELETE", "INSERT", "UPDATE", "CREATE", "ALTER"):
                 if kw.upper() in safe.upper():
                     cur.close(); conn.close()

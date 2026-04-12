@@ -311,6 +311,7 @@ async def _run_single_agent_step(
     agent_type: str,
     client,
     is_final_step: bool = True,
+    plan_already_approved: bool = False,
 ) -> dict:
     """Run one agent loop iteration. Returns dict with output and feedback stats.
 
@@ -318,6 +319,13 @@ async def _run_single_agent_step(
     except that agent_type, system_prompt, tools_spec, and client come from
     parameters instead of being computed inside.
     """
+    if plan_already_approved:
+        system_prompt = (
+            "[PLAN APPROVED] The user has already approved the plan for this task. "
+            "You do NOT need to call plan_action() again. "
+            "Proceed directly with execution steps.\n\n"
+        ) + system_prompt
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
@@ -330,7 +338,7 @@ async def _run_single_agent_step(
     total_prompt_tokens = 0
     total_completion_tokens = 0
     _audit_logged = False        # allow at most one audit_log call per run
-    plan_action_called = False   # track if plan_action was called this run
+    plan_action_called = plan_already_approved   # pre-set if already approved
     _last_blocked_tool = None    # name of most recently blocked tool
     _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
 
@@ -1118,6 +1126,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
     agg_completion_tokens = 0
     final_status = "completed"
     halted_early = False
+    plan_approved_this_session = False
     all_tools = _build_tools_spec()
 
     use_coordinator = should_use_coordinator(steps)
@@ -1173,7 +1182,12 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             agent_type=step_agent_type,
             client=client,
             is_final_step=(step_num == total_steps and not use_coordinator),
+            plan_already_approved=plan_approved_this_session,
         )
+
+        # Track plan approval across coordinator loop iterations
+        if "plan_action" in step_result["tools_used"]:
+            plan_approved_this_session = True
 
         all_tools_used.extend(step_result["tools_used"])
         agg_positive += step_result["positive_signals"]
@@ -1279,6 +1293,36 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             log.debug("record_outcome error: %s", _oe)
 
         last_reasoning = prior_verdict["summary"] if prior_verdict else ""
+
+        # Detect truncated reasoning: ends without sentence-ending punctuation
+        # and is shorter than a full summary would be
+        _is_truncated = (
+            last_reasoning
+            and len(last_reasoning) < 200
+            and not last_reasoning.rstrip().endswith(('.', '!', '?', ':'))
+            and final_status == "completed"
+        )
+
+        if _is_truncated:
+            # Force a clean summary from the model
+            try:
+                _sum_messages = [
+                    {"role": "system", "content": "You are a concise infrastructure ops assistant. Write a 2-3 sentence summary only."},
+                    {"role": "user", "content": f"Task completed: '{task}'. Write a brief summary of what was done and the outcome. Plain text, no markdown."},
+                ]
+                _sum_resp = client.chat.completions.create(
+                    model=_lm_model(),
+                    messages=_sum_messages,
+                    tools=None,
+                    temperature=0.3,
+                    max_tokens=200,
+                )
+                _sum_text = _sum_resp.choices[0].message.content or ""
+                if _sum_text.strip():
+                    last_reasoning = _sum_text.strip()
+            except Exception as _se:
+                log.debug("Force summary for truncated answer failed: %s", _se)
+
         if last_reasoning:
             try:
                 await logger_mod.set_operation_final_answer(session_id, last_reasoning)

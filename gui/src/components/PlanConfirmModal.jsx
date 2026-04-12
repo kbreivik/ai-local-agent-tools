@@ -10,9 +10,9 @@ import { sendConfirmation, authHeaders } from '../api'
 const TIMEOUT_SECONDS = 300
 
 const RISK_STYLE = {
-  low:    { border: 'border-green-500',  badge: 'bg-green-900 text-green-300',  label: 'LOW'    },
-  medium: { border: 'border-yellow-500', badge: 'bg-yellow-900 text-yellow-300', label: 'MEDIUM' },
-  high:   { border: 'border-red-500',    badge: 'bg-red-900 text-red-300',       label: 'HIGH'   },
+  low:    { border: 'border-green-500',  badge: 'bg-green-900 text-green-300',  label: 'LOW',    btnBg: 'bg-green-700 hover:bg-green-600' },
+  medium: { border: 'border-yellow-500', badge: 'bg-yellow-900 text-yellow-300', label: 'MEDIUM', btnBg: 'bg-yellow-700 hover:bg-yellow-600' },
+  high:   { border: 'border-red-500',    badge: 'bg-red-900 text-red-300',       label: 'HIGH',   btnBg: 'bg-red-700 hover:bg-red-600' },
 }
 
 function Countdown({ seconds, onExpire }) {
@@ -85,8 +85,17 @@ export default function PlanConfirmModal() {
   if (!pendingPlan) return null
 
   const riskLevel = pendingPlan.risk_level || 'medium'
-  const risk      = RISK_STYLE[riskLevel] || RISK_STYLE.medium
+  // Irreversible plans always use red styling regardless of risk_level
+  const effectiveRisk = !pendingPlan.reversible ? 'high' : riskLevel
+  const risk      = RISK_STYLE[effectiveRisk] || RISK_STYLE.medium
   const steps     = pendingPlan.steps || []
+  const riskLabel = !pendingPlan.reversible
+    ? '⚠ IRREVERSIBLE'
+    : riskLevel === 'high'
+    ? '⚠ HIGH RISK'
+    : riskLevel === 'medium'
+    ? '△ MEDIUM RISK'
+    : '✓ LOW RISK'
 
   return (
     /* Backdrop — not dismissable */
@@ -110,7 +119,7 @@ export default function PlanConfirmModal() {
         {/* Risk + reversible */}
         <div className="flex items-center gap-3 px-5 pb-3">
           <span className={`text-xs font-bold px-2 py-0.5 rounded ${risk.badge}`}>
-            Risk: {risk.label}
+            {riskLabel}
           </span>
           <span className={`text-xs font-bold px-2 py-0.5 rounded ${
             pendingPlan.reversible
@@ -168,8 +177,8 @@ export default function PlanConfirmModal() {
           </div>
         )}
 
-        {/* High-risk confirmation checkbox */}
-        {riskLevel === 'high' && (
+        {/* High-risk / irreversible confirmation checkbox */}
+        {(effectiveRisk === 'high') && (
           <div className="px-5 pb-3">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
@@ -196,13 +205,9 @@ export default function PlanConfirmModal() {
           </button>
           <button
             onClick={handleConfirm}
-            disabled={(sending && !retryable) || (riskLevel === 'high' && !confirmed)}
-            title={riskLevel === 'high' && !confirmed ? 'Check the confirmation box first' : ''}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-              riskLevel === 'high'
-                ? 'bg-red-700 hover:bg-red-600 text-white'
-                : 'bg-green-700 hover:bg-green-600 text-white'
-            }`}
+            disabled={(sending && !retryable) || (effectiveRisk === 'high' && !confirmed)}
+            title={effectiveRisk === 'high' && !confirmed ? 'Check the confirmation box first' : ''}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${risk.btnBg} text-white`}
           >
             {sending && !retryable ? '⏳ Sending…' : retryable ? '↺ Retry confirm' : '✓ Confirm & Run'}
           </button>

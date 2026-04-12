@@ -49,6 +49,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.1.md | v2.15.1 | Copy connection + bulk create (IP range + name pattern) | DONE (b551045) |
 | CC_PROMPT_v2.15.2.md | v2.15.2 | Kafka: KRaft controller fix + under-replicated threshold | DONE (2dea8d4) |
 | CC_PROMPT_v2.15.3.md | v2.15.3 | kafka_exec agent tool + vm_exec allowlist expansion | DONE (1d26cac) |
+| CC_PROMPT_v2.15.4.md | v2.15.4 | Agent loop fixes: SQL bool, plan re-approval, risk colour, final_answer | PENDING |
 
 ---
 
@@ -63,24 +64,13 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.15.0** — `credential_profiles` table (id, name, auth_type, encrypted credentials).
-Connections reference a profile by ID. One "ubuntu-ssh-key" profile serves all 6 workers.
-Profile picker dropdown in the vm_host connection form. `resolve_credentials_for_connection()`
-priority: own creds → linked profile → shared_credentials fallback.
+**v2.15.0–v2.15.3** — See deployment order section below.
 
-**v2.15.1** — Copy button on each connection row (pre-fills form, excludes credentials).
-Bulk add mode: name pattern with `%N%` counter (configurable start + zero-pad), IP range
-expander (start → end, up to 256 IPs), credential profile picker, role selector, preview
-table before save, sequential create with per-row success/failure report.
-
-**v2.15.2** — `controller_id: None` instead of `-1` for KRaft clusters (kafka-python
-can't detect KRaft controller — None signals "unknown" not "absent").
-`KAFKA_UNDER_REPLICATED_THRESHOLD` env var (default 0 = current behaviour).
-`KAFKA_UNDER_REPLICATED_GRACE` env var. Per-partition ISR detail in topic_data.
-
-**v2.15.3** — `kafka_exec(broker_label, command)` MCP tool: SSH to a worker, find kafka
-container, exec CLI command. Blocks destructive operations. Added to OBSERVE/INVESTIGATE/
-EXECUTE_SWARM allowlists. STATUS_PROMPT examples for topic describe + leader election.
+**v2.15.4** — Four agent loop bugs found during docker prune testing:
+1. `result_query`: `WHERE dangling = true` fails on TEXT columns — auto-coerce bare booleans to quoted strings
+2. `plan_action`: model re-calls approval after first approval — `plan_already_approved` flag passed across coordinator loop iterations
+3. Plan approval dialog: neutral green regardless of risk — now red for irreversible/high-risk, amber for medium
+4. `final_answer`: truncated mid-sentence reasoning stored as final answer — detect truncation, force summary call
 
 ---
 
@@ -91,13 +81,16 @@ EXECUTE_SWARM allowlists. STATUS_PROMPT examples for topic describe + leader ele
    — assign the ubuntu-ssh-key credential profile created in v2.15.0
 3. Run v2.15.2 (Kafka fix) — set KAFKA_UNDER_REPLICATED_THRESHOLD=1 in .env
 4. Run v2.15.3 (kafka_exec) — agent can now investigate and fix Kafka directly
-5. Have agent run: kafka_exec("ds-docker-worker-01", "kafka-leader-election.sh ...")
+5. Run v2.15.4 (agent loop fixes)
+6. Re-test docker prune — should now: single approval (red button), clean final summary
 
 ---
 
 ## Key file paths
 
 ```
+api/db/result_store.py              — query_result boolean coercion (v2.15.4)
+api/routers/agent.py                — plan_already_approved flag + final_answer fix (v2.15.4)
 api/db/credential_profiles.py      — profiles table + CRUD (v2.15.0)
 api/routers/credential_profiles.py — REST API (v2.15.0)
 api/collectors/vm_hosts.py          — _resolve_credentials (updated v2.15.0)
