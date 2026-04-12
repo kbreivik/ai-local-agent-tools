@@ -39,6 +39,9 @@ def _validate_command(command):
         r'^docker system df', r'^docker volume ls', r'^docker volume inspect\b',
         r'^docker container inspect\b', r'^docker inspect\b',
         r'^docker ps\b', r'^docker images\b',
+        r'^docker exec \S+ kafka-[a-z-]+\.sh\b',  # kafka CLI tools in containers
+        r'^docker service ps\b', r'^docker service inspect\b',
+        r'^docker node inspect\b', r'^docker node ls\b',
         r'^apt list', r'^apt-cache\b',
         r'^systemctl list', r'^systemctl status\b',
         r'^cat /etc/os-release$', r'^cat /proc/[\w/]+$',
@@ -273,6 +276,72 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
     except Exception as e:
         return {"status": "error", "message": f"infra_lookup error: {e}",
                 "data": None, "timestamp": _ts()}
+
+
+def kafka_exec(broker_label: str, command: str) -> dict:
+    """Run a Kafka CLI command inside the kafka container on a specific broker node.
+
+    Finds the vm_host connection matching broker_label, SSHes to that node,
+    finds the kafka container, and runs the command inside it.
+
+    Args:
+        broker_label: vm_host connection label (e.g. "ds-docker-worker-01")
+        command:      Kafka CLI command without 'docker exec <container>' prefix
+                      e.g. "kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs"
+
+    Safe commands only: kafka-topics.sh, kafka-consumer-groups.sh,
+    kafka-leader-election.sh (PREFERRED only), kafka-log-dirs.sh.
+    Blocked: kafka-delete-records, kafka-reassign-partitions (destructive).
+    """
+    from api.connections import get_all_connections_for_platform
+    from api.collectors.vm_hosts import _resolve_credentials, _ssh_run
+
+    # Safety: block destructive kafka commands
+    BLOCKED = ["delete-records", "reassign-partitions", "--delete", "--reset-offsets"]
+    for b in BLOCKED:
+        if b in command:
+            return {"status": "error",
+                    "message": f"Blocked: '{b}' is a destructive Kafka operation. Use Kafka admin directly.",
+                    "data": None, "timestamp": _ts()}
+
+    # Find the vm_host connection
+    all_conns = get_all_connections_for_platform("vm_host")
+    conn = next((c for c in all_conns if c.get("label", "").lower() == broker_label.lower()), None)
+    if not conn:
+        available = [c.get("label") for c in all_conns]
+        return {"status": "error",
+                "message": f"No vm_host connection '{broker_label}'. Available: {available}",
+                "data": None, "timestamp": _ts()}
+
+    host = conn.get("host", "")
+    port = conn.get("port") or 22
+    username, password, private_key = _resolve_credentials(conn, all_conns)
+
+    try:
+        # SSH to the worker, find the kafka container, exec the command
+        find_cmd = "docker ps --filter name=kafka --format '{{.Names}}' | head -1"
+        container_name = _ssh_run(host, port, username, password, private_key, find_cmd).strip()
+        if not container_name:
+            return {"status": "error",
+                    "message": f"No kafka container found on {broker_label} ({host})",
+                    "data": None, "timestamp": _ts()}
+
+        full_cmd = f"docker exec {container_name} {command}"
+        output = _ssh_run(host, port, username, password, private_key, full_cmd)
+
+        return {
+            "status": "ok",
+            "data": {
+                "host": host,
+                "container": container_name,
+                "command": command,
+                "output": output,
+            },
+            "message": f"Executed on {broker_label} ({host}) in {container_name}",
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": None, "timestamp": _ts()}
 
 
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:

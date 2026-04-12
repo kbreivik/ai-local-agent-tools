@@ -658,6 +658,17 @@ def vm_exec(host: str, command: str) -> dict:
 
 
 @mcp.tool()
+def kafka_exec(broker_label: str, command: str) -> dict:
+    """Run a Kafka CLI command in the kafka container on a specific worker node.
+    broker_label must match a vm_host connection label exactly.
+    Safe commands: kafka-topics.sh, kafka-consumer-groups.sh, kafka-leader-election.sh (PREFERRED only).
+    Example: kafka_exec("ds-docker-worker-01", "kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
+    """
+    from mcp_server.tools.vm import kafka_exec as _ke
+    return _ke(broker_label=broker_label, command=command)
+
+
+@mcp.tool()
 def infra_lookup(query: str = "", platform: str = "") -> dict:
     """Look up infrastructure entities by hostname, IP, alias, or label.
     Searches the auto-populated infra_inventory. Use to resolve names,

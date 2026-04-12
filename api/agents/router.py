@@ -89,7 +89,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "skill_generation_config", "storage_health",
     "agent_status", "postgres_health",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "ssh_capabilities",
+    "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
 })
@@ -111,7 +111,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "skill_recommend_updates", "service_catalog_list", "storage_health",
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
     "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "ssh_capabilities",
+    "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
 })
@@ -129,7 +129,7 @@ _DIAGNOSTICS = frozenset({
 
 EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
-    "kafka_consumer_lag", "kafka_rolling_restart_safe",
+    "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
@@ -137,7 +137,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
@@ -151,7 +151,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "service_upgrade", "service_rollback", "node_drain",
     "docker_engine_update", "vm_exec", "infra_lookup",
     "vm_disk_investigate", "vm_service_discover",
-    "docker_df", "docker_images", "docker_prune", "ssh_capabilities",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
@@ -323,6 +323,13 @@ When using vm_exec:
   check docker volume inspect on the postgres volume and
   report the actual mount path size. Postgres data grows
   permanently unless VACUUM FULL is run.
+
+KAFKA INVESTIGATION:
+To check topic state on a specific broker: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
+To run preferred leader election: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-leader-election.sh --bootstrap-server localhost:9092 --election-type PREFERRED --all-topic-partitions")
+broker_label must exactly match a vm_host connection label. Call infra_lookup() first if unsure.
 
 RESPONSE STYLE — Professional IT Support:
 - Lead with what you did: "I checked X and found..."
