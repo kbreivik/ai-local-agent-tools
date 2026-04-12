@@ -185,40 +185,13 @@ def _ssh_run(host, port, username, password, private_key, script,
 
 def _resolve_credentials(conn, all_conns):
     """Return (username, password, private_key) for a connection.
-    Falls back to shared connections if this conn has no own credentials.
-    Shared connections are those with config.shared_credentials == True."""
-    creds = conn.get("credentials", {}) or {}
-    if isinstance(creds, str):
-        import json
-        try: creds = json.loads(creds)
-        except Exception: creds = {}
-
-    username    = creds.get("username") or None
-    password    = creds.get("password") or None
-    private_key = creds.get("private_key") or None
-
-    if private_key or password:
-        return username or "ubuntu", password, private_key
-
-    # Fall back to shared connections
-    shared = [c for c in all_conns
-              if c.get("id") != conn.get("id")
-              and (c.get("config") or {}).get("shared_credentials")]
-    for sc in shared:
-        sc_creds = sc.get("credentials", {}) or {}
-        if isinstance(sc_creds, str):
-            import json
-            try: sc_creds = json.loads(sc_creds)
-            except Exception: sc_creds = {}
-        sc_key  = sc_creds.get("private_key") or None
-        sc_pass = sc_creds.get("password") or None
-        sc_user = sc_creds.get("username") or "ubuntu"
-        if sc_key or sc_pass:
-            log.debug("Using shared credentials from %s for %s",
-                      sc.get("label"), conn.get("label"))
-            return sc_user, sc_pass, sc_key
-
-    return username or "ubuntu", None, None
+    Priority: own creds → credential profile → shared_credentials fallback."""
+    from api.db.credential_profiles import resolve_credentials_for_connection
+    creds = resolve_credentials_for_connection(conn, all_conns)
+    username = creds.get('username', 'ubuntu')
+    password = creds.get('password')
+    private_key = creds.get('private_key')
+    return username, password, private_key
 
 
 def _resolve_jump_host(conn, all_conns):

@@ -495,6 +495,56 @@ const PLATFORM_AUTH = {
 }
 const _FL = (/** @type {string} */ txt) => <label className="text-[10px] block mb-0.5" style={{ color: 'var(--text-3)' }}>{txt}</label>
 
+function ProfileForm({ form, setForm, onSave, onCancel }) {
+  const AUTH_TYPES = [
+    ['ssh_key', 'SSH Key'],
+    ['password', 'Password'],
+    ['api_key', 'API Key'],
+    ['token', 'Token'],
+  ]
+  const update = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const updateCred = (k, v) => setForm(f => ({ ...f, credentials: { ...f.credentials, [k]: v } }))
+
+  return (
+    <div className="mt-3 p-3 border rounded" style={{ borderColor: 'var(--border)', background: 'var(--bg-2)' }}>
+      <Field label="Profile name">
+        <TextInput value={form.name} onChange={v => update('name', v)} placeholder="ubuntu-ssh-key" />
+      </Field>
+      <Field label="Auth type">
+        <Select value={form.auth_type} onChange={v => update('auth_type', v)}
+          options={AUTH_TYPES} />
+      </Field>
+      {(form.auth_type === 'ssh_key' || form.auth_type === 'password') && (
+        <>
+          <Field label="Username">
+            <TextInput value={form.credentials.username || ''} onChange={v => updateCred('username', v)} placeholder="ubuntu" />
+          </Field>
+          {form.auth_type === 'ssh_key' && (
+            <Field label="Private key (PEM)">
+              <Textarea value={form.credentials.private_key || ''} onChange={v => updateCred('private_key', v)}
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" rows={5} />
+            </Field>
+          )}
+          {form.auth_type === 'password' && (
+            <Field label="Password">
+              <TextInput type="password" value={form.credentials.password || ''} onChange={v => updateCred('password', v)} />
+            </Field>
+          )}
+        </>
+      )}
+      {form.auth_type === 'api_key' && (
+        <Field label="API Key">
+          <TextInput type="password" value={form.credentials.api_key || ''} onChange={v => updateCred('api_key', v)} />
+        </Field>
+      )}
+      <div className="flex gap-2 mt-3">
+        <button onClick={onSave} className="px-3 py-1 text-xs rounded bg-blue-600 text-white">Save</button>
+        <button onClick={onCancel} className="px-3 py-1 text-xs rounded" style={{ background: 'var(--bg-3)', color: 'var(--text-2)' }}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 function ConnectionsTab() {
   const [conns, setConns] = useState([])
   const [loading, setLoading] = useState(true)
@@ -508,6 +558,10 @@ function ConnectionsTab() {
   const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ds_conn_advanced_open') === 'true')
   const [jumpHosts, setJumpHosts] = useState([])
   const [vmHostConns, setVmHostConns] = useState([])
+  const [profiles, setProfiles] = useState([])
+  const [showProfileForm, setShowProfileForm] = useState(false)
+  const [profileForm, setProfileForm] = useState({ name: '', auth_type: 'ssh_key', credentials: {} })
+  const [profilesOpen, setProfilesOpen] = useState(false)
 
   const DOCKER_AUTH_MODES = [
     { value: 'tcp', label: 'TCP (plain)', port: 2375, hint: 'Unauthenticated — Docker daemon on port 2375. Private LAN only.', warning: '⚠ No authentication. Use only on trusted private networks.', warningColor: 'var(--amber)', fields: [] },
@@ -579,7 +633,14 @@ function ConnectionsTab() {
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchConns() }, [])
+  const fetchProfiles = () => {
+    fetch(`${BASE}/api/credential-profiles`, { headers: { ...authHeaders() } })
+      .then(r => r.json())
+      .then(d => setProfiles(d.profiles || []))
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchConns(); fetchProfiles() }, [])
 
   const saveConn = async (e) => {
     e.stopPropagation()
@@ -659,6 +720,50 @@ function ConnectionsTab() {
 
   return (
     <div className="space-y-3" onClick={e => e.stopPropagation()}>
+      <div className="mb-4 border rounded" style={{ borderColor: 'var(--border)' }}>
+        <button
+          onClick={() => setProfilesOpen(o => !o)}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold"
+          style={{ color: 'var(--text-1)', background: 'none', border: 'none', cursor: 'pointer' }}
+        >
+          <span>CREDENTIAL PROFILES ({profiles.length})</span>
+          <span>{profilesOpen ? '\u25B2' : '\u25BC'}</span>
+        </button>
+        {profilesOpen && (
+          <div className="px-3 pb-3">
+            <p className="text-[10px] mb-2" style={{ color: 'var(--text-3)' }}>
+              Named auth sets shared across multiple connections. Select a profile when adding vm_host or docker_host connections instead of re-entering credentials each time.
+            </p>
+            {profiles.map(p => (
+              <div key={p.id} className="flex items-center justify-between py-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span className="text-xs" style={{ color: 'var(--text-1)' }}>{p.name}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--bg-3)', color: 'var(--text-3)' }}>{p.auth_type}</span>
+              </div>
+            ))}
+            <button
+              onClick={() => setShowProfileForm(true)}
+              className="mt-2 text-xs px-3 py-1 rounded"
+              style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}
+            >+ New profile</button>
+            {showProfileForm && <ProfileForm
+              form={profileForm}
+              setForm={setProfileForm}
+              onSave={async () => {
+                await fetch(`${BASE}/api/credential-profiles`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                  body: JSON.stringify(profileForm),
+                })
+                setShowProfileForm(false)
+                setProfileForm({ name: '', auth_type: 'ssh_key', credentials: {} })
+                fetchProfiles()
+              }}
+              onCancel={() => setShowProfileForm(false)}
+            />}
+          </div>
+        )}
+      </div>
+
       <div className="flex justify-between items-center">
         <span className="text-xs" style={{ color: 'var(--text-3)' }}>{conns.length} connection(s)</span>
         <button className="btn btn-primary text-[10px] px-2 py-1"
@@ -749,6 +854,26 @@ function ConnectionsTab() {
               ))}
             </>)
           })()}
+          {/* Credential profile picker for vm_host */}
+          {form.platform === 'vm_host' && (
+            <div>
+              {_FL('Credential profile')}
+              <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>Pick a saved profile or enter credentials below</div>
+              <select
+                value={form.config?.credential_profile_id || ''}
+                onChange={e => updateConfig('credential_profile_id', e.target.value || null)}
+                className="input text-[10px] w-full"
+              >
+                <option value="">— none (use credentials below) —</option>
+                {profiles.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.auth_type})</option>
+                ))}
+              </select>
+              {form.config?.credential_profile_id && (
+                <div style={{ fontSize: 9, color: 'var(--accent)', marginTop: 3 }}>Credentials from profile — leave blank below to inherit</div>
+              )}
+            </div>
+          )}
           {/* Standard platform fields */}
           {form.platform !== 'docker_host' && platAuth.fields.map(f => (
             <div key={f.key}>

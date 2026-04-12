@@ -45,6 +45,10 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.13.0.md | v2.13.0 | Skill system: spec-first generation + environment discovery | DONE (c558eb6) |
 | CC_PROMPT_v2.13.1.md | v2.13.1 | Skill system: skill_execute dispatcher + three-layer validation | DONE (81e86f2) |
 | CC_PROMPT_v2.14.0.md | v2.14.0 | Notification system: email + webhook for critical events | DONE (ca4273e) |
+| CC_PROMPT_v2.15.0.md | v2.15.0 | Credential profiles: named shared auth sets for connections | PENDING |
+| CC_PROMPT_v2.15.1.md | v2.15.1 | Copy connection + bulk create (IP range + name pattern) | PENDING |
+| CC_PROMPT_v2.15.2.md | v2.15.2 | Kafka: KRaft controller fix + under-replicated threshold | PENDING |
+| CC_PROMPT_v2.15.3.md | v2.15.3 | kafka_exec agent tool + vm_exec allowlist expansion | PENDING |
 
 ---
 
@@ -59,93 +63,47 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.8.0** — Semantic tool routing via bge-small-en-v1.5 (already loaded for RAG).
-LLM sees top-10 relevant tools instead of all ~20. Thinking memory extracts key facts
-from `<think>` blocks for inter-step continuity. Feedback pre-ranking boosts historically
-successful tools to front of manifest.
+**v2.15.0** — `credential_profiles` table (id, name, auth_type, encrypted credentials).
+Connections reference a profile by ID. One "ubuntu-ssh-key" profile serves all 6 workers.
+Profile picker dropdown in the vm_host connection form. `resolve_credentials_for_connection()`
+priority: own creds → linked profile → shared_credentials fallback.
 
-**v2.8.1** — Force-summary calls use temperature 0.3. `/no_think` for audit_log-only
-steps saves 200-400 tokens. `min_p=0.1` for consistent JSON args.
+**v2.15.1** — Copy button on each connection row (pre-fills form, excludes credentials).
+Bulk add mode: name pattern with `%N%` counter (configurable start + zero-pad), IP range
+expander (start → end, up to 256 IPs), credential profile picker, role selector, preview
+table before save, sequential create with per-row success/failure report.
 
-**v2.9.0** — `entity_changes` + `entity_events` tables. Collectors detect field-level
-diffs between polls. Image digest tracking catches silent re-deploys.
+**v2.15.2** — `controller_id: None` instead of `-1` for KRaft clusters (kafka-python
+can't detect KRaft controller — None signals "unknown" not "absent").
+`KAFKA_UNDER_REPLICATED_THRESHOLD` env var (default 0 = current behaviour).
+`KAFKA_UNDER_REPLICATED_GRACE` env var. Per-partition ISR detail in topic_data.
 
-**v2.9.1** — `entity_history()` + `entity_events()` agent tools. Recent changes/events
-injected into system prompt when task mentions a known entity. GUI card badges.
-
-**v2.10.0** — Adaptive coordinator: tiny LLM call (no tools, 200 tokens, /no_think)
-between steps. Decides done/continue/query/escalate. Dynamic step extension. Structured
-JSON context between steps replaces prose summaries.
-
-**v2.10.1** — Alert health-transition badge (healthy → degraded). FortiGate
-ConnectionFilterBar. status_snapshots daily cleanup.
-
-**v2.11.0** — `external_services.py` switches from `get_connection_for_platform()`
-(LIMIT 1) to `get_all_connections_for_platform()` — every registered connection gets
-its own probed card. Fixes same issue in any other collectors.
-
-**v2.11.1** — PBS collector: PBSAPIToken auth, per-datastore usage cards, failed task
-detection, STORAGE section entities.
-
-**v2.12.0** — JWT moves from localStorage to httpOnly `SameSite=Strict` cookie.
-`get_current_user()` accepts cookie OR Authorization header. `slowapi` rate limit on
-login (5/min/IP).
-
-**v2.12.1** — Settings → SSH Access tab: credential→host capability map, success rates,
-new-host alert badges, recent SSH attempt log.
-
-**v2.13.0** — `spec_generator.py`: description → SKILL_SPEC JSON before code.
-`live_validator.py`: probes actual endpoints to verify spec. `fingerprints.py`: 12
-service fingerprints for deterministic identification. `discover_environment()`: 4-phase
-enumerate → fingerprint → catalog → recommend.
-
-**v2.13.1** — Single `skill_execute` dispatcher replaces N individual skill tools
-(context reduction). `validate_skill_live`: three-layer validation — deterministic +
-live probe + optional LLM critic.
-
-**v2.14.0** — Async SMTP email + HTTP webhook delivery. Per-event-type routing rules.
-1-per-hour rate limiting. Wired into `fire_alert()` and `write_event()`. Settings →
-Notifications tab with channel CRUD + delivery log.
+**v2.15.3** — `kafka_exec(broker_label, command)` MCP tool: SSH to a worker, find kafka
+container, exec CLI command. Blocks destructive operations. Added to OBSERVE/INVESTIGATE/
+EXECUTE_SWARM allowlists. STATUS_PROMPT examples for topic describe + leader election.
 
 ---
 
-## Key file paths for CC context
+## Deployment order for v2.15.x
+
+1. Run queue through v2.15.1 (credential profiles + bulk create)
+2. Use bulk create to add all 6 worker nodes (managers too) as vm_host connections
+   — assign the ubuntu-ssh-key credential profile created in v2.15.0
+3. Run v2.15.2 (Kafka fix) — set KAFKA_UNDER_REPLICATED_THRESHOLD=1 in .env
+4. Run v2.15.3 (kafka_exec) — agent can now investigate and fix Kafka directly
+5. Have agent run: kafka_exec("ds-docker-worker-01", "kafka-leader-election.sh ...")
+
+---
+
+## Key file paths
 
 ```
-api/routers/agent.py          — agent loop, safety gates, _summarize_tool_result
-api/agents/router.py          — classifier, domain detector, tool allowlists, prompts
-api/agents/orchestrator.py    — step planner, verdict extraction, coordinator (v2.10+)
-api/memory/hooks.py           — MuninnDB before/after_tool_call hooks
-api/memory/feedback.py        — outcome recording, past_outcomes retrieval
-api/rag/doc_search.py         — pgvector hybrid search (bge-small-en-v1.5 ONNX)
-api/db/entity_history.py      — entity_changes + entity_events tables (v2.9.0+)
-api/db/result_store.py        — large result storage + temp table queries
-api/db/ssh_log.py             — SSH attempt log
-api/db/ssh_capabilities.py    — credential→host capability map
-api/db/infra_inventory.py     — hostname/IP SOT
-api/db/notifications.py       — notification channels/rules/log (v2.14+)
-api/notifications.py          — SMTP + webhook delivery engine (v2.14+)
-api/collectors/external_services.py — platform health probes (multi-connection v2.11+)
-api/collectors/vm_hosts.py    — SSH polling, _ssh_run, change detection (v2.9.0+)
-api/collectors/swarm.py       — Docker SDK swarm polling, image digest tracking
-api/collectors/pbs.py         — PBS datastore collector (v2.11.1+)
-mcp_server/tools/vm.py        — vm_exec, infra_lookup, ssh_capabilities
-mcp_server/tools/docker_api.py   — docker_df, docker_prune, docker_images
-mcp_server/tools/result_tools.py — result_fetch, result_query
-mcp_server/tools/meta_tools.py   — discover_environment, skill_execute (v2.13+)
-mcp_server/tools/skills/modules/spec_generator.py — SKILL_SPEC generation (v2.13+)
-mcp_server/tools/skills/modules/live_validator.py  — spec + skill validation (v2.13+)
-mcp_server/tools/skills/modules/fingerprints.py    — service fingerprints (v2.13+)
-plugins/unifi_network_status.py  — UniFi plugin (DB-first credentials)
-gui/src/components/            — React frontend components
+api/db/credential_profiles.py      — profiles table + CRUD (v2.15.0)
+api/routers/credential_profiles.py — REST API (v2.15.0)
+api/collectors/vm_hosts.py          — _resolve_credentials (updated v2.15.0)
+api/collectors/kafka.py             — KRaft fix + threshold (v2.15.2)
+mcp_server/tools/vm.py              — vm_exec allowlist + kafka_exec (v2.15.3)
+mcp_server/server.py                — tool registration
+api/agents/router.py                — allowlists + STATUS_PROMPT
+gui/src/components/OptionsModal.jsx — ConnectionsTab, ProfileForm, BulkForm
 ```
-
-## Stack
-
-- FastAPI + Python backend
-- React + Vite frontend
-- Postgres (pgvector/pg16) at 127.0.0.1:5433
-- MuninnDB (Hebbian memory) at ghcr.io/scrypster/muninndb
-- LM Studio (Qwen3-coder-next) at env LM_STUDIO_BASE_URL
-- Docker Compose deploy on Linux 192.168.199.10:8000
-- Repo: https://github.com/kbreivik/ai-local-agent-tools

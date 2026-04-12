@@ -28,6 +28,7 @@ from api.routers.skills import router as skills_router
 from api.routers.dashboard import router as dashboard_router
 from api.routers.connections import router as connections_router
 from api.routers.notifications import router as notifications_router
+from api.routers.credential_profiles import router as cred_profiles_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
@@ -142,6 +143,11 @@ async def lifespan(app: FastAPI):
         init_notifications()
     except Exception as e:
         _log.debug("Notifications init skipped: %s", e)
+    try:
+        from api.db.credential_profiles import init_credential_profiles
+        init_credential_profiles()
+    except Exception as e:
+        _log.debug("Credential profiles init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection
@@ -276,6 +282,7 @@ app.include_router(connections_router)
 app.include_router(notifications_router)
 app.include_router(users_router)
 app.include_router(entities_router)
+app.include_router(cred_profiles_router)
 
 
 def _get_host_ips() -> dict:
