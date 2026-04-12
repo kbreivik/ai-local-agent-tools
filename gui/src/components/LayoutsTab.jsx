@@ -43,7 +43,7 @@ function LayoutPreview({ layout }) {
   )
 }
 
-export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, setLayout }) {
+export default function LayoutsTab({ layout = {}, dirty, saveLayout, applyTemplate, setLayout }) {
   const [templates, setTemplates] = useState([])
   const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [msg, setMsg] = useState('')
@@ -58,8 +58,8 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
   const flash = (text) => { setMsg(text); setTimeout(() => setMsg(''), 2000) }
 
   const handleApplyTemplate = (tpl) => {
-    applyTemplate(tpl.layout)
-    saveLayout(tpl.layout)
+    applyTemplate?.(tpl.layout)
+    saveLayout?.(tpl.layout)
     flash(`Applied "${tpl.name}" layout`)
   }
 
@@ -99,8 +99,8 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
   }
 
   const handleReset = () => {
-    applyTemplate(DEFAULT_LAYOUT)
-    saveLayout(DEFAULT_LAYOUT)
+    applyTemplate?.(DEFAULT_LAYOUT)
+    saveLayout?.(DEFAULT_LAYOUT)
     flash('Reset to default')
   }
 
@@ -108,8 +108,8 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
     const name = prompt('Template name:')
     if (!name) return
     const templateLayout = { ...layout, template: name, shared: false }
-    setLayout(templateLayout)
-    saveLayout(templateLayout)
+    setLayout?.(templateLayout)
+    saveLayout?.(templateLayout)
     flash(`Saved as "${name}"`)
   }
 
@@ -183,7 +183,7 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
           ACTIONS
         </h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={() => { saveLayout(); flash('Saved') }} style={_btn(dirty)}>
+          <button onClick={() => { saveLayout?.(); flash('Saved') }} style={_btn(dirty)}>
             {dirty && <span className="ds-layout-dirty-dot" style={{ marginRight: 4 }} />}
             SAVE
           </button>
@@ -201,18 +201,18 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={layout.prefs?.drill_persist ?? true}
+            <input type="checkbox" checked={layout?.prefs?.drill_persist ?? true}
               onChange={e => {
-                const l = { ...layout, prefs: { ...layout.prefs, drill_persist: e.target.checked } }
-                applyTemplate(l)
+                const l = { ...layout, prefs: { ...layout?.prefs, drill_persist: e.target.checked } }
+                applyTemplate?.(l)
               }} />
             Persist drill filter between sessions
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-2)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={layout.prefs?.compare_on_load ?? false}
+            <input type="checkbox" checked={layout?.prefs?.compare_on_load ?? false}
               onChange={e => {
-                const l = { ...layout, prefs: { ...layout.prefs, compare_on_load: e.target.checked } }
-                applyTemplate(l)
+                const l = { ...layout, prefs: { ...layout?.prefs, compare_on_load: e.target.checked } }
+                applyTemplate?.(l)
               }} />
             Enable compare mode on load
           </label>
@@ -220,13 +220,13 @@ export default function LayoutsTab({ layout, dirty, saveLayout, applyTemplate, s
             <span>Card density:</span>
             {['compact', 'normal', 'comfortable'].map(d => (
               <button key={d} onClick={() => {
-                const l = { ...layout, prefs: { ...layout.prefs, density: d } }
-                applyTemplate(l)
+                const l = { ...layout, prefs: { ...layout?.prefs, density: d } }
+                applyTemplate?.(l)
               }} style={{
                 padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
-                background: layout.prefs?.density === d ? 'var(--accent-dim)' : 'transparent',
-                color: layout.prefs?.density === d ? 'var(--accent)' : 'var(--text-3)',
-                border: `1px solid ${layout.prefs?.density === d ? 'var(--accent)' : 'var(--border)'}`,
+                background: layout?.prefs?.density === d ? 'var(--accent-dim)' : 'transparent',
+                color: layout?.prefs?.density === d ? 'var(--accent)' : 'var(--text-3)',
+                border: `1px solid ${layout?.prefs?.density === d ? 'var(--accent)' : 'var(--border)'}`,
                 borderRadius: 2, cursor: 'pointer',
               }}>{d}</button>
             ))}

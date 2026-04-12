@@ -203,50 +203,53 @@ export default function Sidebar({
               </div>
             </div>
             {[
-              { icon: '⊞', label: 'Layouts', action: () => { onLayoutsTab?.(); setUserMenuOpen(false) } },
-              { icon: '◈', label: 'Notifications', action: () => { onNotificationsTab?.(); setUserMenuOpen(false) } },
-              { divider: true },
               { icon: '⏻', label: 'Log out', action: () => { onLogout?.(); setUserMenuOpen(false) }, style: { color: 'var(--red)' } },
-            ].map((item, i) => item.divider
-              ? <div key={i} style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-              : (
-                <button key={i} onClick={item.action} style={{
-                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                  padding: '6px 12px', background: 'none', border: 'none',
-                  color: item.style?.color || 'var(--text-2)', cursor: 'pointer',
-                  fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: 0.5, textAlign: 'left',
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                >
-                  <span style={{ width: 14, textAlign: 'center' }}>{item.icon}</span>
-                  {item.label}
-                </button>
-              )
-            )}
+            ].map((item, i) => (
+              <button key={i} onClick={item.action} style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                padding: '6px 12px', background: 'none', border: 'none',
+                color: item.style?.color || 'var(--text-2)', cursor: 'pointer',
+                fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: 0.5, textAlign: 'left',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}
+              >
+                <span style={{ width: 14, textAlign: 'center' }}>{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
           </div>
         )}
 
         {/* Footer trigger */}
         <button onClick={() => !collapsed && setUserMenuOpen(o => !o)} style={{
           width: '100%', display: 'flex', alignItems: 'center',
-          gap: 6, padding: collapsed ? '8px 0' : '8px 12px',
+          gap: 6, padding: collapsed ? '10px 0' : '10px 12px',
           justifyContent: collapsed ? 'center' : 'flex-start',
-          background: userMenuOpen ? 'var(--bg-2)' : 'none',
+          background: userMenuOpen
+            ? 'var(--accent-dim)'
+            : 'rgba(160,24,40,0.06)',
+          borderTop: '1px solid var(--border)',
           border: 'none', cursor: collapsed ? 'default' : 'pointer',
+          transition: 'background 0.1s',
         }}>
           <span style={{
-            width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+            width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
             background: health?.status === 'ok' ? 'var(--green)' : 'var(--red)',
-            boxShadow: health?.status === 'ok' ? '0 0 3px var(--green)' : '0 0 3px var(--red)',
-            animation: 'pulse 2s ease-in-out infinite',
+            boxShadow: health?.status === 'ok' ? '0 0 4px var(--green)' : '0 0 4px var(--red)',
           }} />
           {!collapsed && (
             <>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', whiteSpace: 'nowrap', flex: 1 }}>
-                {username || 'DS-AGENT-01'} · v{health?.version || '—'}
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                color: 'var(--text-2)',
+                whiteSpace: 'nowrap', flex: 1,
+                letterSpacing: 0.3,
+              }}>
+                {username || 'admin'} · <span style={{ color: 'var(--accent)' }}>v{health?.version || '—'}</span>
               </span>
-              <span style={{ fontSize: 8, color: 'var(--text-3)' }}>{userMenuOpen ? '▾' : '▴'}</span>
+              <span style={{ fontSize: 9, color: 'var(--text-3)' }}>{userMenuOpen ? '▾' : '▴'}</span>
             </>
           )}
         </button>

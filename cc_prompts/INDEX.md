@@ -50,6 +50,10 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.2.md | v2.15.2 | Kafka: KRaft controller fix + under-replicated threshold | DONE (2dea8d4) |
 | CC_PROMPT_v2.15.3.md | v2.15.3 | kafka_exec agent tool + vm_exec allowlist expansion | DONE (1d26cac) |
 | CC_PROMPT_v2.15.4.md | v2.15.4 | Agent loop fixes: SQL bool, plan re-approval, risk colour, final_answer | DONE (a9d27ac) |
+| CC_PROMPT_v2.15.5.md | v2.15.5 | Layouts tab fix + admin menu cleanup + footer styling | PENDING |
+| CC_PROMPT_v2.15.6.md | v2.15.6 | Platform Core value-before-tag + alphabetical sorting everywhere | PENDING |
+| CC_PROMPT_v2.15.7.md | v2.15.7 | Container cards: name fix, real IP, networks, per-host Section | PENDING |
+| CC_PROMPT_v2.15.8.md | v2.15.8 | Multi-expand cards + shift-click range + toolbar expand/collapse | PENDING |
 
 ---
 
@@ -64,39 +68,36 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.15.0–v2.15.3** — See deployment order section below.
+**v2.15.5** — Layouts tab blank page fixed (missing `/api/layout/templates` endpoint + null
+guards on layout prop). Admin user menu stripped to Log out only (Layouts/Notifications
+already in Settings sidebar). Footer `admin · v2.15.x`: crimson tint background, 10px
+font, version highlighted in accent red for visual distinction.
 
-**v2.15.4** — Four agent loop bugs found during docker prune testing:
-1. `result_query`: `WHERE dangling = true` fails on TEXT columns — auto-coerce bare booleans to quoted strings
-2. `plan_action`: model re-calls approval after first approval — `plan_already_approved` flag passed across coordinator loop iterations
-3. Plan approval dialog: neutral green regardless of risk — now red for irreversible/high-risk, amber for medium
-4. `final_answer`: truncated mid-sentence reasoning stored as final answer — detect truncation, force summary call
+**v2.15.6** — Platform Core rows: value (v2.15.4, pg16) now appears before the status
+tag (ONLINE, HEALTHY) — information then state, both right-aligned. VM sort default
+changed to name ascending. Container and connection lists sorted alphabetically.
 
----
+**v2.15.7** — Container card name is primary label (was showing image URL). Image string
+shortened to `repo:tag` only. Compact card shows real IP:port (loopback filtered, port-
+only fallback). Expanded card shows Docker networks + all IPs. Containers section gets
+cluster-style Section header per docker_host connection (like Proxmox clusters).
+Backend: connection_id/label/host added to container collector response.
 
-## Deployment order for v2.15.x
-
-1. Run queue through v2.15.1 (credential profiles + bulk create)
-2. Use bulk create to add all 6 worker nodes (managers too) as vm_host connections
-   — assign the ubuntu-ssh-key credential profile created in v2.15.0
-3. Run v2.15.2 (Kafka fix) — set KAFKA_UNDER_REPLICATED_THRESHOLD=1 in .env
-4. Run v2.15.3 (kafka_exec) — agent can now investigate and fix Kafka directly
-5. Run v2.15.4 (agent loop fixes)
-6. Re-test docker prune — should now: single approval (red button), clean final summary
+**v2.15.8** — `openKeys` Set replaces `openKey` single value — multiple cards can be
+expanded simultaneously. Shift+click expands range between last-opened and clicked card
+using DOM data-card-key attributes within the section. DrillDownBar gets two new buttons:
+EXPAND/COLLAPSE ALL cards and EXPAND/COLLAPSE ALL sections, using window custom events
+to signal ServiceCards and Section components. VM cards narrower at 240px default.
 
 ---
 
 ## Key file paths
 
 ```
-api/db/result_store.py              — query_result boolean coercion (v2.15.4)
-api/routers/agent.py                — plan_already_approved flag + final_answer fix (v2.15.4)
-api/db/credential_profiles.py      — profiles table + CRUD (v2.15.0)
-api/routers/credential_profiles.py — REST API (v2.15.0)
-api/collectors/vm_hosts.py          — _resolve_credentials (updated v2.15.0)
-api/collectors/kafka.py             — KRaft fix + threshold (v2.15.2)
-mcp_server/tools/vm.py              — vm_exec allowlist + kafka_exec (v2.15.3)
-mcp_server/server.py                — tool registration
-api/agents/router.py                — allowlists + STATUS_PROMPT
-gui/src/components/OptionsModal.jsx — ConnectionsTab, ProfileForm, BulkForm
+api/routers/layout.py               — layout templates endpoint (v2.15.5)
+gui/src/components/Sidebar.jsx      — user menu + footer (v2.15.5)
+gui/src/components/LayoutsTab.jsx   — null guards (v2.15.5)
+gui/src/App.jsx                     — Platform Core row order, DrillDownBar (v2.15.6, v2.15.8)
+gui/src/components/ServiceCards.jsx — sort defaults, container cards, openKeys (v2.15.6–8)
+api/collectors/swarm.py             — connection metadata in container response (v2.15.7)
 ```

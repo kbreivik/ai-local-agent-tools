@@ -29,6 +29,7 @@ from api.routers.dashboard import router as dashboard_router
 from api.routers.connections import router as connections_router
 from api.routers.notifications import router as notifications_router
 from api.routers.credential_profiles import router as cred_profiles_router
+from api.routers.layout import router as layout_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
@@ -283,6 +284,7 @@ app.include_router(notifications_router)
 app.include_router(users_router)
 app.include_router(entities_router)
 app.include_router(cred_profiles_router)
+app.include_router(layout_router)
 
 
 def _get_host_ips() -> dict:
