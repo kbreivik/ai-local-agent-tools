@@ -235,39 +235,71 @@ function useConfirm() {
 
 const _SLOT_COLORS = ['#00aa44','#00c8ee','#cc8800','#7c6af7']
 
-function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare }) {
-  const isOpen = openKey === cardKey
-  const anyOpen = openKey != null
-  const dimmed = anyOpen && !isOpen
+function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare }) {
+  const isOpen = forceExpanded || (openKeys || new Set()).has(cardKey)
   const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
   const compareId = entityForCompare?.id
   const slotIdx = compareId ? (compareSet || []).findIndex(e => e.id === compareId) : -1
   const isSelected = slotIdx >= 0
   const [hovered, setHovered] = useState(false)
 
+  const toggle = (e) => {
+    if ((e.ctrlKey || e.metaKey) && compareMode && entityForCompare && onCompareAdd) {
+      e.stopPropagation()
+      onCompareAdd(entityForCompare)
+      return
+    }
+
+    if (e.shiftKey && lastOpenedKey) {
+      // Shift+click: expand range between lastOpenedKey and this cardKey
+      const section = e.currentTarget.closest('[data-section-key]')
+      if (section) {
+        const cards = [...section.querySelectorAll('[data-card-key]')]
+        const keys = cards.map(el => el.getAttribute('data-card-key'))
+        const lastIdx = keys.indexOf(lastOpenedKey)
+        const thisIdx = keys.indexOf(cardKey)
+        if (lastIdx >= 0 && thisIdx >= 0) {
+          const [from, to] = lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx]
+          const rangeKeys = keys.slice(from, to + 1)
+          setOpenKeys(prev => {
+            const next = new Set(prev)
+            rangeKeys.forEach(k => next.add(k))
+            return next
+          })
+          return
+        }
+      }
+    }
+
+    // Normal click: toggle this card
+    setOpenKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(cardKey)) {
+        next.delete(cardKey)
+      } else {
+        next.add(cardKey)
+        setLastOpenedKey?.(cardKey)
+      }
+      return next
+    })
+  }
+
   return (
     <div
+      data-card-key={cardKey}
       className={`border rounded-lg cursor-pointer transition-all ${isOpen ? 'border-violet-500 shadow-[0_0_0_1px_rgba(124,106,247,0.15)]' : ''}`}
       style={{
         background: isSelected ? `${_SLOT_COLORS[slotIdx]}0d` : 'var(--bg-2)',
         borderColor: isOpen ? undefined : 'var(--border)',
         padding: isOpen ? '10px' : '8px 12px',
-        opacity: dimmed ? 0.4 : 1,
-        transition: 'opacity 0.15s ease, border-color 0.15s ease, padding 0.15s ease',
+        transition: 'border-color 0.15s ease, padding 0.15s ease',
         outline: isSelected ? `1px solid ${_SLOT_COLORS[slotIdx]}` : 'none',
         outlineOffset: isSelected ? -1 : 0,
         position: 'relative',
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={(e) => {
-        if ((e.ctrlKey || e.metaKey) && compareMode && entityForCompare && onCompareAdd) {
-          e.stopPropagation()
-          onCompareAdd(entityForCompare)
-          return
-        }
-        setOpenKey(isOpen ? null : cardKey)
-      }}
+      onClick={toggle}
     >
       {isSelected && (
         <div style={{
@@ -318,9 +350,9 @@ function InfraCard({ cardKey, openKey, setOpenKey, dot, name, sub, net, uptime, 
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
-function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd, entityForCompare, countLabels }) {
-  const { cardMinWidth, cardMaxWidth } = useOptions()
-  const _min = cardMinWidth ?? 300
+function Section({ label, meta, errorCount, dot, auth, host, runningCount, totalCount, issueCount, filterBar, children, compareMode, compareSet, onCompareAdd, entityForCompare, countLabels, cardMinWidth: sectionMinWidth }) {
+  const { cardMinWidth: globalMin, cardMaxWidth } = useOptions()
+  const _min = sectionMinWidth ?? globalMin ?? 300
   const _max = cardMaxWidth ? `${cardMaxWidth}px` : '1fr'
   const NAME_W = 174
   const isCluster = dot != null  // new two-row header when dot/auth/host are provided
@@ -335,7 +367,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
           {errorCount > 0 && <span className="text-[10px] text-red-500/60">{errorCount} issue{errorCount !== 1 ? 's' : ''}</span>}
         </div>
         {filterBar}
-        <div className="grid gap-2" style={{
+        <div className="grid gap-2" data-section-key={label} style={{
           gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
           ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
         }}>
@@ -346,7 +378,17 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
   }
 
   // New two-row cluster header with collapsible grid
-  const [expanded, setExpanded] = useState(true)
+  const [sectionExpanded, setSectionExpanded] = useState(true)
+  useEffect(() => {
+    const onExpand = () => setSectionExpanded(true)
+    const onCollapse = () => setSectionExpanded(false)
+    window.addEventListener('ds:expand-all-sections', onExpand)
+    window.addEventListener('ds:collapse-all-sections', onCollapse)
+    return () => {
+      window.removeEventListener('ds:expand-all-sections', onExpand)
+      window.removeEventListener('ds:collapse-all-sections', onCollapse)
+    }
+  }, [])
   const dotColor = dot === 'green' ? 'var(--green)' : dot === 'red' ? 'var(--red)' : 'var(--amber)'
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
@@ -358,7 +400,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
             onCompareAdd(entityForCompare)
             return
           }
-          setExpanded(prev => !prev)
+          setSectionExpanded(prev => !prev)
         }}
         style={{ display: 'flex', alignItems: 'stretch', background: 'var(--bg-1)',
                   borderBottom: '1px solid var(--border)', minHeight: 36,
@@ -375,7 +417,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
           <span style={{
             fontSize: 8, color: 'var(--text-3)',
             transition: 'transform 0.1s', display: 'flex', alignItems: 'center',
-            transform: expanded ? 'rotate(90deg)' : 'none',
+            transform: sectionExpanded ? 'rotate(90deg)' : 'none',
           }}>▶</span>
         </div>
         <div style={{ flex: 1 }} />
@@ -413,11 +455,11 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
       {/* Children grid — collapses */}
       <div style={{
         overflow: 'hidden',
-        maxHeight: expanded ? 9999 : 0,
-        opacity: expanded ? 1 : 0,
+        maxHeight: sectionExpanded ? 9999 : 0,
+        opacity: sectionExpanded ? 1 : 0,
         transition: 'max-height 0.25s ease, opacity 0.2s ease',
       }}>
-        <div className="grid gap-2" style={{
+        <div className="grid gap-2" data-section-key={label} style={{
           padding: 2, background: 'var(--bg-0)',
           gridTemplateColumns: `repeat(auto-fill, minmax(${_min}px, ${_max}))`,
           ...(cardMaxWidth ? { justifyContent: 'start' } : {}),
@@ -1412,7 +1454,9 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   const [swarm, setSwarm]           = useState(null)
   const [vms, setVMs]               = useState(null)
   const [external, setExternal]     = useState(null)
-  const [openKey, setOpenKey]       = useState(null)
+  const [openKeys, setOpenKeys]     = useState(new Set())
+  const [lastOpenedKey, setLastOpenedKey] = useState(null)
+  const [expandAllFlag, setExpandAllFlag] = useState(false)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
   // Per-cluster filter state keyed by connection_id (or cluster index fallback)
   const [proxmoxFilterMap, setProxmoxFilterMap] = useState({})
@@ -1542,6 +1586,21 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
     return () => clearInterval(id)
   }, [load])
 
+  // Listen for expand/collapse all cards events from DrillDownBar
+  useEffect(() => {
+    const expandAll = () => setExpandAllFlag(true)
+    const collapseAll = () => {
+      setOpenKeys(new Set())
+      setExpandAllFlag(false)
+    }
+    window.addEventListener('ds:expand-all-cards', expandAll)
+    window.addEventListener('ds:collapse-all-cards', collapseAll)
+    return () => {
+      window.removeEventListener('ds:expand-all-cards', expandAll)
+      window.removeEventListener('ds:collapse-all-cards', collapseAll)
+    }
+  }, [])
+
   // Don't count intentionally stopped resources as issues — only real problems
   const errorCount = (items) => (items || []).filter(i => i.problem && i.problem !== 'stopped').length
 
@@ -1579,7 +1638,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
           >
             {[...(containers?.containers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
-                key={c.id} cardKey={`c-${c.id}`} openKey={openKey} setOpenKey={setOpenKey}
+                key={c.id} cardKey={`c-${c.id}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
                 collapsed={<ContainerCardCollapsed c={c} onEntityDetail={onEntityDetail} />}
                 expanded={<ContainerCardExpanded
@@ -1607,7 +1666,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
           >
             {[...(swarm?.services || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard
-                key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKey={openKey} setOpenKey={setOpenKey}
+                key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? _compactPort(s.ports[0]) : ''}
                 uptime={s.running_replicas != null ? `${s.running_replicas}/${s.desired_replicas} replicas` : ''}
                 collapsed={<ContainerCardCollapsed c={s} />}
@@ -1664,6 +1723,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 runningCount={runningCount}
                 totalCount={allItems.length}
                 issueCount={issues}
+                cardMinWidth={240}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{
                   id: `cluster:proxmox:${connLabel}`,
@@ -1690,7 +1750,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <InfraCard
                     key={`${vm.type}-${vm.vmid}`}
                     cardKey={`v-${cluster.connection_id || clusterIdx}-${vm.type}-${vm.vmid}`}
-                    openKey={openKey} setOpenKey={setOpenKey}
+                    openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                     dot={vm.dot}
                     name={vm.name}
                     sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
@@ -1720,7 +1780,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
           >
             {(external?.services || []).filter(svc => (matchesShowFilter(svc.dot) || isPinned(`external_services:${svc.slug}`)) && matchesSearch(svc.name, svc.host_port, svc.slug)).map(svc => (
               <InfraCard
-                key={svc.slug} cardKey={`e-${svc.slug}`} openKey={openKey} setOpenKey={setOpenKey}
+                key={svc.slug} cardKey={`e-${svc.slug}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
                 uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
                 collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} compareMode={compareMode} onCompareAdd={onCompareAdd} />}
@@ -1784,7 +1844,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <InfraCard
                     key={dev.mac || dev.name}
                     cardKey={`unifi-${dev.mac || dev.name}`}
-                    openKey={openKey} setOpenKey={setOpenKey}
+                    openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                     dot={devDot}
                     name={dev.name}
                     sub={`${dev.type_label} · ${dev.model}`}
@@ -1863,7 +1923,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <InfraCard
                     key={ds.name}
                     cardKey={`pbs-${ds.name}`}
-                    openKey={openKey} setOpenKey={setOpenKey}
+                    openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                     dot={dsDot}
                     name={ds.name}
                     sub={`${Math.round(pct)}% used`}
@@ -1961,7 +2021,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <InfraCard
                     key={pool.name}
                     cardKey={`truenas-${pool.name}`}
-                    openKey={openKey} setOpenKey={setOpenKey}
+                    openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                     dot={poolDot}
                     name={pool.name}
                     sub={`${Math.round(pct)}% used`}
@@ -2081,7 +2141,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                   <InfraCard
                     key={iface.name}
                     cardKey={`fg-${iface.name}`}
-                    openKey={openKey} setOpenKey={setOpenKey}
+                    openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                     dot={ifDot}
                     name={label}
                     sub={`${iface.type || ''} ${speed ? '· ' + speed : ''}`.trim()}

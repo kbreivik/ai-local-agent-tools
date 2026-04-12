@@ -589,7 +589,7 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout }) {
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout, onExpandAllCards, onCollapseAllCards, onExpandAllSections, onCollapseAllSections, allCardsExpanded, allSectionsExpanded }) {
   const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
   const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
   const _btn = (active) => ({
@@ -678,6 +678,35 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
           SAVE LAYOUT
         </button>
       )}
+      {/* Card expand/collapse toggle */}
+      <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+      <button
+        onClick={allCardsExpanded ? onCollapseAllCards : onExpandAllCards}
+        title={allCardsExpanded ? 'Collapse all cards' : 'Expand all cards'}
+        style={{
+          padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+          background: allCardsExpanded ? 'var(--accent-dim)' : 'transparent',
+          color: allCardsExpanded ? 'var(--accent)' : 'var(--text-3)',
+          border: `1px solid ${allCardsExpanded ? 'var(--accent)' : 'var(--border)'}`,
+          borderRadius: 2, cursor: 'pointer',
+        }}
+      >
+        {allCardsExpanded ? '\u229F COLLAPSE' : '\u229E EXPAND'}
+      </button>
+      {/* Section expand/collapse toggle */}
+      <button
+        onClick={allSectionsExpanded ? onCollapseAllSections : onExpandAllSections}
+        title={allSectionsExpanded ? 'Collapse all sections' : 'Expand all sections'}
+        style={{
+          padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+          background: allSectionsExpanded ? 'rgba(0,200,238,0.1)' : 'transparent',
+          color: allSectionsExpanded ? 'var(--cyan)' : 'var(--text-3)',
+          border: `1px solid ${allSectionsExpanded ? 'var(--cyan)' : 'var(--border)'}`,
+          borderRadius: 2, cursor: 'pointer',
+        }}
+      >
+        {allSectionsExpanded ? '\u229F SECTIONS' : '\u229E SECTIONS'}
+      </button>
       <div style={{ flex: 1 }} />
       <div className="flex gap-3" style={{ fontSize: 8, color: 'var(--text-3)', flexShrink: 0 }}>
         <span>RUNS <span style={{ color: 'var(--text-2)' }}>{stats?.total_operations ?? '—'}</span></span>
@@ -960,7 +989,26 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [globalMaint, setGlobalMaint] = useState(false)
   const [externalData, setExternalData] = useState([])
+  const [allCardsExpanded, setAllCardsExpanded] = useState(false)
+  const [allSectionsExpanded, setAllSectionsExpanded] = useState(true)
   const { layout, dirty, saveLayout, updateRows, toggleCollapse } = layoutState
+
+  const onExpandAllCards = () => {
+    setAllCardsExpanded(true)
+    window.dispatchEvent(new CustomEvent('ds:expand-all-cards'))
+  }
+  const onCollapseAllCards = () => {
+    setAllCardsExpanded(false)
+    window.dispatchEvent(new CustomEvent('ds:collapse-all-cards'))
+  }
+  const onExpandAllSections = () => {
+    setAllSectionsExpanded(true)
+    window.dispatchEvent(new CustomEvent('ds:expand-all-sections'))
+  }
+  const onCollapseAllSections = () => {
+    setAllSectionsExpanded(false)
+    window.dispatchEvent(new CustomEvent('ds:collapse-all-sections'))
+  }
 
   useEffect(() => {
     fetchStats().then(setStats).catch(() => {})
@@ -1034,6 +1082,9 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         stats={stats}
         compareMode={compareMode} compareSet={compareSet} onToggleCompare={onToggleCompare}
         layoutDirty={dirty} onSaveLayout={saveLayout}
+        onExpandAllCards={onExpandAllCards} onCollapseAllCards={onCollapseAllCards}
+        onExpandAllSections={onExpandAllSections} onCollapseAllSections={onCollapseAllSections}
+        allCardsExpanded={allCardsExpanded} allSectionsExpanded={allSectionsExpanded}
       />
 
       {globalMaint && (
