@@ -25,6 +25,37 @@ def _lm_base():  return os.environ.get("LM_STUDIO_BASE_URL", DEFAULT_LM_STUDIO_U
 def _lm_model(): return os.environ.get("LM_STUDIO_MODEL",    DEFAULT_LM_STUDIO_MODEL)
 def _lm_key():   return os.environ.get("LM_STUDIO_API_KEY",  DEFAULT_LM_STUDIO_KEY)
 
+
+def _step_temperature(agent_type: str, has_tool_calls: bool, is_force_summary: bool = False) -> float:
+    """Return appropriate temperature for this step type.
+
+    Tool-call steps need low temperature for deterministic JSON argument formatting.
+    Text-only steps (final summary, force summary) benefit from slightly higher
+    temperature for more natural, readable prose.
+    """
+    if is_force_summary:
+        return 0.3
+    if not has_tool_calls:
+        # Text-only response (final step)
+        return 0.3
+    # Tool-call step — deterministic
+    return 0.1
+
+
+def _should_disable_thinking(tool_names_this_step: list[str], step: int, max_steps: int) -> bool:
+    """Return True if we should append /no_think to suppress the <think> block.
+
+    Qwen3 supports /no_think suffix to skip chain-of-thought reasoning.
+    Use this for steps where structured output matters more than reasoning:
+    - audit_log-only steps (model is just recording, not deciding)
+
+    Do NOT use for planning steps, multi-tool steps, or first steps of complex tasks.
+    """
+    if tool_names_this_step == ["audit_log"]:
+        return True
+    return False
+
+
 # Ensure project root importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -339,6 +370,16 @@ async def _run_single_agent_step(
 
             await manager.send_line("step", f"── Step {step} ──", session_id=session_id)
 
+            # For audit_log-only likely steps: hint to skip thinking
+            _prior_step_tools = [tc.function.name for tc in (msg.tool_calls or [])] if step > 1 and 'msg' in dir() else []
+            if _should_disable_thinking(_prior_step_tools, step, max_steps):
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i]["role"] == "user":
+                        content = messages[i]["content"]
+                        if isinstance(content, str) and "/no_think" not in content:
+                            messages[i] = {**messages[i], "content": content + "\n/no_think"}
+                        break
+
             import time as _time
             _step_t0 = _time.monotonic()
             try:
@@ -349,6 +390,7 @@ async def _run_single_agent_step(
                     tool_choice="auto",
                     temperature=0.1,
                     max_tokens=2048,
+                    extra_body={"min_p": 0.1},
                 )
             except Exception as e:
                 await manager.broadcast({
@@ -808,8 +850,9 @@ async def _run_single_agent_step(
                     messages=messages,
                     tools=None,
                     tool_choice=None,
-                    temperature=0.1,
+                    temperature=0.3,
                     max_tokens=600,
+                    extra_body={"min_p": 0.1},
                 )
                 forced_text = force_response.choices[0].message.content or ""
                 if forced_text:
