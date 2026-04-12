@@ -101,34 +101,68 @@ class PBSCollector(BaseCollector):
         return await asyncio.to_thread(self._collect_sync)
 
     def _collect_sync(self) -> dict:
-        conn = None
-        try:
-            from api.connections import get_connection_for_platform
-            conn = get_connection_for_platform("pbs")
-        except Exception:
-            pass
+        from api.connections import get_all_connections_for_platform
+        conns = get_all_connections_for_platform("pbs")
 
-        if conn:
-            host = conn.get("host", "")
-            creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
-            user = creds.get("user", "")
-            token_name = creds.get("token_name", "")
-            secret = creds.get("secret", "")
-            port = conn.get("port") or 8007
-            conn_label = conn.get("label", host)
-            conn_id = conn.get("id", "")
-        else:
+        # Env-var fallback for backward compat
+        if not conns:
             host = os.environ.get("PBS_HOST", "")
-            user = os.environ.get("PBS_USER", "root@pam")
-            token_name = os.environ.get("PBS_TOKEN_NAME", "")
-            secret = os.environ.get("PBS_TOKEN_SECRET", "")
-            port = int(os.environ.get("PBS_PORT", "8007"))
-            conn_label = host
-            conn_id = ""
+            if host:
+                conns = [{
+                    "host": host,
+                    "port": int(os.environ.get("PBS_PORT", "8007")),
+                    "label": host,
+                    "id": "",
+                    "credentials": {
+                        "user": os.environ.get("PBS_USER", "root@pam"),
+                        "token_name": os.environ.get("PBS_TOKEN_NAME", ""),
+                        "secret": os.environ.get("PBS_TOKEN_SECRET", ""),
+                    },
+                }]
 
-        if not host:
+        if not conns:
             return {"health": "unconfigured", "datastores": [], "tasks": {},
                     "message": "No PBS connection configured"}
+
+        # Poll each connection separately, aggregate results
+        all_results = []
+        for conn in conns:
+            result = self._poll_one_conn(conn)
+            all_results.append(result)
+
+        # Merge all datastores and tasks
+        merged_datastores = []
+        merged_tasks = {"recent_count": 0, "failed_count": 0, "last_failed": None}
+        worst_health = "healthy"
+        health_priority = {"healthy": 0, "degraded": 1, "critical": 2, "error": 3}
+
+        for r in all_results:
+            merged_datastores.extend(r.get("datastores", []))
+            rt = r.get("tasks", {})
+            merged_tasks["recent_count"] += rt.get("recent_count", 0)
+            merged_tasks["failed_count"] += rt.get("failed_count", 0)
+            if rt.get("last_failed") and not merged_tasks["last_failed"]:
+                merged_tasks["last_failed"] = rt["last_failed"]
+            h = r.get("health", "error")
+            if health_priority.get(h, 3) > health_priority.get(worst_health, 0):
+                worst_health = h
+
+        return {
+            "health": worst_health,
+            "datastores": merged_datastores,
+            "tasks": merged_tasks,
+            "connection_count": len(conns),
+        }
+
+    def _poll_one_conn(self, conn: dict) -> dict:
+        host = conn.get("host", "")
+        creds = conn.get("credentials", {}) if isinstance(conn.get("credentials"), dict) else {}
+        user = creds.get("user", "")
+        token_name = creds.get("token_name", "")
+        secret = creds.get("secret", "")
+        port = conn.get("port") or 8007
+        conn_label = conn.get("label", host)
+        conn_id = conn.get("id", "")
 
         if not (user and token_name and secret):
             return {"health": "error", "datastores": [], "tasks": {},
