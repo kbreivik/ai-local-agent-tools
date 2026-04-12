@@ -6,11 +6,6 @@
 #   bash cc_prompts/run_queue.sh              # run all pending prompts
 #   bash cc_prompts/run_queue.sh --dry-run    # show pending prompts without executing
 #   bash cc_prompts/run_queue.sh --one        # run only the next pending prompt, then stop
-#
-# Prerequisites:
-#   - claude CLI installed and authenticated (npm install -g @anthropic-ai/claude-code)
-#   - Git configured with push access to origin
-#   - Run from the project root OR the cc_prompts/ subdirectory
 
 set -euo pipefail
 
@@ -19,7 +14,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INDEX_FILE="$SCRIPT_DIR/INDEX.md"
 RUNNER_FILE="$SCRIPT_DIR/QUEUE_RUNNER.md"
 
-# ── Argument parsing ─────────────────────────────────────────────────────────
+# ── Argument parsing ──────────────────────────────────────────────────────────
 
 DRY_RUN=false
 ONE_ONLY=false
@@ -63,25 +58,21 @@ cd "$PROJECT_ROOT"
 log "Project root: $PROJECT_ROOT"
 log "Index:        $INDEX_FILE"
 
-# Check claude CLI
 if ! command -v claude &>/dev/null; then
     err "claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
 fi
 
-# Check git
 if ! git rev-parse --git-dir &>/dev/null; then
     err "Not in a git repository"
 fi
 
 log "Git branch: $(git branch --show-current)"
 
-# Only block on MODIFIED TRACKED files — not untracked (those just get added).
-# Untracked files (like a new cc_prompts/ folder) are fine; the runner will add them.
 MODIFIED_TRACKED=$(git diff --name-only)
 if [[ -n "$MODIFIED_TRACKED" ]]; then
     warn "Modified tracked files detected before queue run:"
     echo "$MODIFIED_TRACKED"
-    read -p "[queue] Stash or commit these first? Continue anyway? (y/N) " -n 1 -r
+    read -p "[queue] Continue anyway? (y/N) " -n 1 -r
     echo
     [[ $REPLY =~ ^[Yy]$ ]] || exit 1
 fi
@@ -92,8 +83,6 @@ if $DRY_RUN; then
     COUNT=$(pending_count)
     log "Queue status — $COUNT prompt(s) PENDING:"
     echo ""
-
-    # Pretty table output
     printf "  %-10s %-73s %-9s\n" "Version" "Theme" "Status"
     printf "  %-10s %-73s %-9s\n" "-------" "-----" "------"
     grep "| PENDING\|| DONE" "$INDEX_FILE" | while IFS='|' read -r _ file ver theme status _; do
@@ -109,7 +98,7 @@ fi
 # ── Main queue loop ───────────────────────────────────────────────────────────
 
 RUN_COUNT=0
-MAX_RUNS=10   # safety cap
+MAX_RUNS=10
 
 while true; do
     COUNT=$(pending_count)
@@ -119,7 +108,7 @@ while true; do
     fi
 
     if [[ $RUN_COUNT -ge $MAX_RUNS ]]; then
-        log "Safety cap reached ($MAX_RUNS runs). Re-run the script to continue."
+        log "Safety cap reached ($MAX_RUNS runs). Re-run to continue."
         break
     fi
 
@@ -128,7 +117,7 @@ while true; do
     PROMPT_PATH="$SCRIPT_DIR/$NEXT_FILE"
 
     if [[ -z "$NEXT_FILE" ]]; then
-        err "Could not parse next PENDING file from INDEX.md. Check table format."
+        err "Could not parse next PENDING file from INDEX.md."
     fi
 
     if [[ ! -f "$PROMPT_PATH" ]]; then
@@ -141,8 +130,13 @@ while true; do
 
     BEFORE_HASH=$(git rev-parse HEAD)
 
-    # ── Invoke Claude Code ────────────────────────────────────────────────────
-    TASK="You are running in automated queue mode for the DEATHSTAR project.
+    # Write task to temp file and pipe via stdin with --print.
+    # Passing task as a positional arg leaves claude in interactive REPL mode
+    # (requiring "exit" to continue). --print + stdin is the non-interactive mode.
+    TMPFILE=$(mktemp /tmp/deathstar_queue_XXXXXX.txt)
+
+    cat > "$TMPFILE" << TASK_EOF
+You are running in automated queue mode for the DEATHSTAR project.
 
 $(cat "$RUNNER_FILE")
 
@@ -156,12 +150,14 @@ $(cat "$PROMPT_PATH")
 
 After implementing and pushing, update cc_prompts/INDEX.md: change the status
 for $NEXT_FILE from 'PENDING' to 'DONE (SHA)' where SHA is the short git hash,
-then commit and push that index change too."
+then commit and push that index change too.
+TASK_EOF
 
-    if claude --dangerously-skip-permissions "$TASK"; then
+    if claude --dangerously-skip-permissions --print < "$TMPFILE"; then
+        rm -f "$TMPFILE"
         AFTER_HASH=$(git rev-parse HEAD)
         if [[ "$BEFORE_HASH" == "$AFTER_HASH" ]]; then
-            warn "Git hash unchanged after CC run — $NEXT_FILE may not have been committed."
+            warn "Git hash unchanged after CC run — $NEXT_FILE may not have committed."
             warn "Check: git log --oneline -5"
             warn "Queue paused. Fix and re-run."
             exit 1
@@ -169,7 +165,8 @@ then commit and push that index change too."
         SHORT=$(git rev-parse --short HEAD)
         log "✓ $NEXT_VER committed as $SHORT"
     else
-        err "claude exited non-zero for $NEXT_FILE — queue stopped. Fix and re-run."
+        rm -f "$TMPFILE"
+        err "claude exited non-zero for $NEXT_FILE — queue stopped."
     fi
 
     RUN_COUNT=$((RUN_COUNT + 1))
