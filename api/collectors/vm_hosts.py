@@ -388,6 +388,63 @@ def _poll_one_vm(conn, all_conns):
             )
         except Exception:
             pass
+        # ── Change detection ──────────────────────────────────────────────────
+        try:
+            from api.db.entity_history import write_change, write_event, get_last_known_values
+
+            _TRACKED_FIELDS = ["os", "kernel", "docker_version", "hostname"]
+            last = get_last_known_values(label, _TRACKED_FIELDS)
+
+            for field in _TRACKED_FIELDS:
+                new_val = result.get(field, "")
+                if not new_val:
+                    continue
+                old_val = last.get(field)
+                if old_val and old_val != new_val:
+                    write_change(
+                        entity_id=label,
+                        entity_type="vm_host",
+                        field_name=field,
+                        old_value=old_val,
+                        new_value=new_val,
+                        connection_id=str(conn.get("id", "")),
+                        source_collector="vm_hosts",
+                    )
+                    # Version changes fire an event
+                    if field in ("os", "kernel", "docker_version"):
+                        write_event(
+                            entity_id=label,
+                            entity_type="vm_host",
+                            event_type="version_change",
+                            severity="warning",
+                            description=f"{field} changed: {old_val} → {new_val}",
+                            connection_id=str(conn.get("id", "")),
+                            source_collector="vm_hosts",
+                            metadata={"field": field, "old": old_val, "new": new_val},
+                        )
+
+            # Disk threshold events
+            max_disk = max((d.get("usage_pct", 0) for d in result.get("disks", [])), default=0)
+            if max_disk >= 90:
+                write_event(
+                    entity_id=label, entity_type="vm_host",
+                    event_type="disk_threshold_crossed", severity="critical",
+                    description=f"Disk usage at {max_disk}% on {label}",
+                    connection_id=str(conn.get("id", "")),
+                    source_collector="vm_hosts",
+                    metadata={"usage_pct": max_disk},
+                )
+            elif max_disk >= 80:
+                write_event(
+                    entity_id=label, entity_type="vm_host",
+                    event_type="disk_threshold_crossed", severity="warning",
+                    description=f"Disk usage at {max_disk}% on {label}",
+                    connection_id=str(conn.get("id", "")),
+                    source_collector="vm_hosts",
+                    metadata={"usage_pct": max_disk},
+                )
+        except Exception as _he:
+            log.debug("entity_history write failed (non-fatal): %s", _he)
         return result
     except Exception as e:
         log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e, exc_info=True)

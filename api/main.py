@@ -131,6 +131,11 @@ async def lifespan(app: FastAPI):
         init_result_store()
     except Exception as e:
         _log.debug("Result store init skipped: %s", e)
+    try:
+        from api.db.entity_history import init_entity_history
+        init_entity_history()
+    except Exception as e:
+        _log.debug("Entity history init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection

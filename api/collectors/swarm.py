@@ -207,15 +207,19 @@ class SwarmCollector(BaseCollector):
                     elif running < desired:
                         degraded_services.append(name)
 
-                # Strip image digest for display (reads from Spec, i.e. desired image)
-                image = container_spec.get("Image", "unknown")
-                log.debug("[Swarm] %s image from spec: %s", name, image)
-                image = image.split("@")[0]
+                # Separate tag from digest for change tracking
+                image_full = container_spec.get("Image", "unknown")
+                log.debug("[Swarm] %s image from spec: %s", name, image_full)
+                image = image_full.split("@")[0]    # strip digest for display
+                image_digest = ""
+                if "@sha256:" in image_full:
+                    image_digest = "sha256:" + image_full.split("@sha256:")[1][:16]
 
                 svc_data.append({
                     "id": attrs.get("ID", "")[:12],
                     "name": name,
                     "image": image,
+                    "image_digest": image_digest,
                     "desired_replicas": desired,
                     "running_replicas": running,
                     "mode": "replicated" if replicated else "global",
@@ -223,6 +227,61 @@ class SwarmCollector(BaseCollector):
                 })
 
             client.close()
+
+            # ── Image digest change detection ─────────────────────────────────
+            try:
+                from api.db.entity_history import write_change, write_event, get_last_known_values
+                for svc in svc_data:
+                    name = svc.get("name", "")
+                    digest = svc.get("image_digest", "")
+                    if not digest or not name:
+                        continue
+                    entity_id = f"swarm:service:{name}"
+                    last = get_last_known_values(entity_id, ["image_digest", "image_tag"])
+                    old_digest = last.get("image_digest")
+                    old_tag = last.get("image_tag")
+                    new_tag = svc.get("image", "")
+
+                    if old_digest and old_digest != digest:
+                        write_change(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            field_name="image_digest",
+                            old_value=old_digest, new_value=digest,
+                            source_collector="swarm",
+                        )
+                        severity = "info" if old_tag == new_tag else "warning"
+                        description = (
+                            f"Service {name}: image digest changed"
+                            + (f" (tag unchanged: {new_tag})" if old_tag == new_tag else f" ({old_tag} → {new_tag})")
+                        )
+                        write_event(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            event_type="image_digest_change",
+                            severity=severity,
+                            description=description,
+                            source_collector="swarm",
+                            metadata={"old_digest": old_digest, "new_digest": digest,
+                                      "tag": new_tag, "silent": old_tag == new_tag},
+                        )
+
+                    # First-time digest record
+                    if not old_digest and digest:
+                        write_change(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            field_name="image_digest",
+                            old_value=None, new_value=digest,
+                            source_collector="swarm",
+                        )
+
+                    if old_tag and old_tag != new_tag:
+                        write_change(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            field_name="image_tag",
+                            old_value=old_tag, new_value=new_tag,
+                            source_collector="swarm",
+                        )
+            except Exception as _de:
+                log.debug("image digest tracking failed (non-fatal): %s", _de)
 
             # ── Health determination ────────────────────────────────────────────
             quorum = (manager_count // 2) + 1 if manager_count else 1

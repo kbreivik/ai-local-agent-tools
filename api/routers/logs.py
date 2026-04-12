@@ -248,3 +248,34 @@ async def get_ssh_capability_alerts(_: str = Depends(get_current_user)):
     alerts = query_capabilities(alerts_only=True, days=30)
     return {"alerts": alerts, "count": len(alerts),
             "message": f"{len(alerts)} credential(s) gained access to new host(s)" if alerts else "No new host alerts."}
+
+
+# ── Entity History ───────────────────────────────────────────────────────────
+
+@router.get("/entity/{entity_id}/changes")
+async def get_entity_changes(
+    entity_id: str,
+    hours: int = Query(24, ge=1, le=720),
+    field_name: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+    _: str = Depends(get_current_user),
+):
+    """Field-level change history for an entity."""
+    from api.db.entity_history import get_changes
+    return {"changes": get_changes(entity_id, hours=hours, field_name=field_name, limit=limit),
+            "entity_id": entity_id, "hours": hours}
+
+@router.get("/entity/{entity_id}/events")
+async def get_entity_events(
+    entity_id: str,
+    hours: int = Query(24, ge=1, le=720),
+    event_type: str = Query(""),
+    severity: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+    _: str = Depends(get_current_user),
+):
+    """Named event log for an entity."""
+    from api.db.entity_history import get_events
+    return {"events": get_events(entity_id, hours=hours, event_type=event_type,
+                                  severity=severity, limit=limit),
+            "entity_id": entity_id, "hours": hours}
