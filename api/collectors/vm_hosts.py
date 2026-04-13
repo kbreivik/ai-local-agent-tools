@@ -418,6 +418,26 @@ def _poll_one_vm(conn, all_conns):
                 )
         except Exception as _he:
             log.debug("entity_history write failed (non-fatal): %s", _he)
+        # ── Metric samples (time-series) ──────────────────────────────────────
+        try:
+            from api.db.metric_samples import write_samples
+            metrics: dict = {}
+            if result.get("mem_pct") is not None:
+                metrics["mem.pct"] = float(result["mem_pct"])
+            if result.get("load_1") is not None:
+                metrics["load.1m"] = float(result["load_1"])
+            if result.get("load_5") is not None:
+                metrics["load.5m"] = float(result["load_5"])
+            for disk in result.get("disks", []):
+                mp = disk.get("mountpoint", "").replace("/", "_").strip("_") or "root"
+                if disk.get("usage_pct") is not None:
+                    metrics[f"disk.{mp}.pct"] = float(disk["usage_pct"])
+                if disk.get("used_bytes") is not None:
+                    metrics[f"disk.{mp}.used_gb"] = round(disk["used_bytes"] / 1e9, 3)
+            if metrics:
+                write_samples(label, metrics)
+        except Exception as _me:
+            log.debug("metric_samples write failed (non-fatal): %s", _me)
         return result
     except Exception as e:
         log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e, exc_info=True)

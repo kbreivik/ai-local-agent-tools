@@ -213,6 +213,21 @@ class KafkaCollector(BaseCollector):
                         + (f", max lag {max_lag}" if max_lag else "")
                     )
 
+            # ── Metric samples (time-series) ──────────────────────────────────
+            try:
+                from api.db.metric_samples import write_samples
+                kafka_metrics: dict = {
+                    "brokers.alive": float(alive),
+                    "brokers.expected": float(expected),
+                    "partitions.under_replicated": float(under_replicated_total),
+                }
+                # Total consumer lag across all groups
+                total_lag = sum(v.get("total_lag", 0) for v in group_lag.values())
+                kafka_metrics["consumer.lag.total"] = float(total_lag)
+                write_samples("kafka_cluster", kafka_metrics)
+            except Exception as _me:
+                log.debug("kafka metric_samples write failed: %s", _me)
+
             return {
                 "health": health,
                 "message": message,

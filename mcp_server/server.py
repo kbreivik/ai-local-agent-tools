@@ -802,5 +802,29 @@ def entity_events(entity_id: str, hours: int = 24, event_type: str = "", severit
     return _ee(entity_id=entity_id, hours=hours, event_type=event_type, severity=severity)
 
 
+@mcp.tool()
+def metric_trend(entity_id: str, metric_name: str, hours: int = 24) -> dict:
+    """Query time-series metric history for infrastructure entities.
+    Returns samples + trend analysis (rising/falling/stable, rate per hour).
+    Entities: vm host labels, 'kafka_cluster', 'swarm_cluster'.
+    Metrics: 'mem.pct', 'load.1m', 'disk.root.pct', 'consumer.lag.total',
+             'brokers.alive', 'partitions.under_replicated'.
+    Use to answer: 'is disk growing?', 'was lag rising before the failure?'
+    Example: metric_trend('ds-docker-worker-01', 'mem.pct', hours=12)
+    """
+    from mcp_server.tools.metric_tools import metric_trend as _mt
+    return _mt(entity_id=entity_id, metric_name=metric_name, hours=hours)
+
+
+@mcp.tool()
+def list_metrics(entity_id: str = "") -> dict:
+    """List available time-series metrics for an entity (or all entities if blank).
+    Use before metric_trend() to discover what metrics are available.
+    Example: list_metrics('ds-docker-worker-01')
+    """
+    from mcp_server.tools.metric_tools import list_metrics as _lm
+    return _lm(entity_id=entity_id)
+
+
 if __name__ == "__main__":
     mcp.run()

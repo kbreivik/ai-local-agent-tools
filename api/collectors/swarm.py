@@ -290,6 +290,20 @@ class SwarmCollector(BaseCollector):
             except Exception as _de:
                 log.debug("image digest tracking failed (non-fatal): %s", _de)
 
+            # ── Metric samples ────────────────────────────────────────────────
+            try:
+                from api.db.metric_samples import write_samples
+                swarm_metrics: dict = {
+                    "nodes.total": float(len(node_data)),
+                    "nodes.active_managers": float(active_managers),
+                    "services.total": float(len(svc_data)),
+                    "services.degraded": float(len(degraded_services)),
+                    "services.failed": float(len(failed_services)),
+                }
+                write_samples("swarm_cluster", swarm_metrics)
+            except Exception as _me:
+                log.debug("swarm metric_samples write failed: %s", _me)
+
             # ── Health determination ────────────────────────────────────────────
             quorum = (manager_count // 2) + 1 if manager_count else 1
             if active_managers < quorum:

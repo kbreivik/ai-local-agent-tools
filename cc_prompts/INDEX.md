@@ -58,9 +58,11 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
 | CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
 | CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | PENDING |
-| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | PENDING |
-| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | DONE (f507583) |
-| CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | DONE (d29a309) |
+| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions | PENDING |
+| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | PENDING |
+| CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
+| CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | RUNNING |
+| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | PENDING |
 
 ---
 
@@ -76,52 +78,47 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 ## Phase summaries
 
 **v2.16.0–v2.16.1** — Agent investigate-on-degraded + task templates.
-
 **v2.17.0–v2.17.1** — Entity timeline + Proxmox console URL fix.
-
 **v2.18.0–v2.18.1** — Result store viewer + synthesis on all completion paths.
+**v2.19.0–v2.19.1** — service_placement tool + docker logs allowlist.
+**v2.20.0–v2.20.2** — Investigation quality + VM card feedback + SSH log stream.
 
-**v2.19.0** — service_placement tool: swarm service → node → vm_host bridge.
+**v2.21.0** — Time-series metric_samples table.
+New `metric_samples` table: (entity_id, metric_name, value, sampled_at).
+VM hosts collector writes mem.pct, load.1m/5m, disk.*.pct/used_gb every 60s.
+Kafka collector writes brokers.alive, under_replicated, consumer.lag.total every 30s.
+Swarm collector writes nodes.total, services.degraded/failed every 30s.
+30-day rolling retention via daily cleanup task.
+New MCP tools: metric_trend() returns samples + rate-of-change (rising/falling/stable);
+list_metrics() shows what's available. Both added to OBSERVE + INVESTIGATE allowlists.
+Enables: "is disk growing?", "was lag rising before the failure?"
 
-**v2.19.1** — docker logs allowlist + investigation depth rules.
-
-**v2.20.0** — Investigation quality: 4-section output + evidence exhaustion tiers.
-
-**v2.20.1** — VM card action audit trail + visual feedback.
-New `vm_action_log` table records every VM card action (reboot, update, service restart)
-with user, status, output, timestamps. vm_reboot/update/service_restart endpoints now
-log to this table and broadcast `vm_action` WebSocket events. VMCard subscribes to
-`ws:message` window events and shows: pulsing amber REBOOTING badge with 90s countdown,
-UPDATING badge during apt, auto-refresh after reboot completes, buttons disabled during
-action. AgentOutputContext dispatches ws:message for cross-component WS access.
-
-**v2.20.2** — VM card SSH log stream + live logs filter fix.
-_ssh_run_streaming() in vm_hosts.py yields SSH channel output line by line.
-GET /api/dashboard/vm-hosts/{id}/logs/stream: SSE journalctl -f via SSH, service filter.
-VMCard: "Live Logs" button opens 180px scrollable SSH journal panel with level coloring
-and optional service filter (docker, ssh, filebeat, active systemd services).
-VMCard: Recent Actions section shows last 5 actions.
-Unified log generator ES reader: both container.name and host.name preserved; display_name
-uses container.name when available, falls back to host.name for host-level ES events.
+**v2.21.1** — Container lifecycle events + collector snapshots to Elasticsearch.
+Swarm collector: tracks running_replicas in entity_changes; writes entity_events for
+replica drops (service_replica_lost), all-down (service_all_replicas_down), recovery.
+base.py: _index_snapshot_to_es() POSTs flattened state to deathstar-metrics-YYYY.MM
+after each successful poll — covers kafka, swarm, elasticsearch, vm_hosts, external.
+external_services: writes latency_ms + reachable samples per connection.
+Together: full time-series coverage from PostgreSQL (metric_samples) + Elasticsearch
+(deathstar-metrics-*) enabling Kibana dashboards and cross-source correlation.
 
 ---
 
 ## Key file paths
 
 ```
+api/db/metric_samples.py               — time-series metrics table (v2.21.0)
+mcp_server/tools/metric_tools.py       — metric_trend + list_metrics tools (v2.21.0)
+api/collectors/base.py                 — ES snapshot indexing (v2.21.1)
+api/collectors/swarm.py                — replica lifecycle events (v2.21.1)
+api/collectors/external_services.py   — latency samples (v2.21.1)
 api/db/vm_action_log.py                — vm action audit table (v2.20.1)
 api/routers/dashboard.py               — VM action endpoints + SSH log stream (v2.20.1, v2.20.2)
-api/collectors/vm_hosts.py             — _ssh_run_streaming helper (v2.20.2)
-api/routers/logs.py                    — result-store endpoints (v2.18.0)
-api/routers/entities.py                — entity list + history endpoint (v2.17.0)
+api/collectors/vm_hosts.py             — metric samples + _ssh_run_streaming (v2.21.0, v2.20.2)
 api/routers/agent.py                   — synthesis on all paths (v2.18.1, v2.20.0)
-api/agents/router.py                   — prompts + allowlists (v2.18.1–v2.20.0)
+api/agents/router.py                   — prompts + allowlists (v2.18.1–v2.21.0)
 mcp_server/tools/vm.py                 — service_placement + docker logs (v2.19.0, v2.19.1)
-mcp_server/server.py                   — service_placement registration (v2.19.0)
+mcp_server/server.py                   — tool registrations
 gui/src/components/VMHostsSection.jsx  — action state + SSH log panel (v2.20.1, v2.20.2)
-gui/src/context/AgentOutputContext.jsx — ws:message window event dispatch (v2.20.1)
-gui/src/components/TaskTemplates.jsx   — one-click task templates (v2.16.1)
-gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
-gui/src/components/ServiceCards.jsx    — Proxmox console URL fix (v2.17.1)
-gui/src/components/LogsPanel.jsx       — Result Refs tab (v2.18.0)
+gui/src/context/AgentOutputContext.jsx — ws:message window event (v2.20.1)
 ```

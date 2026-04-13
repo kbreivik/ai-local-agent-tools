@@ -161,6 +161,12 @@ async def lifespan(app: FastAPI):
         init_vm_action_log()
     except Exception as e:
         _log.debug("VM action log init skipped: %s", e)
+    # Initialize metric_samples time-series table
+    try:
+        from api.db.metric_samples import init_metric_samples
+        init_metric_samples()
+    except Exception as e:
+        _log.debug("Metric samples init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection
@@ -249,6 +255,18 @@ async def lifespan(app: FastAPI):
             except Exception as _e:
                 _log.debug("status_snapshots cleanup error: %s", _e)
     _aio.create_task(_snapshot_cleanup_loop())
+    # Schedule daily metric_samples cleanup (30-day retention)
+    async def _daily_metric_cleanup():
+        while True:
+            await _aio.sleep(86400)
+            try:
+                from api.db.metric_samples import cleanup_old_samples
+                n = cleanup_old_samples(days=30)
+                if n:
+                    _log.info("metric_samples cleanup: deleted %d rows older than 30d", n)
+            except Exception as _e:
+                _log.debug("metric_samples cleanup failed: %s", _e)
+    _aio.create_task(_daily_metric_cleanup())
     yield
     try:
         stop_auto_update()

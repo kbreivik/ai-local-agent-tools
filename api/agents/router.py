@@ -94,6 +94,8 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "entity_history", "entity_events",
     "swarm_node_status",
     "service_placement",
+    "metric_trend",
+    "list_metrics",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -118,6 +120,8 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "entity_history", "entity_events",
     "swarm_node_status",
     "service_placement",
+    "metric_trend",
+    "list_metrics",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -396,6 +400,17 @@ INVESTIGATION TOOL ORDER (for degraded Kafka):
 Only skip a tier if: the tool returns an error (not in allowlist), the component is
 confirmed unreachable, or you already have definitive root cause from earlier steps.
 
+METRIC TREND QUERIES:
+When asked if something is growing, rising, or trending:
+  metric_trend(entity_id="ds-docker-worker-01", metric_name="disk.root.pct", hours=24)
+  metric_trend(entity_id="kafka_cluster", metric_name="consumer.lag.total", hours=6)
+  metric_trend(entity_id="swarm_cluster", metric_name="services.failed", hours=12)
+Use list_metrics(entity_id="...") to see what metrics are available for an entity.
+Available metrics by entity type:
+  VM hosts: mem.pct, load.1m, load.5m, disk.<mount>.pct, disk.<mount>.used_gb
+  kafka_cluster: brokers.alive, partitions.under_replicated, consumer.lag.total
+  swarm_cluster: nodes.total, services.degraded, services.failed
+
 RESPONSE STYLE — Professional IT Support:
 - Lead with what you did: "I checked X and found..."
 - Be direct and specific: use exact values (IPs, versions, counts)
@@ -449,6 +464,17 @@ RULES:
 
     TOOL NOTE: infra_lookup(query="worker-01") — param is 'query', never 'hostname'.
                run_ssh does NOT exist — use vm_exec(host=..., command=...) instead.
+METRIC TREND QUERIES:
+When asked if something is growing, rising, or trending:
+  metric_trend(entity_id="ds-docker-worker-01", metric_name="disk.root.pct", hours=24)
+  metric_trend(entity_id="kafka_cluster", metric_name="consumer.lag.total", hours=6)
+  metric_trend(entity_id="swarm_cluster", metric_name="services.failed", hours=12)
+Use list_metrics(entity_id="...") to see what metrics are available for an entity.
+Available metrics by entity type:
+  VM hosts: mem.pct, load.1m, load.5m, disk.<mount>.pct, disk.<mount>.used_gb
+  kafka_cluster: brokers.alive, partitions.under_replicated, consumer.lag.total
+  swarm_cluster: nodes.total, services.degraded, services.failed
+
 6. Phrase suggestions as future actions, not past summaries.
    Good: "1. Restart broker-2 to clear the JVM OOM state"
    Bad:  "1. The broker crashed at 14:32"
