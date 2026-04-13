@@ -290,6 +290,57 @@ class SwarmCollector(BaseCollector):
             except Exception as _de:
                 log.debug("image digest tracking failed (non-fatal): %s", _de)
 
+            # ── Replica count event tracking ─────────────────────────────────
+            try:
+                from api.db.entity_history import write_event, get_last_known_values
+                for svc in svc_data:
+                    name = svc.get("name", "")
+                    if not name:
+                        continue
+                    entity_id = f"swarm:service:{name}"
+                    running = svc.get("running_replicas", 0)
+                    desired = svc.get("desired_replicas", 0)
+                    last = get_last_known_values(entity_id, ["running_replicas"])
+                    old_running_str = last.get("running_replicas")
+                    old_running = int(old_running_str) if old_running_str is not None else None
+
+                    if old_running is not None and old_running != running:
+                        if running == 0 and desired > 0:
+                            severity = "critical"
+                            event_type = "service_all_replicas_down"
+                            desc = f"{name}: all replicas down (was {old_running}/{desired})"
+                        elif running < old_running:
+                            severity = "warning"
+                            event_type = "service_replica_lost"
+                            desc = f"{name}: replicas dropped {old_running} → {running} (desired {desired})"
+                        elif running > old_running:
+                            severity = "info"
+                            event_type = "service_replica_recovered"
+                            desc = f"{name}: replicas restored {old_running} → {running} (desired {desired})"
+                        else:
+                            continue
+                        write_event(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            event_type=event_type, severity=severity,
+                            description=desc, source_collector="swarm",
+                            metadata={"old_running": old_running, "new_running": running,
+                                      "desired": desired},
+                        )
+
+                    # Record current running count for next poll comparison
+                    if old_running_str is None or old_running != running:
+                        from api.db.entity_history import write_change
+                        write_change(
+                            entity_id=entity_id, entity_type="swarm_service",
+                            field_name="running_replicas",
+                            old_value=old_running_str,
+                            new_value=str(running),
+                            source_collector="swarm",
+                            metadata={"desired": desired},
+                        )
+            except Exception as _re:
+                log.debug("replica tracking failed (non-fatal): %s", _re)
+
             # ── Metric samples ────────────────────────────────────────────────
             try:
                 from api.db.metric_samples import write_samples

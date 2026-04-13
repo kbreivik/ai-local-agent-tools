@@ -209,6 +209,17 @@ class ExternalServicesCollector(BaseCollector):
                 "connection_id": conn.get("id"),
             }
 
+        # Write latency sample for trending
+        try:
+            from api.db.metric_samples import write_samples
+            if latency_ms is not None:
+                write_samples(f"external:{platform}", {
+                    "latency_ms": float(latency_ms),
+                    "reachable": 1.0 if reachable else 0.0,
+                })
+        except Exception:
+            pass
+
         dot, problem = _classify_external(reachable, latency_ms)
         try:
             from api.connections import mark_connection_verified

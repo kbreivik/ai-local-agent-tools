@@ -18,6 +18,88 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _index_snapshot_to_es(component: str, state: dict) -> None:
+    """POST a flattened collector snapshot to Elasticsearch deathstar-metrics-* index.
+
+    Non-blocking (called in background thread via asyncio.to_thread by caller).
+    Silently no-ops if ELASTIC_URL is not set.
+    Only indexes components that have useful numeric metrics.
+    """
+    import os
+    import json as _json
+    from datetime import datetime, timezone
+
+    elastic_url = os.environ.get("ELASTIC_URL", "").rstrip("/")
+    if not elastic_url:
+        return
+
+    # Only index components with useful metrics — skip unconfigured
+    health = state.get("health", "unknown")
+    if health == "unconfigured":
+        return
+
+    # Build a flat document from the state
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc: dict = {
+        "@timestamp": now_iso,
+        "component": component,
+        "health": health,
+        "deathstar.source": "collector",
+    }
+
+    # Component-specific field extraction
+    if component == "kafka_cluster":
+        doc["kafka.brokers.alive"] = state.get("broker_count", 0)
+        doc["kafka.brokers.expected"] = state.get("expected_brokers", 0)
+        doc["kafka.partitions.under_replicated"] = state.get("under_replicated_partitions", 0)
+        total_lag = sum(
+            v.get("total_lag", 0)
+            for v in (state.get("consumer_lag") or {}).values()
+        )
+        doc["kafka.consumer.lag.total"] = total_lag
+
+    elif component == "swarm":
+        doc["swarm.nodes.total"] = state.get("node_count", 0)
+        doc["swarm.managers.active"] = state.get("active_managers", 0)
+        doc["swarm.services.total"] = state.get("service_count", 0)
+        doc["swarm.services.degraded"] = len(state.get("degraded_services") or [])
+        doc["swarm.services.failed"] = len(state.get("failed_services") or [])
+
+    elif component == "elasticsearch":
+        doc["es.nodes"] = state.get("nodes", 0)
+        doc["es.shards.active"] = (state.get("shards") or {}).get("active", 0)
+        doc["es.shards.unassigned"] = (state.get("shards") or {}).get("unassigned", 0)
+
+    elif component == "vm_hosts":
+        # Aggregate across all VMs
+        vms = state.get("vms") or []
+        doc["vm_hosts.total"] = len(vms)
+        doc["vm_hosts.ok"] = state.get("ok", 0)
+        doc["vm_hosts.issues"] = state.get("issues", 0)
+
+    elif component == "external_services":
+        svcs = state.get("services") or []
+        doc["external.total"] = len(svcs)
+        doc["external.reachable"] = sum(1 for s in svcs if s.get("reachable"))
+        doc["external.unreachable"] = sum(1 for s in svcs if not s.get("reachable"))
+
+    else:
+        # Skip components with no useful numeric fields
+        return
+
+    try:
+        import httpx
+        index = f"deathstar-metrics-{datetime.now(timezone.utc).strftime('%Y.%m')}"
+        httpx.post(
+            f"{elastic_url}/{index}/_doc",
+            content=_json.dumps(doc),
+            headers={"Content-Type": "application/json"},
+            timeout=3.0,
+        )
+    except Exception:
+        pass  # never let ES failure affect the collector loop
+
+
 class BaseCollector(ABC):
     component: str = "base"
     interval: int = 30  # seconds
@@ -66,6 +148,12 @@ class BaseCollector(ABC):
             from api.memory.triggers import evaluate_triggers
             after_status_snapshot(self.component, state)
             await evaluate_triggers(self.component, state)
+
+            # Index snapshot to Elasticsearch (non-blocking, best-effort)
+            import asyncio as _asyncio
+            _asyncio.create_task(
+                _asyncio.to_thread(_index_snapshot_to_es, self.component, state)
+            )
 
         except Exception as e:
             self.last_error = str(e)
