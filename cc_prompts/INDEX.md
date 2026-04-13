@@ -51,10 +51,12 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
 | CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | DONE (bd42b0c) |
-| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (f76a451) |
-| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | DONE (f76a451) |
-| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | DONE (f7b118b) |
-| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | DONE (78359d6) |
+| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (f20e94e) |
+| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | PENDING |
+| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | PENDING |
+| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | PENDING |
+| CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
+| CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
 
 ---
 
@@ -69,31 +71,30 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.15.9** — Three new agent tools for Swarm/infra recovery.
-
-**v2.15.10** — Persistent escalation banner + acknowledge.
-
 **v2.16.0** — Agent investigate-on-degraded + halt synthesis.
-research/investigate/status/observe agents treat `degraded` results as findings, not halts.
-`_degraded_findings` accumulates; synthesis LLM call fires on halt and max-steps exit.
-Removed noisy auto-escalate. STATUS_PROMPT and RESEARCH_PROMPT updated.
 
-**v2.16.1** — Agent task templates in CommandPanel.
-TaskTemplates.jsx: 5 domain groups, 18 pre-built tasks. Click to fill textarea.
+**v2.16.1** — Agent task templates in CommandPanel (18 pre-built tasks, 5 domain groups).
 
-**v2.17.0** — Entity timeline view in EntityDrawer.
-GET /api/entities/{entity_id}/history endpoint. Collapsible TIMELINE section in EntityDrawer
-showing field changes (cyan) and events (severity-colored), grouped by day, lazy-loaded.
+**v2.17.0** — Entity timeline view in EntityDrawer (field changes + events, lazy-loaded).
 
-**v2.17.1** — Fix Proxmox noVNC console URL.
-ProxmoxCardExpanded: accepts proxmoxHost + proxmoxPort props passed from cluster data.
-Both "Open Console" and "View in Proxmox" buttons now use the actual Proxmox host,
-not DEATHSTAR's location.hostname.
+**v2.17.1** — Fix Proxmox noVNC console URL to use actual Proxmox host.
 
-**v2.18.0** — Result store viewer in Logs tab.
-GET /api/logs/result-store and /result-store/{ref} endpoints.
-New "Result Refs" sub-tab in LogsPanel: shows active rs-* refs with tool name, row count,
-age, expiry. Click to expand and browse first 20 rows in a table. Auto-refreshes every 30s.
+**v2.18.0** — Result store viewer in Logs tab (browse active rs-* refs + rows).
+
+**v2.18.1** — Synthesis fires on all completion paths + Kafka diagnostic chain in prompts.
+audit_log completion path and finish=stop path now trigger synthesis when _degraded_findings
+are present. Synthesis output: root cause + what was checked + numbered fix steps + which
+steps agent can automate. STATUS_PROMPT and RESEARCH_PROMPT: Kafka diagnostic chain
+(kafka_broker_status → swarm_node_status → docker service ps via vm_exec → kafka_exec).
+infra_lookup kwarg corrected to 'query=' in both prompts. 'run_ssh' does not exist note added.
+
+**v2.19.0** — service_placement tool: swarm service → node → vm_host bridge.
+service_placement(service_name) SSHes to a manager, runs docker service ps, cross-references
+node hostnames to vm_host connections. Returns: task state, error, vm_host_label, vm_host_ip,
+ssh_ready flag. Partial service name supported. Added to OBSERVE and INVESTIGATE allowlists.
+STATUS_PROMPT and RESEARCH_PROMPT: topology shortcut section with example 3-step workflow
+(service_placement → vm_exec → kafka_exec). Closes the gap between Kafka cluster visibility
+and node-level SSH diagnosis.
 
 ---
 
@@ -102,8 +103,10 @@ age, expiry. Click to expand and browse first 20 rows in a table. Auto-refreshes
 ```
 api/routers/logs.py                    — result-store endpoints (v2.18.0)
 api/routers/entities.py                — entity list + history endpoint (v2.17.0)
-api/routers/agent.py                   — halt logic + degraded handling (v2.16.0)
-api/agents/router.py                   — STATUS_PROMPT + RESEARCH_PROMPT (v2.16.0)
+api/routers/agent.py                   — synthesis on all paths (v2.18.1)
+api/agents/router.py                   — prompts + allowlists (v2.18.1, v2.19.0)
+mcp_server/tools/vm.py                 — service_placement tool (v2.19.0)
+mcp_server/server.py                   — tool registration (v2.19.0)
 gui/src/components/TaskTemplates.jsx   — one-click task templates (v2.16.1)
 gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
 gui/src/components/ServiceCards.jsx    — Proxmox console URL fix (v2.17.1)
