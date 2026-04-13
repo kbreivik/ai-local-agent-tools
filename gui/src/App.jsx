@@ -28,6 +28,7 @@ import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
+import EscalationBanner from './components/EscalationBanner'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
 import { useLayout } from './hooks/useLayout'
@@ -1086,6 +1087,8 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         onExpandAllSections={onExpandAllSections} onCollapseAllSections={onCollapseAllSections}
         allCardsExpanded={allCardsExpanded} allSectionsExpanded={allSectionsExpanded}
       />
+
+      <EscalationBanner />
 
       {globalMaint && (
         <div style={{ padding: '6px 12px', background: 'var(--amber-dim)', borderBottom: '1px solid var(--amber)', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--amber)' }}>

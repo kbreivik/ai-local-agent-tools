@@ -81,6 +81,9 @@ function _ensureWS(url) {
     try {
       const msg = JSON.parse(e.data)
       if (!msg || msg.type === 'pong') return
+      if (msg.type === 'escalation_recorded') {
+        window.dispatchEvent(new CustomEvent('ds:ws-message', { detail: msg }))
+      }
       if (!msg.content && !msg.text && !msg.message && !msg.type) return
       _msgListeners.forEach(fn => fn(msg))
     } catch { /* ignore parse errors */ }

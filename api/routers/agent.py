@@ -806,6 +806,27 @@ async def _run_single_agent_step(
                         )
                     except Exception:
                         pass
+                    # Record in persistent escalation table for dashboard visibility
+                    try:
+                        from api.routers.escalations import record_escalation
+                        esc_reason = f"{fn_name} returned {result_status}: {result_msg[:200]}"
+                        if fn_name == "escalate" and result_status != "blocked":
+                            esc_reason = result_msg or fn_args.get("reason", "Agent escalated")
+                        record_escalation(
+                            session_id=session_id,
+                            reason=esc_reason[:500],
+                            operation_id=operation_id,
+                            severity="critical" if result_status == "failed" else "warning",
+                        )
+                        await manager.broadcast({
+                            "type": "escalation_recorded",
+                            "session_id": session_id,
+                            "reason": esc_reason[:200],
+                            "severity": "critical" if result_status == "failed" else "warning",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+                    except Exception as _re:
+                        log.debug("record_escalation failed: %s", _re)
                     halt = True
                     final_status = "escalated"
                     break
