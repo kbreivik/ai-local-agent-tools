@@ -320,6 +320,22 @@ export async function fetchEntityHistory(entityId, hours = 48) {
   return r.json()
 }
 
+export async function fetchResultRefs(sessionId = '') {
+  const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  const r = await fetch(`${BASE}/api/logs/result-store${qs}`, { headers: { ...authHeaders() } })
+  if (!r.ok) return { refs: [], count: 0 }
+  return r.json()
+}
+
+export async function fetchResultRef(ref, offset = 0, limit = 20) {
+  const r = await fetch(
+    `${BASE}/api/logs/result-store/${encodeURIComponent(ref)}?offset=${offset}&limit=${limit}`,
+    { headers: { ...authHeaders() } }
+  )
+  if (!r.ok) return null
+  return r.json()
+}
+
 export async function dashboardAction(path, body = null) {
   const r = await fetch(`${BASE}/api/dashboard/${path}`, {
     method: 'POST',

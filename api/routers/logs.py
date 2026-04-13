@@ -306,3 +306,63 @@ async def mark_capability_reviewed(
         return {"status": "ok", "message": "Alert cleared"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ── Result Store ─────────────────────────────────────────────────────────────
+
+@router.get("/result-store")
+async def list_result_refs(
+    limit: int = 50,
+    session_id: str = "",
+    _: str = Depends(get_current_user),
+):
+    """List active (non-expired) result store references."""
+    try:
+        from api.db.result_store import _is_pg
+        if not _is_pg():
+            return {"refs": [], "count": 0}
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        sql = """
+            SELECT id, tool_name, session_id, operation_id,
+                   row_count, columns, created_at, expires_at, accessed_at
+            FROM result_store
+            WHERE expires_at > NOW()
+        """
+        params = []
+        if session_id:
+            sql += " AND session_id = %s"
+            params.append(session_id)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+        cur.execute(sql, params)
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close(); conn.close()
+        for r in rows:
+            for k in ('created_at', 'expires_at', 'accessed_at'):
+                if r.get(k):
+                    try: r[k] = r[k].isoformat()
+                    except: pass
+            if isinstance(r.get('columns'), list):
+                r['columns'] = r['columns']
+        return {"refs": rows, "count": len(rows)}
+    except Exception as e:
+        return {"refs": [], "count": 0, "error": str(e)}
+
+
+@router.get("/result-store/{ref}")
+async def get_result_ref(
+    ref: str,
+    offset: int = 0,
+    limit: int = 20,
+    _: str = Depends(get_current_user),
+):
+    """Retrieve rows from a specific result ref."""
+    from api.db.result_store import fetch_result
+    result = fetch_result(ref, offset=offset, limit=limit)
+    if result is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Ref not found or expired")
+    return result

@@ -6,7 +6,7 @@
  */
 import { useEffect, useState, useRef } from 'react'
 import { ToolCallsView, OpsView, EscView, StatsView } from './LogTable'
-import { createUnifiedLogStream, authHeaders } from '../api'
+import { createUnifiedLogStream, authHeaders, fetchResultRefs, fetchResultRef } from '../api'
 
 const _CONN_BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -301,9 +301,163 @@ function LiveLogsView() {
   )
 }
 
+function ResultRefsView() {
+  const [refs, setRefs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [openRef, setOpenRef] = useState(null)
+  const [refData, setRefData] = useState(null)
+  const [refLoading, setRefLoading] = useState(false)
+
+  const load = () => {
+    setLoading(true)
+    fetchResultRefs()
+      .then(d => setRefs(d.refs || []))
+      .catch(() => setRefs([]))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const openRows = (ref) => {
+    if (openRef === ref) { setOpenRef(null); setRefData(null); return }
+    setOpenRef(ref)
+    setRefData(null)
+    setRefLoading(true)
+    fetchResultRef(ref, 0, 20)
+      .then(d => setRefData(d))
+      .catch(() => setRefData(null))
+      .finally(() => setRefLoading(false))
+  }
+
+  const timeAgo = (iso) => {
+    if (!iso) return '—'
+    const age = Date.now() - new Date(iso).getTime()
+    const mins = Math.round(age / 60000)
+    if (mins < 60) return `${mins}m ago`
+    return `${Math.round(age / 3600000)}h ago`
+  }
+
+  const expiresIn = (iso) => {
+    if (!iso) return '—'
+    const remaining = new Date(iso).getTime() - Date.now()
+    if (remaining < 0) return 'expired'
+    const mins = Math.round(remaining / 60000)
+    if (mins < 60) return `${mins}m`
+    return `${Math.round(remaining / 3600000)}h`
+  }
+
+  if (loading) {
+    return (
+      <div className="p-4 text-xs text-slate-500 font-mono">Loading result refs…</div>
+    )
+  }
+
+  if (refs.length === 0) {
+    return (
+      <div className="p-4 text-xs text-slate-600 font-mono">
+        No active result refs — refs are stored when agent tool results exceed 3KB and expire after 2h.
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-auto p-3 gap-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs text-slate-500 font-mono">{refs.length} active ref{refs.length !== 1 ? 's' : ''}</span>
+        <button onClick={load} className="text-xs text-slate-600 hover:text-slate-400 font-mono">↻ refresh</button>
+      </div>
+
+      {refs.map(r => (
+        <div key={r.id} className="border border-slate-800 rounded overflow-hidden">
+          {/* Header row */}
+          <div
+            className="flex items-center gap-2 px-3 py-2 bg-slate-900 cursor-pointer hover:bg-slate-800 transition-colors"
+            onClick={() => openRows(r.id)}
+          >
+            <span className="font-mono text-xs text-violet-400 shrink-0">{r.id}</span>
+            <span className="text-xs text-slate-500 shrink-0">{r.tool_name}</span>
+            <span className="text-xs text-slate-600 shrink-0">{r.row_count} rows</span>
+            <span className="flex-1" />
+            <span className="text-xs text-slate-600 font-mono shrink-0">{timeAgo(r.created_at)}</span>
+            <span
+              className={`text-xs font-mono shrink-0 ${
+                expiresIn(r.expires_at) === 'expired' ? 'text-red-500' : 'text-slate-600'
+              }`}
+            >
+              exp {expiresIn(r.expires_at)}
+            </span>
+            <span className="text-xs text-slate-700 shrink-0">{openRef === r.id ? '▲' : '▼'}</span>
+          </div>
+
+          {/* Columns row */}
+          {r.columns?.length > 0 && (
+            <div className="px-3 py-1 bg-slate-950 border-t border-slate-800">
+              <span className="text-xs text-slate-700 font-mono">
+                cols: {r.columns.join(', ')}
+              </span>
+            </div>
+          )}
+
+          {/* Session link */}
+          {r.session_id && (
+            <div className="px-3 py-1 bg-slate-950 border-t border-slate-800">
+              <span className="text-xs text-slate-700 font-mono">session: {r.session_id.slice(0, 16)}…</span>
+            </div>
+          )}
+
+          {/* Expanded rows */}
+          {openRef === r.id && (
+            <div className="border-t border-slate-800 bg-slate-950 overflow-x-auto">
+              {refLoading && (
+                <div className="p-3 text-xs text-slate-600 font-mono">Loading rows…</div>
+              )}
+              {!refLoading && refData && (
+                <>
+                  <div className="px-3 py-1 text-xs text-slate-600 font-mono border-b border-slate-800">
+                    {refData.total} total rows — showing {refData.items?.length ?? 0}
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs font-mono">
+                      <thead>
+                        <tr className="border-b border-slate-800">
+                          {refData.items?.[0] && Object.keys(refData.items[0]).slice(0, 8).map(col => (
+                            <th key={col} className="text-left px-3 py-1 text-slate-600 whitespace-nowrap">{col}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(refData.items || []).map((item, i) => (
+                          <tr key={i} className="border-b border-slate-900 hover:bg-slate-900">
+                            {Object.values(item).slice(0, 8).map((val, j) => (
+                              <td key={j} className="px-3 py-1 text-slate-400 whitespace-nowrap max-w-xs truncate">
+                                {val == null ? '—' : typeof val === 'object' ? JSON.stringify(val).slice(0, 60) : String(val).slice(0, 80)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+              {!refLoading && !refData && (
+                <div className="p-3 text-xs text-red-500 font-mono">Failed to load ref data</div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats']
+const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', 'Result Refs']
 
 export default function LogsPanel() {
   const [tab, setTab] = useState('Live Logs')
@@ -333,6 +487,7 @@ export default function LogsPanel() {
         {tab === 'Operations'  && <OpsView refreshTick={0} />}
         {tab === 'Escalations' && <EscView refreshTick={0} />}
         {tab === 'Stats'       && <StatsView />}
+        {tab === 'Result Refs' && <ResultRefsView />}
       </div>
     </div>
   )
