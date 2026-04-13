@@ -59,7 +59,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
 | CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | PENDING |
 | CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | PENDING |
-| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | RUNNING |
+| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | DONE (f507583) |
 | CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
 
 ---
