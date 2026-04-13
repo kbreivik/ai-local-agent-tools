@@ -118,6 +118,28 @@ async def check_transition(component: str, current_health: str, **extra) -> None
     _alerts.appendleft(alert)
     log.warning("ALERT [%s] %s", severity.upper(), message)
 
+    # Broadcast health change to all connected WebSocket clients
+    try:
+        from api.websocket import manager as _ws_mgr
+        import asyncio as _asyncio
+        _loop = None
+        try:
+            _loop = _asyncio.get_event_loop()
+        except RuntimeError:
+            pass
+        if _loop and _loop.is_running():
+            _asyncio.ensure_future(_ws_mgr.broadcast({
+                "type":      "health_change",
+                "component": component,
+                "severity":  severity,
+                "prev":      prev,
+                "current":   current_health,
+                "message":   message,
+                "timestamp": now.isoformat(),
+            }))
+    except Exception as _e:
+        log.debug("health_change broadcast failed: %s", _e)
+
     # Dispatch webhook notification (non-blocking)
     try:
         from api.settings_manager import get_setting

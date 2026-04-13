@@ -117,12 +117,26 @@ export function DashboardDataProvider({ children }) {
     const agentDoneHandler = () => refreshStats()
     window.addEventListener('agent-done', agentDoneHandler)
 
+    // WS: immediately refresh summary when health changes are broadcast
+    const wsHealthHandler = (e) => {
+      try {
+        const msg = JSON.parse(e.data || '{}')
+        // Refresh summary on: health transitions, vm_action completions,
+        // escalation_recorded, swarm replica changes
+        if (['alert', 'vm_action', 'escalation_recorded', 'health_change'].includes(msg.type)) {
+          fetchSummary()
+          if (msg.type === 'vm_action') fetchSummary()  // double refresh for action feedback
+        }
+      } catch (_) {}
+    }
+    window.addEventListener('ws:message', wsHealthHandler)
     return () => {
       clearInterval(externalId)
       clearInterval(summaryId)
       clearInterval(statsId)
       clearInterval(healthId)
       window.removeEventListener('agent-done', agentDoneHandler)
+      window.removeEventListener('ws:message', wsHealthHandler)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -150,6 +164,7 @@ export function DashboardDataProvider({ children }) {
       summary,
       summaryTs,
       summaryLoading,
+      summaryStale: summaryTs ? (Date.now() - summaryTs) > 90_000 : false,
 
       // Derived data (same shape as old individual endpoints)
       containersData,

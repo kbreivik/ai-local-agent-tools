@@ -30,6 +30,7 @@ import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
+import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
 import { useLayout } from './hooks/useLayout'
@@ -571,7 +572,7 @@ function AlertsPanel() {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 
-function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout, onExpandAllCards, onCollapseAllCards, onExpandAllSections, onCollapseAllSections, allCardsExpanded, allSectionsExpanded }) {
+function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout, onExpandAllCards, onCollapseAllCards, onExpandAllSections, onCollapseAllSections, allCardsExpanded, allSectionsExpanded, summaryStale, onRefreshSummary }) {
   const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
   const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
   const _btn = (active) => ({
@@ -658,6 +659,22 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
         >
           {layoutDirty && <span className="ds-layout-dirty-dot" />}
           SAVE LAYOUT
+        </button>
+      )}
+      {summaryStale && (
+        <button
+          onClick={onRefreshSummary}
+          title="Dashboard data is stale — click to refresh"
+          style={{
+            padding: '2px 8px', fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0,
+            background: 'var(--amber-dim)',
+            color: 'var(--amber)',
+            border: '1px solid var(--amber)',
+            borderRadius: 2, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 4,
+          }}
+        >
+          ⟳ stale
         </button>
       )}
       {/* Card expand/collapse toggle */}
@@ -958,7 +975,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
 }
 
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare, layoutState }) {
-  const { stats: ctxStats, externalData: ctxExternal } = useDashboardData()
+  const { stats: ctxStats, externalData: ctxExternal, summaryLoading, summaryStale, refreshSummary } = useDashboardData()
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
   const [typeFilter, setTypeFilter] = useState('ALL')
@@ -1002,11 +1019,13 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
   const sectionContent = {
     PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards /> : null,
     COMPUTE: showSection('COMPUTE') ? (
+      summaryLoading ? <SkeletonGrid count={4} /> :
       <ServiceCardsErrorBoundary>
         <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
       </ServiceCardsErrorBoundary>
     ) : null,
     CONTAINERS: showSection('COMPUTE') ? (
+      summaryLoading ? <SkeletonGrid count={6} /> :
       <ServiceCardsErrorBoundary>
         <ServiceCards activeFilters={['containers_local', 'containers_swarm']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
       </ServiceCardsErrorBoundary>
@@ -1031,6 +1050,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
       <ConnectionSectionCards platforms={SECTION_PLATFORMS.SECURITY} externalData={externalData} onEntityClick={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} sectionName="SECURITY" showFilter={showFilter} />
     ) : null,
     VM_HOSTS: showSection('COMPUTE') ? (
+      summaryLoading ? <SkeletonGrid count={5} /> :
       <VMHostsSection showFilter={showFilter} />
     ) : null,
   }
@@ -1048,6 +1068,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
         onExpandAllCards={onExpandAllCards} onCollapseAllCards={onCollapseAllCards}
         onExpandAllSections={onExpandAllSections} onCollapseAllSections={onCollapseAllSections}
         allCardsExpanded={allCardsExpanded} allSectionsExpanded={allSectionsExpanded}
+        summaryStale={summaryStale} onRefreshSummary={refreshSummary}
       />
 
       <EscalationBanner />
