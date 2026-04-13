@@ -1,95 +1,247 @@
-# HP1-AI-Agent — Claude Code Guide
+# DEATHSTAR — Claude Code Guide
+## Version: 2.15.10
 
-## Project
-Self-improving AI infrastructure agent with MCP server, FastAPI backend, React GUI, and Docker Swarm deployment. Manages homelab services (Proxmox, FortiGate, TrueNAS, Docker, Elasticsearch, Kafka) through auto-generated skills.
+Self-hosted infrastructure monitoring and AI agent orchestration platform.
+FastMCP + FastAPI backend, React (Vite) frontend, Docker Swarm deployment.
 
-- **Repo**: github.com/kbreivik/ai-local-agent-tools
-- **Runtime**: Python 3.13, FastMCP, FastAPI, React (JSX)
-- **Deployed**: Single container on hp1-prod-agent-01 (192.168.199.10:8000) — standalone mode
-- **LLM**: LM Studio (Qwen3-Coder-30B) at 192.168.199.51:1234
-- **Swarm cluster**: 3 managers (199.21-23) + 3 workers (199.31-33) — SERVICE TEST cluster
-  - Runs: Kafka cluster, Elasticsearch, Logstash, Filebeat, services under test/upgrade
-  - The agent manages swarm but does NOT run in it
-  - These VMs are ephemeral — can be destroyed and recreated
+---
+
+## Core Facts
+
+| Item | Value |
+|---|---|
+| Repo | github.com/kbreivik/ai-local-agent-tools (public, MIT) |
+| Current version | v2.15.10 |
+| Stack | FastMCP + FastAPI (Python 3.13) + React (Vite/JSX) |
+| Deploy target | agent-01 at `192.168.199.10:8000` (standalone container) |
+| Docker image | `ghcr.io/kbreivik/hp1-ai-agent:latest` |
+| LM Studio | MS-S1 at `192.168.199.51:1234` (Qwen3-Coder-30B) |
+| Database | Postgres (pgvector/pg16) at `127.0.0.1:5433` |
+| Memory store | MuninnDB at `ghcr.io/scrypster/muninndb:latest` |
+
+---
 
 ## WISC Context Protocol
 - **Always read `state/HANDOFF.md`** at session start if it exists
 - **Always run `/handoff`** before ending a session
 - **Use subagents** — don't load full skill modules or service state directly
-- **Session split points**: new feature (plan) → implement → test/verify
 - Context >60%: run `/compact`
+
+---
+
+## Development Workflow — CC Prompt Queue
+
+All code changes go through Claude Code (CC) via structured prompt files.
+**One prompt = one version bump = one git commit.**
+Claude in chat writes the prompts; CC implements them.
+
+### File structure
+```
+cc_prompts/
+  INDEX.md              ← queue table + phase summaries (source of truth)
+  QUEUE_RUNNER.md       ← project context injected into every CC run
+  run_queue.sh          ← queue runner (Git Bash)
+  CC_PROMPT_vX.Y.Z.md  ← one file per version bump
+```
+
+### Prompt file format
+```markdown
+# CC PROMPT — vX.Y.Z — Title
+
+## What this does
+2-3 sentences. Version bump: X.Y.Z-1 → X.Y.Z
+
+## Change 1 — path/to/file.py
+[exact code with context]
+
+## Version bump
+Update VERSION: X.Y.Z-1 → X.Y.Z
+
+## Commit
+git add -A
+git commit -m "type(scope): vX.Y.Z description"
+git push origin main
+```
+
+### Adding to the queue
+1. Write `cc_prompts/CC_PROMPT_vX.Y.Z.md`
+2. Add row to `INDEX.md` Phase Queue table:
+   `| CC_PROMPT_vX.Y.Z.md | vX.Y.Z | Short description | PENDING |`
+3. Add summary paragraph under `## Phase summaries`
+
+### Running the queue
+```bash
+bash cc_prompts/run_queue.sh          # all pending, streams output live
+bash cc_prompts/run_queue.sh --one    # one at a time
+bash cc_prompts/run_queue.sh --dry-run
+```
+CC implements the prompt, commits, pushes, then updates `INDEX.md`
+changing `PENDING` → `DONE (SHA)` and commits that too.
+Runner verifies git hash changed before moving to next prompt.
+
+### Version bump convention
+| Bump | When |
+|---|---|
+| `x.x.1` | Fix, tuning, small addition |
+| `x.1.x` | New subsystem, multi-file architectural change |
+
+### After CC pushes a commit
+```bash
+# Pull and restart on agent-01
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+
+# Verify
+curl -s http://192.168.199.10:8000/api/health
+docker logs hp1_agent --tail 50
+```
+
+---
 
 ## Architecture
 
 ```
 ai-local-agent-tools/
-├── api/                        ← FastAPI app (port 8000, GUI + REST + WebSocket)
-│   ├── main.py                 ← App entry, CORS, health endpoint, static mount
-│   ├── db/                     ← SQLAlchemy database layer
-│   └── routers/                ← auth, tools, agent, status
+├── api/
+│   ├── main.py                 ← App entry, startup, router mounts
+│   ├── auth.py                 ← JWT + API token fallback
+│   ├── connections.py          ← Connections DB, Fernet encryption
+│   ├── agents/
+│   │   └── router.py           ← Task classifier, tool allowlists, system prompts
+│   ├── collectors/
+│   │   ├── manager.py          ← CollectorManager, trigger_poll()
+│   │   ├── external_services.py
+│   │   ├── proxmox_vms.py
+│   │   ├── swarm.py
+│   │   ├── kafka.py
+│   │   ├── vm_hosts.py
+│   │   ├── unifi.py
+│   │   ├── pbs.py
+│   │   └── truenas.py
+│   ├── db/
+│   │   ├── result_store.py     ← Large tool result storage (2h TTL)
+│   │   ├── entity_history.py   ← Change tracking + event log
+│   │   ├── infra_inventory.py  ← Host discovery registry
+│   │   ├── credential_profiles.py ← Named shared auth sets
+│   │   └── ssh_capabilities.py
+│   └── routers/
+│       ├── agent.py            ← POST /api/agent/run, WebSocket agent loop
+│       ├── connections.py      ← CRUD + auto-trigger collector poll
+│       ├── users.py            ← User + API token CRUD
+│       ├── layout.py           ← Layout templates endpoint
+│       ├── escalations.py      ← Agent escalation table + endpoints
+│       └── credential_profiles.py
 ├── mcp_server/
-│   ├── server.py               ← FastMCP tool registrations (ALL tools registered here)
+│   ├── server.py               ← ALL MCP tool registrations here
 │   └── tools/
-│       ├── skills/             ← Self-improving skill system
-│       │   ├── registry.py     ← Thin wrapper over storage backend
-│       │   ├── validator.py    ← AST validation (blocks dangerous imports)
-│       │   ├── prompt_builder.py
-│       │   ├── generator.py    ← 3 backends: local LLM, cloud API, export
-│       │   ├── loader.py       ← Hot-load skills, scan imports, version tracking
-│       │   ├── meta_tools.py   ← skill_search, skill_create, etc.
-│       │   ├── knowledge_base.py ← Compat checking, breaking change detection
-│       │   ├── doc_retrieval.py  ← MuninnDB document retrieval
-│       │   ├── discovery.py    ← 4-phase environment discovery pipeline
-│       │   ├── fingerprints.py ← ~15 known service fingerprints
-│       │   ├── spec_generator.py ← SKILL_SPEC before code (spec-first)
-│       │   ├── live_validator.py ← Validate against real endpoints
-│       │   └── storage/        ← SQLite (default) / PostgreSQL / Redis cache
-│       │       ├── interface.py
-│       │       ├── sqlite_backend.py
-│       │       ├── postgres_backend.py
-│       │       ├── cache.py
-│       │       └── auto_detect.py
-│       └── modules/            ← Skill Python files (one per skill)
-│           ├── _template.py    ← Contract: SKILL_META + execute()
-│           ├── proxmox_vm_status.py
-│           ├── fortigate_system_status.py
-│           └── http_health_check.py
-├── agent/                      ← Agent loop (LLM-driven task execution)
-├── gui/                        ← React (JSX) (src/ → built to dist/ by Docker)
+│       ├── vm.py               ← vm_exec, kafka_exec, swarm_node_status,
+│       │                           swarm_service_force_update, proxmox_vm_power
+│       └── skills/             ← Self-improving skill system
+├── gui/src/
+│   ├── App.jsx                 ← Sidebar nav, routing, DashboardView, DrillDownBar
+│   ├── components/
+│   │   ├── ServiceCards.jsx    ← All infra cards (VM, container, external, UniFi, etc.)
+│   │   ├── Sidebar.jsx         ← Navigation + user menu + footer
+│   │   ├── SettingsPage.jsx    ← All settings tabs
+│   │   ├── OptionsModal.jsx    ← Connections form, ProfileForm, BulkForm
+│   │   ├── ComparePanel.jsx    ← Right-side compare panel, exports SLOT_COLORS
+│   │   ├── VMHostsSection.jsx  ← VM_HOSTS dashboard section
+│   │   ├── EscalationBanner.jsx ← Persistent amber banner for agent escalations
+│   │   ├── LayoutsTab.jsx      ← Layout templates + current layout management
+│   │   └── CardFilterBar.jsx   ← INFRA_SECTION_KEYS filter bar
+│   ├── hooks/useLayout.js      ← Layout state management
+│   └── index.css               ← V3a Imperial theme (CSS vars)
+├── cc_prompts/                 ← CC prompt queue (see above)
 ├── docker/
-│   ├── Dockerfile              ← Multi-stage: node (GUI) → python → slim runtime
-│   ├── swarm-stack.yml         ← Swarm deployment (upgrade testing)
-│   ├── docker-compose.yml      ← Dev/standalone
-│   ├── entrypoint.sh
-│   ├── healthcheck.sh
-│   └── .env                    ← Generated by Ansible hp1-infra (never edit manually)
-├── data/                       ← SQLite DB, skill exports/imports
-├── logs/
-└── docs/
+│   ├── Dockerfile
+│   └── docker-compose.yml
+└── VERSION                     ← Single source of version truth
 ```
 
-## Rules
+---
 
-### Absolute Rules
-- **All functions sync** — no async/await anywhere (project pattern — enforce strictly)
+## Key Environment Variables
+
+Location: `/opt/hp1-agent/docker/.env` (chmod 600, Ansible-managed — never edit manually)
+
+```
+SETTINGS_ENCRYPTION_KEY=<fernet-key>   # Encrypts connection credentials in DB
+ADMIN_USER=admin
+ADMIN_PASSWORD=<password>
+KAFKA_UNDER_REPLICATED_THRESHOLD=1     # Tolerate 1 under-rep partition before DEGRADED
+DATABASE_URL=postgresql+asyncpg://...
+```
+
+**Never print `SETTINGS_ENCRYPTION_KEY` to terminal.** Write directly:
+```bash
+python3 -c "
+from cryptography.fernet import Fernet
+key = Fernet.generate_key().decode()
+with open('/opt/hp1-agent/docker/.env', 'r') as f: content = f.read()
+import re; content = re.sub(r'SETTINGS_ENCRYPTION_KEY=.*', f'SETTINGS_ENCRYPTION_KEY={key}', content)
+with open('/opt/hp1-agent/docker/.env', 'w') as f: f.write(content)
+print('Done')
+"
+```
+
+---
+
+## Platform → Dashboard Section Mapping
+
+| Section | Platforms |
+|---|---|
+| COMPUTE | proxmox, pbs |
+| NETWORK | fortigate, fortiswitch, opnsense, cisco, juniper, aruba, unifi, pihole, technitium, nginx, caddy, traefik |
+| STORAGE | truenas, pbs, synology, syncthing |
+| SECURITY | security_onion, wazuh, grafana, kibana |
+
+---
+
+## Infrastructure (Current State)
+
+### Swarm cluster — SERVICE TEST cluster
+```
+3 managers: manager-01 (199.21), manager-02 (199.22), manager-03 (199.23)
+3 workers:  worker-01 (199.31), worker-02 (199.32), worker-03 (199.33) ← worker-03 currently Down
+```
+- Agent runs on agent-01 (199.10) — NOT in the swarm
+- All 6 + agent-01 registered as vm_host connections
+
+### Kafka
+- 3-broker KRaft cluster on workers (kafka_broker-1/2/3 Swarm services)
+- `hp1-logs` topic: 3 partitions, RF=3, min.insync.replicas=2
+- Current: 2/3 brokers (broker-3 not scheduled — worker-03 Down)
+
+### Connections as universal registry
+The connections DB is the single source of truth. Adding a connection:
+- Creates a card in the correct dashboard section
+- Starts appearing in collector results
+- Shows as a source filter in Logs tab
+
+### Proxmox token fields — split at `!`
+`terraform@pve!terraform-token` → `user=terraform@pve`, `token_name=terraform-token`
+
+---
+
+## Absolute Rules (Claude Code must follow)
+
+- **All tool functions sync** — no async/await in mcp_server/tools/
 - **Return format**: `{"status": "ok"|"error"|"degraded", "data": ..., "timestamp": ..., "message": ...}`
-- **Helpers**: every module uses `_ts()`, `_ok()`, `_err()`, `_degraded()` — never raw dicts
-- **Config**: env vars with `agent_settings.json` fallback — never hardcode
 - **Always** run `git push` after every commit
-- **Never** hardcode IPs, passwords, or API keys — 192.168.x.x never appears in Python
+- **Never** hardcode IPs, passwords, or API keys in Python files
 - **Never** add `async` to tool functions or skill execute()
-- **Never** import dangerous modules in skills or plugins (os.system, eval, exec)
-- **Never** edit docker/.env — it is generated by Ansible (hp1-infra repo)
+- **Never** import dangerous modules in skills (os.system, eval, exec)
+- **Never** edit docker/.env — Ansible-managed
+- `CardFilterBar.jsx` and `ServiceCards.jsx` must stay in sync — new platform types need explicit addition to `INFRA_SECTION_KEYS`
+- `get_connection_for_platform()` uses `LIMIT 1` — known limitation for multi-connection scenarios
+- Always use CSS vars (`var(--accent)`) — never hardcode colours
 
-### Subprocess Policy
-- **NEVER** use subprocess in any code path where LLM output or user input reaches the command. This prevents prompt injection → remote code execution.
-- subprocess **IS** allowed for internal plumbing (redeploy triggers, config validation) where the command is fully hardcoded with no dynamic arguments from untrusted sources.
-- All subprocess calls must be reviewed and explicitly approved in PR review.
-- Always use `subprocess.run()` with `shell=False` and explicit arg lists, never `shell=True`.
+### Subprocess policy
+- **NEVER** use subprocess where LLM output or user input reaches the command
+- subprocess IS allowed for fully hardcoded internal plumbing
+- Always `subprocess.run()` with `shell=False`, explicit arg lists
 
-### Code Patterns
-
-#### MCP Tool Registration (server.py only)
+### MCP tool registration pattern (server.py only)
 ```python
 @mcp.tool()
 def tool_name(param: str) -> dict:
@@ -98,106 +250,80 @@ def tool_name(param: str) -> dict:
     return function(param)
 ```
 
-#### Skill Contract (modules/_template.py)
-```python
-SKILL_META = {
-    "name": "skill_name",
-    "description": "What this skill does",
-    "category": "monitoring",  # compute | networking | monitoring | storage | orchestration
-    "parameters": {"host": {"type": "string", "required": False}},
-    "compat": {
-        "service": "proxmox",
-        "api_version_built_for": "7.4",
-        "version_endpoint": "/api2/json/version",
-        "version_field": "data.version",
-    }
-}
+---
 
-def execute(**kwargs) -> dict:
-    """Sync. Return _ok/_err/_degraded. Handle missing config gracefully."""
-    ...
+## CSS Theme (V3a Imperial)
+
+```css
+--font-sans: 'Rajdhani', sans-serif;
+--font-mono: 'Share Tech Mono', monospace;
+--bg-0: #05060a;  --bg-1: #09090f;  --bg-2: #0d0f1a;
+--accent: #a01828;  --accent-dim: rgba(160,24,40,0.12);
+--cyan: #00c8ee;  --green: #00aa44;  --amber: #cc8800;  --red: #cc2828;
+--radius-card: 2px;  --radius-btn: 2px;
 ```
 
-#### Storage Pattern
-```python
-from mcp_server.tools.skills.storage import get_backend
-backend = get_backend()  # SQLite or PostgreSQL singleton
-```
+---
 
-### Naming Conventions
-- Commits: `feat|fix|refactor|docs|test(scope): message`
-- Skills: snake_case, `{service}_{action}` (e.g., `kafka_consumer_lag`)
-- MCP tools: snake_case, verb_noun (e.g., `skill_create`, `discover_environment`)
-- Config env vars: UPPER_SNAKE_CASE (e.g., `LM_STUDIO_BASE_URL`)
+## Auth System
 
-## Skill Generation Flow (spec-first)
-```
-description → LLM → SKILL_SPEC (JSON) → live_validator (probe real endpoint)
-→ generate_code_from_spec → validator.py (AST: no dangerous imports)
-→ save to modules/ + register in DB
-```
+Roles: `sith_lord` (full admin) | `imperial_officer` (ops) | `stormtrooper` (monitoring) | `droid` (read-only API)
 
-## Docker
+Auth flow:
+1. Login → JWT from users table (bcrypt) → falls back to env var
+2. API calls → JWT decode → SHA256 hash lookup in api_tokens → 401
 
-```bash
-# Build
-docker build --build-arg DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) \
-  -t hp1-ai-agent:latest -f docker/Dockerfile .
+---
 
-# Swarm deploy (for upgrade testing)
-cd docker && set -a; source .env; set +a
-docker stack deploy -c swarm-stack.yml hp1
+## Agent Architecture
 
-# Health check
-curl -s http://192.168.199.10:8000/api/health | python3 -m json.tool
-```
+4 agent types routed by task classifier in `api/agents/router.py`:
 
-**Key facts:**
-- GUI served by FastAPI at port 8000 (not 5173 — dev only)
-- Docker socket mounted read-only for Swarm tools
-- Volumes: agent-data, agent-logs, agent-checkpoints, agent-skills
-- gui/dist is built inside Docker — gitignored, not in repo
+| Type | When | Key tools |
+|---|---|---|
+| observe/status | status checks, read-only | swarm_status, kafka_broker_status, vm_exec |
+| investigate/research | why/diagnose/logs | elastic_search_logs, kafka_exec, entity_history |
+| execute/action | fix/restart/deploy | plan_action required for destructive ops |
+| build | skill management | skill_create, skill_regenerate |
 
-## GUI Rules
-- API base: `import.meta.env.VITE_API_BASE || ''` — empty string = relative paths
-- WebSocket: always `window.location.host` — never hardcode localhost
-- Files using API_BASE: IngestPanel.jsx, LockBadge.jsx, AgentOutputContext.jsx, AuthContext.jsx
+Key agent tools:
+- `vm_exec(host, command)` — SSH to vm_host connection, allowlisted commands
+- `kafka_exec(broker_label, command)` — SSH to worker, exec in kafka container
+- `swarm_node_status()` — docker node ls from a manager (read-only)
+- `swarm_service_force_update(service_name)` — docker service update --force (needs plan_action)
+- `proxmox_vm_power(vm_label, action)` — start/stop/reboot via Proxmox API (needs plan_action)
 
-## Database (7 tables)
-skills | service_catalog | breaking_changes | skill_compat_log | audit_log | checkpoints | settings
+**Pre-flight bypass:** Remediation tasks (fix/restart/recover) skip `pre_kafka_check` —
+that check is for precautionary ops, not for fixing known-degraded components.
+
+**Blocked tool rule:** When a tool is unavailable, agent outputs exact manual SSH
+command instead of escalating.
+
+---
+
+## Naming Convention
+
+| Pattern | Resolves to |
+|---|---|
+| Agent Pattern `{short}-agent-{n:02d}` | DS-agent-01 |
+| Database `{short}-postgres` | DS-postgres |
+| Memory Store `{short}-muninndb` | DS-muninndb |
+
+---
 
 ## Validation Commands
+
 ```bash
 python -m py_compile api/main.py
 python -m py_compile mcp_server/server.py
-for f in mcp_server/tools/skills/modules/*.py; do python -m py_compile "$f"; done
-python -m pytest tests/ -x -q
 curl -s http://192.168.199.10:8000/api/health
+docker logs hp1_agent --tail 50
 ```
 
 ## Pre-Commit Checklist
-1. `grep -rE "192\.168\.|password|secret|token" --include="*.py"` — no hardcoded values?
-2. `python -m py_compile <changed .py files>` — valid syntax?
-3. Skill modules: SKILL_META + execute() present, no dangerous imports?
-4. GUI changes: no hardcoded localhost URLs?
-5. Conventional commit message?
-
-## Known Issues
-- sqlalchemy missing: add to requirements.txt, rebuild image
-- gui/dist not in container: multi-stage Dockerfile required (Node.js build stage)
-- localhost API in GUI: use `''` as fallback, never `http://localhost:8000`
-- Port 5173 in production: not used, remove from swarm-stack.yml
-- `set -a; source .env; set +a` before `docker stack deploy` — always
-
-## Environment Variables
-| Variable | Default | Description |
-|----------|---------|-------------|
-| LM_STUDIO_BASE_URL | http://host.docker.internal:1234/v1 | Local LLM |
-| ADMIN_PASSWORD | changeme | GUI login |
-| SKILL_GEN_BACKEND | local | local/cloud/export |
-| ANTHROPIC_API_KEY | (empty) | Cloud skill generation |
-| DATABASE_URL | (empty) | PostgreSQL (SQLite default) |
-| KAFKA_BOOTSTRAP_SERVERS | kafka1:9092,... | Kafka brokers |
-| ELASTIC_URL | (empty) | Elasticsearch |
-| PROXMOX_HOST | (empty) | Proxmox API |
-| FORTIGATE_HOST | (empty) | FortiGate API |
+1. No hardcoded IPs/passwords/secrets in Python?
+2. `python -m py_compile <changed files>` — valid syntax?
+3. New platform types added to `INFRA_SECTION_KEYS` in CardFilterBar.jsx?
+4. No hardcoded `localhost` URLs in GUI?
+5. Conventional commit message (`feat|fix|refactor|docs(scope): message`)?
+6. VERSION file bumped?
