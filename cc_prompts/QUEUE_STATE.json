@@ -1,0 +1,29 @@
+{
+  "updated_at": "2026-04-13T11:09:11",
+  "entries": [
+    {
+      "filename": "CC_PROMPT_v2.16.1.md",
+      "version": "v2.16.1",
+      "theme": "Agent task templates in CommandPanel",
+      "runner_status": "RUNNING",
+      "commit_sha": "",
+      "error": "",
+      "started_at": "2026-04-13T11:09:11",
+      "finished_at": "",
+      "duration_s": 0.0,
+      "log_file": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.17.0.md",
+      "version": "v2.17.0",
+      "theme": "Entity timeline view in EntityDrawer",
+      "runner_status": "PENDING",
+      "commit_sha": "",
+      "error": "",
+      "started_at": "",
+      "finished_at": "",
+      "duration_s": 0.0,
+      "log_file": ""
+    }
+  ]
+}

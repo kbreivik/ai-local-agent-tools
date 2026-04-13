@@ -1,6 +1,9 @@
 #!/bin/bash
 # DEATHSTAR Prompt Queue Runner
-# Invokes Claude Code in non-interactive (--print) mode to avoid Ink TTY requirement.
+#
+# Uses winpty (built into Git Bash) to give Claude Code a pseudo-TTY so Ink
+# doesn't throw "Raw mode not supported", while feeding the task via a FIFO.
+# Falls back to --print if winpty is unavailable.
 #
 # Usage:
 #   bash cc_prompts/run_queue.sh              # run all pending prompts
@@ -53,6 +56,35 @@ next_pending_version() {
     grep "| PENDING" "$INDEX_FILE" | head -1 \
         | sed 's/.*|\s*\(v[0-9][0-9.]*\)\s*|.*/\1/' \
         | tr -dc 'A-Za-z0-9.'
+}
+
+# Run claude with live streaming output.
+# Strategy 1: winpty + FIFO — gives CC a pseudo-TTY (Ink happy) + feeds task via pipe.
+# Strategy 2: --print fallback — no streaming, but at least it works.
+run_claude() {
+    local task_file="$1"
+
+    if command -v winpty &>/dev/null; then
+        log "Using winpty (streaming mode)"
+        local FIFO
+        FIFO=$(mktemp -u /tmp/deathstar_fifo_XXXXXX)
+        mkfifo "$FIFO"
+        # Feed task content then "exit" into the FIFO in background.
+        # The write end closes when the subshell exits — sends EOF to claude.
+        ( cat "$task_file"; echo "exit" ) > "$FIFO" &
+        local FEED_PID=$!
+        # winpty allocates a Windows console so Ink's setRawMode() succeeds.
+        # stdin comes from the FIFO — claude reads task, runs it, reads "exit", quits.
+        winpty claude --dangerously-skip-permissions < "$FIFO"
+        local CC_EXIT=$?
+        kill "$FEED_PID" 2>/dev/null || true
+        wait "$FEED_PID" 2>/dev/null || true
+        rm -f "$FIFO"
+        return $CC_EXIT
+    else
+        log "winpty not found — falling back to --print (output shown at end)"
+        claude --dangerously-skip-permissions --print < "$task_file"
+    fi
 }
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
@@ -135,8 +167,7 @@ while true; do
 
     BEFORE_HASH=$(git rev-parse HEAD)
 
-    # Build task file: queue runner context + prompt content.
-    # Written to a temp file to avoid shell expansion of special chars.
+    # Build task file — temp file avoids shell expansion of special chars in content.
     TMPFILE=$(mktemp /tmp/deathstar_queue_XXXXXX.txt)
 
     cat > "$TMPFILE" << TASK_EOF
@@ -157,9 +188,7 @@ for $NEXT_FILE from 'PENDING' to 'DONE (SHA)' where SHA is the short git hash,
 then commit and push that index change too.
 TASK_EOF
 
-    # Use --print (non-interactive) mode — bypasses Ink TUI, no TTY required.
-    # stdin redirected from task file; output streams to terminal.
-    if claude --dangerously-skip-permissions --print < "$TMPFILE"; then
+    if run_claude "$TMPFILE"; then
         rm -f "$TMPFILE"
         AFTER_HASH=$(git rev-parse HEAD)
         if [ "$BEFORE_HASH" = "$AFTER_HASH" ]; then

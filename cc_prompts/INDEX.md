@@ -51,6 +51,8 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
 | CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | DONE (bd42b0c) |
+| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | PENDING |
+| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | PENDING |
 
 ---
 
@@ -92,6 +94,22 @@ exit if degraded findings are present. Removed noisy auto-escalate that was fail
 and streaming "Escalating failed" to the GUI. STATUS_PROMPT and RESEARCH_PROMPT updated to
 instruct chaining of findings and always ending with root cause + fix steps.
 
+**v2.16.1** — Agent task templates in CommandPanel.
+TaskTemplates.jsx: collapsible TEMPLATES section in CommandPanel (both panel and tab modes).
+5 domain groups: KAFKA, SWARM, INFRASTRUCTURE, ELASTIC/LOGS, PROXMOX.
+18 pre-built tasks covering common ops — kafka diagnosis, swarm node check, disk usage,
+image prune, elasticsearch health, broker recovery, worker-03 reboot, etc.
+Click group tab to expand, click template to fill task textarea. User can edit before running.
+
+**v2.17.0** — Entity timeline view in EntityDrawer.
+New endpoint GET /api/entities/{entity_id}/history?hours=N serves entity_changes +
+entity_events from the tables written by collectors since v2.9.0.
+fetchEntityHistory() added to api.js.
+EntityDrawer: collapsible TIMELINE section at bottom showing field changes (cyan) and
+discrete events (severity-colored: green/amber/red). Items sorted newest-first, grouped
+by calendar day. Time window selector: 24h / 48h / 7d. Lazy-loaded — only fetches when
+the section is expanded.
+
 ---
 
 ## Key file paths
@@ -99,12 +117,12 @@ instruct chaining of findings and always ending with root cause + fix steps.
 ```
 api/routers/escalations.py          — escalation table + endpoints (v2.15.10)
 api/routers/agent.py                — halt logic + degraded handling + synthesis (v2.16.0)
+api/routers/entities.py             — entity list + history endpoint (v2.17.0)
 api/agents/router.py                — STATUS_PROMPT + RESEARCH_PROMPT rules (v2.16.0)
 gui/src/components/EscalationBanner.jsx — persistent amber banner (v2.15.10)
+gui/src/components/TaskTemplates.jsx    — one-click task templates (v2.16.1)
+gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
+gui/src/components/CommandPanel.jsx    — mounts TaskTemplates (v2.16.1)
+gui/src/api.js                         — fetchEntityHistory() (v2.17.0)
 mcp_server/tools/vm.py              — swarm_node_status, swarm_service_force_update, proxmox_vm_power (v2.15.9)
-mcp_server/server.py                — tool registration (v2.15.9)
-api/routers/layout.py               — layout templates endpoint (v2.15.5)
-gui/src/components/Sidebar.jsx      — user menu + footer (v2.15.5)
-gui/src/App.jsx                     — EscalationBanner mount, Platform Core row order (v2.15.6, v2.15.10)
-gui/src/components/ServiceCards.jsx — sort defaults, container cards, openKeys (v2.15.6–8)
 ```

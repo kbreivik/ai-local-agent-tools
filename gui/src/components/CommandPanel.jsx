@@ -5,6 +5,7 @@ import { useTask } from '../context/TaskContext'
 import ChoiceBar from './ChoiceBar'
 import ClarificationWidget from './ClarificationWidget'
 import AgentFeed from './AgentFeed'
+import TaskTemplates from './TaskTemplates'
 import { useAgentOutput } from '../context/AgentOutputContext'
 
 // ── Tool name humanization ────────────────────────────────────────────────────
@@ -373,6 +374,7 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
       )}
       <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
       <ClarificationWidget dark />
+      <TaskTemplates />
 
       {/* Tag filter bar */}
       <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
