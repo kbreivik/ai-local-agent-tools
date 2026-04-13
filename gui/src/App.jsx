@@ -37,6 +37,95 @@ import { useLayout } from './hooks/useLayout'
 
 const FILTER_KEY = 'hp1_cardFilter'
 
+class RootErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null, reported: false }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[DEATHSTAR] Root crash:', error, info?.componentStack)
+
+    if (this.state.reported) return
+
+    // Report to backend — no auth header needed, crash may have killed auth state
+    const BASE = import.meta.env.VITE_API_BASE ?? ''
+    const version = document.querySelector('[data-version]')?.dataset?.version || ''
+    fetch(`${BASE}/api/errors/frontend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message:          error?.message   || String(error),
+        stack:            error?.stack     || '',
+        component_stack:  info?.componentStack || '',
+        url:              window.location.href,
+        version,
+      }),
+    }).catch(() => {}) // fire-and-forget, never throws
+
+    this.setState({ reported: true })
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children
+
+    const msg = this.state.error?.message || 'Unknown error'
+
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#05060a', padding: 40,
+      }}>
+        <div style={{
+          maxWidth: 540, width: '100%', background: '#09090f',
+          border: '1px solid #a01828', borderRadius: 2, padding: '32px 36px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <span style={{ color: '#cc2828', fontSize: 18 }}>✕</span>
+            <span style={{
+              fontFamily: 'Share Tech Mono, monospace', fontSize: 13,
+              color: '#e8e8f0', letterSpacing: '0.06em',
+            }}>DASHBOARD ERROR</span>
+          </div>
+          <p style={{ color: '#828aa0', fontSize: 11, fontFamily: 'Share Tech Mono, monospace', marginBottom: 8 }}>
+            A component crashed. The error has been logged.
+          </p>
+          <pre style={{
+            color: '#cc4444', fontSize: 10, fontFamily: 'Share Tech Mono, monospace',
+            background: '#0d0f1a', padding: '10px 12px', borderRadius: 2,
+            border: '1px solid #2a0a0a', overflow: 'auto', maxHeight: 120,
+            marginBottom: 20, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          }}>
+            {msg}
+          </pre>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '7px 16px', fontSize: 10, fontFamily: 'Share Tech Mono, monospace',
+                background: 'var(--accent, #a01828)', color: '#fff',
+                border: 'none', borderRadius: 2, cursor: 'pointer', letterSpacing: '0.05em',
+              }}
+            >↺ RELOAD</button>
+            <button
+              onClick={() => { localStorage.clear(); window.location.reload() }}
+              style={{
+                padding: '7px 16px', fontSize: 10, fontFamily: 'Share Tech Mono, monospace',
+                background: 'transparent', color: '#828aa0',
+                border: '1px solid #2a2a3a', borderRadius: 2, cursor: 'pointer', letterSpacing: '0.05em',
+              }}
+            >⊘ CLEAR STATE & RELOAD</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+}
+
 class ServiceCardsErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
@@ -1403,13 +1492,15 @@ function AuthGate({ children }) {
 function AppWithPanelProvider() {
   const { commandsPanelDefault } = useOptions()
   return (
-    <CommandPanelProvider defaultOpen={commandsPanelDefault === 'visible'}>
-      <DashboardDataProvider>
-        <AgentProvider>
-          <AppShell />
-        </AgentProvider>
-      </DashboardDataProvider>
-    </CommandPanelProvider>
+    <RootErrorBoundary>
+      <CommandPanelProvider defaultOpen={commandsPanelDefault === 'visible'}>
+        <DashboardDataProvider>
+          <AgentProvider>
+            <AppShell />
+          </AgentProvider>
+        </DashboardDataProvider>
+      </CommandPanelProvider>
+    </RootErrorBoundary>
   )
 }
 

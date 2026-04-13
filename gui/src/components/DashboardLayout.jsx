@@ -10,7 +10,32 @@
  *   onCollapsedChange(tile)  — called to toggle collapse on a tile
  *   children    — map of tile-name → React node (section content)
  */
-import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
+
+class SectionErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch(error) {
+    console.error(`[DEATHSTAR] Section '${this.props.sectionName}' crashed:`, error)
+  }
+  render() {
+    if (!this.state.hasError) return this.props.children
+    return (
+      <div style={{
+        padding: '12px 14px', background: 'var(--bg-2)',
+        border: '1px solid var(--border)', borderLeft: '3px solid var(--red)',
+        borderRadius: 2, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--red)',
+      }}>
+        ✕ {this.props.sectionName || 'Section'} unavailable — check browser console
+      </div>
+    )
+  }
+}
 
 const TILE_META = {
   PLATFORM:   { icon: '⬡', badge: 'INTERNAL' },
@@ -586,7 +611,9 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
                           onUnsplit={() => handleUnsplitFromCol(ri, ti, ci)}
                           canUnsplit={item.col.length > 1}
                         >
-                          {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                          <SectionErrorBoundary sectionName={tileName}>
+                            {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                          </SectionErrorBoundary>
                         </Tile>
                       </span>
                     ))}
@@ -607,7 +634,9 @@ export default function DashboardLayout({ layout, onRowsChange, onCollapsedChang
                   onUnsplit={() => handleUnsplit(ri, ti)}
                   canUnsplit={row.tiles.length > 1}
                 >
-                  {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                  <SectionErrorBoundary sectionName={tileName}>
+                    {children[tileName] || <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>No content for {tileName}</div>}
+                  </SectionErrorBoundary>
                 </Tile>
               </span>
             )

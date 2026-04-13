@@ -1,64 +1,53 @@
-# HANDOFF — 2026-04-08T16:00:00Z
+# HANDOFF — 2026-04-13T14:45:00+02:00
 
 ## Git state
-Branch: main
-Latest: 3c6f842 — fix(connections): platform-targeted collector repoll
-VERSION: 1.22.6
-186 tests pass
+```
+feb929d fix(ui): v2.22.2 VMCard const id temporal dead zone crash
+b7680bd chore: mark v2.22.1 DONE in prompt queue
+1ac7d64 feat(ux): v2.22.1 skeleton loading + WebSocket-driven dashboard refresh
+0012bd8 chore: mark v2.22.0 DONE in prompt queue
+676fa82 feat(perf): v2.22.0 dashboard summary endpoint + DashboardDataContext
+```
+```
+ M cc_prompts/QUEUE_STATE.json
+ M cc_prompts/QUEUE_STATUS.md
+ M cc_prompts/logs/20260413_143107_CC_PROMPT_v2.22.1.log
+```
 
-## What was built this session
+## Agent state
+v2.22.2 build 412 standalone
+Skills registered: 0
 
-### Multi-user auth + API tokens (v1.22.0)
-- api/users.py: users + api_tokens Postgres tables, bcrypt, SHA256 token hash
-- api/routers/users.py: 7 endpoints (CRUD users + tokens)
-- api/auth.py: authenticate() checks users table → env fallback; decode_token() tries JWT → API token
-- Frontend AccessTab: USERS sub-tab (table + add + role dropdown + enable/disable + delete) + API TOKENS sub-tab (generate + revoke + raw token display)
-- Roles: sith_lord, imperial_officer, stormtrooper, droid
+## Active plan
+No active plans with pending status.
 
-### Connections as universal service registry (v1.21.0)
-- External services collector rewritten — connections-driven, 20 platform health checks
-- Proxmox skill accepts connection_id parameter
-- Alert system enriched with connection_label + connection_id
-- Platform-targeted collector repoll on create/update/delete
+## What was accomplished this session
+- **Diagnosed and fixed blank-page crash** in production GUI
+- `gui/src/components/VMHostsSection.jsx` — moved `const id` declaration before useEffect hooks that reference it (TDZ fix)
+- `VERSION` — bumped 2.22.1 → 2.22.2
+- `api/users.py` — reset admin password in users table to match env var (runtime fix, not code change)
+- Docker image rebuilt and deployed on agent-01 (build 412, commit feb929d)
 
-### V3a Imperial Ops theme (v1.20.2+)
-- Star Wars theme: Share Tech Mono + Rajdhani fonts, crimson accent, 2px sharp corners
-- DS orb sidebar with collapse, settings sub-nav (8 items)
-- Drill-down bar: search + SHOW/TYPE filters + GLOBAL MAINT button + stats
-- Section accordion dashboard: PLATFORM / COMPUTE / CONTAINERS / NETWORK / STORAGE / SECURITY
-- Dynamic connection cards in NETWORK/STORAGE/SECURITY sections
+## Decisions made
+- Moved variable declaration rather than restructuring — minimal change to fix the crash
+- Did not add a top-level React error boundary — that's a separate improvement (see report below)
 
-### Settings page (v1.20.0+)
-- Full page (not modal) with 8 tabs
-- Naming tab with live preview
-- Permissions tab with role matrix
-- Access tab with user + token management
-- Connections tab with per-platform credential fields
-- Infrastructure moved service connections to Connections tab
-
-### Other fixes
-- Proxmox collector: proxmoxer library, auto-discover nodes, user/token_name/secret fields
-- Network SSH collector (netmiko) for FortiSwitch/Cisco/Juniper
-- Logs tab: connection source filter pills with cyan border
-- JWT: hostname-derived deterministic fallback (survives restarts)
-- Agent loop: last_reasoning in done broadcast
-- Tool registry: unified build_tools_spec()
-
-## Architecture summary
-- 26 platform tools (plugins + skills)
-- 7 collectors: swarm, kafka, elastic, proxmox_vms, docker_agent01, external_services, network_ssh
-- Connections DB: universal service registry (Postgres + SQLite fallback)
-- pgvector RAG: 607 chunks, hybrid search, tiered agent injection
-- ONNX Runtime embeddings (bge-small-en-v1.5, no PyTorch)
-- Plugin architecture: 3-tier (core → plugin → skill)
-- Settings encryption: Fernet for secrets at rest
+## Dead ends
+- Spent significant time checking auth/JWT issues (hostname-derived secret invalidation on container restart) — turned out login worked fine; the blank page was a React crash, not an auth problem
+- Checked for circular imports, Tailwind CSS compilation issues, missing endpoints — none were the cause
+- Initial confusion caused by container being rebuilt mid-investigation (v2.21.1 → v2.21.2 → v2.22.1) while debugging
 
 ## Active issues
-- test_routers_dashboard.py: 2 pre-existing failures (httpx mock mismatch)
-- Container needs rebuild for latest code
-- ADMIN_PASSWORD=changeme in production .env
+- `Failed to decrypt value — key may have changed` on startup — SETTINGS_ENCRYPTION_KEY may have changed since connections were stored; non-fatal but credentials show as empty
+- `JWT_SECRET not set` — still using hostname-derived fallback; sessions break on every container restart
+- Filebeat stale alert: ongoing — not a blocker
+- No top-level React error boundary — any crash above ServiceCardsErrorBoundary blanks the entire page silently
 
-## Next actions
-- Rebuild + deploy v1.22.6
-- Test multi-user auth end-to-end
-- Wire Naming tab values to sidebar branding (DS orb text, footer agent name)
+## Exact next action
+Write the incident report and error-handling improvement recommendations (user requested this session).
+
+## Context files for next session
+- `gui/src/components/VMHostsSection.jsx` — the fixed file
+- `gui/src/App.jsx` — needs a top-level error boundary wrapping the whole tree
+- `gui/src/context/DashboardDataContext.jsx` — new in v2.22.0, central data provider
+- `state/plans/` — no active plans

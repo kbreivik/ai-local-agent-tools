@@ -63,9 +63,12 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
 | CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | PENDING |
 | CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | PENDING |
-| CC_PROMPT_v2.21.2.md | v2.21.2 | Data pipeline health tab (ES doc counts, PG snapshot freshness) | DONE (bf6bae3) |
-| CC_PROMPT_v2.22.0.md | v2.22.0 | Dashboard summary endpoint + DashboardDataContext shared state | DONE (676fa82) |
-| CC_PROMPT_v2.22.1.md | v2.22.1 | Skeleton loading + WebSocket-driven live updates | DONE (1ac7d64) |
+| CC_PROMPT_v2.21.2.md | v2.21.2 | Data pipeline health tab (ES doc counts, PG snapshot freshness) | PENDING |
+| CC_PROMPT_v2.22.0.md | v2.22.0 | Dashboard summary endpoint + DashboardDataContext shared state | PENDING |
+| CC_PROMPT_v2.22.1.md | v2.22.1 | Skeleton loading + WebSocket-driven live updates | PENDING |
+| CC_PROMPT_v2.22.2.md | v2.22.2 | TDZ fix: move const id before useEffect hooks in VMCard | DONE (feb929d) |
+| CC_PROMPT_v2.22.3.md | v2.22.3 | Root error boundary + per-section + frontend crash reporting | RUNNING |
+| CC_PROMPT_v2.22.4.md | v2.22.4 | ESLint TDZ rule + source maps + API version gate + Dockerfile | PENDING |
 
 ---
 
@@ -86,43 +89,49 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.19.0–v2.19.1** — service_placement tool + docker logs allowlist.
 **v2.20.0–v2.20.2** — Investigation quality + VM card feedback + SSH log stream.
 **v2.21.0–v2.21.2** — Time-series metrics + ES indexing + data pipeline health tab.
+**v2.22.0–v2.22.1** — Dashboard summary endpoint + DashboardDataContext + skeleton loading.
 
-**v2.22.0** — Dashboard summary endpoint + DashboardDataContext.
-Root cause of slow GUI: ~12 simultaneous API calls on load; 5 components independently
-polling the same data every 30s. Fix: GET /api/dashboard/summary returns all dashboard
-data in one call (5 parallel PG snapshot reads). DashboardDataContext is a shared React
-context owning all fetches. Tiered intervals: external=30s, summary=60s, stats=60s,
-health=90s, connections=once. Staggered initial load (200ms between each). SubBar drops
-6-call-per-30s cycle to zero (derives alert list from context). ConnectionSectionCards
-drops 30s interval. VMHostsSection reads from context.
-Net: 12 simultaneous calls on load → 5 staggered; 30s duty cycle from ~20 calls → 2.
+**v2.22.2** (DONE feb929d) — TDZ hotfix: const id declared before useEffect dep arrays.
+Root cause of 2026-04-13 blank GUI incident: VMCard.useEffect([open, id]) referenced
+`id` before `const id = vm.connection_id || vm.label` was declared. Runtime crash blanked
+the entire page.
 
-**v2.22.1** — Skeleton loading + WebSocket-driven live updates.
-SkeletonCard/SkeletonGrid shimmer components; ds-shimmer CSS keyframe. COMPUTE,
-CONTAINERS, VM_HOSTS sections show skeleton grids while summaryLoading=true — layout
-visible instantly, data fills in progressively. DashboardDataContext WS listener:
-health_change/vm_action/alert events trigger immediate refreshSummary(). DrillDownBar
-stale badge (>90s) with click-to-refresh. api/alerts.py check_transition() broadcasts
-health_change WS event — frontend responds in seconds not minutes.
+**v2.22.3** — Root error boundary + per-section + frontend crash reporting.
+From incident post-mortem: any JS crash in AppShell or below blanked the entire GUI.
+RootErrorBoundary wraps AppShell — shows error message + RELOAD + CLEAR STATE buttons.
+componentDidCatch POSTs crash details to /api/errors/frontend (no auth required; logged
+to server log + audit_log). SectionErrorBoundary in DashboardLayout: each section
+isolated — one crashing section shows "unavailable" while others continue rendering.
+
+**v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
+From incident post-mortem: TDZ bug wasn't caught because no ESLint rule covered it and
+Vite build succeeds on runtime-only errors. Adds no-use-before-define: variables:true —
+catches const/let TDZ at dev/CI time. Hidden source maps (sourcemap: 'hidden') maps
+minified names (q → id) for future debugging. DashboardDataContext: fetchSummary handles
+404 with versionMismatch banner; refreshHealth compares backend version to
+MIN_BACKEND_VERSION. Amber banner in DashboardView when mismatch detected — would have
+made the frontend/backend mismatch immediately visible instead of silent blank sections.
+.dockerignore: excludes gui/dist/, __pycache__, state/, cc_prompts/.
 
 ---
 
 ## Key file paths
 
 ```
-gui/src/context/DashboardDataContext.jsx — shared dashboard state (v2.22.0)
+gui/src/context/DashboardDataContext.jsx — shared dashboard state + version gate (v2.22.0, v2.22.4)
 gui/src/components/SkeletonCard.jsx      — shimmer skeleton components (v2.22.1)
-api/routers/dashboard.py                — /summary endpoint (v2.22.0)
-api/alerts.py                           — health_change WS broadcast (v2.22.1)
-api/db/metric_samples.py               — time-series metrics table (v2.21.0)
-mcp_server/tools/metric_tools.py       — metric_trend + list_metrics tools (v2.21.0)
-api/collectors/base.py                 — ES snapshot indexing (v2.21.1)
-api/collectors/swarm.py                — replica lifecycle events (v2.21.1)
-api/collectors/external_services.py   — latency samples (v2.21.1)
-api/db/vm_action_log.py                — vm action audit table (v2.20.1)
-api/collectors/vm_hosts.py             — metric samples + _ssh_run_streaming (v2.20.2, v2.21.0)
-api/agents/router.py                   — prompts + allowlists (v2.18.1–v2.21.0)
-mcp_server/tools/vm.py                 — service_placement + docker logs (v2.19.0, v2.19.1)
-gui/src/components/VMHostsSection.jsx  — action state + SSH log panel (v2.20.1, v2.20.2)
-gui/src/context/AgentOutputContext.jsx — ws:message window event (v2.20.1)
+gui/src/components/DashboardLayout.jsx   — SectionErrorBoundary (v2.22.3)
+gui/src/App.jsx                          — RootErrorBoundary (v2.22.3)
+api/routers/dashboard.py                 — /summary endpoint (v2.22.0)
+api/routers/errors.py                    — /api/errors/frontend crash reporting (v2.22.3)
+api/alerts.py                            — health_change WS broadcast (v2.22.1)
+eslint.config.js                         — no-use-before-define rule (v2.22.4)
+gui/vite.config.js                       — sourcemap: hidden (v2.22.4)
+.dockerignore                            — excludes build artifacts (v2.22.4)
+api/db/metric_samples.py                 — time-series metrics (v2.21.0)
+mcp_server/tools/metric_tools.py         — metric_trend + list_metrics (v2.21.0)
+api/collectors/base.py                   — ES snapshot indexing (v2.21.1)
+api/db/vm_action_log.py                  — vm action audit table (v2.20.1)
+api/agents/router.py                     — prompts + allowlists (v2.18.1–v2.21.0)
+mcp_server/tools/vm.py                   — service_placement + docker logs (v2.19.0, v2.19.1)
 ```
