@@ -15,12 +15,6 @@ cd /d/claude_code/ai-local-agent-tools
 bash cc_prompts/run_queue.sh --dry-run   # preview
 bash cc_prompts/run_queue.sh --one       # run next one (supervised)
 bash cc_prompts/run_queue.sh             # run all
-
-# PowerShell (Windows Terminal)
-cd D:\claude_code\ai-local-agent-tools
-.\cc_prompts\run_queue.ps1 -DryRun
-.\cc_prompts\run_queue.ps1 -One
-.\cc_prompts\run_queue.ps1
 ```
 
 Use `--dangerously-skip-permissions` (already in run_queue.sh) so CC runs without
@@ -51,9 +45,11 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.3.md | v2.15.3 | kafka_exec agent tool + vm_exec allowlist expansion | DONE (1d26cac) |
 | CC_PROMPT_v2.15.4.md | v2.15.4 | Agent loop fixes: SQL bool, plan re-approval, risk colour, final_answer | DONE (a9d27ac) |
 | CC_PROMPT_v2.15.5.md | v2.15.5 | Layouts tab fix + admin menu cleanup + footer styling | DONE (12cd178) |
-| CC_PROMPT_v2.15.6.md | v2.15.6 | Platform Core value-before-tag + alphabetical sorting everywhere | DONE (050b865) |
-| CC_PROMPT_v2.15.7.md | v2.15.7 | Container cards: name fix, real IP, networks, per-host Section | DONE (55ab911) |
+| CC_PROMPT_v2.15.6.md | v2.15.6 | Platform Core value-before-tag + alphabetical sorting everywhere | DONE |
+| CC_PROMPT_v2.15.7.md | v2.15.7 | Container cards: name fix, real IP, networks, per-host Section | DONE |
 | CC_PROMPT_v2.15.8.md | v2.15.8 | Multi-expand cards + shift-click range + toolbar expand/collapse | DONE (e516007) |
+| CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | PENDING |
+| CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | PENDING |
 
 ---
 
@@ -68,36 +64,36 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.15.5** — Layouts tab blank page fixed (missing `/api/layout/templates` endpoint + null
-guards on layout prop). Admin user menu stripped to Log out only (Layouts/Notifications
-already in Settings sidebar). Footer `admin · v2.15.x`: crimson tint background, 10px
-font, version highlighted in accent red for visual distinction.
+**v2.15.9** — Three new agent tools for Swarm/infra recovery:
+`swarm_node_status()` — `docker node ls` + failed task list from a manager (read-only, always allowed).
+`swarm_service_force_update(service_name)` — SSH to manager, runs `docker service update --force`, requires plan_action.
+`proxmox_vm_power(vm_label, action)` — start/stop/reboot Proxmox VM when a worker node is completely down.
+Pre-flight bypass: `pre_kafka_check` skipped when task is explicitly a remediation/fix/restart.
+Recovery workflow added to ACTION_PROMPT with node-down → Proxmox reboot path.
+Blocked tool rule: agent must provide exact manual SSH command instead of escalating.
 
-**v2.15.6** — Platform Core rows: value (v2.15.4, pg16) now appears before the status
-tag (ONLINE, HEALTHY) — information then state, both right-aligned. VM sort default
-changed to name ascending. Container and connection lists sorted alphabetically.
-
-**v2.15.7** — Container card name is primary label (was showing image URL). Image string
-shortened to `repo:tag` only. Compact card shows real IP:port (loopback filtered, port-
-only fallback). Expanded card shows Docker networks + all IPs. Containers section gets
-cluster-style Section header per docker_host connection (like Proxmox clusters).
-Backend: connection_id/label/host added to container collector response.
-
-**v2.15.8** — `openKeys` Set replaces `openKey` single value — multiple cards can be
-expanded simultaneously. Shift+click expands range between last-opened and clicked card
-using DOM data-card-key attributes within the section. DrillDownBar gets two new buttons:
-EXPAND/COLLAPSE ALL cards and EXPAND/COLLAPSE ALL sections, using window custom events
-to signal ServiceCards and Section components. VM cards narrower at 240px default.
+**v2.15.10** — Escalations now visible outside the output panel.
+`agent_escalations` table stores all escalations with reason, session ID, severity.
+`record_escalation()` called when agent escalates or halts on degraded tool result.
+REST endpoints: list, acknowledge, acknowledge-all.
+`EscalationBanner` component: persistent amber banner in dashboard between drill bar and content.
+Pulsing dot, reason text, ACK button, ACK ALL button.
+WebSocket `escalation_recorded` event triggers immediate banner update.
+Zero height when no escalations — no layout impact on normal operation.
 
 ---
 
 ## Key file paths
 
 ```
+api/routers/escalations.py          — escalation table + endpoints (v2.15.10)
+api/routers/agent.py                — record_escalation calls + WS broadcast (v2.15.10)
+gui/src/components/EscalationBanner.jsx — persistent amber banner (v2.15.10)
+mcp_server/tools/vm.py              — swarm_node_status, swarm_service_force_update, proxmox_vm_power (v2.15.9)
+mcp_server/server.py                — tool registration (v2.15.9)
+api/agents/router.py                — allowlists + ACTION_PROMPT recovery workflow (v2.15.9)
 api/routers/layout.py               — layout templates endpoint (v2.15.5)
 gui/src/components/Sidebar.jsx      — user menu + footer (v2.15.5)
-gui/src/components/LayoutsTab.jsx   — null guards (v2.15.5)
-gui/src/App.jsx                     — Platform Core row order, DrillDownBar (v2.15.6, v2.15.8)
+gui/src/App.jsx                     — EscalationBanner mount, Platform Core row order (v2.15.6, v2.15.10)
 gui/src/components/ServiceCards.jsx — sort defaults, container cards, openKeys (v2.15.6–8)
-api/collectors/swarm.py             — connection metadata in container response (v2.15.7)
 ```

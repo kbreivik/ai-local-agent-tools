@@ -344,6 +344,247 @@ def kafka_exec(broker_label: str, command: str) -> dict:
         return {"status": "error", "message": str(e), "data": None, "timestamp": _ts()}
 
 
+def swarm_service_force_update(service_name: str, manager_label: str = "") -> dict:
+    """Force-update a Docker Swarm service to recover from network/scheduling issues.
+
+    Runs 'docker service update --force <service>' on a Swarm manager node.
+    This causes Swarm to reschedule the service with fresh network attachments,
+    fixing 'network not found' errors and stale overlay network references.
+    Does NOT change the image or configuration — safe for broker recovery.
+
+    Requires plan_action() approval before calling.
+
+    Args:
+        service_name:  Exact Swarm service name (e.g. "kafka_broker-2", "logstash_logstash")
+        manager_label: vm_host label of a Swarm manager node. If blank, auto-selects
+                       the first available manager from vm_host connections.
+    """
+    from api.connections import get_all_connections_for_platform
+    from api.collectors.vm_hosts import _resolve_credentials, _ssh_run
+
+    all_conns = get_all_connections_for_platform("vm_host")
+
+    # Resolve manager — explicit label, or find one by role/label pattern
+    manager_conn = None
+    if manager_label:
+        manager_conn = next(
+            (c for c in all_conns if c.get("label", "").lower() == manager_label.lower()),
+            None
+        )
+    if not manager_conn:
+        # Auto-select: prefer connections with 'manager' in label
+        manager_conn = next(
+            (c for c in all_conns if 'manager' in c.get("label", "").lower()),
+            None
+        )
+    if not manager_conn:
+        return {"status": "error",
+                "message": "No Swarm manager vm_host connection found. Add a manager node in Settings → Connections.",
+                "data": None, "timestamp": _ts()}
+
+    host = manager_conn.get("host", "")
+    port = manager_conn.get("port") or 22
+    username, password, private_key = _resolve_credentials(manager_conn, all_conns)
+
+    try:
+        output = _ssh_run(
+            host, port, username, password, private_key,
+            f"docker service update --force {service_name}",
+        )
+        success = "converged" in output.lower() or "verify" in output.lower()
+        return {
+            "status": "ok" if success else "error",
+            "message": f"Force-updated {service_name} on {manager_conn.get('label')}",
+            "data": {
+                "service": service_name,
+                "manager": manager_conn.get("label"),
+                "output": output.strip()[:2000],
+                "converged": success,
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error",
+                "message": f"SSH failed on {manager_conn.get('label')}: {e}",
+                "data": None, "timestamp": _ts()}
+
+
+def swarm_node_status() -> dict:
+    """Get Docker Swarm node availability and service task placement.
+
+    Runs 'docker node ls' on a manager to show all nodes with their status.
+    Also checks for services with failed/not-running tasks.
+    Read-only — never requires plan_action.
+
+    Returns node list with: hostname, status (Ready/Down), availability
+    (Active/Drain/Pause), manager status, engine version.
+    Also returns any services with tasks not running as expected.
+    """
+    from api.connections import get_all_connections_for_platform
+    from api.collectors.vm_hosts import _resolve_credentials, _ssh_run
+
+    all_conns = get_all_connections_for_platform("vm_host")
+    manager_conn = next(
+        (c for c in all_conns if 'manager' in c.get("label", "").lower()),
+        None
+    )
+    if not manager_conn:
+        return {"status": "error",
+                "message": "No manager vm_host connection found.",
+                "data": None, "timestamp": _ts()}
+
+    host = manager_conn.get("host", "")
+    port = manager_conn.get("port") or 22
+    username, password, private_key = _resolve_credentials(manager_conn, all_conns)
+
+    try:
+        # Get node list
+        node_out = _ssh_run(
+            host, port, username, password, private_key,
+            "docker node ls --format '{{.Hostname}}|{{.Status}}|{{.Availability}}|{{.ManagerStatus}}|{{.EngineVersion}}'",
+        )
+        nodes = []
+        down_nodes = []
+        for line in node_out.strip().splitlines():
+            parts = line.split("|")
+            if len(parts) >= 4:
+                hostname, status, avail, mgr_status = parts[0], parts[1], parts[2], parts[3]
+                engine = parts[4] if len(parts) > 4 else ""
+                nodes.append({
+                    "hostname": hostname.strip(),
+                    "status": status.strip(),
+                    "availability": avail.strip(),
+                    "manager_status": mgr_status.strip(),
+                    "engine_version": engine.strip(),
+                })
+                if status.strip().lower() == "down":
+                    down_nodes.append(hostname.strip())
+
+        # Get service task failures
+        svc_out = _ssh_run(
+            host, port, username, password, private_key,
+            "docker service ps --filter desired-state=running --format '{{.Name}}|{{.CurrentState}}|{{.Error}}' $(docker service ls -q) 2>/dev/null | grep -v 'Running' | head -20",
+        )
+        failed_tasks = []
+        for line in svc_out.strip().splitlines():
+            if line and "|" in line:
+                parts = line.split("|")
+                failed_tasks.append({
+                    "task": parts[0].strip(),
+                    "state": parts[1].strip() if len(parts) > 1 else "",
+                    "error": parts[2].strip() if len(parts) > 2 else "",
+                })
+
+        health = "healthy"
+        if down_nodes:
+            health = "critical" if len(down_nodes) > 1 else "degraded"
+
+        return {
+            "status": "ok",
+            "health": health,
+            "message": (
+                f"{len(nodes)} nodes ({len(down_nodes)} down)"
+                + (f" — DOWN: {', '.join(down_nodes)}" if down_nodes else " — all ready")
+            ),
+            "data": {
+                "nodes": nodes,
+                "down_nodes": down_nodes,
+                "failed_tasks": failed_tasks[:10],
+                "manager_used": manager_conn.get("label"),
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error",
+                "message": f"swarm_node_status failed: {e}",
+                "data": None, "timestamp": _ts()}
+
+
+def proxmox_vm_power(vm_label: str, action: str) -> dict:
+    """Start, stop, or reboot a Proxmox VM by label.
+
+    Use when a Swarm worker node is completely down (STATUS=Down in docker node ls)
+    and cannot be reached via SSH. This talks directly to the Proxmox API.
+    Requires plan_action() approval before calling.
+
+    Args:
+        vm_label: VM name as shown in Proxmox (e.g. "hp1-prod-worker-03")
+                  or the short hostname (e.g. "worker-03")
+        action:   "start" | "stop" | "reboot" — reboot is preferred over stop+start
+    """
+    if action not in ("start", "stop", "reboot"):
+        return {"status": "error",
+                "message": f"Invalid action '{action}'. Use: start, stop, reboot",
+                "data": None, "timestamp": _ts()}
+
+    try:
+        from api.connections import get_connection_for_platform
+        from proxmoxer import ProxmoxAPI
+
+        conn = get_connection_for_platform("proxmox")
+        if not conn:
+            return {"status": "error",
+                    "message": "No Proxmox connection configured.",
+                    "data": None, "timestamp": _ts()}
+
+        creds = conn.get("credentials", {})
+        pve = ProxmoxAPI(
+            conn["host"],
+            port=conn.get("port", 8006),
+            user=creds.get("user"),
+            token_name=creds.get("token_name"),
+            token_value=creds.get("secret"),
+            verify_ssl=False,
+        )
+
+        # Find VM across all nodes by name
+        found = None
+        for node_info in pve.nodes.get():
+            node = node_info["node"]
+            for vm in pve.nodes(node).qemu.get():
+                name = vm.get("name", "")
+                if (vm_label.lower() in name.lower() or
+                        name.lower() in vm_label.lower()):
+                    found = {"node": node, "vmid": vm["vmid"], "name": name,
+                             "status": vm.get("status")}
+                    break
+            if found:
+                break
+
+        if not found:
+            return {"status": "error",
+                    "message": f"No VM matching '{vm_label}' found in Proxmox.",
+                    "data": None, "timestamp": _ts()}
+
+        node, vmid = found["node"], found["vmid"]
+        endpoint = pve.nodes(node).qemu(vmid).status
+
+        if action == "start":
+            result = endpoint.start.post()
+        elif action == "stop":
+            result = endpoint.stop.post()
+        else:  # reboot
+            result = endpoint.reboot.post()
+
+        return {
+            "status": "ok",
+            "message": f"{action.capitalize()}ed VM '{found['name']}' (vmid {vmid}) on node {node}",
+            "data": {
+                "vm_name": found["name"],
+                "vmid": vmid,
+                "node": node,
+                "action": action,
+                "task_id": str(result),
+                "previous_status": found["status"],
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error",
+                "message": f"proxmox_vm_power failed: {e}",
+                "data": None, "timestamp": _ts()}
+
+
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query the SSH capability map — which credentials can reach which hosts.
 

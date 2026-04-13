@@ -76,6 +76,8 @@ DESTRUCTIVE_TOOLS = frozenset({
     "docker_engine_update", "docker_prune",
     # Skill write-tools — modify persistent state (modules on disk + DB)
     "skill_create", "skill_regenerate", "skill_disable", "skill_enable", "skill_import",
+    # Swarm recovery + Proxmox power — require plan_action approval
+    "swarm_service_force_update", "proxmox_vm_power",
 })
 
 # Per-session cancellation flags — set by POST /api/agent/stop

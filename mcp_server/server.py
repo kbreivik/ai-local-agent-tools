@@ -729,6 +729,38 @@ def result_query(ref: str, where: str = "", columns: str = "",
 
 
 @mcp.tool()
+def swarm_service_force_update(service_name: str, manager_label: str = "") -> dict:
+    """Force-update a Swarm service to recover from network/scheduling failures.
+    Runs 'docker service update --force' on a manager. Requires plan_action() first.
+    Use for: 'network not found' errors, tasks stuck in Rejected/Failed state.
+    Example: swarm_service_force_update("kafka_broker-2")
+    """
+    from mcp_server.tools.vm import swarm_service_force_update as _f
+    return _f(service_name=service_name, manager_label=manager_label)
+
+
+@mcp.tool()
+def swarm_node_status() -> dict:
+    """Get Swarm node availability — which nodes are Ready/Down, any failed tasks.
+    Read-only. Use first when Kafka or services are missing replicas.
+    Shows: hostname, status, availability, manager status, engine version.
+    """
+    from mcp_server.tools.vm import swarm_node_status as _f
+    return _f()
+
+
+@mcp.tool()
+def proxmox_vm_power(vm_label: str, action: str) -> dict:
+    """Start, stop, or reboot a Proxmox VM by name label.
+    Use when a worker node is completely Down and unreachable via SSH.
+    action: 'start' | 'stop' | 'reboot'. Requires plan_action() first.
+    Example: proxmox_vm_power("worker-03", "reboot")
+    """
+    from mcp_server.tools.vm import proxmox_vm_power as _f
+    return _f(vm_label=vm_label, action=action)
+
+
+@mcp.tool()
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query SSH capability map — which credentials can reach which hosts.
     Returns verified pairs with success rates and latency. Use to audit

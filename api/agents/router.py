@@ -92,6 +92,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
+    "swarm_node_status",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -114,6 +115,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
+    "swarm_node_status",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -130,6 +132,7 @@ _DIAGNOSTICS = frozenset({
 EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
+    "swarm_node_status", "swarm_service_force_update",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
@@ -140,6 +143,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
+    "swarm_node_status", "swarm_service_force_update",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -154,6 +158,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
     "result_fetch", "result_query",
     "entity_history", "entity_events",
+    "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -283,6 +288,16 @@ same command or variations of it. Instead:
 3. If no alternative exists, note the limitation in your summary
    and move on. Never call the same blocked command twice.
 
+BLOCKED TOOL RULE (CRITICAL):
+When a tool is unavailable or blocked:
+- NEVER call escalate() solely because a tool is blocked
+- ALWAYS provide the exact manual command the user can run via SSH
+- Format: "I cannot execute this directly. Run manually:
+  ssh ubuntu@<ip> 'docker service update --force <service>'"
+- Use swarm_node_status() and infra_lookup() to get the correct IP first
+- escalate() is ONLY for genuine infrastructure failures where data shows
+  a real problem (broker actually lost data, service not converging after restart, etc.)
+
 DYNAMIC SKILLS:
 Dynamic skills are not listed in the tool manifest individually.
 To use a skill: first call skill_search(query=...) to find it,
@@ -377,6 +392,16 @@ call that tool directly first before any general investigation.
 NETWORK QUERIES: For questions about IP addresses, hostnames, ports, or how to
 connect to this agent from other machines: call get_host_network() tool first.
 
+BLOCKED TOOL RULE (CRITICAL):
+When a tool is unavailable or blocked:
+- NEVER call escalate() solely because a tool is blocked
+- ALWAYS provide the exact manual command the user can run via SSH
+- Format: "I cannot execute this directly. Run manually:
+  ssh ubuntu@<ip> 'docker service update --force <service>'"
+- Use swarm_node_status() and infra_lookup() to get the correct IP first
+- escalate() is ONLY for genuine infrastructure failures where data shows
+  a real problem (broker actually lost data, service not converging after restart, etc.)
+
 STOPPING RULES (MANDATORY):
 - After presenting findings and action suggestions, output as plain text with NO tool calls.
 - After audit_log(), output NOTHING MORE — the run ends immediately after.
@@ -401,7 +426,13 @@ ACTION_PROMPT = """You are an infrastructure orchestration agent for a Docker Sw
 RULES:
 1. check → act → verify → continue or halt
 2. Before ANY service upgrade: call pre_upgrade_check(). If not ok, HALT.
-3. Before ANY Kafka operation: call pre_kafka_check(). If not ok, HALT.
+3. Before ANY Kafka operation: call pre_kafka_check() UNLESS the task explicitly
+   involves fixing, restarting, recovering, or force-updating a known-degraded
+   component. Remediation tasks (fix, repair, restart, recover, force-update,
+   rejoin, rebalance a broken broker) must proceed THROUGH degraded state —
+   that is the point of the task. In those cases, skip pre_kafka_check and
+   proceed directly to swarm_node_status → plan_action → swarm_service_force_update.
+   If not a remediation task and pre_kafka_check is not ok, HALT.
 4. If any tool returns status=degraded or status=failed: call escalate() immediately.
 5. Call audit_log() ONCE at the very end of the run to record a final summary. Do not call it after every tool.
 6. Call checkpoint_save() before any risky operation.
@@ -521,6 +552,31 @@ same command or variations of it. Instead:
    for per-volume sizes, use 'docker volume inspect <name>' for paths)
 3. If no alternative exists, note the limitation in your summary
    and move on. Never call the same blocked command twice.
+
+KAFKA/SWARM RECOVERY WORKFLOW:
+When asked to fix/restart/recover a Kafka broker or Swarm service:
+1. Call swarm_node_status() — find which nodes are Down
+2. If a node is Down and unreachable:
+   a. Call plan_action() with: "Reboot <node> via Proxmox to recover broker"
+   b. After approval: call proxmox_vm_power(vm_label=..., action="reboot")
+   c. Wait is not possible — tell user to verify after ~2 minutes
+3. If node is Up but service failing:
+   a. Call plan_action() with: "Force-update <service> to clear network state"
+   b. After approval: call swarm_service_force_update(service_name=...)
+   c. Report convergence status from the tool result
+4. If blocked at any step: provide the EXACT manual command to run, e.g.:
+   "I cannot execute this directly. Run on a manager: docker service update --force kafka_broker-3"
+   NEVER escalate solely because a command is unavailable — give the manual alternative.
+
+BLOCKED TOOL RULE (CRITICAL):
+When a tool is unavailable or blocked:
+- NEVER call escalate() solely because a tool is blocked
+- ALWAYS provide the exact manual command the user can run via SSH
+- Format: "I cannot execute this directly. Run manually:
+  ssh ubuntu@<ip> 'docker service update --force <service>'"
+- Use swarm_node_status() and infra_lookup() to get the correct IP first
+- escalate() is ONLY for genuine infrastructure failures where data shows
+  a real problem (broker actually lost data, service not converging after restart, etc.)
 
 RESPONSE STYLE — Professional IT Support:
 - Lead with what you did: "I checked X and found..."
