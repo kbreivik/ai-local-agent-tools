@@ -57,8 +57,10 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | PENDING |
 | CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
 | CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
-| CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | DONE (cb1cfa9) |
-| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | DONE (b49a545) |
+| CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | PENDING |
+| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | PENDING |
+| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | RUNNING |
+| CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
 
 ---
 
@@ -73,51 +75,53 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.16.0** — Agent investigate-on-degraded + halt synthesis.
+**v2.16.0–v2.16.1** — Agent investigate-on-degraded + task templates.
 
-**v2.16.1** — Agent task templates in CommandPanel (18 pre-built tasks, 5 domain groups).
+**v2.17.0–v2.17.1** — Entity timeline + Proxmox console URL fix.
 
-**v2.17.0** — Entity timeline view in EntityDrawer (field changes + events, lazy-loaded).
-
-**v2.17.1** — Fix Proxmox noVNC console URL to use actual Proxmox host.
-
-**v2.18.0** — Result store viewer in Logs tab (browse active rs-* refs + rows).
-
-**v2.18.1** — Synthesis fires on all completion paths + Kafka diagnostic chain in prompts.
+**v2.18.0–v2.18.1** — Result store viewer + synthesis on all completion paths.
 
 **v2.19.0** — service_placement tool: swarm service → node → vm_host bridge.
-service_placement(service_name) SSHes to a manager, cross-references node to vm_host connections.
-Returns task state, error, vm_host_label, vm_host_ip, ssh_ready. Added to OBSERVE + INVESTIGATE.
 
 **v2.19.1** — docker logs allowlist + investigation depth rules.
-vm_exec allowlist: add `docker logs` (read-only, metachar filter already blocks writes).
-RESEARCH_PROMPT: investigation depth rules — elastic_kafka_logs required before concluding.
-Exit code interpretation: 137=OOM (check free -m), 255=JVM crash (read docker logs).
-service_placement param corrected: service_name= not service= in both prompts.
 
-**v2.20.0** — Investigation quality: structured output + clarifying questions + evidence exhaustion.
-RESEARCH_PROMPT: 4-section required output (Evidence/Root cause/Fix steps/Automatable).
-clarifying_question() guidance: call after gathering ambiguous evidence, not upfront.
-Evidence exhaustion tiers for Kafka (cluster→placement→logs→elastic), must complete before concluding.
-Tool priority for container logs: service_logs=local Docker host only; vm_exec for Swarm workers.
-STATUS_PROMPT: numbered 6-step investigation tool order for degraded Kafka.
-agent.py: all 3 synthesis calls use structured 4-section format.
+**v2.20.0** — Investigation quality: 4-section output + evidence exhaustion tiers.
+
+**v2.20.1** — VM card action audit trail + visual feedback.
+New `vm_action_log` table records every VM card action (reboot, update, service restart)
+with user, status, output, timestamps. vm_reboot/update/service_restart endpoints now
+log to this table and broadcast `vm_action` WebSocket events. VMCard subscribes to
+`ws:message` window events and shows: pulsing amber REBOOTING badge with 90s countdown,
+UPDATING badge during apt, auto-refresh after reboot completes, buttons disabled during
+action. AgentOutputContext dispatches ws:message for cross-component WS access.
+
+**v2.20.2** — VM card SSH log stream + live logs filter fix.
+_ssh_run_streaming() in vm_hosts.py yields SSH channel output line by line.
+GET /api/dashboard/vm-hosts/{id}/logs/stream: SSE journalctl -f via SSH, service filter.
+VMCard: "Live Logs" button opens 180px scrollable SSH journal panel with level coloring
+and optional service filter (docker, ssh, filebeat, active systemd services).
+VMCard: Recent Actions section shows last 5 actions.
+Unified log generator ES reader: both container.name and host.name preserved; display_name
+uses container.name when available, falls back to host.name for host-level ES events.
 
 ---
 
 ## Key file paths
 
 ```
+api/db/vm_action_log.py                — vm action audit table (v2.20.1)
+api/routers/dashboard.py               — VM action endpoints + SSH log stream (v2.20.1, v2.20.2)
+api/collectors/vm_hosts.py             — _ssh_run_streaming helper (v2.20.2)
 api/routers/logs.py                    — result-store endpoints (v2.18.0)
 api/routers/entities.py                — entity list + history endpoint (v2.17.0)
-api/routers/agent.py                   — synthesis on all paths + structured format (v2.18.1, v2.20.0)
-api/agents/router.py                   — prompts + allowlists (v2.18.1, v2.19.0, v2.19.1, v2.20.0)
-mcp_server/tools/vm.py                 — service_placement + docker logs allowlist (v2.19.0, v2.19.1)
+api/routers/agent.py                   — synthesis on all paths (v2.18.1, v2.20.0)
+api/agents/router.py                   — prompts + allowlists (v2.18.1–v2.20.0)
+mcp_server/tools/vm.py                 — service_placement + docker logs (v2.19.0, v2.19.1)
 mcp_server/server.py                   — service_placement registration (v2.19.0)
+gui/src/components/VMHostsSection.jsx  — action state + SSH log panel (v2.20.1, v2.20.2)
+gui/src/context/AgentOutputContext.jsx — ws:message window event dispatch (v2.20.1)
 gui/src/components/TaskTemplates.jsx   — one-click task templates (v2.16.1)
 gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
 gui/src/components/ServiceCards.jsx    — Proxmox console URL fix (v2.17.1)
-gui/src/components/CommandPanel.jsx    — mounts TaskTemplates (v2.16.1)
 gui/src/components/LogsPanel.jsx       — Result Refs tab (v2.18.0)
-gui/src/api.js                         — fetchEntityHistory, fetchResultRefs, fetchResultRef
 ```

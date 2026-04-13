@@ -74,6 +74,8 @@ function VMCard({ vm, onAction }) {
   const [loading, setLoading] = useState({})
   const [output, setOutput] = useState(null)
   const [historyData, setHistoryData] = useState(null)
+  const [actionState, setActionState] = useState(null)  // null | {action, status, startedAt}
+  const [rebootCountdown, setRebootCountdown] = useState(null)
 
   const entityId = vm.label || vm.hostname || ''
   useEffect(() => {
@@ -83,6 +85,43 @@ function VMCard({ vm, onAction }) {
       .then(d => { if (d) setHistoryData(d) })
       .catch(() => {})
   }, [entityId])
+
+  // Listen for WebSocket vm_action events for this host
+  useEffect(() => {
+    const handler = (e) => {
+      try {
+        const msg = JSON.parse(e.detail || e.data || '{}')
+        if (msg.type === 'vm_action' && (msg.host === (vm.label || vm.hostname))) {
+          if (msg.status === 'started') {
+            setActionState({ action: msg.action, status: 'started', startedAt: Date.now() })
+            if (msg.action === 'reboot') {
+              setRebootCountdown(90)
+            }
+          } else {
+            setActionState(prev => prev ? { ...prev, status: msg.status } : null)
+            if (msg.action !== 'reboot') {
+              setTimeout(() => setActionState(null), 4000)
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    window.addEventListener('ws:message', handler)
+    return () => window.removeEventListener('ws:message', handler)
+  }, [vm.label, vm.hostname])
+
+  // Reboot countdown timer
+  useEffect(() => {
+    if (rebootCountdown === null) return
+    if (rebootCountdown <= 0) {
+      setRebootCountdown(null)
+      setActionState(null)
+      if (onAction) onAction()
+      return
+    }
+    const t = setTimeout(() => setRebootCountdown(c => c !== null ? c - 1 : null), 1000)
+    return () => clearTimeout(t)
+  }, [rebootCountdown, onAction])
 
   const dot = vm.dot || 'grey'
   const dotColor = dot === 'green' ? 'var(--green)' : dot === 'amber' ? 'var(--amber)' : dot === 'red' ? 'var(--red)' : 'var(--text-3)'
@@ -106,7 +145,11 @@ function VMCard({ vm, onAction }) {
     <div style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${dotColor}`, borderRadius: 2, background: 'var(--bg-2)', marginBottom: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', padding: '8px 10px', cursor: 'pointer', userSelect: 'none', gap: 8 }}
            onClick={() => setOpen(o => !o)}>
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        <div style={{
+          width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+          background: actionState?.status === 'started' ? 'var(--amber)' : dotColor,
+          animation: actionState?.status === 'started' ? 'pulse 1s infinite' : 'none',
+        }} />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-1)', flex: 1 }}>{vm.hostname || vm.label}</span>
         {_showIp(vm.host) && <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{vm.host}{vm.port && vm.port !== 22 ? `:${vm.port}` : ''}</span>}
         {vm.config?.is_jump_host && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(204,136,0,0.15)', color: 'var(--amber)', border: '1px solid rgba(204,136,0,0.3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.05em' }}>⇢ BASTION</span>}
@@ -132,6 +175,23 @@ function VMCard({ vm, onAction }) {
           </span>
         )}
         {vm.problem && <span style={{ fontSize: 9, color: dot === 'red' ? 'var(--red)' : 'var(--amber)', padding: '1px 5px', borderRadius: 2, background: dot === 'red' ? 'var(--red-dim)' : 'var(--amber-dim)' }}>⚠ {vm.problem}</span>}
+        {actionState && (
+          <span style={{
+            fontSize: 8, padding: '1px 6px', borderRadius: 2, fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.06em',
+            background: actionState.status === 'started' ? 'var(--amber-dim)' : actionState.status === 'ok' ? 'var(--green-dim)' : 'var(--red-dim)',
+            color: actionState.status === 'started' ? 'var(--amber)' : actionState.status === 'ok' ? 'var(--green)' : 'var(--red)',
+            border: `1px solid ${actionState.status === 'started' ? 'var(--amber)' : actionState.status === 'ok' ? 'var(--green)' : 'var(--red)'}`,
+          }}>
+            {actionState.action === 'reboot' && actionState.status === 'started'
+              ? `↺ REBOOTING${rebootCountdown !== null ? ` ~${rebootCountdown}s` : '…'}`
+              : actionState.action === 'update_packages' && actionState.status === 'started'
+              ? '⬆ UPDATING…'
+              : actionState.status === 'started'
+              ? `↺ ${actionState.action.replace(/_/g, ' ').toUpperCase()}…`
+              : actionState.status === 'ok' ? '✓ DONE' : '✕ FAILED'}
+          </span>
+        )}
         <span style={{ fontSize: 8, color: 'var(--text-3)', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.1s' }}>▶</span>
       </div>
 
@@ -183,21 +243,21 @@ function VMCard({ vm, onAction }) {
             </div>
           )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
-            <button onClick={() => act('status', `vm-hosts/${id}/exec`)} disabled={loading.status}
+            <button onClick={() => act('status', `vm-hosts/${id}/exec`)} disabled={loading.status || (actionState?.status === 'started')}
               style={{ fontSize: 9, padding: '3px 8px', background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-2)', borderRadius: 2, cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
               {loading.status ? '…' : '⟳ Refresh'}
             </button>
-            <button onClick={() => act('update', `vm-hosts/${id}/update`, `Run apt update + upgrade on ${vm.label}?`)} disabled={loading.update}
+            <button onClick={() => act('update', `vm-hosts/${id}/update`, `Run apt update + upgrade on ${vm.label}?`)} disabled={loading.update || (actionState?.status === 'started')}
               style={{ fontSize: 9, padding: '3px 8px', background: 'var(--amber-dim)', border: '1px solid var(--amber)', color: 'var(--amber)', borderRadius: 2, cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
               {loading.update ? '…' : '⬆ Update packages'}
             </button>
-            <button onClick={() => act('reboot', `vm-hosts/${id}/reboot`, `Reboot ${vm.label}?`)} disabled={loading.reboot}
+            <button onClick={() => act('reboot', `vm-hosts/${id}/reboot`, `Reboot ${vm.label}?`)} disabled={loading.reboot || (actionState?.status === 'started')}
               style={{ fontSize: 9, padding: '3px 8px', background: 'var(--red-dim)', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 2, cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
               {loading.reboot ? '…' : '↺ Reboot'}
             </button>
           </div>
           {Object.entries(vm.services || {}).filter(([, s]) => s === 'active' || s === 'failed').map(([name]) => (
-            <button key={name} onClick={() => act(`svc_${name}`, `vm-hosts/${id}/service/${name}/restart`, `Restart ${name} on ${vm.label}?`)} disabled={loading[`svc_${name}`]}
+            <button key={name} onClick={() => act(`svc_${name}`, `vm-hosts/${id}/service/${name}/restart`, `Restart ${name} on ${vm.label}?`)} disabled={loading[`svc_${name}`] || (actionState?.status === 'started')}
               style={{ fontSize: 9, padding: '2px 6px', marginTop: 4, marginRight: 4, background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-3)', borderRadius: 2, cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
               {loading[`svc_${name}`] ? '…' : `↺ ${name}`}
             </button>

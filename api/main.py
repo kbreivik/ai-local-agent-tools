@@ -155,6 +155,12 @@ async def lifespan(app: FastAPI):
         init_escalations()
     except Exception as e:
         _log.debug("Escalations table init skipped: %s", e)
+    # Initialize VM action audit log table
+    try:
+        from api.db.vm_action_log import init_vm_action_log
+        init_vm_action_log()
+    except Exception as e:
+        _log.debug("VM action log init skipped: %s", e)
     # Auto-register local Docker socket as docker_host connection (idempotent)
     try:
         from api.connections import list_connections, create_connection

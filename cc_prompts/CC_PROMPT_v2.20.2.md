@@ -1,0 +1,426 @@
+# CC PROMPT — v2.20.2 — VM card SSH log stream + live logs filter fix
+
+## What this does
+
+Two improvements to log visibility:
+
+1. **SSH log stream in VM card** — "LOGS" button in expanded VM card opens a live
+   `journalctl -f` stream via SSH from that host, showing exactly what the VM is
+   doing after a reboot/update/service restart. Uses the same SSE pattern as the
+   container log stream.
+
+2. **Live logs filter fix** — The filter buttons in the Logs tab show sources like
+   "worker-01", "worker-02" which come from Elasticsearch `host.name`. Currently the
+   unified log generator uses `container.name` then falls back to `host.name`, but
+   the LiveLogsView filter logic only shows the `container` field value. Swarm worker
+   hostnames need to be preserved as a separate `host` field so filters work correctly
+   for both Docker (container name) and ES (host name) sources.
+
+Version bump: 2.20.1 → 2.20.2
+
+---
+
+## Change 1 — api/routers/dashboard.py
+
+### 1a — Add vm-hosts log stream endpoint
+
+Add this new endpoint and generator after the `get_vm_actions` endpoint added in v2.20.1:
+
+```python
+async def _vm_journal_generator(conn: dict, service_filter: str = ""):
+    """SSH to a VM host and stream journalctl -f output as SSE events."""
+    import asyncio as _asyncio
+    import threading
+    import queue as _q
+
+    shared_q: _q.Queue = _q.Queue(maxsize=300)
+    stop = threading.Event()
+    _DONE = object()
+
+    label = conn.get("label", conn.get("host", "?"))
+
+    cmd = "journalctl -f --no-pager --output=short-iso -n 50"
+    if service_filter:
+        # Safe: service name is validated against _VM_ALLOWED_SERVICES before calling
+        cmd = f"journalctl -f --no-pager --output=short-iso -n 50 -u {service_filter}"
+
+    def _reader():
+        try:
+            from api.collectors.vm_hosts import _resolve_credentials, _ssh_run_streaming
+            from api.connections import get_all_connections_for_platform
+            all_conns = get_all_connections_for_platform("vm_host")
+            username, password, private_key = _resolve_credentials(conn, all_conns)
+            # _ssh_run_streaming: yields lines from SSH channel as they arrive
+            for line in _ssh_run_streaming(
+                conn["host"], conn.get("port") or 22,
+                username, password, private_key, cmd
+            ):
+                if stop.is_set():
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.dumps({
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "source": "ssh",
+                    "container": label,
+                    "level": _detect_level(line),
+                    "msg": line,
+                })
+                try:
+                    shared_q.put(f"data: {obj}\n\n", timeout=1)
+                except _q.Full:
+                    if stop.is_set():
+                        return
+        except Exception as exc:
+            try:
+                err_obj = json.dumps({"source": "status", "msg": f"SSH stream ended: {exc}"})
+                shared_q.put(f"data: {err_obj}\n\n", timeout=1)
+            except Exception:
+                pass
+        finally:
+            shared_q.put(_DONE)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    try:
+        while True:
+            try:
+                item = await asyncio.to_thread(shared_q.get, timeout=30)
+            except Exception:
+                break
+            if item is _DONE:
+                break
+            yield item
+    except GeneratorExit:
+        stop.set()
+        raise
+
+
+@router.get("/vm-hosts/{host_id}/logs/stream")
+async def stream_vm_logs(
+    host_id: str,
+    service: str = "",
+    token: str = "",
+):
+    """Stream journalctl from a VM host via SSH as SSE.
+
+    service: optional systemd service name to filter (must be in _VM_ALLOWED_SERVICES).
+    Auth via ?token= (EventSource cannot send custom headers).
+    Each event: data: {"ts","source","container","level","msg"}
+    """
+    from api.auth import decode_token
+    try:
+        decode_token(token)
+    except HTTPException:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+    if service and service not in _VM_ALLOWED_SERVICES:
+        return JSONResponse({"detail": f"Service {service!r} not allowed"}, status_code=400)
+
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        return JSONResponse({"detail": "VM host not found"}, status_code=404)
+
+    return StreamingResponse(
+        _vm_journal_generator(conn, service_filter=service),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+```
+
+### 1b — Add `_ssh_run_streaming` to api/collectors/vm_hosts.py
+
+This is a new helper function that wraps paramiko invoke_shell to yield lines.
+Add at the end of `api/collectors/vm_hosts.py`:
+
+```python
+def _ssh_run_streaming(host, port, username, password, private_key, command):
+    """Run a long-running command via SSH and yield output lines as they arrive.
+
+    Unlike _ssh_run() which waits for completion, this generator yields each line
+    as soon as it's received. Suitable for journalctl -f, tail -f, etc.
+    The caller should iterate and stop when done (e.g. via threading stop event).
+    """
+    import paramiko
+    import time as _t
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    connect_kwargs = {
+        "hostname": host,
+        "port": port,
+        "username": username,
+        "timeout": 15,
+        "banner_timeout": 20,
+    }
+    if private_key:
+        import io as _io
+        pkey = paramiko.RSAKey.from_private_key(_io.StringIO(private_key))
+        connect_kwargs["pkey"] = pkey
+    elif password:
+        connect_kwargs["password"] = password
+
+    try:
+        client.connect(**connect_kwargs)
+        chan = client.get_transport().open_session()
+        chan.set_combine_stderr(True)
+        chan.exec_command(command)
+
+        remainder = ""
+        while True:
+            if chan.recv_ready():
+                chunk = chan.recv(4096).decode("utf-8", errors="replace")
+                text = remainder + chunk
+                lines = text.splitlines(keepends=True)
+                remainder = lines.pop() if lines and not lines[-1].endswith("\n") else ""
+                for line in lines:
+                    yield line.rstrip("\n")
+            elif chan.exit_status_ready():
+                if remainder.strip():
+                    yield remainder.strip()
+                break
+            else:
+                _t.sleep(0.05)
+    finally:
+        client.close()
+```
+
+---
+
+## Change 2 — api/routers/dashboard.py — unified log generator ES fix
+
+In the `_unified_log_generator` function, find the ES reader `_es_reader` inner function.
+
+Find the part that builds the event dict:
+```python
+                            container_name = ""
+                            if isinstance(src.get("container"), dict):
+                                container_name = src["container"].get("name", "")
+                            elif isinstance(src.get("host"), dict):
+                                container_name = src["host"].get("name", "")
+```
+
+Replace with:
+```python
+                            container_name = ""
+                            host_name = ""
+                            if isinstance(src.get("container"), dict):
+                                container_name = src["container"].get("name", "")
+                            if isinstance(src.get("host"), dict):
+                                host_name = src["host"].get("name", "")
+                            # Use container name if available, fall back to host name
+                            display_name = container_name or host_name
+```
+
+And update the `_emit` call to include both fields:
+```python
+                            _emit({
+                                "ts": ts,
+                                "source": "es",
+                                "container": display_name,
+                                "host": host_name,
+                                "level": level_raw.lower(),
+                                "msg": src.get("message", ""),
+                            })
+```
+
+---
+
+## Change 3 — gui/src/components/VMHostsSection.jsx
+
+### 3a — Add LOGS button and log panel state
+
+In `VMCard`, add state for the log panel:
+
+```jsx
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [logLines, setLogLines]   = useState([])
+  const [logService, setLogService] = useState('')
+  const logEsRef = useRef(null)
+  const logScrollRef = useRef(null)
+```
+
+Add a `useEffect` to auto-scroll logs:
+```jsx
+  useEffect(() => {
+    if (logScrollRef.current) {
+      logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight
+    }
+  }, [logLines])
+```
+
+Add a `useEffect` cleanup for the log stream:
+```jsx
+  useEffect(() => () => { logEsRef.current?.close() }, [])
+```
+
+Add an `openLogs` function:
+```jsx
+  const openLogs = () => {
+    if (logsOpen) {
+      logEsRef.current?.close()
+      logEsRef.current = null
+      setLogLines([])
+      setLogsOpen(false)
+      return
+    }
+    setLogLines([])
+    setLogsOpen(true)
+    const token = localStorage.getItem('hp1_auth_token') || ''
+    const svcParam = logService ? `&service=${encodeURIComponent(logService)}` : ''
+    const url = `${BASE}/api/dashboard/vm-hosts/${id}/logs/stream?token=${encodeURIComponent(token)}${svcParam}`
+    const es = new EventSource(url)
+    es.onmessage = (e) => {
+      try {
+        const parsed = JSON.parse(e.data)
+        const line = parsed.msg || e.data
+        setLogLines(prev => [...prev, { msg: line, level: parsed.level || 'info' }].slice(-500))
+      } catch {
+        setLogLines(prev => [...prev, { msg: e.data, level: 'info' }].slice(-500))
+      }
+    }
+    es.onerror = () => { es.close(); setLogsOpen(false) }
+    logEsRef.current = es
+  }
+```
+
+### 3b — Add LOGS button and log panel to the expanded card section
+
+In the expanded card content, after the existing action buttons row and before the service restart buttons, add:
+
+```jsx
+          {/* Log stream panel */}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+              <button
+                onClick={openLogs}
+                style={{
+                  fontSize: 9, padding: '3px 8px', borderRadius: 2, cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                  background: logsOpen ? 'var(--cyan)' : 'var(--bg-3)',
+                  border: `1px solid ${logsOpen ? 'var(--cyan)' : 'var(--border)'}`,
+                  color: logsOpen ? 'var(--bg-0)' : 'var(--text-3)',
+                }}
+              >
+                {logsOpen ? '✕ Close Logs' : '◫ Live Logs'}
+              </button>
+              {!logsOpen && (
+                <select
+                  value={logService}
+                  onChange={e => setLogService(e.target.value)}
+                  style={{
+                    fontSize: 9, padding: '2px 4px', fontFamily: 'var(--font-mono)',
+                    background: 'var(--bg-3)', border: '1px solid var(--border)',
+                    borderRadius: 2, color: 'var(--text-2)', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">all services</option>
+                  {['docker', 'ssh', 'filebeat'].map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                  {Object.keys(vm.services || {}).filter(n => vm.services[n] === 'active').map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {logsOpen && (
+              <div
+                ref={logScrollRef}
+                style={{
+                  height: 180, overflowY: 'auto', background: 'var(--bg-0)',
+                  border: '1px solid var(--border)', borderRadius: 2, padding: '6px 8px',
+                  fontFamily: 'var(--font-mono)', fontSize: 9,
+                }}
+              >
+                {logLines.length === 0 ? (
+                  <span style={{ color: 'var(--text-3)' }}>Waiting for log lines…</span>
+                ) : logLines.map((l, i) => (
+                  <div key={i} style={{
+                    color: l.level === 'error' || l.level === 'critical' ? 'var(--red)'
+                         : l.level === 'warn' || l.level === 'warning' ? 'var(--amber)'
+                         : 'var(--text-2)',
+                    lineHeight: 1.5, wordBreak: 'break-all',
+                  }}>
+                    {l.msg}
+                  </div>
+                ))}
+                <div style={{ color: 'var(--accent)', animation: 'pulse 1s infinite' }}>▋</div>
+              </div>
+            )}
+          </div>
+```
+
+### 3c — Add action history section (last 5 actions)
+
+In the `VMCard` component, load recent action history when the card is opened.
+
+After the `entityId` history fetch useEffect, add:
+
+```jsx
+  const [actionHistory, setActionHistory] = useState([])
+  useEffect(() => {
+    if (!open || !id) return
+    fetch(`${BASE}/api/dashboard/vm-hosts/${id}/actions?limit=5`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.actions) setActionHistory(d.actions) })
+      .catch(() => {})
+  }, [open, id])
+```
+
+In the expanded section, after the log stream panel, add:
+
+```jsx
+          {/* Recent action history */}
+          {actionHistory.length > 0 && (
+            <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+              <div style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 4, letterSpacing: '0.06em' }}>RECENT ACTIONS</div>
+              {actionHistory.map(a => (
+                <div key={a.id} style={{ display: 'flex', gap: 6, fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', marginBottom: 2 }}>
+                  <span style={{ color: a.status === 'ok' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : 'var(--amber)' }}>
+                    {a.status === 'ok' ? '✓' : a.status === 'error' ? '✕' : '…'}
+                  </span>
+                  <span style={{ color: 'var(--text-2)' }}>{a.action.replace(/_/g, ' ')}</span>
+                  <span>{a.owner_user}</span>
+                  <span style={{ marginLeft: 'auto' }}>
+                    {a.started_at ? new Date(a.started_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+```
+
+---
+
+## Do NOT touch
+
+- Any collector files other than `api/collectors/vm_hosts.py` (one addition only)
+- `api/db/vm_action_log.py` (created in v2.20.1)
+- `EscalationBanner.jsx`
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.20.1` → `2.20.2`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(ui): v2.20.2 VM card SSH log stream + live logs filter fix
+
+- api/collectors/vm_hosts.py: _ssh_run_streaming() helper — yields lines from SSH channel
+- GET /api/dashboard/vm-hosts/{id}/logs/stream: SSE journalctl -f via SSH with service filter
+- VMCard: Live Logs button opens 180px scrollable SSH log panel with level coloring
+- VMCard: service filter dropdown (all, docker, ssh, filebeat, active systemd services)
+- VMCard: Recent Actions section shows last 5 actions with status/user/timestamp
+- Unified log generator: ES events now include host field separate from container field
+- ES reader: display_name = container.name or host.name; both fields preserved in event"
+git push origin main
+```

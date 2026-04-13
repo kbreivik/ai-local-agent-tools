@@ -20,6 +20,8 @@ from starlette.responses import JSONResponse, StreamingResponse
 from api.auth import get_current_user
 from api.db.base import get_engine
 from api.db import queries as q
+from api.websocket import manager as _ws_manager
+from api.db.vm_action_log import record_action, complete_action
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -1559,38 +1561,122 @@ async def vm_exec(host_id: str, req: VMExecRequest, user: str = Depends(get_curr
 
 @router.post("/vm-hosts/{host_id}/update")
 async def vm_update(host_id: str, user: str = Depends(get_current_user)):
-    """Run apt update + apt upgrade -y on a VM host (non-interactive)."""
+    """Run apt update + apt upgrade -y on a VM host. Logs action + broadcasts events."""
     conn = _get_vm_conn(host_id)
     if not conn:
         raise HTTPException(404, f"VM host not found: {host_id}")
+    label = conn.get("label", host_id)
+    aid = record_action(label, "update_packages", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "update_packages",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
     cmd = (
         "export DEBIAN_FRONTEND=noninteractive && "
         "sudo apt-get update -qq && "
-        "sudo apt-get upgrade -y -qq 2>&1 | tail -20"
+        "sudo apt-get upgrade -y -qq 2>&1 | tail -30"
     )
-    return await asyncio.to_thread(_vm_ssh_exec, conn, cmd)
+    result = await asyncio.to_thread(_vm_ssh_exec, conn, cmd)
+    status = "ok" if result.get("ok") else "error"
+    output = result.get("output") or result.get("error", "")
+    complete_action(aid, status, output)
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "update_packages",
+        "status": status,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    return {"ok": result.get("ok", False), "output": output, "action_id": aid,
+            "message": f"Package update complete on {label}"}
 
 
 @router.post("/vm-hosts/{host_id}/reboot")
 async def vm_reboot(host_id: str, user: str = Depends(get_current_user)):
-    """Schedule an immediate reboot of a VM host."""
+    """Schedule an immediate reboot of a VM host. Logs action + broadcasts WebSocket event."""
     conn = _get_vm_conn(host_id)
     if not conn:
         raise HTTPException(404, f"VM host not found: {host_id}")
-    asyncio.create_task(asyncio.to_thread(_vm_ssh_exec, conn, "sudo shutdown -r +0"))
-    return {"ok": True, "message": f"Reboot scheduled for {conn.get('label', host_id)}"}
+    label = conn.get("label", host_id)
+    aid = record_action(label, "reboot", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "reboot",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    async def _do_and_log():
+        result = await asyncio.to_thread(_vm_ssh_exec, conn, "sudo shutdown -r +0")
+        status = "ok" if result.get("ok") else "error"
+        complete_action(aid, status, result.get("output") or result.get("error", ""))
+        await _ws_manager.broadcast({
+            "type":   "vm_action",
+            "host":   label,
+            "action": "reboot",
+            "status": status,
+            "action_id": aid,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+    asyncio.create_task(_do_and_log())
+    return {"ok": True, "message": f"Reboot scheduled for {label}", "action_id": aid}
 
 
 @router.post("/vm-hosts/{host_id}/service/{service_name}/restart")
 async def vm_service_restart(host_id: str, service_name: str,
                              user: str = Depends(get_current_user)):
-    """Restart a systemd service on a VM host."""
+    """Restart a systemd service on a VM host. Logs action + broadcasts events."""
     if service_name not in _VM_ALLOWED_SERVICES:
         raise HTTPException(400, f"Service {service_name!r} not in allowlist")
     conn = _get_vm_conn(host_id)
     if not conn:
         raise HTTPException(404, f"VM host not found: {host_id}")
-    return await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")
+    label = conn.get("label", host_id)
+    aid = record_action(label, f"restart_{service_name}", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": f"restart_{service_name}",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    result = await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")
+    status = "ok" if result.get("ok") else "error"
+    output = result.get("output") or result.get("error", "")
+    complete_action(aid, status, output)
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": f"restart_{service_name}",
+        "status": status,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    return {"ok": result.get("ok", False), "output": output, "action_id": aid,
+            "message": f"{service_name} restarted on {label}"}
+
+
+@router.get("/vm-hosts/{host_id}/actions")
+async def get_vm_actions(host_id: str, limit: int = 20,
+                         _: str = Depends(get_current_user)):
+    """Recent actions taken on a VM host."""
+    conn = _get_vm_conn(host_id)
+    label = conn.get("label", host_id) if conn else host_id
+    from api.db.vm_action_log import list_recent
+    return {"actions": list_recent(connection_label=label, limit=limit)}
 
 
 @router.get("/entity-history/{entity_id}")

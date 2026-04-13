@@ -84,6 +84,8 @@ function _ensureWS(url) {
       if (msg.type === 'escalation_recorded') {
         window.dispatchEvent(new CustomEvent('ds:ws-message', { detail: msg }))
       }
+      // Dispatch ws:message for cross-component WS access (vm_action, etc.)
+      window.dispatchEvent(new CustomEvent('ws:message', { detail: e.data }))
       if (!msg.content && !msg.text && !msg.message && !msg.type) return
       _msgListeners.forEach(fn => fn(msg))
     } catch { /* ignore parse errors */ }
