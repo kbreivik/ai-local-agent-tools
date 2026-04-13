@@ -527,12 +527,11 @@ def run_claude(
     stats: Optional[SessionStats] = None,
 ) -> ClaudeResult:
     """
-    Run claude --print --output-format stream-json.
-    Parses JSON events to extract text (displayed + logged) and metadata
-    (cost, tokens, model). Falls back to raw text if JSON parsing fails.
+    Run claude --print with real-time output streaming.
+    Uses plain text mode for readable output. Attempts to parse cost/token
+    info from Claude Code's summary lines if present.
     """
-    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json",
-           "--dangerously-skip-permissions"]
+    cmd = ["claude", "--print", "--dangerously-skip-permissions"]
     start = time.monotonic()
 
     cost = 0.0
@@ -540,7 +539,7 @@ def run_claude(
     out_tok = 0
     model = ""
     last_status_time = start
-    STATUS_INTERVAL = 30  # show inline status every 30s
+    STATUS_INTERVAL = 30
 
     with open(log_file, "w", encoding="utf-8") as lf:
         lf.write(f"{'='*72}\nTASK INPUT\n{'='*72}\n{task}\n")
@@ -554,73 +553,39 @@ def run_claude(
         proc.stdin.write(task)
         proc.stdin.close()
 
-        for raw_line in proc.stdout:
+        for line in proc.stdout:
             now = time.monotonic()
 
-            # Try to parse as JSON event
-            text_to_show = None
+            # Display the line
+            sys.stdout.write(f"{C.DIM}  │{C.RESET} {line}")
+            sys.stdout.flush()
+            lf.write(line)
+            lf.flush()
+
+            # Try to extract cost/token info from Claude Code output lines
+            # Claude Code sometimes prints summary lines like:
+            #   "Cost: $0.42 | Tokens: 12345 in, 678 out"
+            #   or JSON snippets with usage data
+            stripped = line.strip()
             try:
-                event = json.loads(raw_line)
-
-                # Extract displayable text from various event shapes
-                if isinstance(event, dict):
-                    # Stream-json content events
-                    if event.get("type") == "content_block_delta":
-                        delta = event.get("delta", {})
-                        text_to_show = delta.get("text", "")
-
-                    # Result/summary events with usage info
-                    elif event.get("type") == "result":
-                        cost = event.get("cost_usd", cost) or cost
-                        usage = event.get("usage", {})
-                        in_tok = usage.get("input_tokens", in_tok) or in_tok
-                        out_tok = usage.get("output_tokens", out_tok) or out_tok
-                        model = event.get("model", model) or model
-
-                    # Message-level usage (some versions)
-                    elif event.get("type") == "message" and "usage" in event:
-                        usage = event["usage"]
-                        in_tok = usage.get("input_tokens", in_tok) or in_tok
-                        out_tok = usage.get("output_tokens", out_tok) or out_tok
-
-                    # Top-level cost/usage in final summary
-                    if "cost_usd" in event:
-                        cost = event["cost_usd"] or cost
-                    if "total_cost_usd" in event:
-                        cost = event["total_cost_usd"] or cost
-                    if "model" in event and event["model"]:
-                        model = event["model"]
-                    if "usage" in event and isinstance(event["usage"], dict):
-                        u = event["usage"]
+                # Check if line is a JSON object with usage data
+                if stripped.startswith("{") and stripped.endswith("}"):
+                    data = json.loads(stripped)
+                    if "cost_usd" in data:
+                        cost = data["cost_usd"] or cost
+                    if "total_cost_usd" in data:
+                        cost = data["total_cost_usd"] or cost
+                    if "model" in data and data["model"]:
+                        model = data["model"]
+                    if "usage" in data and isinstance(data["usage"], dict):
+                        u = data["usage"]
                         in_tok = u.get("input_tokens", in_tok) or in_tok
                         out_tok = u.get("output_tokens", out_tok) or out_tok
-
-                    # If no specific text extracted, check for generic text field
-                    if text_to_show is None and "text" in event:
-                        text_to_show = event["text"]
-
             except (json.JSONDecodeError, KeyError, TypeError):
-                # Not JSON — treat as raw text output
-                text_to_show = raw_line
+                pass
 
-            # Display text
-            if text_to_show:
-                for line in text_to_show.splitlines(True):
-                    sys.stdout.write(f"{C.DIM}  │{C.RESET} {line}")
-                if not text_to_show.endswith("\n"):
-                    sys.stdout.write("\n")
-                sys.stdout.flush()
-                lf.write(text_to_show if text_to_show.endswith("\n") else text_to_show + "\n")
-                lf.flush()
-
-            # Update cumulative stats for title bar
+            # Update stats for title bar
             if stats:
-                stats.total_cost = stats.total_cost - getattr(stats, '_prev_cost', 0) + cost
-                stats._prev_cost = cost
-                stats.total_input_tokens = stats.total_input_tokens - getattr(stats, '_prev_in', 0) + in_tok
-                stats._prev_in = in_tok
-                stats.total_output_tokens = stats.total_output_tokens - getattr(stats, '_prev_out', 0) + out_tok
-                stats._prev_out = out_tok
                 if model:
                     stats.model = model
 
@@ -630,8 +595,6 @@ def run_claude(
                 status_parts = [fmt_duration(elapsed)]
                 if cost > 0:
                     status_parts.append(fmt_cost(cost))
-                if in_tok + out_tok > 0:
-                    status_parts.append(f"{fmt_tokens(in_tok + out_tok)} tok")
                 if model:
                     status_parts.append(model)
                 status_line = " · ".join(status_parts)
@@ -649,9 +612,6 @@ def run_claude(
         lf.write(f"\n{'='*72}\n")
         lf.write(f"EXIT CODE: {proc.returncode}\n")
         lf.write(f"DURATION:  {fmt_duration(time.monotonic() - start)}\n")
-        lf.write(f"MODEL:     {model}\n")
-        lf.write(f"COST:      {fmt_cost(cost)}\n")
-        lf.write(f"TOKENS:    {fmt_tokens(in_tok)} in / {fmt_tokens(out_tok)} out\n")
         lf.write(f"{'='*72}\n")
 
     return ClaudeResult(
@@ -944,9 +904,6 @@ def main():
             stats.current_prompt = entry.filename
             stats.current_version = entry.version
             stats.current_start = time.monotonic()
-            stats._prev_cost = 0
-            stats._prev_in = 0
-            stats._prev_out = 0
 
             write_status_md(md_path, state, stats)
 
@@ -966,6 +923,11 @@ def main():
             stats.current_prompt = ""
             stats.current_version = ""
             stats.current_start = 0
+            stats.total_cost += result.cost_usd
+            stats.total_input_tokens += result.input_tokens
+            stats.total_output_tokens += result.output_tokens
+            if result.model:
+                stats.model = result.model
 
             if result.exit_code != 0:
                 err(f"Exit {result.exit_code} — log: {log_file}")

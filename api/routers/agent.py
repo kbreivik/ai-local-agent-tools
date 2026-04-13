@@ -472,6 +472,44 @@ async def _run_single_agent_step(
                     )
                     continue  # Next iteration will call plan_action
 
+                # Synthesise degraded findings if present and summary is thin
+                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                    try:
+                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_resp = client.chat.completions.create(
+                            model=_lm_model(),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a concise infrastructure ops assistant. "
+                                        "Based on the findings, provide:\n"
+                                        "1. Root cause in one sentence\n"
+                                        "2. What was checked (bullet list: tool → result)\n"
+                                        "3. Numbered fix steps (specific commands or actions)\n"
+                                        "4. Which fix steps the agent can run automatically "
+                                        "if re-run with an action task\n"
+                                        "Plain text only. No markdown headers."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Task: {task}\n\nFindings:\n{_synth_ctx}\n\n"
+                                        "Give root cause, what was checked, and remediation steps."
+                                    ),
+                                },
+                            ],
+                            tools=None,
+                            temperature=0.3,
+                            max_tokens=500,
+                        )
+                        _synth_text = _synth_resp.choices[0].message.content or ""
+                        if _synth_text.strip():
+                            last_reasoning = _synth_text.strip()
+                            await manager.send_line("reasoning", _synth_text, session_id=session_id)
+                    except Exception as _se:
+                        log.debug("Stop-path synthesis failed: %s", _se)
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
                 if is_final_step:
                     payload = {
@@ -883,6 +921,44 @@ async def _run_single_agent_step(
             _step_names = [tc.function.name for tc in msg.tool_calls]
             if (_step_names and all(n == "audit_log" for n in _step_names)
                     and _last_blocked_tool != "escalate"):
+                # Synthesise degraded findings before broadcasting done
+                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                    try:
+                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_resp = client.chat.completions.create(
+                            model=_lm_model(),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a concise infrastructure ops assistant. "
+                                        "Based on the findings, provide:\n"
+                                        "1. Root cause in one sentence\n"
+                                        "2. What was checked (bullet list: tool → result)\n"
+                                        "3. Numbered fix steps (specific commands or actions)\n"
+                                        "4. Which fix steps the agent can run automatically "
+                                        "if re-run with an action task\n"
+                                        "Plain text only. No markdown headers."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Task: {task}\n\nFindings:\n{_synth_ctx}\n\n"
+                                        "Give root cause, what was checked, and remediation steps."
+                                    ),
+                                },
+                            ],
+                            tools=None,
+                            temperature=0.3,
+                            max_tokens=500,
+                        )
+                        _synth_text = _synth_resp.choices[0].message.content or ""
+                        if _synth_text.strip():
+                            last_reasoning = _synth_text.strip()
+                            await manager.send_line("reasoning", _synth_text, session_id=session_id)
+                    except Exception as _se:
+                        log.debug("Audit-log completion synthesis failed: %s", _se)
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
                 if is_final_step:
                     await manager.broadcast({
