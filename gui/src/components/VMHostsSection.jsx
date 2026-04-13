@@ -2,7 +2,7 @@
  * VMHostsSection — self-contained VM hosts dashboard section.
  * Fetches its own data, renders one card per vm_host connection.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { authHeaders, dashboardAction } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -76,6 +76,12 @@ function VMCard({ vm, onAction }) {
   const [historyData, setHistoryData] = useState(null)
   const [actionState, setActionState] = useState(null)  // null | {action, status, startedAt}
   const [rebootCountdown, setRebootCountdown] = useState(null)
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [logLines, setLogLines]   = useState([])
+  const [logService, setLogService] = useState('')
+  const logEsRef = useRef(null)
+  const logScrollRef = useRef(null)
+  const [actionHistory, setActionHistory] = useState([])
 
   const entityId = vm.label || vm.hostname || ''
   useEffect(() => {
@@ -85,6 +91,49 @@ function VMCard({ vm, onAction }) {
       .then(d => { if (d) setHistoryData(d) })
       .catch(() => {})
   }, [entityId])
+
+  useEffect(() => {
+    if (!open || !id) return
+    fetch(`${BASE}/api/dashboard/vm-hosts/${id}/actions?limit=5`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.actions) setActionHistory(d.actions) })
+      .catch(() => {})
+  }, [open, id])
+
+  useEffect(() => {
+    if (logScrollRef.current) {
+      logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight
+    }
+  }, [logLines])
+
+  useEffect(() => () => { logEsRef.current?.close() }, [])
+
+  const openLogs = () => {
+    if (logsOpen) {
+      logEsRef.current?.close()
+      logEsRef.current = null
+      setLogLines([])
+      setLogsOpen(false)
+      return
+    }
+    setLogLines([])
+    setLogsOpen(true)
+    const token = localStorage.getItem('hp1_auth_token') || ''
+    const svcParam = logService ? `&service=${encodeURIComponent(logService)}` : ''
+    const url = `${BASE}/api/dashboard/vm-hosts/${id}/logs/stream?token=${encodeURIComponent(token)}${svcParam}`
+    const es = new EventSource(url)
+    es.onmessage = (e) => {
+      try {
+        const parsed = JSON.parse(e.data)
+        const line = parsed.msg || e.data
+        setLogLines(prev => [...prev, { msg: line, level: parsed.level || 'info' }].slice(-500))
+      } catch {
+        setLogLines(prev => [...prev, { msg: e.data, level: 'info' }].slice(-500))
+      }
+    }
+    es.onerror = () => { es.close(); setLogsOpen(false) }
+    logEsRef.current = es
+  }
 
   // Listen for WebSocket vm_action events for this host
   useEffect(() => {
@@ -262,6 +311,84 @@ function VMCard({ vm, onAction }) {
               {loading[`svc_${name}`] ? '…' : `↺ ${name}`}
             </button>
           ))}
+          {/* Log stream panel */}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+              <button
+                onClick={openLogs}
+                style={{
+                  fontSize: 9, padding: '3px 8px', borderRadius: 2, cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                  background: logsOpen ? 'var(--cyan)' : 'var(--bg-3)',
+                  border: `1px solid ${logsOpen ? 'var(--cyan)' : 'var(--border)'}`,
+                  color: logsOpen ? 'var(--bg-0)' : 'var(--text-3)',
+                }}
+              >
+                {logsOpen ? '✕ Close Logs' : '◫ Live Logs'}
+              </button>
+              {!logsOpen && (
+                <select
+                  value={logService}
+                  onChange={e => setLogService(e.target.value)}
+                  style={{
+                    fontSize: 9, padding: '2px 4px', fontFamily: 'var(--font-mono)',
+                    background: 'var(--bg-3)', border: '1px solid var(--border)',
+                    borderRadius: 2, color: 'var(--text-2)', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">all services</option>
+                  {['docker', 'ssh', 'filebeat'].map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                  {Object.keys(vm.services || {}).filter(n => vm.services[n] === 'active').map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {logsOpen && (
+              <div
+                ref={logScrollRef}
+                style={{
+                  height: 180, overflowY: 'auto', background: 'var(--bg-0)',
+                  border: '1px solid var(--border)', borderRadius: 2, padding: '6px 8px',
+                  fontFamily: 'var(--font-mono)', fontSize: 9,
+                }}
+              >
+                {logLines.length === 0 ? (
+                  <span style={{ color: 'var(--text-3)' }}>Waiting for log lines…</span>
+                ) : logLines.map((l, i) => (
+                  <div key={i} style={{
+                    color: l.level === 'error' || l.level === 'critical' ? 'var(--red)'
+                         : l.level === 'warn' || l.level === 'warning' ? 'var(--amber)'
+                         : 'var(--text-2)',
+                    lineHeight: 1.5, wordBreak: 'break-all',
+                  }}>
+                    {l.msg}
+                  </div>
+                ))}
+                <div style={{ color: 'var(--accent)', animation: 'pulse 1s infinite' }}>▋</div>
+              </div>
+            )}
+          </div>
+          {/* Recent action history */}
+          {actionHistory.length > 0 && (
+            <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+              <div style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 4, letterSpacing: '0.06em' }}>RECENT ACTIONS</div>
+              {actionHistory.map(a => (
+                <div key={a.id} style={{ display: 'flex', gap: 6, fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', marginBottom: 2 }}>
+                  <span style={{ color: a.status === 'ok' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : 'var(--amber)' }}>
+                    {a.status === 'ok' ? '✓' : a.status === 'error' ? '✕' : '…'}
+                  </span>
+                  <span style={{ color: 'var(--text-2)' }}>{a.action.replace(/_/g, ' ')}</span>
+                  <span>{a.owner_user}</span>
+                  <span style={{ marginLeft: 'auto' }}>
+                    {a.started_at ? new Date(a.started_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -721,17 +721,21 @@ async def _unified_log_generator(tail: int):
                             if ts > last_ts:
                                 last_ts = ts
                             container_name = ""
+                            host_name = ""
                             if isinstance(src.get("container"), dict):
                                 container_name = src["container"].get("name", "")
-                            elif isinstance(src.get("host"), dict):
-                                container_name = src["host"].get("name", "")
+                            if isinstance(src.get("host"), dict):
+                                host_name = src["host"].get("name", "")
+                            # Use container name if available, fall back to host name
+                            display_name = container_name or host_name
                             level_raw = "info"
                             if isinstance(src.get("log"), dict):
                                 level_raw = src["log"].get("level") or "info"
                             _emit({
                                 "ts": ts,
                                 "source": "es",
-                                "container": container_name,
+                                "container": display_name,
+                                "host": host_name,
                                 "level": level_raw.lower(),
                                 "msg": src.get("message", ""),
                             })
@@ -1677,6 +1681,108 @@ async def get_vm_actions(host_id: str, limit: int = 20,
     label = conn.get("label", host_id) if conn else host_id
     from api.db.vm_action_log import list_recent
     return {"actions": list_recent(connection_label=label, limit=limit)}
+
+
+async def _vm_journal_generator(conn: dict, service_filter: str = ""):
+    """SSH to a VM host and stream journalctl -f output as SSE events."""
+    import asyncio as _asyncio
+    import threading
+    import queue as _q
+
+    shared_q: _q.Queue = _q.Queue(maxsize=300)
+    stop = threading.Event()
+    _DONE = object()
+
+    label = conn.get("label", conn.get("host", "?"))
+
+    cmd = "journalctl -f --no-pager --output=short-iso -n 50"
+    if service_filter:
+        # Safe: service name is validated against _VM_ALLOWED_SERVICES before calling
+        cmd = f"journalctl -f --no-pager --output=short-iso -n 50 -u {service_filter}"
+
+    def _reader():
+        try:
+            from api.collectors.vm_hosts import _resolve_credentials, _ssh_run_streaming
+            from api.connections import get_all_connections_for_platform
+            all_conns = get_all_connections_for_platform("vm_host")
+            username, password, private_key = _resolve_credentials(conn, all_conns)
+            # _ssh_run_streaming: yields lines from SSH channel as they arrive
+            for line in _ssh_run_streaming(
+                conn["host"], conn.get("port") or 22,
+                username, password, private_key, cmd
+            ):
+                if stop.is_set():
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.dumps({
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "source": "ssh",
+                    "container": label,
+                    "level": _detect_level(line),
+                    "msg": line,
+                })
+                try:
+                    shared_q.put(f"data: {obj}\n\n", timeout=1)
+                except _q.Full:
+                    if stop.is_set():
+                        return
+        except Exception as exc:
+            try:
+                err_obj = json.dumps({"source": "status", "msg": f"SSH stream ended: {exc}"})
+                shared_q.put(f"data: {err_obj}\n\n", timeout=1)
+            except Exception:
+                pass
+        finally:
+            shared_q.put(_DONE)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
+    try:
+        while True:
+            try:
+                item = await asyncio.to_thread(shared_q.get, timeout=30)
+            except Exception:
+                break
+            if item is _DONE:
+                break
+            yield item
+    except GeneratorExit:
+        stop.set()
+        raise
+
+
+@router.get("/vm-hosts/{host_id}/logs/stream")
+async def stream_vm_logs(
+    host_id: str,
+    service: str = "",
+    token: str = "",
+):
+    """Stream journalctl from a VM host via SSH as SSE.
+
+    service: optional systemd service name to filter (must be in _VM_ALLOWED_SERVICES).
+    Auth via ?token= (EventSource cannot send custom headers).
+    Each event: data: {"ts","source","container","level","msg"}
+    """
+    from api.auth import decode_token
+    try:
+        decode_token(token)
+    except HTTPException:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+    if service and service not in _VM_ALLOWED_SERVICES:
+        return JSONResponse({"detail": f"Service {service!r} not allowed"}, status_code=400)
+
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        return JSONResponse({"detail": "VM host not found"}, status_code=404)
+
+    return StreamingResponse(
+        _vm_journal_generator(conn, service_filter=service),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/entity-history/{entity_id}")

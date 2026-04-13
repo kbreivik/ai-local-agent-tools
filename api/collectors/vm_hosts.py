@@ -432,6 +432,58 @@ def _poll_one_vm(conn, all_conns):
         }
 
 
+def _ssh_run_streaming(host, port, username, password, private_key, command):
+    """Run a long-running command via SSH and yield output lines as they arrive.
+
+    Unlike _ssh_run() which waits for completion, this generator yields each line
+    as soon as it's received. Suitable for journalctl -f, tail -f, etc.
+    The caller should iterate and stop when done (e.g. via threading stop event).
+    """
+    import paramiko
+    import time as _t
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    connect_kwargs = {
+        "hostname": host,
+        "port": port,
+        "username": username,
+        "timeout": 15,
+        "banner_timeout": 20,
+    }
+    if private_key:
+        import io as _io
+        pkey = paramiko.RSAKey.from_private_key(_io.StringIO(private_key))
+        connect_kwargs["pkey"] = pkey
+    elif password:
+        connect_kwargs["password"] = password
+
+    try:
+        client.connect(**connect_kwargs)
+        chan = client.get_transport().open_session()
+        chan.set_combine_stderr(True)
+        chan.exec_command(command)
+
+        remainder = ""
+        while True:
+            if chan.recv_ready():
+                chunk = chan.recv(4096).decode("utf-8", errors="replace")
+                text = remainder + chunk
+                lines = text.splitlines(keepends=True)
+                remainder = lines.pop() if lines and not lines[-1].endswith("\n") else ""
+                for line in lines:
+                    yield line.rstrip("\n")
+            elif chan.exit_status_ready():
+                if remainder.strip():
+                    yield remainder.strip()
+                break
+            else:
+                _t.sleep(0.05)
+    finally:
+        client.close()
+
+
 class VMHostsCollector(BaseCollector):
     component = "vm_hosts"
 
