@@ -1,0 +1,183 @@
+/**
+ * DashboardDataContext — single source of truth for all dashboard data.
+ *
+ * Replaces independent polling in SubBar, DashboardView, PlatformCoreCards,
+ * ConnectionSectionCards, and VMHostsSection. Components subscribe to this
+ * context instead of fetching their own data.
+ *
+ * Tiered refresh intervals:
+ *   summary (containers+swarm+vms+external+vm_hosts): 60s
+ *   external only (health dots, latency): 30s — most volatile, own fast fetch
+ *   connections list: one-time + WS-invalidated (changes only on user edit)
+ *   stats: 60s
+ *   health: 90s
+ *
+ * On mount: fetch everything immediately, then stagger subsequent polls
+ * so they don't all fire at once. External fires at t+0, summary at t+200ms,
+ * stats at t+400ms, health at t+600ms.
+ */
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
+import { authHeaders, fetchDashboardExternal, fetchStats, fetchHealth } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+const DashboardDataContext = createContext(null)
+
+export function DashboardDataProvider({ children }) {
+  // Summary data (containers + swarm + VMs + vm_hosts + collectors)
+  const [summary, setSummary]     = useState(null)
+  const [summaryTs, setSummaryTs] = useState(null)
+
+  // External (health dots — refreshes faster)
+  const [external, setExternal]   = useState(null)
+
+  // Connections (almost never changes — fetch once)
+  const [connections, setConnections]   = useState(null)
+  const [connVersion, setConnVersion]   = useState(0)  // bump to force refetch
+
+  // Agent stats + platform health
+  const [stats, setStats]   = useState(null)
+  const [health, setHealth] = useState(null)
+
+  // Loading flags — true until first fetch completes
+  const [summaryLoading, setSummaryLoading]       = useState(true)
+  const [externalLoading, setExternalLoading]     = useState(true)
+  const [connectionsLoading, setConnectionsLoading] = useState(true)
+
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
+  // ── Summary fetch (60s) ─────────────────────────────────────────────────────
+  const fetchSummary = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/api/dashboard/summary`, { headers: authHeaders() })
+      if (!r.ok || !mountedRef.current) return
+      const d = await r.json()
+      setSummary(d)
+      setSummaryTs(Date.now())
+      setSummaryLoading(false)
+    } catch (_) {}
+  }, [])
+
+  // ── External fetch (30s) ────────────────────────────────────────────────────
+  const fetchExternal = useCallback(async () => {
+    try {
+      const d = await fetchDashboardExternal()
+      if (!mountedRef.current) return
+      setExternal(d)
+      setExternalLoading(false)
+    } catch (_) {}
+  }, [])
+
+  // ── Connections fetch (once + on connVersion bump) ──────────────────────────
+  const fetchConnections = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/api/connections`, { headers: authHeaders() })
+      if (!r.ok || !mountedRef.current) return
+      const d = await r.json()
+      setConnections(d.data || [])
+      setConnectionsLoading(false)
+    } catch (_) {}
+  }, [])
+
+  // ── Stats fetch (60s) ───────────────────────────────────────────────────────
+  const refreshStats = useCallback(async () => {
+    try {
+      const d = await fetchStats()
+      if (!mountedRef.current) return
+      setStats(d)
+    } catch (_) {}
+  }, [])
+
+  // ── Health fetch (90s) ──────────────────────────────────────────────────────
+  const refreshHealth = useCallback(async () => {
+    try {
+      const d = await fetchHealth()
+      if (!mountedRef.current) return
+      setHealth(d)
+    } catch (_) {}
+  }, [])
+
+  // ── Mount: staggered initial loads ─────────────────────────────────────────
+  useEffect(() => {
+    fetchExternal()                                      // t+0ms
+    setTimeout(fetchSummary, 200)                        // t+200ms
+    setTimeout(refreshStats, 400)                        // t+400ms
+    setTimeout(refreshHealth, 600)                       // t+600ms
+    setTimeout(fetchConnections, 800)                    // t+800ms
+
+    // Polling intervals
+    const externalId    = setInterval(fetchExternal, 30_000)   // 30s
+    const summaryId     = setInterval(fetchSummary, 60_000)    // 60s
+    const statsId       = setInterval(refreshStats, 60_000)    // 60s
+    const healthId      = setInterval(refreshHealth, 90_000)   // 90s
+    // Connections: no interval — only refetch when connVersion changes
+
+    // WebSocket: re-fetch stats after agent run completes
+    const agentDoneHandler = () => refreshStats()
+    window.addEventListener('agent-done', agentDoneHandler)
+
+    return () => {
+      clearInterval(externalId)
+      clearInterval(summaryId)
+      clearInterval(statsId)
+      clearInterval(healthId)
+      window.removeEventListener('agent-done', agentDoneHandler)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Connections: refetch when connVersion bumps ──────────────────────────────
+  useEffect(() => {
+    if (connVersion > 0) fetchConnections()
+  }, [connVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const invalidateConnections = useCallback(() => {
+    setConnVersion(v => v + 1)
+  }, [])
+
+  // ── Derived helpers ─────────────────────────────────────────────────────────
+  // Provide the same shape as individual fetchDashboard* results for compatibility
+  const containersData = summary?.containers ?? null
+  const swarmData      = summary?.swarm      ?? null
+  const vmsData        = summary?.vms        ?? null
+  const vmHostsData    = summary?.vm_hosts   ?? null
+  const collectorsData = summary?.collectors ?? {}
+  const externalData   = external            ?? summary?.external ?? null
+
+  return (
+    <DashboardDataContext.Provider value={{
+      // Raw summary
+      summary,
+      summaryTs,
+      summaryLoading,
+
+      // Derived data (same shape as old individual endpoints)
+      containersData,
+      swarmData,
+      vmsData,
+      vmHostsData,
+      externalData,
+      collectorsData,
+
+      // Individual
+      connections,
+      connectionsLoading,
+      stats,
+      health,
+      externalLoading,
+
+      // Actions
+      invalidateConnections,
+      refreshSummary: fetchSummary,
+      refreshExternal: fetchExternal,
+    }}>
+      {children}
+    </DashboardDataContext.Provider>
+  )
+}
+
+export function useDashboardData() {
+  const ctx = useContext(DashboardDataContext)
+  if (!ctx) throw new Error('useDashboardData must be used inside DashboardDataProvider')
+  return ctx
+}

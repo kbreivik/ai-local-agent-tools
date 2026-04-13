@@ -18,7 +18,8 @@ import { CommandPanelProvider, useCommandPanel } from './context/CommandPanelCon
 import { AgentProvider } from './context/AgentContext'
 import { AgentOutputProvider, useAgentOutput } from './context/AgentOutputContext'
 import { TaskProvider } from './context/TaskContext'
-import { fetchHealth, fetchStats, fetchStatus, fetchMemoryHealth, fetchDashboardContainers, fetchDashboardSwarm, fetchDashboardVMs, fetchDashboardExternal, authHeaders } from './api'
+import { fetchHealth, fetchStats, fetchStatus, fetchMemoryHealth, authHeaders } from './api'
+import { DashboardDataProvider, useDashboardData } from './context/DashboardDataContext'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
@@ -231,56 +232,36 @@ const SEV = { red: 0, amber: 1, grey: 2, green: 3 }
 function SubBar({ onTab, onAlertNavigate }) {
   const { panelOpen, togglePanel } = useCommandPanel()
   const { wsState, agentType, lastAgentType } = useAgentOutput()
-  const [stats,  setStats]  = useState(null)
-  const [health, setHealth] = useState(null)
+  const {
+    stats,
+    health,
+    containersData,
+    swarmData,
+    vmsData,
+    externalData,
+  } = useDashboardData()
+
+  const rawContainers = containersData
+  const rawSwarm      = swarmData
+  const rawVms        = vmsData
+  const rawExternal   = externalData
+
   const [alerts, setAlerts] = useState([])
-  const [rawContainers, setRawContainers] = useState(null)
-  const [rawSwarm,      setRawSwarm]      = useState(null)
-  const [rawVms,        setRawVms]        = useState(null)
-  const [rawExternal,   setRawExternal]   = useState(null)
   const [alertTrayOpen, setAlertTrayOpen] = useState(false)
   const trayRef = useRef(null)
 
+  // Rebuild alert list whenever dashboard data updates
   useEffect(() => {
-    const refreshStats = () => fetchStats().then(setStats).catch(() => setStats(null))
-
-    const refreshAlerts = () => {
-      Promise.allSettled([
-        fetchDashboardContainers(),
-        fetchDashboardSwarm(),
-        fetchDashboardVMs(),
-        fetchDashboardExternal(),
-      ]).then(([c, s, v, e]) => {
-        if (c.status === 'fulfilled') setRawContainers(c.value)
-        if (s.status === 'fulfilled') setRawSwarm(s.value)
-        if (v.status === 'fulfilled') setRawVms(v.value)
-        if (e.status === 'fulfilled') setRawExternal(e.value)
-
-        const issues = []
-        let idx = 0
-        if (c.status === 'fulfilled') for (const x of c.value?.containers || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
-        if (s.status === 'fulfilled') for (const x of s.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
-        if (v.status === 'fulfilled') for (const x of [...(v.value?.vms || []), ...(v.value?.lxc || [])]) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
-        if (e.status === 'fulfilled') for (const x of e.value?.services   || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
-        issues.sort((a, b) => (SEV[a.sev] ?? 2) - (SEV[b.sev] ?? 2) || a.idx - b.idx)
-        setAlerts(issues)
-        if (issues.length === 0) setAlertTrayOpen(false)
-      }).catch(() => {})
-    }
-
-    const loadAll = () => {
-      refreshStats()
-      fetchHealth().then(setHealth).catch(() => setHealth(null))
-      refreshAlerts()
-    }
-    loadAll()
-    const id = setInterval(loadAll, 30_000)
-    window.addEventListener('agent-done', refreshStats)
-    return () => {
-      clearInterval(id)
-      window.removeEventListener('agent-done', refreshStats)
-    }
-  }, [])
+    const issues = []
+    let idx = 0
+    for (const x of rawContainers?.containers || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+    for (const x of rawSwarm?.services         || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+    for (const x of [...(rawVms?.vms || []), ...(rawVms?.lxc || [])]) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+    for (const x of rawExternal?.services      || []) if (x.problem) issues.push({ sev: x.dot, text: `${x.name} ${x.problem}`, idx: idx++ })
+    issues.sort((a, b) => (SEV[a.sev] ?? 2) - (SEV[b.sev] ?? 2) || a.idx - b.idx)
+    setAlerts(issues)
+    if (issues.length === 0) setAlertTrayOpen(false)
+  }, [rawContainers, rawSwarm, rawVms, rawExternal])
 
   useEffect(() => {
     const handler = (e) => {
@@ -720,24 +701,23 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
 
 
 function PlatformCoreCards() {
-  const [health, setHealth] = useState(null)
-  const [statusData, setStatusData] = useState(null)
   const [memHealth, setMemHealth] = useState(null)
-  const [containers, setContainers] = useState([])
+  const { health, collectorsData, containersData } = useDashboardData()
+  const containers = containersData?.containers || []
+
+  // Keep fetching status (kafka/es health) + memHealth separately — not in summary
+  const [fullStatus, setFullStatus] = useState(null)
   useEffect(() => {
     const load = () => {
-      fetchHealth().then(setHealth).catch(() => {})
-      fetchStatus().then(setStatusData).catch(() => {})
+      fetchStatus().then(setFullStatus).catch(() => {})
       fetchMemoryHealth().then(setMemHealth).catch(() => {})
-      fetchDashboardContainers().then(d => setContainers(d?.containers || [])).catch(() => {})
     }
     load()
-    const id = setInterval(load, 30000)
+    const id = setInterval(load, 90_000)  // 90s — these change slowly
     return () => clearInterval(id)
   }, [])
 
-  const collectors = statusData?.collectors ?? {}
-  const sortedCollectors = Object.entries(collectors).sort(([a], [b]) => a.localeCompare(b))
+  const sortedCollectors = Object.entries(collectorsData || {}).sort(([a], [b]) => a.localeCompare(b))
   const apiOk = health?.status === 'ok'
 
   const _healthDot = (h) => {
@@ -765,10 +745,10 @@ function PlatformCoreCards() {
   )
 
   // Extract data for right-side values
-  const kafkaHealth = statusData?.kafka?.health || 'unknown'
-  const kafkaBrokers = statusData?.kafka?.data?.brokers?.length ?? statusData?.kafka?.data?.count ?? ''
-  const esHealth = statusData?.elasticsearch?.health || 'unknown'
-  const esNodes = statusData?.elasticsearch?.data?.node_count ?? statusData?.elasticsearch?.data?.nodes ?? ''
+  const kafkaHealth = fullStatus?.kafka?.health || 'unknown'
+  const kafkaBrokers = fullStatus?.kafka?.data?.brokers?.length ?? fullStatus?.kafka?.data?.count ?? ''
+  const esHealth = fullStatus?.elasticsearch?.health || 'unknown'
+  const esNodes = fullStatus?.elasticsearch?.data?.node_count ?? fullStatus?.elasticsearch?.data?.nodes ?? ''
   // MuninnDB: use dedicated memory health endpoint
   const muninnOk = memHealth?.status === 'ok' || memHealth?.healthy === true
   const muninnHealth = muninnOk ? 'healthy' : memHealth ? 'error' : 'unknown'
@@ -860,21 +840,15 @@ function connDotName(ext, c) {
 
 function ConnectionSectionCards({ platforms, externalData, onEntityClick, compareMode, compareSet, onCompareAdd, sectionName, showFilter }) {
   const [conns, setConns] = useState([])
+  const { connections } = useDashboardData()
   useEffect(() => {
-    const load = () => {
-      fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/connections`, { headers: { ...authHeaders() } })
-        .then(r => r.ok ? r.json() : { data: [] })
-        .then(d => setConns(
-          (d.data || [])
-            .filter(c => platforms.includes(c.platform) && c.host)
-            .sort((a, b) => (a.label || a.host || '').localeCompare(b.label || b.host || ''))
-        ))
-        .catch(() => {})
-    }
-    load()
-    const id = setInterval(load, 30000)
-    return () => clearInterval(id)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!connections) return
+    setConns(
+      connections
+        .filter(c => platforms.includes(c.platform) && c.host)
+        .sort((a, b) => (a.label || a.host || '').localeCompare(b.label || b.host || ''))
+    )
+  }, [connections, platforms])
 
   const [expanded, setExpanded] = useState({})
   const [hoveredId, setHoveredId] = useState(null)
@@ -984,12 +958,11 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
 }
 
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare, layoutState }) {
-  const [stats, setStats] = useState(null)
+  const { stats: ctxStats, externalData: ctxExternal } = useDashboardData()
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [globalMaint, setGlobalMaint] = useState(false)
-  const [externalData, setExternalData] = useState([])
   const [allCardsExpanded, setAllCardsExpanded] = useState(false)
   const [allSectionsExpanded, setAllSectionsExpanded] = useState(true)
   const { layout, dirty, saveLayout, updateRows, toggleCollapse } = layoutState
@@ -1011,19 +984,8 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     window.dispatchEvent(new CustomEvent('ds:collapse-all-sections'))
   }
 
-  useEffect(() => {
-    fetchStats().then(setStats).catch(() => {})
-    const id = setInterval(() => fetchStats().then(setStats).catch(() => {}), 30000)
-    return () => clearInterval(id)
-  }, [])
-  useEffect(() => {
-    const load = () => fetchDashboardExternal()
-      .then(d => setExternalData(d?.services || []))
-      .catch(() => {})
-    load()
-    const id = setInterval(load, 30000)
-    return () => clearInterval(id)
-  }, [])
+  const stats = ctxStats
+  const externalData = ctxExternal?.services || []
 
   // Auto-save layout on unmount if dirty (refs avoid re-running effect on every state change)
   const dirtyRef = useRef(false)
@@ -1421,9 +1383,11 @@ function AppWithPanelProvider() {
   const { commandsPanelDefault } = useOptions()
   return (
     <CommandPanelProvider defaultOpen={commandsPanelDefault === 'visible'}>
-      <AgentProvider>
-        <AppShell />
-      </AgentProvider>
+      <DashboardDataProvider>
+        <AgentProvider>
+          <AppShell />
+        </AgentProvider>
+      </DashboardDataProvider>
     </CommandPanelProvider>
   )
 }

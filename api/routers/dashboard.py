@@ -82,6 +82,93 @@ def _swarm_problem(svc: dict) -> str | None:
     return None
 
 
+# ── GET /summary ─────────────────────────────────────────────────────────────
+
+@router.get("/summary")
+async def get_dashboard_summary(user: str = Depends(get_current_user)):
+    """Single call returning all dashboard data needed for the main dashboard view.
+
+    Assembles from DB snapshots (all fast PG reads — no SSH/API calls).
+    Replaces 5–6 individual dashboard endpoint calls on the frontend.
+    Response shape is stable — additive changes only.
+    """
+    from api.collectors import manager as coll_mgr
+
+    async with get_engine().connect() as conn:
+        # All fetched in parallel via gather
+        import asyncio as _asyncio
+        (
+            containers_snap,
+            swarm_snap,
+            vms_snap,
+            external_snap,
+            vm_hosts_snap,
+        ) = await _asyncio.gather(
+            q.get_latest_snapshot(conn, "docker_agent01"),
+            q.get_latest_snapshot(conn, "swarm"),
+            q.get_latest_snapshot(conn, "proxmox_vms"),
+            q.get_latest_snapshot(conn, "external_services"),
+            q.get_latest_snapshot(conn, "vm_hosts"),
+        )
+
+    containers_state = _parse_state(containers_snap)
+    swarm_state      = _parse_state(swarm_snap)
+    vms_state        = _parse_state(vms_snap)
+    external_state   = _parse_state(external_snap)
+    vm_hosts_state   = _parse_state(vm_hosts_snap)
+
+    # Enrich swarm services with dot/problem
+    services = []
+    for svc in swarm_state.get("services", []):
+        enriched = dict(svc)
+        enriched["dot"]     = _swarm_dot(svc)
+        enriched["problem"] = _swarm_problem(svc)
+        enriched["replicas_running"] = enriched.get("running_replicas")
+        enriched["replicas_desired"] = enriched.get("desired_replicas")
+        services.append(enriched)
+
+    collectors = coll_mgr.status()
+
+    return {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "containers": {
+            "containers":        containers_state.get("containers", []),
+            "agent01_ip":        containers_state.get("agent01_ip", ""),
+            "health":            containers_state.get("health", "unknown"),
+            "connection_label":  containers_state.get("connection_label", "agent-01"),
+            "last_updated":      containers_snap.get("timestamp") if containers_snap else None,
+        },
+        "swarm": {
+            "services":       services,
+            "nodes":          swarm_state.get("nodes", []),
+            "swarm_managers": sum(1 for n in swarm_state.get("nodes", []) if n.get("role") == "manager"),
+            "swarm_workers":  sum(1 for n in swarm_state.get("nodes", []) if n.get("role") == "worker"),
+            "health":         swarm_state.get("health", "unknown"),
+            "last_updated":   swarm_snap.get("timestamp") if swarm_snap else None,
+        },
+        "vms": {
+            "clusters":          vms_state.get("clusters", []),
+            "vms":               vms_state.get("vms", []),
+            "lxc":               vms_state.get("lxc", []),
+            "health":            vms_state.get("health", "unknown"),
+            "connection_label":  vms_state.get("connection_label", ""),
+            "connection_host":   vms_state.get("connection_host", ""),
+            "last_updated":      vms_snap.get("timestamp") if vms_snap else None,
+        },
+        "external": {
+            "services":    external_state.get("services", []),
+            "health":      external_state.get("health", "unknown"),
+            "last_updated": external_snap.get("timestamp") if external_snap else None,
+        },
+        "vm_hosts": {
+            "vms":        vm_hosts_state.get("vms", []),
+            "health":     vm_hosts_state.get("health", "unknown"),
+            "last_updated": vm_hosts_snap.get("timestamp") if vm_hosts_snap else None,
+        },
+        "collectors": collectors,
+    }
+
+
 # ── GET /containers/agent01 ───────────────────────────────────────────────────
 
 @router.get("/containers/agent01")

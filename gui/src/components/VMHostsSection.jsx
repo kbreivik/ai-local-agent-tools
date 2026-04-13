@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { authHeaders, dashboardAction } from '../api'
+import { useDashboardData } from '../context/DashboardDataContext'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -396,17 +397,9 @@ function VMCard({ vm, onAction }) {
 }
 
 export default function VMHostsSection({ showFilter }) {
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(() => {
-    fetch(`${BASE}/api/dashboard/vm-hosts`, { headers: { ...authHeaders() } })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setData(d); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
-
-  useEffect(() => { load(); const id = setInterval(load, 60000); return () => clearInterval(id) }, [load])
+  const { vmHostsData, summaryLoading, refreshSummary } = useDashboardData()
+  const data = vmHostsData
+  const loading = summaryLoading && !vmHostsData
 
   if (loading) return <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>Loading VM hosts…</div>
 
@@ -430,7 +423,7 @@ export default function VMHostsSection({ showFilter }) {
         {issues > 0 && <span><span style={{ color: 'var(--red)' }}>{issues}</span> issues</span>}
         <span>{vms.length} total</span>
       </div>
-      {visible.map(vm => <VMCard key={vm.label || vm.host} vm={vm} onAction={load} />)}
+      {visible.map(vm => <VMCard key={vm.label || vm.host} vm={vm} onAction={refreshSummary} />)}
     </div>
   )
 }
