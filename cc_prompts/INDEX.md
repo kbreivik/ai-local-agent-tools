@@ -58,7 +58,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
 | CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
 | CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | DONE (cb1cfa9) |
-| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | PENDING |
+| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | RUNNING |
 
 ---
 

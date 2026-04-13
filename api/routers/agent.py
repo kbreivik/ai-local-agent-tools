@@ -483,13 +483,17 @@ async def _run_single_agent_step(
                                     "role": "system",
                                     "content": (
                                         "You are a concise infrastructure ops assistant. "
-                                        "Based on the findings, provide:\n"
-                                        "1. Root cause in one sentence\n"
-                                        "2. What was checked (bullet list: tool → result)\n"
-                                        "3. Numbered fix steps (specific commands or actions)\n"
-                                        "4. Which fix steps the agent can run automatically "
-                                        "if re-run with an action task\n"
-                                        "Plain text only. No markdown headers."
+                                        "Produce a 4-section investigation report in plain text:\n\n"
+                                        "EVIDENCE:\n"
+                                        "- (one bullet per finding: tool → result)\n\n"
+                                        "ROOT CAUSE: (one specific sentence)\n\n"
+                                        "FIX STEPS:\n"
+                                        "1. (specific action with exact command if known)\n"
+                                        "2. ...\n\n"
+                                        "AUTOMATABLE (if re-run as action task):\n"
+                                        "- (step N — tool that would execute it)\n\n"
+                                        "No markdown headers. No padding. Be specific: use exact "
+                                        "exit codes, IPs, container names, and timestamps from the findings."
                                     ),
                                 },
                                 {
@@ -869,12 +873,17 @@ async def _run_single_agent_step(
                                     "role": "system",
                                     "content": (
                                         "You are a concise infrastructure ops assistant. "
-                                        "Based on the findings, provide:\n"
-                                        "1. Root cause in one sentence\n"
-                                        "2. Numbered fix steps (specific commands or UI actions)\n"
-                                        "3. Which steps the agent can run automatically "
-                                        "if re-run with an action task\n"
-                                        "Plain text only. No markdown headers."
+                                        "Produce a 4-section investigation report in plain text:\n\n"
+                                        "EVIDENCE:\n"
+                                        "- (one bullet per finding: tool → result)\n\n"
+                                        "ROOT CAUSE: (one specific sentence)\n\n"
+                                        "FIX STEPS:\n"
+                                        "1. (specific action with exact command if known)\n"
+                                        "2. ...\n\n"
+                                        "AUTOMATABLE (if re-run as action task):\n"
+                                        "- (step N — tool that would execute it)\n\n"
+                                        "No markdown headers. No padding. Be specific: use exact "
+                                        "exit codes, IPs, container names, and timestamps from the findings."
                                     ),
                                 },
                                 {
@@ -932,13 +941,17 @@ async def _run_single_agent_step(
                                     "role": "system",
                                     "content": (
                                         "You are a concise infrastructure ops assistant. "
-                                        "Based on the findings, provide:\n"
-                                        "1. Root cause in one sentence\n"
-                                        "2. What was checked (bullet list: tool → result)\n"
-                                        "3. Numbered fix steps (specific commands or actions)\n"
-                                        "4. Which fix steps the agent can run automatically "
-                                        "if re-run with an action task\n"
-                                        "Plain text only. No markdown headers."
+                                        "Produce a 4-section investigation report in plain text:\n\n"
+                                        "EVIDENCE:\n"
+                                        "- (one bullet per finding: tool → result)\n\n"
+                                        "ROOT CAUSE: (one specific sentence)\n\n"
+                                        "FIX STEPS:\n"
+                                        "1. (specific action with exact command if known)\n"
+                                        "2. ...\n\n"
+                                        "AUTOMATABLE (if re-run as action task):\n"
+                                        "- (step N — tool that would execute it)\n\n"
+                                        "No markdown headers. No padding. Be specific: use exact "
+                                        "exit codes, IPs, container names, and timestamps from the findings."
                                     ),
                                 },
                                 {
@@ -1009,11 +1022,17 @@ async def _run_single_agent_step(
                                 "role": "system",
                                 "content": (
                                     "You are a concise infrastructure ops assistant. "
-                                    "Based on the findings, explain:\n"
-                                    "1. Root cause in one sentence\n"
-                                    "2. Numbered fix steps (specific)\n"
-                                    "3. Which steps the agent can run automatically\n"
-                                    "Plain text only."
+                                    "Produce a 4-section investigation report in plain text:\n\n"
+                                    "EVIDENCE:\n"
+                                    "- (one bullet per finding: tool → result)\n\n"
+                                    "ROOT CAUSE: (one specific sentence)\n\n"
+                                    "FIX STEPS:\n"
+                                    "1. (specific action with exact command if known)\n"
+                                    "2. ...\n\n"
+                                    "AUTOMATABLE (if re-run as action task):\n"
+                                    "- (step N — tool that would execute it)\n\n"
+                                    "No markdown headers. No padding. Be specific: use exact "
+                                    "exit codes, IPs, container names, and timestamps from the findings."
                                 ),
                             },
                             {

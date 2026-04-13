@@ -1,0 +1,518 @@
+# CC PROMPT — v2.20.1 — VM card action audit trail + visual feedback
+
+## What this does
+
+VM card actions (reboot, update, service restart) are currently fire-and-forget with
+no audit trail, no WebSocket notification, and minimal visual feedback. The card shows
+a small output box but there's no persistent record, no animated state, and no way to
+see what happened if you weren't watching.
+
+This adds:
+1. `vm_action_log` table — every action logged with host, action, user, result
+2. WebSocket broadcast — `vm_action` event so all connected clients see it live
+3. VMCard visual states — pulsing "REBOOTING" badge, "UPDATING" progress, auto-refresh
+4. Reboot detection — card polls for the host to come back online and refreshes automatically
+
+Version bump: 2.20.0 → 2.20.1
+
+---
+
+## Change 1 — NEW FILE: api/db/vm_action_log.py
+
+```python
+"""VM action audit log — records every action taken from the VM card."""
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS vm_action_log (
+    id              TEXT PRIMARY KEY,
+    connection_id   TEXT,
+    connection_label TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    owner_user      TEXT DEFAULT 'unknown',
+    status          TEXT DEFAULT 'started',
+    output          TEXT,
+    started_at      TIMESTAMPTZ DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_vm_action_label ON vm_action_log(connection_label, started_at DESC);
+"""
+
+_initialized = False
+
+
+def init_vm_action_log():
+    global _initialized
+    if _initialized:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in _DDL.strip().split(";"):
+            s = stmt.strip()
+            if s:
+                cur.execute(s)
+        cur.close()
+        conn.close()
+        _initialized = True
+        log.info("vm_action_log table ready")
+    except Exception as e:
+        log.warning("vm_action_log init failed: %s", e)
+
+
+def record_action(connection_label: str, action: str, owner_user: str = "unknown",
+                  connection_id: str = "") -> str:
+    """Insert a started action record. Returns the action ID."""
+    aid = str(uuid.uuid4())
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO vm_action_log (id, connection_id, connection_label, action, owner_user)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (aid, connection_id or None, connection_label, action, owner_user)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log.debug("record_action failed: %s", e)
+    return aid
+
+
+def complete_action(action_id: str, status: str, output: str = ""):
+    """Update a vm_action_log row with completion status and output."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE vm_action_log
+               SET status = %s, output = %s, completed_at = NOW()
+               WHERE id = %s""",
+            (status, output[:2000] if output else None, action_id)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log.debug("complete_action failed: %s", e)
+
+
+def list_recent(connection_label: str = "", limit: int = 20) -> list:
+    """Return recent vm actions, optionally filtered by host."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        if connection_label:
+            cur.execute(
+                """SELECT id, connection_label, action, owner_user, status,
+                          output, started_at, completed_at
+                   FROM vm_action_log
+                   WHERE connection_label = %s
+                   ORDER BY started_at DESC LIMIT %s""",
+                (connection_label, limit)
+            )
+        else:
+            cur.execute(
+                """SELECT id, connection_label, action, owner_user, status,
+                          output, started_at, completed_at
+                   FROM vm_action_log
+                   ORDER BY started_at DESC LIMIT %s""",
+                (limit,)
+            )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        for r in rows:
+            for k in ("started_at", "completed_at"):
+                if r.get(k):
+                    try:
+                        r[k] = r[k].isoformat()
+                    except Exception:
+                        pass
+        return rows
+    except Exception as e:
+        log.debug("list_recent failed: %s", e)
+        return []
+```
+
+---
+
+## Change 2 — api/main.py
+
+Init the new table on startup. Find where `init_escalations()` is called (in the lifespan or startup section) and add alongside it:
+
+```python
+from api.db.vm_action_log import init_vm_action_log
+init_vm_action_log()
+```
+
+---
+
+## Change 3 — api/routers/dashboard.py
+
+### 3a — Add WebSocket import and vm_action_log imports at the top
+
+After the existing imports, add:
+
+```python
+from api.websocket import manager as _ws_manager
+from api.db.vm_action_log import record_action, complete_action
+```
+
+### 3b — Replace `vm_reboot` endpoint
+
+Find:
+```python
+@router.post("/vm-hosts/{host_id}/reboot")
+async def vm_reboot(host_id: str, user: str = Depends(get_current_user)):
+    """Schedule an immediate reboot of a VM host."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    asyncio.create_task(asyncio.to_thread(_vm_ssh_exec, conn, "sudo shutdown -r +0"))
+    return {"ok": True, "message": f"Reboot scheduled for {conn.get('label', host_id)}"}
+```
+
+Replace with:
+```python
+@router.post("/vm-hosts/{host_id}/reboot")
+async def vm_reboot(host_id: str, user: str = Depends(get_current_user)):
+    """Schedule an immediate reboot of a VM host. Logs action + broadcasts WebSocket event."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    label = conn.get("label", host_id)
+    aid = record_action(label, "reboot", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "reboot",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    async def _do_and_log():
+        result = await asyncio.to_thread(_vm_ssh_exec, conn, "sudo shutdown -r +0")
+        status = "ok" if result.get("ok") else "error"
+        complete_action(aid, status, result.get("output") or result.get("error", ""))
+        await _ws_manager.broadcast({
+            "type":   "vm_action",
+            "host":   label,
+            "action": "reboot",
+            "status": status,
+            "action_id": aid,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+    asyncio.create_task(_do_and_log())
+    return {"ok": True, "message": f"Reboot scheduled for {label}", "action_id": aid}
+```
+
+### 3c — Replace `vm_update` endpoint
+
+Find:
+```python
+@router.post("/vm-hosts/{host_id}/update")
+async def vm_update(host_id: str, user: str = Depends(get_current_user)):
+    """Run apt update + apt upgrade -y on a VM host (non-interactive)."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    cmd = (
+        "export DEBIAN_FRONTEND=noninteractive && "
+        "sudo apt-get update -qq && "
+        "sudo apt-get upgrade -y -qq 2>&1 | tail -20"
+    )
+    return await asyncio.to_thread(_vm_ssh_exec, conn, cmd)
+```
+
+Replace with:
+```python
+@router.post("/vm-hosts/{host_id}/update")
+async def vm_update(host_id: str, user: str = Depends(get_current_user)):
+    """Run apt update + apt upgrade -y on a VM host. Logs action + broadcasts events."""
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    label = conn.get("label", host_id)
+    aid = record_action(label, "update_packages", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "update_packages",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    cmd = (
+        "export DEBIAN_FRONTEND=noninteractive && "
+        "sudo apt-get update -qq && "
+        "sudo apt-get upgrade -y -qq 2>&1 | tail -30"
+    )
+    result = await asyncio.to_thread(_vm_ssh_exec, conn, cmd)
+    status = "ok" if result.get("ok") else "error"
+    output = result.get("output") or result.get("error", "")
+    complete_action(aid, status, output)
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": "update_packages",
+        "status": status,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    return {"ok": result.get("ok", False), "output": output, "action_id": aid,
+            "message": f"Package update complete on {label}"}
+```
+
+### 3d — Replace `vm_service_restart` endpoint
+
+Find:
+```python
+@router.post("/vm-hosts/{host_id}/service/{service_name}/restart")
+async def vm_service_restart(host_id: str, service_name: str,
+                             user: str = Depends(get_current_user)):
+    """Restart a systemd service on a VM host."""
+    if service_name not in _VM_ALLOWED_SERVICES:
+        raise HTTPException(400, f"Service {service_name!r} not in allowlist")
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    return await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")
+```
+
+Replace with:
+```python
+@router.post("/vm-hosts/{host_id}/service/{service_name}/restart")
+async def vm_service_restart(host_id: str, service_name: str,
+                             user: str = Depends(get_current_user)):
+    """Restart a systemd service on a VM host. Logs action + broadcasts events."""
+    if service_name not in _VM_ALLOWED_SERVICES:
+        raise HTTPException(400, f"Service {service_name!r} not in allowlist")
+    conn = _get_vm_conn(host_id)
+    if not conn:
+        raise HTTPException(404, f"VM host not found: {host_id}")
+    label = conn.get("label", host_id)
+    aid = record_action(label, f"restart_{service_name}", owner_user=user,
+                        connection_id=str(conn.get("id", "")))
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": f"restart_{service_name}",
+        "status": "started",
+        "user":   user,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    result = await asyncio.to_thread(_vm_ssh_exec, conn, f"sudo systemctl restart {service_name}")
+    status = "ok" if result.get("ok") else "error"
+    output = result.get("output") or result.get("error", "")
+    complete_action(aid, status, output)
+    await _ws_manager.broadcast({
+        "type":   "vm_action",
+        "host":   label,
+        "action": f"restart_{service_name}",
+        "status": status,
+        "action_id": aid,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    })
+    return {"ok": result.get("ok", False), "output": output, "action_id": aid,
+            "message": f"{service_name} restarted on {label}"}
+```
+
+### 3e — Add GET endpoint for vm_action_log
+
+After the `vm_service_restart` endpoint, add:
+
+```python
+@router.get("/vm-hosts/{host_id}/actions")
+async def get_vm_actions(host_id: str, limit: int = 20,
+                         _: str = Depends(get_current_user)):
+    """Recent actions taken on a VM host."""
+    conn = _get_vm_conn(host_id)
+    label = conn.get("label", host_id) if conn else host_id
+    from api.db.vm_action_log import list_recent
+    return {"actions": list_recent(connection_label=label, limit=limit)}
+```
+
+---
+
+## Change 4 — gui/src/components/VMHostsSection.jsx
+
+### 4a — Add WebSocket listener for vm_action events + action state tracking
+
+In the `VMCard` component, add state variables after the existing state declarations:
+
+```jsx
+  const [actionState, setActionState] = useState(null)  // null | {action, status, startedAt}
+  const [rebootCountdown, setRebootCountdown] = useState(null)
+```
+
+Add a WebSocket listener effect. Add this after the existing `useEffect` for entity history:
+
+```jsx
+  // Listen for WebSocket vm_action events for this host
+  useEffect(() => {
+    const handler = (e) => {
+      try {
+        const msg = JSON.parse(e.data || '{}')
+        if (msg.type === 'vm_action' && (msg.host === (vm.label || vm.hostname))) {
+          if (msg.status === 'started') {
+            setActionState({ action: msg.action, status: 'started', startedAt: Date.now() })
+            if (msg.action === 'reboot') {
+              setRebootCountdown(90)
+            }
+          } else {
+            setActionState(prev => prev ? { ...prev, status: msg.status } : null)
+            if (msg.action !== 'reboot') {
+              setTimeout(() => setActionState(null), 4000)
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    // Subscribe to the global agent WebSocket
+    window.addEventListener('ws:message', handler)
+    return () => window.removeEventListener('ws:message', handler)
+  }, [vm.label, vm.hostname])
+```
+
+Note: this requires that `AgentOutputContext` (or wherever the WS is connected) dispatches a `ws:message` custom event on `window` for each incoming message. If it doesn't already, add `window.dispatchEvent(new CustomEvent('ws:message', { detail: msg }))` in the WebSocket `onmessage` handler in `AgentOutputContext.jsx`.
+
+### 4b — Add reboot countdown timer effect
+
+After the WebSocket effect, add:
+
+```jsx
+  useEffect(() => {
+    if (rebootCountdown === null) return
+    if (rebootCountdown <= 0) {
+      // Try to refresh — host should be back online
+      setRebootCountdown(null)
+      setActionState(null)
+      if (onAction) onAction()
+      return
+    }
+    const t = setTimeout(() => setRebootCountdown(c => c !== null ? c - 1 : null), 1000)
+    return () => clearTimeout(t)
+  }, [rebootCountdown, onAction])
+```
+
+### 4c — Update the VMCard header to show action state
+
+In the collapsed header row (the `<div style={{ display: 'flex', alignItems: 'center', ... }}>` that contains the dot, hostname, IP etc.), add before the `▶` chevron:
+
+```jsx
+        {actionState && (
+          <span style={{
+            fontSize: 8, padding: '1px 6px', borderRadius: 2, fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.06em',
+            background: actionState.status === 'started' ? 'var(--amber-dim)' : actionState.status === 'ok' ? 'var(--green-dim)' : 'var(--red-dim)',
+            color: actionState.status === 'started' ? 'var(--amber)' : actionState.status === 'ok' ? 'var(--green)' : 'var(--red)',
+            border: `1px solid ${actionState.status === 'started' ? 'var(--amber)' : actionState.status === 'ok' ? 'var(--green)' : 'var(--red)'}`,
+          }}>
+            {actionState.action === 'reboot' && actionState.status === 'started'
+              ? `↺ REBOOTING${rebootCountdown !== null ? ` ~${rebootCountdown}s` : '…'}`
+              : actionState.action === 'update_packages' && actionState.status === 'started'
+              ? '⬆ UPDATING…'
+              : actionState.status === 'started'
+              ? `↺ ${actionState.action.replace(/_/g, ' ').toUpperCase()}…`
+              : actionState.status === 'ok' ? '✓ DONE' : '✕ FAILED'}
+          </span>
+        )}
+```
+
+Also update the dot to pulse during action:
+
+Find the dot div in the header:
+```jsx
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+```
+
+Replace with:
+```jsx
+        <div style={{
+          width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+          background: actionState?.status === 'started' ? 'var(--amber)' : dotColor,
+          animation: actionState?.status === 'started' ? 'pulse 1s infinite' : 'none',
+        }} />
+```
+
+### 4d — Disable action buttons during active action
+
+In the action buttons section, add `disabled={!!actionState && actionState.status === 'started'}` to all three action buttons (Refresh, Update packages, Reboot) and all service restart buttons.
+
+Find each button in the action buttons row and add this disabled check:
+
+```jsx
+            <button onClick={() => act('reboot', `vm-hosts/${id}/reboot`, `Reboot ${vm.label}?`)}
+              disabled={loading.reboot || (actionState?.status === 'started')}
+```
+
+Apply the same `|| (actionState?.status === 'started')` to the update and service restart buttons.
+
+### 4e — Dispatch ws:message from AgentOutputContext
+
+In `gui/src/context/AgentOutputContext.jsx`, find the WebSocket `onmessage` handler. It likely has a line like:
+```js
+ws.onmessage = (e) => { ... }
+```
+
+Inside that handler, after the existing message processing, add:
+```js
+  window.dispatchEvent(new CustomEvent('ws:message', { detail: e.data }))
+```
+
+This lets any component (not just AgentOutputContext consumers) subscribe to WS events.
+
+---
+
+## Do NOT touch
+
+- Any collector files
+- `api/routers/escalations.py`
+- `EscalationBanner.jsx`
+- Any other router
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.20.0` → `2.20.1`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(ui): v2.20.1 VM card action audit trail + visual feedback
+
+- api/db/vm_action_log.py: new table recording every vm card action with user, status, output
+- vm_reboot: logs to vm_action_log, broadcasts vm_action WS event (started + completed)
+- vm_update: logs, broadcasts, returns apt output in response
+- vm_service_restart: logs, broadcasts
+- GET /api/dashboard/vm-hosts/{id}/actions: recent action history
+- VMCard: action state tracking via ws:message window event
+- VMCard: pulsing amber REBOOTING badge with countdown timer (90s)
+- VMCard: UPDATING badge during apt upgrade
+- VMCard: action buttons disabled while action is in progress
+- VMCard: auto-refresh after reboot countdown completes
+- AgentOutputContext: dispatches ws:message window event for cross-component WS access"
+git push origin main
+```
