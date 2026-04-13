@@ -45,6 +45,9 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels && \
     python -c "import torch" 2>/dev/null && echo "ERROR: torch installed" && exit 1 || true
 
+# Optionally validate clean build — set BUILD_DIRTY_OK=1 to skip
+ARG BUILD_DIRTY_OK=0
+
 # Copy application code
 WORKDIR /app
 COPY . .

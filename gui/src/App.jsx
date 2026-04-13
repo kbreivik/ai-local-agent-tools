@@ -1064,7 +1064,7 @@ function ConnectionSectionCards({ platforms, externalData, onEntityClick, compar
 }
 
 function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEntityClick, compareMode, compareSet, onCompareAdd, onToggleCompare, layoutState }) {
-  const { stats: ctxStats, externalData: ctxExternal, summaryLoading, summaryStale, refreshSummary } = useDashboardData()
+  const { stats: ctxStats, externalData: ctxExternal, summaryLoading, summaryStale, refreshSummary, versionMismatch } = useDashboardData()
   const [search, setSearch] = useState('')
   const [showFilter, setShowFilter] = useState('ALL')
   const [typeFilter, setTypeFilter] = useState('ALL')
@@ -1161,6 +1161,20 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
       />
 
       <EscalationBanner />
+
+      {versionMismatch && (
+        <div style={{
+          padding: '8px 12px', background: '#1a0a00', borderBottom: '1px solid var(--amber)',
+          fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--amber)',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span>⚠</span>
+          <span style={{ flex: 1 }}>{versionMismatch}</span>
+          <span style={{ color: 'var(--text-3)', fontSize: 9 }}>
+            backend may need rebuild+redeploy
+          </span>
+        </div>
+      )}
 
       {globalMaint && (
         <div style={{ padding: '6px 12px', background: 'var(--amber-dim)', borderBottom: '1px solid var(--amber)', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--amber)' }}>

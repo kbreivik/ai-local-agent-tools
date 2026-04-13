@@ -21,6 +21,11 @@ import { authHeaders, fetchDashboardExternal, fetchStats, fetchHealth } from '..
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
+// Minimum backend version this frontend requires.
+// Increment when a new required endpoint is added (e.g. /api/dashboard/summary).
+// Format: major.minor — patch versions don't break API contracts.
+const MIN_BACKEND_VERSION = '2.22'
+
 const DashboardDataContext = createContext(null)
 
 export function DashboardDataProvider({ children }) {
@@ -44,6 +49,8 @@ export function DashboardDataProvider({ children }) {
   const [externalLoading, setExternalLoading]     = useState(true)
   const [connectionsLoading, setConnectionsLoading] = useState(true)
 
+  const [versionMismatch, setVersionMismatch] = useState(null)  // null | string message
+
   const mountedRef = useRef(true)
   useEffect(() => () => { mountedRef.current = false }, [])
 
@@ -51,12 +58,23 @@ export function DashboardDataProvider({ children }) {
   const fetchSummary = useCallback(async () => {
     try {
       const r = await fetch(`${BASE}/api/dashboard/summary`, { headers: authHeaders() })
+      if (r.status === 404) {
+        // Backend doesn't have this endpoint yet — version mismatch
+        setVersionMismatch(
+          'Backend missing /api/dashboard/summary — backend version too old. Rebuild backend.'
+        )
+        setSummaryLoading(false)
+        return
+      }
       if (!r.ok || !mountedRef.current) return
       const d = await r.json()
       setSummary(d)
       setSummaryTs(Date.now())
       setSummaryLoading(false)
-    } catch (_) {}
+      setVersionMismatch(prev => prev?.includes('summary') ? null : prev)
+    } catch (_) {
+      setSummaryLoading(false)
+    }
   }, [])
 
   // ── External fetch (30s) ────────────────────────────────────────────────────
@@ -95,6 +113,21 @@ export function DashboardDataProvider({ children }) {
       const d = await fetchHealth()
       if (!mountedRef.current) return
       setHealth(d)
+
+      // Version gate: warn if backend is older than this frontend expects
+      const backendVer = d?.version || ''
+      if (backendVer && MIN_BACKEND_VERSION) {
+        const [majB, minB] = backendVer.split('.').map(Number)
+        const [majMin, minMin] = MIN_BACKEND_VERSION.split('.').map(Number)
+        if (majB < majMin || (majB === majMin && minB < minMin)) {
+          setVersionMismatch(
+            `Backend v${backendVer} is older than frontend requires (v${MIN_BACKEND_VERSION}+). ` +
+            `Dashboard data may be missing. Rebuild and redeploy the backend.`
+          )
+        } else {
+          setVersionMismatch(null)
+        }
+      }
     } catch (_) {}
   }, [])
 
@@ -180,6 +213,9 @@ export function DashboardDataProvider({ children }) {
       stats,
       health,
       externalLoading,
+
+      // Version gate
+      versionMismatch,
 
       // Actions
       invalidateConnections,

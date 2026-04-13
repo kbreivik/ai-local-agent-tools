@@ -4,6 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    sourcemap: 'hidden',  // generates .map files but doesn't link them from the bundle
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,

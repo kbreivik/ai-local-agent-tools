@@ -24,6 +24,12 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'no-use-before-define': ['error', {
+        functions: false,    // function declarations are hoisted — fine
+        classes: true,       // class TDZ is a real error
+        variables: true,     // catches const/let TDZ — THIS is what caused the incident
+        allowNamedExports: false,
+      }],
     },
   },
 ])

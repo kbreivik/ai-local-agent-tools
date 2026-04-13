@@ -104,6 +104,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # IMPORTANT: Build from a clean git checkout to prevent frontend/backend version mismatch.
+  # If building locally with uncommitted changes, run: git stash && docker compose build && git stash pop
+  # Or set an explicit version: docker build --build-arg APP_VERSION=$(git describe --tags)
   hp1_agent:
     image: ${HP1_IMAGE:-ghcr.io/kbreivik/hp1-ai-agent:latest}
     container_name: hp1_agent

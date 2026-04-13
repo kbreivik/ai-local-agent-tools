@@ -24,3 +24,5 @@ checkpoints/*
 files.zip
 gui/node_modules
 gui/dist
+state/
+cc_prompts/

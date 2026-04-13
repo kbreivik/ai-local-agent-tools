@@ -45,9 +45,15 @@ docker/.env
 tests/
 *.test.py
 
+# Never copy local build artifacts — always build inside Docker
+gui/dist/
 # Node (built in gui-builder stage, node_modules not needed in final image)
 gui/node_modules
 gui/.git
+
+# Prompt queue and state (not needed in image)
+state/
+cc_prompts/
 
 # Docs
 docs/
