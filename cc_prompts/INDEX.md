@@ -61,8 +61,11 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions | PENDING |
 | CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | PENDING |
 | CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
-| CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | DONE (cdb44d6) |
-| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | DONE (99e017c) |
+| CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | PENDING |
+| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | PENDING |
+| CC_PROMPT_v2.21.2.md | v2.21.2 | Data pipeline health tab (ES doc counts, PG snapshot freshness) | RUNNING |
+| CC_PROMPT_v2.22.0.md | v2.22.0 | Dashboard summary endpoint + DashboardDataContext shared state | PENDING |
+| CC_PROMPT_v2.22.1.md | v2.22.1 | Skeleton loading + WebSocket-driven live updates | PENDING |
 
 ---
 
@@ -82,43 +85,44 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.18.0–v2.18.1** — Result store viewer + synthesis on all completion paths.
 **v2.19.0–v2.19.1** — service_placement tool + docker logs allowlist.
 **v2.20.0–v2.20.2** — Investigation quality + VM card feedback + SSH log stream.
+**v2.21.0–v2.21.2** — Time-series metrics + ES indexing + data pipeline health tab.
 
-**v2.21.0** — Time-series metric_samples table.
-New `metric_samples` table: (entity_id, metric_name, value, sampled_at).
-VM hosts collector writes mem.pct, load.1m/5m, disk.*.pct/used_gb every 60s.
-Kafka collector writes brokers.alive, under_replicated, consumer.lag.total every 30s.
-Swarm collector writes nodes.total, services.degraded/failed every 30s.
-30-day rolling retention via daily cleanup task.
-New MCP tools: metric_trend() returns samples + rate-of-change (rising/falling/stable);
-list_metrics() shows what's available. Both added to OBSERVE + INVESTIGATE allowlists.
-Enables: "is disk growing?", "was lag rising before the failure?"
+**v2.22.0** — Dashboard summary endpoint + DashboardDataContext.
+Root cause of slow GUI: ~12 simultaneous API calls on load; 5 components independently
+polling the same data every 30s. Fix: GET /api/dashboard/summary returns all dashboard
+data in one call (5 parallel PG snapshot reads). DashboardDataContext is a shared React
+context owning all fetches. Tiered intervals: external=30s, summary=60s, stats=60s,
+health=90s, connections=once. Staggered initial load (200ms between each). SubBar drops
+6-call-per-30s cycle to zero (derives alert list from context). ConnectionSectionCards
+drops 30s interval. VMHostsSection reads from context.
+Net: 12 simultaneous calls on load → 5 staggered; 30s duty cycle from ~20 calls → 2.
 
-**v2.21.1** — Container lifecycle events + collector snapshots to Elasticsearch.
-Swarm collector: tracks running_replicas in entity_changes; writes entity_events for
-replica drops (service_replica_lost), all-down (service_all_replicas_down), recovery.
-base.py: _index_snapshot_to_es() POSTs flattened state to deathstar-metrics-YYYY.MM
-after each successful poll — covers kafka, swarm, elasticsearch, vm_hosts, external.
-external_services: writes latency_ms + reachable samples per connection.
-Together: full time-series coverage from PostgreSQL (metric_samples) + Elasticsearch
-(deathstar-metrics-*) enabling Kibana dashboards and cross-source correlation.
+**v2.22.1** — Skeleton loading + WebSocket-driven live updates.
+SkeletonCard/SkeletonGrid shimmer components; ds-shimmer CSS keyframe. COMPUTE,
+CONTAINERS, VM_HOSTS sections show skeleton grids while summaryLoading=true — layout
+visible instantly, data fills in progressively. DashboardDataContext WS listener:
+health_change/vm_action/alert events trigger immediate refreshSummary(). DrillDownBar
+stale badge (>90s) with click-to-refresh. api/alerts.py check_transition() broadcasts
+health_change WS event — frontend responds in seconds not minutes.
 
 ---
 
 ## Key file paths
 
 ```
+gui/src/context/DashboardDataContext.jsx — shared dashboard state (v2.22.0)
+gui/src/components/SkeletonCard.jsx      — shimmer skeleton components (v2.22.1)
+api/routers/dashboard.py                — /summary endpoint (v2.22.0)
+api/alerts.py                           — health_change WS broadcast (v2.22.1)
 api/db/metric_samples.py               — time-series metrics table (v2.21.0)
 mcp_server/tools/metric_tools.py       — metric_trend + list_metrics tools (v2.21.0)
 api/collectors/base.py                 — ES snapshot indexing (v2.21.1)
 api/collectors/swarm.py                — replica lifecycle events (v2.21.1)
 api/collectors/external_services.py   — latency samples (v2.21.1)
 api/db/vm_action_log.py                — vm action audit table (v2.20.1)
-api/routers/dashboard.py               — VM action endpoints + SSH log stream (v2.20.1, v2.20.2)
-api/collectors/vm_hosts.py             — metric samples + _ssh_run_streaming (v2.21.0, v2.20.2)
-api/routers/agent.py                   — synthesis on all paths (v2.18.1, v2.20.0)
+api/collectors/vm_hosts.py             — metric samples + _ssh_run_streaming (v2.20.2, v2.21.0)
 api/agents/router.py                   — prompts + allowlists (v2.18.1–v2.21.0)
 mcp_server/tools/vm.py                 — service_placement + docker logs (v2.19.0, v2.19.1)
-mcp_server/server.py                   — tool registrations
 gui/src/components/VMHostsSection.jsx  — action state + SSH log panel (v2.20.1, v2.20.2)
 gui/src/context/AgentOutputContext.jsx — ws:message window event (v2.20.1)
 ```

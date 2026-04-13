@@ -336,6 +336,12 @@ export async function fetchResultRef(ref, offset = 0, limit = 20) {
   return r.json()
 }
 
+export async function fetchPipelineHealth() {
+  const r = await fetch(`${BASE}/api/status/pipeline`, { headers: { ...authHeaders() } })
+  if (!r.ok) return null
+  return r.json()
+}
+
 export async function dashboardAction(path, body = null) {
   const r = await fetch(`${BASE}/api/dashboard/${path}`, {
     method: 'POST',

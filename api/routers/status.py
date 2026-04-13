@@ -7,6 +7,7 @@ Never calls Docker/Kafka/ES directly — that's the collectors' job.
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
 
 from api.auth import get_current_user
 from api.db.base import get_engine
@@ -230,4 +231,175 @@ async def collector_debug(component: str, _: str = Depends(get_current_user)):
         "token_name": token_name,
         "secret_set": bool(secret),
         "results": results,
+    }
+
+
+@router.get("/pipeline")
+async def get_pipeline_health(_: str = Depends(get_current_user)):
+    """Consolidated data pipeline health — collector freshness, PG snapshot age, ES ingest."""
+    from api.collectors import manager as coll_mgr
+    import os
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+
+    # ── Collector freshness from in-memory status ─────────────────────────────
+    collectors_raw = coll_mgr.status()
+    collector_rows = []
+    for name, c in sorted(collectors_raw.items()):
+        last_poll_str = c.get("last_poll")
+        age_s = None
+        stale = False
+        if last_poll_str:
+            try:
+                lp = datetime.fromisoformat(last_poll_str.replace("Z", "+00:00"))
+                age_s = int((now - lp).total_seconds())
+                interval = c.get("interval_s", 60)
+                stale = age_s > interval * 3  # stale if >3x interval since last poll
+            except Exception:
+                pass
+        collector_rows.append({
+            "name": name,
+            "running": c.get("running", False),
+            "health": c.get("last_health", "unknown"),
+            "interval_s": c.get("interval_s", 0),
+            "last_poll": last_poll_str,
+            "age_s": age_s,
+            "stale": stale,
+            "error": c.get("last_error"),
+        })
+
+    # ── PostgreSQL snapshot freshness per collector ───────────────────────────
+    pg_rows = []
+    try:
+        async with get_engine().connect() as conn:
+            # Get latest snapshot timestamp per component
+            result = await conn.execute(
+                text("""
+                    SELECT component, MAX(timestamp) as latest, COUNT(*) as total_24h
+                    FROM status_snapshots
+                    WHERE timestamp >= NOW() - INTERVAL '24 hours'
+                    GROUP BY component
+                    ORDER BY component
+                """)
+            )
+            for row in result.mappings():
+                ts = row["latest"]
+                age_s = int((now - ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else now - ts).total_seconds()) if ts else None
+                pg_rows.append({
+                    "component": row["component"],
+                    "latest_snapshot": ts.isoformat() if ts else None,
+                    "age_s": age_s,
+                    "snapshots_24h": row["total_24h"],
+                    "stale": age_s is not None and age_s > 300,  # >5 min = stale
+                })
+    except Exception as e:
+        pg_rows = [{"error": str(e)}]
+
+    # ── Elasticsearch ingest health ───────────────────────────────────────────
+    es_health = {}
+    try:
+        import httpx
+        elastic_url = os.environ.get("ELASTIC_URL", "").rstrip("/")
+        if elastic_url:
+            # Document count + last document timestamp in hp1-logs-*
+            r = httpx.post(
+                f"{elastic_url}/hp1-logs-*/_search",
+                json={
+                    "size": 1,
+                    "sort": [{"@timestamp": "desc"}],
+                    "_source": ["@timestamp"],
+                    "query": {"match_all": {}},
+                    "aggs": {
+                        "total_1h": {
+                            "filter": {"range": {"@timestamp": {"gte": "now-1h"}}}
+                        },
+                        "total_5m": {
+                            "filter": {"range": {"@timestamp": {"gte": "now-5m"}}}
+                        }
+                    }
+                },
+                timeout=8.0,
+            )
+            if r.is_success:
+                data = r.json()
+                hits = data.get("hits", {})
+                aggs = data.get("aggregations", {})
+                last_doc_ts = None
+                if hits.get("hits"):
+                    last_doc_ts = hits["hits"][0].get("_source", {}).get("@timestamp")
+                last_doc_age_s = None
+                if last_doc_ts:
+                    try:
+                        ld = datetime.fromisoformat(last_doc_ts.replace("Z", "+00:00"))
+                        last_doc_age_s = int((now - ld).total_seconds())
+                    except Exception:
+                        pass
+                es_health = {
+                    "configured": True,
+                    "total_docs": hits.get("total", {}).get("value", 0),
+                    "docs_last_1h": aggs.get("total_1h", {}).get("doc_count", 0),
+                    "docs_last_5m": aggs.get("total_5m", {}).get("doc_count", 0),
+                    "last_document": last_doc_ts,
+                    "last_document_age_s": last_doc_age_s,
+                    "stale": last_doc_age_s is not None and last_doc_age_s > 600,  # >10min
+                    "ingest_rate_per_min": round(aggs.get("total_5m", {}).get("doc_count", 0) / 5, 1),
+                }
+            else:
+                es_health = {"configured": True, "error": f"HTTP {r.status_code}"}
+        else:
+            es_health = {"configured": False}
+    except Exception as e:
+        es_health = {"configured": True, "error": str(e)}
+
+    # ── PostgreSQL connectivity + table sizes ─────────────────────────────────
+    pg_meta = {}
+    try:
+        async with get_engine().connect() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT
+                      (SELECT COUNT(*) FROM status_snapshots) as snapshots_total,
+                      (SELECT COUNT(*) FROM operations) as operations_total,
+                      (SELECT COUNT(*) FROM tool_calls) as tool_calls_total,
+                      (SELECT COUNT(*) FROM entity_changes) as entity_changes_total,
+                      (SELECT COUNT(*) FROM entity_events) as entity_events_total
+                """)
+            )
+            row = result.mappings().fetchone()
+            if row:
+                pg_meta = dict(row)
+                pg_meta["connected"] = True
+    except Exception as e:
+        pg_meta = {"connected": False, "error": str(e)}
+
+    # Overall pipeline health
+    stale_collectors = [c["name"] for c in collector_rows if c.get("stale")]
+    stale_pg = [r["component"] for r in pg_rows if r.get("stale")]
+    es_stale = es_health.get("stale", False)
+
+    if stale_collectors or stale_pg or es_stale:
+        pipeline_health = "degraded"
+    elif not pg_meta.get("connected"):
+        pipeline_health = "error"
+    else:
+        pipeline_health = "healthy"
+
+    return {
+        "health": pipeline_health,
+        "timestamp": now.isoformat(),
+        "collectors": collector_rows,
+        "postgres": {
+            "connected": pg_meta.get("connected", False),
+            "error": pg_meta.get("error"),
+            "table_counts": {k: v for k, v in pg_meta.items() if k not in ("connected", "error")},
+            "snapshots_by_component": pg_rows,
+            "stale_components": stale_pg,
+        },
+        "elasticsearch": es_health,
+        "alerts": {
+            "stale_collectors": stale_collectors,
+            "stale_pg_components": stale_pg,
+            "es_stale": es_stale,
+        },
     }
