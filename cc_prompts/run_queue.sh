@@ -1,6 +1,6 @@
 #!/bin/bash
 # DEATHSTAR Prompt Queue Runner
-# Invokes Claude Code in agentic mode to work through cc_prompts/ queue sequentially.
+# Invokes Claude Code in non-interactive (--print) mode to avoid Ink TTY requirement.
 #
 # Usage:
 #   bash cc_prompts/run_queue.sh              # run all pending prompts
@@ -38,7 +38,6 @@ err()  { echo "[queue] ERROR: $*" >&2; exit 1; }
 warn() { echo "[queue] WARN:  $*"; }
 
 pending_count() {
-    # grep -c on Git Bash (CRLF files) can return "3\r" — strip all non-digits
     local raw
     raw=$(grep -c "| PENDING" "$INDEX_FILE" 2>/dev/null) || raw=0
     echo "$raw" | tr -dc '0-9'
@@ -136,10 +135,8 @@ while true; do
 
     BEFORE_HASH=$(git rev-parse HEAD)
 
-    # Write task to temp file — avoids shell expansion of special chars in content.
-    # Then pipe file + "exit" to claude WITHOUT --print so output streams live
-    # to terminal. Claude reads the task, runs it with full streaming output, then
-    # reads "exit" from the pipe and quits — no manual typing needed.
+    # Build task file: queue runner context + prompt content.
+    # Written to a temp file to avoid shell expansion of special chars.
     TMPFILE=$(mktemp /tmp/deathstar_queue_XXXXXX.txt)
 
     cat > "$TMPFILE" << TASK_EOF
@@ -160,8 +157,9 @@ for $NEXT_FILE from 'PENDING' to 'DONE (SHA)' where SHA is the short git hash,
 then commit and push that index change too.
 TASK_EOF
 
-    # { cat file; echo exit } pipes task then "exit" — streaming output, auto-quits
-    if { cat "$TMPFILE"; echo "exit"; } | claude --dangerously-skip-permissions; then
+    # Use --print (non-interactive) mode — bypasses Ink TUI, no TTY required.
+    # stdin redirected from task file; output streams to terminal.
+    if claude --dangerously-skip-permissions --print < "$TMPFILE"; then
         rm -f "$TMPFILE"
         AFTER_HASH=$(git rev-parse HEAD)
         if [ "$BEFORE_HASH" = "$AFTER_HASH" ]; then

@@ -50,6 +50,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.8.md | v2.15.8 | Multi-expand cards + shift-click range + toolbar expand/collapse | DONE (e516007) |
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
+| CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | PENDING |
 
 ---
 
@@ -81,17 +82,27 @@ Pulsing dot, reason text, ACK button, ACK ALL button.
 WebSocket `escalation_recorded` event triggers immediate banner update.
 Zero height when no escalations — no layout impact on normal operation.
 
+**v2.16.0** — Agent investigate-on-degraded + halt synthesis.
+research/investigate/status/observe agents now treat `degraded` tool results as findings,
+not halt conditions. `_degraded_findings` list accumulates degraded results; agent continues
+checking related components. action/execute agents still halt on degraded (pre-check behavior
+preserved). On halt (any agent): synthesis LLM call fires, returning root cause in one sentence
++ numbered fix steps + which steps the agent can automate. Same synthesis fires on max-steps
+exit if degraded findings are present. Removed noisy auto-escalate that was failing silently
+and streaming "Escalating failed" to the GUI. STATUS_PROMPT and RESEARCH_PROMPT updated to
+instruct chaining of findings and always ending with root cause + fix steps.
+
 ---
 
 ## Key file paths
 
 ```
 api/routers/escalations.py          — escalation table + endpoints (v2.15.10)
-api/routers/agent.py                — record_escalation calls + WS broadcast (v2.15.10)
+api/routers/agent.py                — halt logic + degraded handling + synthesis (v2.16.0)
+api/agents/router.py                — STATUS_PROMPT + RESEARCH_PROMPT rules (v2.16.0)
 gui/src/components/EscalationBanner.jsx — persistent amber banner (v2.15.10)
 mcp_server/tools/vm.py              — swarm_node_status, swarm_service_force_update, proxmox_vm_power (v2.15.9)
 mcp_server/server.py                — tool registration (v2.15.9)
-api/agents/router.py                — allowlists + ACTION_PROMPT recovery workflow (v2.15.9)
 api/routers/layout.py               — layout templates endpoint (v2.15.5)
 gui/src/components/Sidebar.jsx      — user menu + footer (v2.15.5)
 gui/src/App.jsx                     — EscalationBanner mount, Platform Core row order (v2.15.6, v2.15.10)
