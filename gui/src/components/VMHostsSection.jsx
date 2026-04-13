@@ -84,6 +84,7 @@ function VMCard({ vm, onAction }) {
   const logScrollRef = useRef(null)
   const [actionHistory, setActionHistory] = useState([])
 
+  const id = vm.connection_id || vm.label
   const entityId = vm.label || vm.hostname || ''
   useEffect(() => {
     if (!entityId) return
@@ -175,7 +176,6 @@ function VMCard({ vm, onAction }) {
 
   const dot = vm.dot || 'grey'
   const dotColor = dot === 'green' ? 'var(--green)' : dot === 'amber' ? 'var(--amber)' : dot === 'red' ? 'var(--red)' : 'var(--text-3)'
-  const id = vm.connection_id || vm.label
 
   const act = async (key, path, confirmMsg) => {
     if (confirmMsg && !window.confirm(confirmMsg)) return
