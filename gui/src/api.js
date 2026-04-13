@@ -311,6 +311,15 @@ export async function fetchContainerTags(containerId) {
   return r.json()
 }
 
+export async function fetchEntityHistory(entityId, hours = 48) {
+  const r = await fetch(
+    `${BASE}/api/entities/${encodeURIComponent(entityId)}/history?hours=${hours}`,
+    { headers: { ...authHeaders() } }
+  )
+  if (!r.ok) return { changes: [], events: [] }
+  return r.json()
+}
+
 export async function dashboardAction(path, body = null) {
   const r = await fetch(`${BASE}/api/dashboard/${path}`, {
     method: 'POST',

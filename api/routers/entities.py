@@ -97,3 +97,26 @@ async def list_entities(_: str = Depends(get_current_user)):
 async def entities_by_section(section: str, _: str = Depends(get_current_user)):
     """Entities for a specific section."""
     return [e for e in await _build_entities() if e.get("section") == section.upper()]
+
+
+@router.get("/{entity_id:path}/history")
+async def entity_history(
+    entity_id: str,
+    hours: int = 48,
+    _: str = Depends(get_current_user),
+):
+    """Return recent field changes and discrete events for one entity.
+
+    entity_id is path-encoded (may contain colons, e.g. proxmox:hp1:100).
+    hours: look-back window, default 48h, max 168h (7 days).
+    """
+    hours = min(max(1, hours), 168)
+    from api.db.entity_history import get_changes, get_events
+    changes = get_changes(entity_id, hours=hours, limit=50)
+    events  = get_events(entity_id,  hours=hours, limit=50)
+    return {
+        "entity_id": entity_id,
+        "hours":     hours,
+        "changes":   changes,
+        "events":    events,
+    }

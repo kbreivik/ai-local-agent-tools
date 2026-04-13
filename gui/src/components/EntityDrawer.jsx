@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { authHeaders, askAgent, fetchAskSuggestions } from '../api'
+import { authHeaders, askAgent, fetchAskSuggestions, fetchEntityHistory } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -39,6 +39,10 @@ export default function EntityDrawer({ entityId, onClose }) {
   const [answer, setAnswer]           = useState('')
   const [asking, setAsking]           = useState(false)
   const [suggestions, setSuggestions] = useState([])
+  const [timeline, setTimeline]       = useState(null)   // { changes, events } | null
+  const [tlLoading, setTlLoading]     = useState(false)
+  const [tlHours, setTlHours]         = useState(48)
+  const [tlOpen, setTlOpen]           = useState(false)
   const textareaRef                   = useRef(null)
 
   const load = useCallback(() => {
@@ -76,6 +80,16 @@ export default function EntityDrawer({ entityId, onClose }) {
     fetchAskSuggestions(entity.status, entity.section)
       .then(setSuggestions)
   }, [entity])
+
+  // Load timeline when drawer opens or hours changes (lazy — only when tlOpen)
+  useEffect(() => {
+    if (!entityId || !tlOpen) return
+    setTlLoading(true)
+    fetchEntityHistory(entityId, tlHours)
+      .then(d => setTimeline(d))
+      .catch(() => setTimeline({ changes: [], events: [] }))
+      .finally(() => setTlLoading(false))
+  }, [entityId, tlOpen, tlHours])
 
   const sendQuestion = () => {
     if (!question.trim() || asking || !entity) return
@@ -286,6 +300,129 @@ export default function EntityDrawer({ entityId, onClose }) {
                   }}>
                     {answer}
                     {asking && <span style={{ opacity: 0.5 }}>█</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* ── TIMELINE ────────────────────────────────────────────── */}
+              <div style={{ marginTop: 16, borderTop: '1px solid var(--border)' }}>
+                <button
+                  onClick={() => setTlOpen(o => !o)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center',
+                    justifyContent: 'space-between', padding: '8px 0',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    fontFamily: 'var(--font-mono)', fontSize: 9,
+                    letterSpacing: '0.08em', color: 'var(--text-3)',
+                  }}
+                >
+                  <span>TIMELINE</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {tlOpen && (
+                      <select
+                        value={tlHours}
+                        onChange={e => { e.stopPropagation(); setTlHours(Number(e.target.value)) }}
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                          fontSize: 8, fontFamily: 'var(--font-mono)', background: 'var(--bg-2)',
+                          border: '1px solid var(--border)', borderRadius: 2,
+                          color: 'var(--text-2)', padding: '1px 4px', cursor: 'pointer',
+                        }}
+                      >
+                        <option value={24}>24h</option>
+                        <option value={48}>48h</option>
+                        <option value={168}>7d</option>
+                      </select>
+                    )}
+                    <span style={{ fontSize: 8 }}>{tlOpen ? '▲' : '▼'}</span>
+                  </div>
+                </button>
+
+                {tlOpen && (
+                  <div style={{ paddingBottom: 12 }}>
+                    {tlLoading && (
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', padding: '4px 0' }}>
+                        Loading timeline…
+                      </div>
+                    )}
+
+                    {!tlLoading && timeline && (() => {
+                      const items = [
+                        ...(timeline.changes || []).map(c => ({
+                          kind: 'change',
+                          ts: c.detected_at,
+                          label: c.field_name,
+                          detail: `${c.old_value ?? '—'} → ${c.new_value}`,
+                          color: 'var(--cyan)',
+                        })),
+                        ...(timeline.events || []).map(e => ({
+                          kind: 'event',
+                          ts: e.occurred_at,
+                          label: e.event_type,
+                          detail: e.description,
+                          color: e.severity === 'critical' ? 'var(--red)'
+                               : e.severity === 'error'    ? 'var(--red)'
+                               : e.severity === 'warning'  ? 'var(--amber)'
+                               : 'var(--green)',
+                        })),
+                      ].sort((a, b) => new Date(b.ts) - new Date(a.ts))
+
+                      if (items.length === 0) {
+                        return (
+                          <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', padding: '4px 0' }}>
+                            No changes or events in the last {tlHours}h
+                          </div>
+                        )
+                      }
+
+                      // Group by calendar day
+                      const byDay = {}
+                      for (const item of items) {
+                        const day = item.ts ? new Date(item.ts).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : 'Unknown'
+                        if (!byDay[day]) byDay[day] = []
+                        byDay[day].push(item)
+                      }
+
+                      return Object.entries(byDay).map(([day, dayItems]) => (
+                        <div key={day} style={{ marginBottom: 10 }}>
+                          <div style={{
+                            fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+                            letterSpacing: '0.08em', marginBottom: 4, textTransform: 'uppercase',
+                          }}>{day}</div>
+                          {dayItems.map((item, i) => (
+                            <div key={i} style={{
+                              display: 'flex', gap: 8, marginBottom: 4, alignItems: 'flex-start',
+                            }}>
+                              <div style={{
+                                width: 6, height: 6, borderRadius: '50%',
+                                background: item.color, flexShrink: 0, marginTop: 3,
+                              }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                                  <span style={{
+                                    fontSize: 9, fontFamily: 'var(--font-mono)',
+                                    color: item.color, letterSpacing: '0.04em',
+                                  }}>{item.label}</span>
+                                  <span style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                                    {item.ts ? new Date(item.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                                  </span>
+                                </div>
+                                <div style={{
+                                  fontSize: 9, color: 'var(--text-2)', fontFamily: 'var(--font-mono)',
+                                  wordBreak: 'break-word',
+                                }}>{item.detail}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))
+                    })()}
+
+                    {!tlLoading && !timeline && (
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                        Timeline unavailable
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
