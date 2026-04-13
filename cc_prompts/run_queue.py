@@ -715,6 +715,8 @@ def main():
     p.add_argument("--sync",        action="store_true",  help="Merge state → INDEX.md and exit")
     p.add_argument("--reset",       action="store_true",  help="Clear state (fresh start)")
     p.add_argument("--retry",       action="store_true",  help="Reset ERROR entries back to PENDING")
+    p.add_argument("--mark-done-before", type=str, metavar="VERSION",
+                   help="Mark all prompts before VERSION as DONE (e.g. --mark-done-before v2.22.4)")
     p.add_argument("--poll",        type=int, default=180,help="Poll interval seconds (default 180)")
     p.add_argument("--prompts-dir", type=str, default="cc_prompts")
     p.add_argument("--log-dir",     type=str, default=None)
@@ -783,6 +785,84 @@ def main():
         for e in error_entries:
             print(f"  {C.YELLOW}⏳{C.RESET} {e.filename}")
         info("Run again to process them.")
+        sys.exit(0)
+
+    # ── Mark done before version ──────────────────────────────────────────
+    if args.mark_done_before:
+        cutoff = args.mark_done_before
+        index_entries = read_index(idx)
+        if not index_entries:
+            err("No entries found in INDEX.md")
+            sys.exit(1)
+
+        # Find the cutoff line — everything above it gets marked DONE
+        cutoff_found = False
+        to_mark = []
+        for ie in index_entries:
+            if ie.version == cutoff:
+                cutoff_found = True
+                break
+            if ie.status.strip().upper() not in ("DONE",) and "DONE" not in ie.status.upper():
+                to_mark.append(ie)
+
+        if not cutoff_found:
+            err(f"Version {cutoff} not found in INDEX.md")
+            info(f"Available: {', '.join(e.version for e in index_entries)}")
+            sys.exit(1)
+
+        if not to_mark:
+            info(f"Nothing to mark — everything before {cutoff} is already DONE.")
+            sys.exit(0)
+
+        # Try to find commit SHAs from git log
+        git_log = git("log", "--oneline", "--all", f"-{len(index_entries) * 3}", cwd=root)
+        log_lines = git_log.stdout.strip().splitlines() if git_log.stdout else []
+
+        info(f"Marking {len(to_mark)} entry/entries as DONE before {cutoff}:")
+
+        # Update INDEX.md
+        lines = idx.read_text(encoding="utf-8").splitlines()
+        for ie in to_mark:
+            # Try to find a matching commit
+            sha = ""
+            for logline in log_lines:
+                # Match on version string in commit message
+                if ie.version in logline or ie.filename.replace(".md","").replace("CC_PROMPT_","") in logline:
+                    sha = logline.split()[0]
+                    break
+            if not sha:
+                sha = git_short(root)  # fallback: current HEAD
+
+            new_status = f"DONE ({sha})"
+
+            # Update INDEX.md line
+            for i, line in enumerate(lines):
+                if ie.filename in line and ("PENDING" in line or "RUNNING" in line or "ERROR" in line):
+                    lines[i] = re.sub(
+                        r"\|\s*(PENDING|RUNNING|ERROR\s*\([^)]*\))\s*\|",
+                        f"| {new_status} |",
+                        line, count=1,
+                    )
+                    break
+
+            # Update state
+            se = state.get(ie.filename)
+            if not se:
+                se = StateEntry(
+                    filename=ie.filename, version=ie.version,
+                    theme=ie.theme, runner_status="DONE",
+                    commit_sha=sha,
+                )
+            else:
+                se.runner_status = "DONE"
+                se.commit_sha = sha
+            state.upsert(se)
+
+            print(f"  {C.GREEN}✓{C.RESET} {ie.version:<10} {ie.filename} → DONE ({sha})")
+
+        idx.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_status_md(md_path, state)
+        ok(f"Marked {len(to_mark)} entries as DONE in both INDEX.md and QUEUE_STATE.json.")
         sys.exit(0)
 
     # ── Sync (manual) ─────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-13T15:15:28",
+  "updated_at": "2026-04-13T15:58:53",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -54,7 +54,7 @@
       "version": "v2.18.0",
       "theme": "Result store viewer in Logs tab",
       "runner_status": "DONE",
-      "commit_sha": "22c9709",
+      "commit_sha": "c17aec2",
       "error": "",
       "started_at": "2026-04-13T12:29:29",
       "finished_at": "2026-04-13T12:30:10",
@@ -261,10 +261,26 @@
       "filename": "CC_PROMPT_v2.22.4.md",
       "version": "v2.22.4",
       "theme": "ESLint TDZ rule + source maps + API version gate + Dockerfile",
+      "runner_status": "DONE",
+      "commit_sha": "d0779f0",
+      "error": "",
+      "started_at": "2026-04-13T15:15:28",
+      "finished_at": "2026-04-13T15:19:11",
+      "duration_s": 223.32942760002334,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260413_151528_CC_PROMPT_v2.22.4.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.22.5.md",
+      "version": "v2.22.5",
+      "theme": "Fix GHCR tag pagination + version status display",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-13T15:15:28",
+      "started_at": "2026-04-13T15:58:53",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -1,0 +1,406 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.22.4.md (v2.22.4)
+Theme: ESLint TDZ rule + source maps + API version gate + Dockerfile
+
+Prompt content:
+
+# CC PROMPT — v2.22.4 — ESLint + source maps + API version gate + Dockerfile hardening
+
+## What this does
+
+Four low-effort, high-value changes from the incident post-mortem:
+
+1. **ESLint `no-use-before-define`** — would have caught the TDZ bug (`const id` used
+   before declaration) at build time instead of at runtime in production.
+
+2. **Hidden source maps** — `sourcemap: 'hidden'` generates `.map` files but doesn't
+   reference them in the JS bundle. When debugging, load them manually in Chrome DevTools.
+   Maps `q` → `id`, `yv` → `VMCard`, etc. in minified errors.
+
+3. **API version gate in DashboardDataContext** — when the frontend calls
+   `/api/dashboard/summary` and gets a 404 (because the backend is older than the frontend),
+   show a clear "API version mismatch" banner instead of silently staying blank. Reads
+   `/api/health` version on startup and compares to a `MIN_API_VERSION` constant.
+
+4. **Dockerfile: build only committed files** — `COPY . .` copies uncommitted working-tree
+   changes into the Docker image, causing frontend/backend version mismatches like the one
+   that extended the incident. Use `git stash` + build + `git stash pop` pattern, or add
+   a CI guard that fails the build when there are uncommitted changes.
+
+Version bump: 2.22.3 → 2.22.4
+
+---
+
+## Change 1 — eslint.config.js (or .eslintrc.cjs)
+
+Find the ESLint config file in the project root or gui/. If it's `eslint.config.js` (flat
+config), add to the rules object:
+
+```javascript
+rules: {
+  // ... existing rules ...
+  'no-use-before-define': ['error', {
+    functions: false,    // function declarations are hoisted — fine
+    classes: true,       // class TDZ is a real error
+    variables: true,     // catches const/let TDZ — THIS is what caused the incident
+    allowNamedExports: false,
+  }],
+}
+```
+
+If the file is `.eslintrc.cjs` (legacy config):
+```javascript
+rules: {
+  'no-use-before-define': ['error', { functions: false, classes: true, variables: true }],
+}
+```
+
+---
+
+## Change 2 — gui/vite.config.js
+
+Find the `build` section in vite.config.js. Add `sourcemap: 'hidden'`:
+
+```javascript
+export default defineConfig({
+  // ... existing config ...
+  build: {
+    sourcemap: 'hidden',  // generates .map files but doesn't link them from the bundle
+    // ... existing build config ...
+  },
+})
+```
+
+`'hidden'` means:
+- `.map` files ARE generated during `vite build`
+- The JS bundle does NOT contain `//# sourceMappingURL=...` references
+- Users and bots cannot auto-discover the maps
+- You can load them manually in Chrome DevTools: Sources → right-click → Add source map
+
+---
+
+## Change 3 — gui/src/context/DashboardDataContext.jsx
+
+### 3a — Add MIN_BACKEND_VERSION constant
+
+At the top of the file, after imports:
+
+```jsx
+// Minimum backend version this frontend requires.
+// Increment when a new required endpoint is added (e.g. /api/dashboard/summary).
+// Format: major.minor — patch versions don't break API contracts.
+const MIN_BACKEND_VERSION = '2.22'
+```
+
+### 3b — Add version check state
+
+In `DashboardDataProvider`, add:
+
+```jsx
+  const [versionMismatch, setVersionMismatch] = useState(null)  // null | string message
+```
+
+### 3c — Check version on first health fetch
+
+In `refreshHealth`, add a version check after setting health:
+
+```jsx
+  const refreshHealth = useCallback(async () => {
+    try {
+      const d = await fetchHealth()
+      if (!mountedRef.current) return
+      setHealth(d)
+
+      // Version gate: warn if backend is older than this frontend expects
+      const backendVer = d?.version || ''
+      if (backendVer && MIN_BACKEND_VERSION) {
+        const [majB, minB] = backendVer.split('.').map(Number)
+        const [majMin, minMin] = MIN_BACKEND_VERSION.split('.').map(Number)
+        if (majB < majMin || (majB === majMin && minB < minMin)) {
+          setVersionMismatch(
+            `Backend v${backendVer} is older than frontend requires (v${MIN_BACKEND_VERSION}+). ` +
+            `Dashboard data may be missing. Rebuild and redeploy the backend.`
+          )
+        } else {
+          setVersionMismatch(null)
+        }
+      }
+    } catch (_) {}
+  }, [])
+```
+
+### 3d — Expose versionMismatch in context value
+
+Add to the context value:
+```jsx
+      versionMismatch,
+```
+
+### 3e — Handle 404 gracefully in fetchSummary
+
+In `fetchSummary`, replace the simple error catch with a more informative one:
+
+```jsx
+  const fetchSummary = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/api/dashboard/summary`, { headers: authHeaders() })
+      if (r.status === 404) {
+        // Backend doesn't have this endpoint yet — version mismatch
+        setVersionMismatch(
+          'Backend missing /api/dashboard/summary — backend version too old. Rebuild backend.'
+        )
+        setSummaryLoading(false)
+        return
+      }
+      if (!r.ok || !mountedRef.current) return
+      const d = await r.json()
+      setSummary(d)
+      setSummaryTs(Date.now())
+      setSummaryLoading(false)
+      setVersionMismatch(prev => prev?.includes('summary') ? null : prev)
+    } catch (_) {
+      setSummaryLoading(false)
+    }
+  }, [])
+```
+
+---
+
+## Change 4 — gui/src/App.jsx — show version mismatch banner
+
+In `DashboardView`, consume `versionMismatch` from context and show a banner.
+
+Find in DashboardView:
+```jsx
+  const { summaryLoading, summaryStale, refreshSummary } = useDashboardData()
+```
+
+Replace with:
+```jsx
+  const { summaryLoading, summaryStale, refreshSummary, versionMismatch } = useDashboardData()
+```
+
+In the DashboardView JSX, after `<EscalationBanner />`, add:
+
+```jsx
+          {versionMismatch && (
+            <div style={{
+              padding: '8px 12px', background: '#1a0a00', borderBottom: '1px solid var(--amber)',
+              fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--amber)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span>⚠</span>
+              <span style={{ flex: 1 }}>{versionMismatch}</span>
+              <span style={{ color: 'var(--text-3)', fontSize: 9 }}>
+                backend may need rebuild+redeploy
+              </span>
+            </div>
+          )}
+```
+
+---
+
+## Change 5 — Dockerfile (or docker-compose build context)
+
+Find `docker/Dockerfile` or the file that defines the Docker build.
+
+### 5a — Add dirty working tree guard
+
+If there's a CI/CD script or Makefile that runs `docker build`, add before it:
+
+In `docker/Dockerfile`, add a build-time check using a build arg:
+
+```dockerfile
+# Optionally validate clean build — set BUILD_DIRTY_OK=1 to skip
+ARG BUILD_DIRTY_OK=0
+```
+
+### 5b — Add .dockerignore entries
+
+Find or create `docker/.dockerignore` (or root `.dockerignore`):
+
+```
+# Never copy local build artifacts — always build inside Docker
+gui/dist/
+gui/node_modules/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.git/
+*.log
+state/
+cc_prompts/
+```
+
+The key entry is `gui/dist/` — this prevents a locally-built dist from being copied
+in instead of building fresh.
+
+### 5c — Add build validation comment to docker-compose
+
+In `docker/docker-compose.yml`, add a comment near the build section (if one exists)
+or in the service definition:
+
+```yaml
+# IMPORTANT: Build from a clean git checkout to prevent frontend/backend version mismatch.
+# If building locally with uncommitted changes, run: git stash && docker compose build && git stash pop
+# Or set an explicit version: docker build --build-arg APP_VERSION=$(git describe --tags)
+```
+
+---
+
+## Do NOT touch
+
+- Any collector files
+- `api/agents/router.py`
+- `mcp_server/`
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.22.3` → `2.22.4`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(hardening): v2.22.4 ESLint TDZ rule + source maps + API version gate + Dockerfile
+
+- eslint.config.js: no-use-before-define with variables:true — catches const/let TDZ
+  bugs at build time; would have caught the incident root cause during development
+- vite.config.js: sourcemap: 'hidden' — generates .map files but doesn't expose them;
+  makes production errors like 'q is not defined' debuggable via DevTools
+- DashboardDataContext: fetchSummary handles 404 gracefully with versionMismatch state
+- DashboardDataContext: refreshHealth compares backend version to MIN_BACKEND_VERSION
+- DashboardView: amber banner when versionMismatch is set — visible to operator
+  instead of silent blank sections (root cause of 90min outage)
+- .dockerignore: excludes gui/dist/, node_modules, __pycache__, state/, cc_prompts/
+- Dockerfile/compose: build validation comments documenting clean-checkout requirement"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-13 15:15:28
+========================================================================
+PROMPT COMPLETE: v2.22.4
+[STATUS] 3m41s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m43s
+========================================================================

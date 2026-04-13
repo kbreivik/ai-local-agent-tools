@@ -51,24 +51,25 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
 | CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | DONE (bd42b0c) |
-| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | PENDING |
-| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | PENDING |
-| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | PENDING |
-| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | PENDING |
-| CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
-| CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
-| CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | PENDING |
-| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions | PENDING |
-| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | PENDING |
-| CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
-| CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | PENDING |
-| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | PENDING |
-| CC_PROMPT_v2.21.2.md | v2.21.2 | Data pipeline health tab (ES doc counts, PG snapshot freshness) | PENDING |
-| CC_PROMPT_v2.22.0.md | v2.22.0 | Dashboard summary endpoint + DashboardDataContext shared state | PENDING |
-| CC_PROMPT_v2.22.1.md | v2.22.1 | Skeleton loading + WebSocket-driven live updates | PENDING |
+| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (2339ba4) |
+| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | DONE (20656ec) |
+| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | DONE (22c9709) |
+| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | DONE (c17aec2) |
+| CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | DONE (774692f) |
+| CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | DONE (c0b964a) |
+| CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | DONE (a77c6f5) |
+| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions | DONE (5a52b30) |
+| CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | DONE (a3c0e01) |
+| CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | DONE (858b2a6) |
+| CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | DONE (650a615) |
+| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | DONE (1ce76c2) |
+| CC_PROMPT_v2.21.2.md | v2.21.2 | Data pipeline health tab (ES doc counts, PG snapshot freshness) | DONE (638e3f1) |
+| CC_PROMPT_v2.22.0.md | v2.22.0 | Dashboard summary endpoint + DashboardDataContext shared state | DONE (0012bd8) |
+| CC_PROMPT_v2.22.1.md | v2.22.1 | Skeleton loading + WebSocket-driven live updates | DONE (b7680bd) |
 | CC_PROMPT_v2.22.2.md | v2.22.2 | TDZ fix: move const id before useEffect hooks in VMCard | DONE (feb929d) |
 | CC_PROMPT_v2.22.3.md | v2.22.3 | Root error boundary + per-section + frontend crash reporting | DONE (5acdd54) |
 | CC_PROMPT_v2.22.4.md | v2.22.4 | ESLint TDZ rule + source maps + API version gate + Dockerfile | DONE (0b2e69b) |
+| CC_PROMPT_v2.22.5.md | v2.22.5 | Fix GHCR tag pagination + version status display | RUNNING |
 
 ---
 
@@ -90,39 +91,30 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.20.0–v2.20.2** — Investigation quality + VM card feedback + SSH log stream.
 **v2.21.0–v2.21.2** — Time-series metrics + ES indexing + data pipeline health tab.
 **v2.22.0–v2.22.1** — Dashboard summary endpoint + DashboardDataContext + skeleton loading.
-
-**v2.22.2** (DONE feb929d) — TDZ hotfix: const id declared before useEffect dep arrays.
-Root cause of 2026-04-13 blank GUI incident: VMCard.useEffect([open, id]) referenced
-`id` before `const id = vm.connection_id || vm.label` was declared. Runtime crash blanked
-the entire page.
-
+**v2.22.2** (DONE feb929d) — TDZ hotfix.
 **v2.22.3** — Root error boundary + per-section + frontend crash reporting.
-From incident post-mortem: any JS crash in AppShell or below blanked the entire GUI.
-RootErrorBoundary wraps AppShell — shows error message + RELOAD + CLEAR STATE buttons.
-componentDidCatch POSTs crash details to /api/errors/frontend (no auth required; logged
-to server log + audit_log). SectionErrorBoundary in DashboardLayout: each section
-isolated — one crashing section shows "unavailable" while others continue rendering.
-
 **v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
-From incident post-mortem: TDZ bug wasn't caught because no ESLint rule covered it and
-Vite build succeeds on runtime-only errors. Adds no-use-before-define: variables:true —
-catches const/let TDZ at dev/CI time. Hidden source maps (sourcemap: 'hidden') maps
-minified names (q → id) for future debugging. DashboardDataContext: fetchSummary handles
-404 with versionMismatch banner; refreshHealth compares backend version to
-MIN_BACKEND_VERSION. Amber banner in DashboardView when mismatch detected — would have
-made the frontend/backend mismatch immediately visible instead of silent blank sections.
-.dockerignore: excludes gui/dist/, __pycache__, state/, cc_prompts/.
+
+**v2.22.5** — Fix GHCR tag pagination + version status display.
+_fetch_ghcr_tags() stopped pagination as soon as it accumulated 20 semver-matching tags.
+GHCR returns tags alphabetically so the first 20 matches were always the oldest ones
+(2.14.0 → 2.19.1). Versions 2.20.x–2.22.x exist on GHCR (CI pushes them correctly)
+but were on a later page never fetched. Fix: remove early-exit, increase max pages
+to 10. Frontend: when running_version > tags[0] (severity='ahead') and update-status
+reports update_available=false, status badge shows '✓ latest' instead of '—'. Pull
+Latest button hidden when update_available=false (digests match, no pull needed).
 
 ---
 
 ## Key file paths
 
 ```
+gui/src/components/ServiceCards.jsx      — GHCR version status + pull button fix (v2.22.5)
+api/routers/dashboard.py                 — _fetch_ghcr_tags pagination fix (v2.22.5)
 gui/src/context/DashboardDataContext.jsx — shared dashboard state + version gate (v2.22.0, v2.22.4)
 gui/src/components/SkeletonCard.jsx      — shimmer skeleton components (v2.22.1)
 gui/src/components/DashboardLayout.jsx   — SectionErrorBoundary (v2.22.3)
 gui/src/App.jsx                          — RootErrorBoundary (v2.22.3)
-api/routers/dashboard.py                 — /summary endpoint (v2.22.0)
 api/routers/errors.py                    — /api/errors/frontend crash reporting (v2.22.3)
 api/alerts.py                            — health_change WS broadcast (v2.22.1)
 eslint.config.js                         — no-use-before-define rule (v2.22.4)

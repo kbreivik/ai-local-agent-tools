@@ -430,7 +430,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     all_tags: list[str] = []
     url = f"https://ghcr.io/v2/{repo}/tags/list?n=500"
 
-    for _ in range(3):
+    for _ in range(10):
         try:
             r = client.get(url, headers=headers)
         except Exception as exc:
@@ -443,10 +443,9 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
         all_tags.extend(r.json().get("tags") or [])
 
-        if len([t for t in all_tags if semver_re.match(t)]) >= 20:
-            break
-
-        # Follow Link header pagination
+        # Follow Link header pagination — do NOT stop early.
+        # GHCR returns tags alphabetically, so old tags appear before new ones.
+        # We must page through ALL tags to find the newest semver versions.
         next_url = None
         for part in r.headers.get("link", "").split(","):
             part = part.strip()

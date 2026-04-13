@@ -531,6 +531,15 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selectedTag, setSelectedTag] = useState('')
   const [versionPickerOpen, setVersionPickerOpen] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState(null)
+
+  useEffect(() => {
+    if (!c.image?.startsWith('ghcr.io/')) return
+    fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (mounted.current && d) setUpdateStatus(d) })
+      .catch(() => {})
+  }, [c.image])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
@@ -673,9 +682,22 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                   : tagsError
                   ? <span className="text-gray-700">version check unavailable</span>
                   : !tags.length
-                  ? <span className="text-gray-700">no versioned tags</span>
+                  // No semver tags on GHCR — fall back to digest comparison
+                  ? updateStatus?.update_available === false
+                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                    : updateStatus?.update_available === true
+                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
+                    : <span className="text-gray-700">no versioned tags</span>
                   : severity === 'current'
                   ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                  : severity === 'ahead'
+                  // Running version is NEWER than highest known tag (e.g. GHCR pagination was stale)
+                  // Trust the digest comparison from update-status as the authoritative signal
+                  ? updateStatus?.update_available === false
+                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                    : updateStatus?.update_available === true
+                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
+                    : <span className="text-gray-700">✓ ahead of tagged</span>
                   : hasUpdate
                   ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
                       ⬆ {tags[0]} {severity}
@@ -739,7 +761,8 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
             )}
 
             {/* Fallback pull when version check unavailable or no tags */}
-            {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') && (
+            {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') &&
+             updateStatus?.update_available !== false && (
               <ActionBtn
                 key="pull"
                 label="↓ Pull Latest"
