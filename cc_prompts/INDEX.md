@@ -51,8 +51,10 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
 | CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | DONE (bd42b0c) |
-| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (f20e94e) |
-| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | DONE (39ab8dd) |
+| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (f76a451) |
+| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | DONE (f76a451) |
+| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | RUNNING |
+| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | PENDING |
 
 ---
 
@@ -67,62 +69,45 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.15.9** — Three new agent tools for Swarm/infra recovery:
-`swarm_node_status()` — `docker node ls` + failed task list from a manager (read-only, always allowed).
-`swarm_service_force_update(service_name)` — SSH to manager, runs `docker service update --force`, requires plan_action.
-`proxmox_vm_power(vm_label, action)` — start/stop/reboot Proxmox VM when a worker node is completely down.
-Pre-flight bypass: `pre_kafka_check` skipped when task is explicitly a remediation/fix/restart.
-Recovery workflow added to ACTION_PROMPT with node-down → Proxmox reboot path.
-Blocked tool rule: agent must provide exact manual SSH command instead of escalating.
+**v2.15.9** — Three new agent tools for Swarm/infra recovery.
 
-**v2.15.10** — Escalations now visible outside the output panel.
-`agent_escalations` table stores all escalations with reason, session ID, severity.
-`record_escalation()` called when agent escalates or halts on degraded tool result.
-REST endpoints: list, acknowledge, acknowledge-all.
-`EscalationBanner` component: persistent amber banner in dashboard between drill bar and content.
-Pulsing dot, reason text, ACK button, ACK ALL button.
-WebSocket `escalation_recorded` event triggers immediate banner update.
-Zero height when no escalations — no layout impact on normal operation.
+**v2.15.10** — Persistent escalation banner + acknowledge.
 
 **v2.16.0** — Agent investigate-on-degraded + halt synthesis.
-research/investigate/status/observe agents now treat `degraded` tool results as findings,
-not halt conditions. `_degraded_findings` list accumulates degraded results; agent continues
-checking related components. action/execute agents still halt on degraded (pre-check behavior
-preserved). On halt (any agent): synthesis LLM call fires, returning root cause in one sentence
-+ numbered fix steps + which steps the agent can automate. Same synthesis fires on max-steps
-exit if degraded findings are present. Removed noisy auto-escalate that was failing silently
-and streaming "Escalating failed" to the GUI. STATUS_PROMPT and RESEARCH_PROMPT updated to
-instruct chaining of findings and always ending with root cause + fix steps.
+research/investigate/status/observe agents treat `degraded` results as findings, not halts.
+`_degraded_findings` accumulates; synthesis LLM call fires on halt and max-steps exit.
+Removed noisy auto-escalate. STATUS_PROMPT and RESEARCH_PROMPT updated.
 
 **v2.16.1** — Agent task templates in CommandPanel.
-TaskTemplates.jsx: collapsible TEMPLATES section in CommandPanel (both panel and tab modes).
-5 domain groups: KAFKA, SWARM, INFRASTRUCTURE, ELASTIC/LOGS, PROXMOX.
-18 pre-built tasks covering common ops — kafka diagnosis, swarm node check, disk usage,
-image prune, elasticsearch health, broker recovery, worker-03 reboot, etc.
-Click group tab to expand, click template to fill task textarea. User can edit before running.
+TaskTemplates.jsx: 5 domain groups, 18 pre-built tasks. Click to fill textarea.
 
 **v2.17.0** — Entity timeline view in EntityDrawer.
-New endpoint GET /api/entities/{entity_id}/history?hours=N serves entity_changes +
-entity_events from the tables written by collectors since v2.9.0.
-fetchEntityHistory() added to api.js.
-EntityDrawer: collapsible TIMELINE section at bottom showing field changes (cyan) and
-discrete events (severity-colored: green/amber/red). Items sorted newest-first, grouped
-by calendar day. Time window selector: 24h / 48h / 7d. Lazy-loaded — only fetches when
-the section is expanded.
+GET /api/entities/{entity_id}/history endpoint. Collapsible TIMELINE section in EntityDrawer
+showing field changes (cyan) and events (severity-colored), grouped by day, lazy-loaded.
+
+**v2.17.1** — Fix Proxmox noVNC console URL.
+ProxmoxCardExpanded: accepts proxmoxHost + proxmoxPort props passed from cluster data.
+Both "Open Console" and "View in Proxmox" buttons now use the actual Proxmox host,
+not DEATHSTAR's location.hostname.
+
+**v2.18.0** — Result store viewer in Logs tab.
+GET /api/logs/result-store and /result-store/{ref} endpoints.
+New "Result Refs" sub-tab in LogsPanel: shows active rs-* refs with tool name, row count,
+age, expiry. Click to expand and browse first 20 rows in a table. Auto-refreshes every 30s.
 
 ---
 
 ## Key file paths
 
 ```
-api/routers/escalations.py          — escalation table + endpoints (v2.15.10)
-api/routers/agent.py                — halt logic + degraded handling + synthesis (v2.16.0)
-api/routers/entities.py             — entity list + history endpoint (v2.17.0)
-api/agents/router.py                — STATUS_PROMPT + RESEARCH_PROMPT rules (v2.16.0)
-gui/src/components/EscalationBanner.jsx — persistent amber banner (v2.15.10)
-gui/src/components/TaskTemplates.jsx    — one-click task templates (v2.16.1)
+api/routers/logs.py                    — result-store endpoints (v2.18.0)
+api/routers/entities.py                — entity list + history endpoint (v2.17.0)
+api/routers/agent.py                   — halt logic + degraded handling (v2.16.0)
+api/agents/router.py                   — STATUS_PROMPT + RESEARCH_PROMPT (v2.16.0)
+gui/src/components/TaskTemplates.jsx   — one-click task templates (v2.16.1)
 gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
+gui/src/components/ServiceCards.jsx    — Proxmox console URL fix (v2.17.1)
 gui/src/components/CommandPanel.jsx    — mounts TaskTemplates (v2.16.1)
-gui/src/api.js                         — fetchEntityHistory() (v2.17.0)
-mcp_server/tools/vm.py              — swarm_node_status, swarm_service_force_update, proxmox_vm_power (v2.15.9)
+gui/src/components/LogsPanel.jsx       — Result Refs tab (v2.18.0)
+gui/src/api.js                         — fetchEntityHistory, fetchResultRefs, fetchResultRef
 ```

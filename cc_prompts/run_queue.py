@@ -7,6 +7,12 @@ File ownership:
     QUEUE_STATE.json → Runner's internal state (machine-readable)
     QUEUE_STATUS.md  → Runner's live progress view (human-readable, auto-generated)
 
+Features:
+    - Live terminal title bar: model, cost, tokens, elapsed, queue progress
+    - Periodic inline status lines during long prompts
+    - Cumulative cost/token tracking across session
+    - Interactive sync on startup (previous results) and shutdown (Ctrl+C)
+
 Usage:
     python run_queue.py                  # persistent watcher, 3 min poll
     python run_queue.py --poll 60        # poll every 60s
@@ -27,8 +33,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
@@ -39,14 +46,29 @@ class C:
     RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"
     RED = "\033[31m"; GREEN = "\033[32m"; YELLOW = "\033[33m"
     BLUE = "\033[34m"; CYAN = "\033[36m"; MAGENTA = "\033[35m"
+    WHITE = "\033[37m"
 
     @classmethod
     def disable(cls):
-        for a in ["BOLD","DIM","RED","GREEN","YELLOW","BLUE","CYAN","MAGENTA","RESET"]:
+        for a in ["BOLD","DIM","RED","GREEN","YELLOW","BLUE","CYAN","MAGENTA","WHITE","RESET"]:
             setattr(cls, a, "")
 
-if not (sys.stdout.isatty() and os.environ.get("NO_COLOR") is None):
+_tty = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+if not _tty:
     C.disable()
+
+
+# ─── Terminal title ───────────────────────────────────────────────────────────
+
+def set_title(text: str):
+    """Set terminal window/tab title via OSC escape. Works on Windows Terminal,
+    iTerm2, most Linux terminals."""
+    if _tty:
+        sys.stdout.write(f"\033]0;{text}\007")
+        sys.stdout.flush()
+
+def clear_title():
+    set_title("")
 
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -57,12 +79,11 @@ def warn(msg):  print(f"{C.YELLOW}[queue]{C.RESET} {msg}")
 def err(msg):   print(f"{C.RED}[queue]{C.RESET} {msg}", file=sys.stderr)
 
 def banner(text):
-    print(f"\n{C.CYAN}{'━'*64}{C.RESET}")
+    print(f"\n{C.CYAN}{'━'*72}{C.RESET}")
     print(f"{C.CYAN}{C.BOLD}  {text}{C.RESET}")
-    print(f"{C.CYAN}{'━'*64}{C.RESET}")
+    print(f"{C.CYAN}{'━'*72}{C.RESET}")
 
 def prompt_yn(msg: str, default: bool = True) -> bool:
-    """Interactive yes/no prompt. Returns default on EOF/non-tty."""
     hint = "Y/n" if default else "y/N"
     try:
         if not sys.stdin.isatty():
@@ -76,11 +97,32 @@ def prompt_yn(msg: str, default: bool = True) -> bool:
         return default
 
 
+def fmt_duration(s: float) -> str:
+    if s < 60:
+        return f"{s:.0f}s"
+    m, sec = divmod(int(s), 60)
+    if m < 60:
+        return f"{m}m{sec:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m"
+
+def fmt_tokens(n: int) -> str:
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n/1000:.1f}k"
+    return f"{n/1_000_000:.2f}M"
+
+def fmt_cost(usd: float) -> str:
+    if usd < 0.01:
+        return f"${usd:.4f}"
+    return f"${usd:.2f}"
+
+
 # ─── Data model ───────────────────────────────────────────────────────────────
 
 @dataclass
 class IndexEntry:
-    """A row parsed from INDEX.md."""
     filename: str
     version: str
     theme: str
@@ -90,7 +132,6 @@ class IndexEntry:
 
 @dataclass
 class StateEntry:
-    """Runner's internal tracking for one prompt."""
     filename: str
     version: str
     theme: str
@@ -101,6 +142,110 @@ class StateEntry:
     finished_at: str = ""
     duration_s: float = 0.0
     log_file: str = ""
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+
+
+@dataclass
+class SessionStats:
+    """Cumulative stats for the entire runner session."""
+    total_cost: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    prompts_done: int = 0
+    prompts_failed: int = 0
+    prompts_total: int = 0
+    session_start: float = field(default_factory=time.monotonic)
+    current_prompt: str = ""
+    current_version: str = ""
+    current_start: float = 0.0
+    model: str = ""
+    branch: str = ""
+
+    def title_string(self) -> str:
+        """Build the terminal title bar string."""
+        parts = []
+
+        # Model
+        if self.model:
+            parts.append(self.model)
+
+        # Cost
+        parts.append(fmt_cost(self.total_cost))
+
+        # Tokens
+        total_tok = self.total_input_tokens + self.total_output_tokens
+        if total_tok > 0:
+            parts.append(f"{fmt_tokens(total_tok)} tok")
+
+        # Queue progress
+        done = self.prompts_done + self.prompts_failed
+        parts.append(f"{done}/{self.prompts_total} done")
+
+        # Current prompt elapsed
+        if self.current_start > 0:
+            elapsed = time.monotonic() - self.current_start
+            parts.append(f"⏱ {fmt_duration(elapsed)}")
+
+        # Current prompt name
+        if self.current_prompt:
+            parts.append(self.current_version or self.current_prompt)
+
+        # Session elapsed
+        session_elapsed = time.monotonic() - self.session_start
+        parts.append(f"session {fmt_duration(session_elapsed)}")
+
+        # Branch
+        if self.branch:
+            parts.append(self.branch)
+
+        return " │ ".join(parts)
+
+    def inline_status(self) -> str:
+        """Build an inline status line for periodic display during execution."""
+        parts = []
+        done = self.prompts_done + self.prompts_failed
+        parts.append(f"Queue {done}/{self.prompts_total}")
+        parts.append(fmt_cost(self.total_cost))
+        total_tok = self.total_input_tokens + self.total_output_tokens
+        if total_tok:
+            parts.append(f"{fmt_tokens(total_tok)} tok")
+        if self.current_start > 0:
+            parts.append(f"⏱ {fmt_duration(time.monotonic() - self.current_start)}")
+        if self.model:
+            parts.append(self.model)
+        return " · ".join(parts)
+
+
+# ─── Title updater thread ────────────────────────────────────────────────────
+
+class TitleUpdater:
+    """Background thread that updates terminal title every second."""
+
+    def __init__(self, stats: SessionStats):
+        self.stats = stats
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                set_title(self.stats.title_string())
+            except Exception:
+                pass
+            self._stop.wait(1.0)
 
 
 # ─── INDEX.md parser (read-only) ─────────────────────────────────────────────
@@ -138,8 +283,6 @@ def read_index(path: Path) -> list[IndexEntry]:
 # ─── QUEUE_STATE.json ─────────────────────────────────────────────────────────
 
 class QueueState:
-    """Shadow state file — the runner's private ledger."""
-
     def __init__(self, path: Path):
         self.path = path
         self._entries: dict[str, StateEntry] = {}
@@ -149,7 +292,7 @@ class QueueState:
         if self.path.exists():
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             for item in raw.get("entries", []):
-                se = StateEntry(**item)
+                se = StateEntry(**{k: v for k, v in item.items() if k in StateEntry.__dataclass_fields__})
                 self._entries[se.filename] = se
 
     def save(self):
@@ -159,7 +302,7 @@ class QueueState:
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)  # atomic on POSIX
+        tmp.replace(self.path)
 
     def get(self, filename: str) -> Optional[StateEntry]:
         return self._entries.get(filename)
@@ -176,27 +319,18 @@ class QueueState:
         self.save()
 
     def discover_new(self, index_entries: list[IndexEntry]) -> list[StateEntry]:
-        """
-        Scan INDEX.md for PENDING rows not yet in state.
-        Returns newly discovered entries.
-        """
         new = []
         for ie in index_entries:
             if "PENDING" not in ie.status.upper():
                 continue
             if ie.filename in self._entries:
-                existing = self._entries[ie.filename]
-                if existing.runner_status in ("DONE", "ERROR", "RUNNING", "PENDING"):
-                    continue
+                continue
             se = StateEntry(
-                filename=ie.filename,
-                version=ie.version,
-                theme=ie.theme,
-                runner_status="PENDING",
+                filename=ie.filename, version=ie.version,
+                theme=ie.theme, runner_status="PENDING",
             )
             self._entries[se.filename] = se
             new.append(se)
-
         if new:
             self.save()
         return new
@@ -221,8 +355,7 @@ class QueueState:
 
 STATUS_SYM = {"PENDING": "⏳", "RUNNING": "🔄", "DONE": "✅", "ERROR": "❌"}
 
-def write_status_md(path: Path, state: QueueState):
-    """Regenerate human-readable status from current state."""
+def write_status_md(path: Path, state: QueueState, stats: Optional[SessionStats] = None):
     entries = state.all()
     total = len(entries)
     done  = sum(1 for e in entries if e.runner_status == "DONE")
@@ -235,37 +368,49 @@ def write_status_md(path: Path, state: QueueState):
         "",
         f"> Auto-generated by run_queue.py — {_now_human()}",
         "",
-        f"**Progress:** {done}/{total} done"
-        + (f" · {errs} error(s)" if errs else "")
-        + (f" · {pend} pending" if pend else "")
-        + (f" · 1 running" if run else ""),
-        "",
     ]
 
+    # Summary line
+    summary = f"**Progress:** {done}/{total} done"
+    if errs: summary += f" · {errs} error(s)"
+    if pend: summary += f" · {pend} pending"
+    if run:  summary += f" · 1 running"
+    lines.append(summary)
+
+    # Cost summary
+    total_cost = sum(e.cost_usd for e in entries)
+    total_in = sum(e.input_tokens for e in entries)
+    total_out = sum(e.output_tokens for e in entries)
+    if total_cost > 0:
+        lines.append(
+            f"**Cost:** {fmt_cost(total_cost)} · "
+            f"{fmt_tokens(total_in)} in / {fmt_tokens(total_out)} out"
+        )
+    lines.append("")
+
+    # Progress bar
     if total > 0:
         pct = done / total
         filled = int(pct * 30)
-        lines += [
-            "```",
-            f"[{'█' * filled}{'░' * (30 - filled)}] {pct:.0%}",
-            "```",
-            "",
-        ]
+        lines += ["```", f"[{'█'*filled}{'░'*(30-filled)}] {pct:.0%}", "```", ""]
 
+    # Table
     lines += [
-        "| Status | File | Version | Theme | SHA | Duration |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Status | File | Version | Theme | SHA | Duration | Cost | Tokens |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for e in entries:
         sym = STATUS_SYM.get(e.runner_status, "❓")
         sha = e.commit_sha or "—"
-        dur = f"{e.duration_s:.0f}s" if e.duration_s > 0 else "—"
+        dur = fmt_duration(e.duration_s) if e.duration_s > 0 else "—"
+        cost = fmt_cost(e.cost_usd) if e.cost_usd > 0 else "—"
+        tok = fmt_tokens(e.input_tokens + e.output_tokens) if (e.input_tokens + e.output_tokens) > 0 else "—"
         err_note = f" ⚠ {e.error}" if e.error else ""
         lines.append(
             f"| {sym} {e.runner_status}{err_note} "
-            f"| {e.filename} | {e.version} | {e.theme} | {sha} | {dur} |"
+            f"| {e.filename} | {e.version} | {e.theme} "
+            f"| {sha} | {dur} | {cost} | {tok} |"
         )
-
     lines += ["", "---", f"*{done + errs} of {total} processed*", ""]
 
     tmp = path.with_suffix(".tmp")
@@ -276,14 +421,11 @@ def write_status_md(path: Path, state: QueueState):
 # ─── Sync: merge state → INDEX.md ────────────────────────────────────────────
 
 def sync_to_index(index_path: Path, state: QueueState) -> int:
-    """One-time write: merge DONE/ERROR results back into INDEX.md."""
     if not index_path.exists():
         err("INDEX.md not found")
         return 0
-
     lines = index_path.read_text(encoding="utf-8").splitlines()
     count = 0
-
     for se in state.all():
         if se.runner_status not in ("DONE", "ERROR"):
             continue
@@ -300,9 +442,35 @@ def sync_to_index(index_path: Path, state: QueueState) -> int:
                 )
                 count += 1
                 break
-
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return count
+
+
+def update_index_entry(index_path: Path, entry: StateEntry):
+    """Update a single entry's status in INDEX.md immediately.
+    Handles PENDING→RUNNING, PENDING→DONE, RUNNING→DONE, RUNNING→ERROR, etc."""
+    if not index_path.exists():
+        return
+    lines = index_path.read_text(encoding="utf-8").splitlines()
+
+    if entry.runner_status == "DONE":
+        new_status = f"DONE ({entry.commit_sha})"
+    elif entry.runner_status == "ERROR":
+        new_status = f"ERROR ({entry.error})"
+    elif entry.runner_status == "RUNNING":
+        new_status = "RUNNING"
+    else:
+        return
+
+    for i, line in enumerate(lines):
+        if entry.filename in line and ("PENDING" in line or "RUNNING" in line):
+            lines[i] = re.sub(
+                r"\|\s*(PENDING|RUNNING)\s*\|",
+                f"| {new_status} |",
+                line, count=1,
+            )
+            break
+    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ─── Git helpers ──────────────────────────────────────────────────────────────
@@ -342,11 +510,37 @@ def build_task(prompt_path: Path, runner_path: Optional[Path], entry: StateEntry
     return "\n".join(parts)
 
 
-# ─── Claude subprocess with real-time streaming ──────────────────────────────
+# ─── Claude subprocess with stream-json parsing ──────────────────────────────
 
-def run_claude(task: str, cwd: Path, log_file: Path, timeout_s: int) -> tuple[int, float]:
-    cmd = ["claude", "--print", "--dangerously-skip-permissions"]
+@dataclass
+class ClaudeResult:
+    exit_code: int
+    duration_s: float
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+
+
+def run_claude(
+    task: str, cwd: Path, log_file: Path, timeout_s: int,
+    stats: Optional[SessionStats] = None,
+) -> ClaudeResult:
+    """
+    Run claude --print --output-format stream-json.
+    Parses JSON events to extract text (displayed + logged) and metadata
+    (cost, tokens, model). Falls back to raw text if JSON parsing fails.
+    """
+    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json",
+           "--dangerously-skip-permissions"]
     start = time.monotonic()
+
+    cost = 0.0
+    in_tok = 0
+    out_tok = 0
+    model = ""
+    last_status_time = start
+    STATUS_INTERVAL = 30  # show inline status every 30s
 
     with open(log_file, "w", encoding="utf-8") as lf:
         lf.write(f"{'='*72}\nTASK INPUT\n{'='*72}\n{task}\n")
@@ -360,20 +554,119 @@ def run_claude(task: str, cwd: Path, log_file: Path, timeout_s: int) -> tuple[in
         proc.stdin.write(task)
         proc.stdin.close()
 
-        for line in proc.stdout:
-            sys.stdout.write(f"{C.DIM}  │{C.RESET} {line}")
-            sys.stdout.flush()
-            lf.write(line)
-            lf.flush()
+        for raw_line in proc.stdout:
+            now = time.monotonic()
+
+            # Try to parse as JSON event
+            text_to_show = None
+            try:
+                event = json.loads(raw_line)
+
+                # Extract displayable text from various event shapes
+                if isinstance(event, dict):
+                    # Stream-json content events
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        text_to_show = delta.get("text", "")
+
+                    # Result/summary events with usage info
+                    elif event.get("type") == "result":
+                        cost = event.get("cost_usd", cost) or cost
+                        usage = event.get("usage", {})
+                        in_tok = usage.get("input_tokens", in_tok) or in_tok
+                        out_tok = usage.get("output_tokens", out_tok) or out_tok
+                        model = event.get("model", model) or model
+
+                    # Message-level usage (some versions)
+                    elif event.get("type") == "message" and "usage" in event:
+                        usage = event["usage"]
+                        in_tok = usage.get("input_tokens", in_tok) or in_tok
+                        out_tok = usage.get("output_tokens", out_tok) or out_tok
+
+                    # Top-level cost/usage in final summary
+                    if "cost_usd" in event:
+                        cost = event["cost_usd"] or cost
+                    if "total_cost_usd" in event:
+                        cost = event["total_cost_usd"] or cost
+                    if "model" in event and event["model"]:
+                        model = event["model"]
+                    if "usage" in event and isinstance(event["usage"], dict):
+                        u = event["usage"]
+                        in_tok = u.get("input_tokens", in_tok) or in_tok
+                        out_tok = u.get("output_tokens", out_tok) or out_tok
+
+                    # If no specific text extracted, check for generic text field
+                    if text_to_show is None and "text" in event:
+                        text_to_show = event["text"]
+
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # Not JSON — treat as raw text output
+                text_to_show = raw_line
+
+            # Display text
+            if text_to_show:
+                for line in text_to_show.splitlines(True):
+                    sys.stdout.write(f"{C.DIM}  │{C.RESET} {line}")
+                if not text_to_show.endswith("\n"):
+                    sys.stdout.write("\n")
+                sys.stdout.flush()
+                lf.write(text_to_show if text_to_show.endswith("\n") else text_to_show + "\n")
+                lf.flush()
+
+            # Update cumulative stats for title bar
+            if stats:
+                stats.total_cost = stats.total_cost - getattr(stats, '_prev_cost', 0) + cost
+                stats._prev_cost = cost
+                stats.total_input_tokens = stats.total_input_tokens - getattr(stats, '_prev_in', 0) + in_tok
+                stats._prev_in = in_tok
+                stats.total_output_tokens = stats.total_output_tokens - getattr(stats, '_prev_out', 0) + out_tok
+                stats._prev_out = out_tok
+                if model:
+                    stats.model = model
+
+            # Periodic inline status
+            if now - last_status_time >= STATUS_INTERVAL:
+                elapsed = now - start
+                status_parts = [fmt_duration(elapsed)]
+                if cost > 0:
+                    status_parts.append(fmt_cost(cost))
+                if in_tok + out_tok > 0:
+                    status_parts.append(f"{fmt_tokens(in_tok + out_tok)} tok")
+                if model:
+                    status_parts.append(model)
+                status_line = " · ".join(status_parts)
+                sys.stdout.write(
+                    f"{C.DIM}  ├─ {status_line}{C.RESET}\n"
+                )
+                sys.stdout.flush()
+                lf.write(f"[STATUS] {status_line}\n")
+                lf.flush()
+                last_status_time = now
 
         proc.wait(timeout=timeout_s)
 
-    return proc.returncode, time.monotonic() - start
+        # Write final stats to log
+        lf.write(f"\n{'='*72}\n")
+        lf.write(f"EXIT CODE: {proc.returncode}\n")
+        lf.write(f"DURATION:  {fmt_duration(time.monotonic() - start)}\n")
+        lf.write(f"MODEL:     {model}\n")
+        lf.write(f"COST:      {fmt_cost(cost)}\n")
+        lf.write(f"TOKENS:    {fmt_tokens(in_tok)} in / {fmt_tokens(out_tok)} out\n")
+        lf.write(f"{'='*72}\n")
+
+    return ClaudeResult(
+        exit_code=proc.returncode,
+        duration_s=time.monotonic() - start,
+        cost_usd=cost,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        model=model,
+    )
 
 
 # ─── Countdown display ───────────────────────────────────────────────────────
 
-def countdown(seconds: int):
+def countdown(seconds: int, stats: Optional[SessionStats] = None):
     end = time.monotonic() + seconds
     try:
         while True:
@@ -381,29 +674,27 @@ def countdown(seconds: int):
             if left <= 0:
                 break
             m, s = divmod(left, 60)
+            extra = ""
+            if stats and stats.total_cost > 0:
+                extra = f" · session {fmt_cost(stats.total_cost)}"
             sys.stdout.write(
-                f"\r{C.DIM}[queue] Next poll in {m}m{s:02d}s · Ctrl+C to stop{C.RESET}   "
+                f"\r{C.DIM}[queue] Next poll in {m}m{s:02d}s{extra} · Ctrl+C to stop{C.RESET}   "
             )
             sys.stdout.flush()
             time.sleep(1)
-        sys.stdout.write("\r" + " " * 72 + "\r")
+        sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
     except KeyboardInterrupt:
-        sys.stdout.write("\r" + " " * 72 + "\r")
+        sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
         raise
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _now_iso():
-    return datetime.datetime.now().isoformat(timespec="seconds")
-
-def _now_human():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def _now_file():
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+def _now_iso():   return datetime.datetime.now().isoformat(timespec="seconds")
+def _now_human(): return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def _now_file():  return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 # ─── Terminal display ─────────────────────────────────────────────────────────
@@ -413,29 +704,46 @@ def print_table(state: QueueState):
     if not entries:
         info("No entries tracked yet.")
         return
-    print(f"\n  {'St':<4} {'Version':<10} {'File':<35} {'Theme':<30} {'SHA':<9} {'Time'}")
-    print(f"  {'──':<4} {'───────':<10} {'────':<35} {'─────':<30} {'───':<9} {'────'}")
+    print(f"\n  {'St':<4} {'Version':<10} {'File':<35} {'Cost':<9} {'SHA':<9} {'Time'}")
+    print(f"  {'──':<4} {'───────':<10} {'────':<35} {'────':<9} {'───':<9} {'────'}")
     for e in entries:
         sym = STATUS_SYM.get(e.runner_status, "?")
         c = {"DONE":C.GREEN,"RUNNING":C.MAGENTA,"PENDING":C.YELLOW,"ERROR":C.RED}.get(e.runner_status, C.DIM)
         sha = e.commit_sha[:7] if e.commit_sha else "—"
-        dur = f"{e.duration_s:.0f}s" if e.duration_s else "—"
-        th = (e.theme[:27]+"...") if len(e.theme)>30 else e.theme
-        print(f"  {c}{sym:<4} {e.version:<10} {e.filename:<35} {th:<30} {sha:<9} {dur}{C.RESET}")
+        dur = fmt_duration(e.duration_s) if e.duration_s else "—"
+        cost = fmt_cost(e.cost_usd) if e.cost_usd > 0 else "—"
+        print(f"  {c}{sym:<4} {e.version:<10} {e.filename:<35} {cost:<9} {sha:<9} {dur}{C.RESET}")
     print()
 
 
-def print_summary(state: QueueState):
+def print_summary(state: QueueState, stats: SessionStats):
     entries = state.all()
-    done = [e for e in entries if e.runner_status == "DONE"]
-    errs = [e for e in entries if e.runner_status == "ERROR"]
+    done_entries = [e for e in entries if e.runner_status == "DONE"]
+    err_entries  = [e for e in entries if e.runner_status == "ERROR"]
+
     banner("Session Summary")
-    for e in done:
-        print(f"  {C.GREEN}✓{C.RESET} {e.version:<10} {e.filename:<35} → {e.commit_sha} ({e.duration_s:.0f}s)")
-    for e in errs:
+
+    for e in done_entries:
+        cost = fmt_cost(e.cost_usd) if e.cost_usd > 0 else ""
+        tok = fmt_tokens(e.input_tokens + e.output_tokens) if (e.input_tokens + e.output_tokens) > 0 else ""
+        extra = f"  {cost}  {tok}".rstrip()
+        print(f"  {C.GREEN}✓{C.RESET} {e.version:<10} {e.filename:<35} → {e.commit_sha} ({fmt_duration(e.duration_s)}){extra}")
+    for e in err_entries:
         print(f"  {C.RED}✗{C.RESET} {e.version:<10} {e.filename:<35} — {e.error}")
+
+    # Totals
     total_t = sum(e.duration_s for e in entries if e.duration_s)
-    print(f"\n  {C.BOLD}Total:{C.RESET} {len(done)} ok, {len(errs)} failed, {total_t:.0f}s\n")
+    total_c = stats.total_cost
+    total_tok = stats.total_input_tokens + stats.total_output_tokens
+    parts = [f"{len(done_entries)} ok, {len(err_entries)} failed, {fmt_duration(total_t)}"]
+    if total_c > 0:
+        parts.append(fmt_cost(total_c))
+    if total_tok > 0:
+        parts.append(f"{fmt_tokens(total_tok)} tokens")
+    if stats.model:
+        parts.append(stats.model)
+
+    print(f"\n  {C.BOLD}Total:{C.RESET} {' · '.join(parts)}\n")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -446,6 +754,7 @@ def main():
     p.add_argument("--one",         action="store_true",  help="Run next pending, then exit")
     p.add_argument("--sync",        action="store_true",  help="Merge state → INDEX.md and exit")
     p.add_argument("--reset",       action="store_true",  help="Clear state (fresh start)")
+    p.add_argument("--retry",       action="store_true",  help="Reset ERROR entries back to PENDING")
     p.add_argument("--poll",        type=int, default=180,help="Poll interval seconds (default 180)")
     p.add_argument("--prompts-dir", type=str, default="cc_prompts")
     p.add_argument("--log-dir",     type=str, default=None)
@@ -462,7 +771,6 @@ def main():
     st_path = pdir / "QUEUE_STATE.json"
     md_path = pdir / "QUEUE_STATUS.md"
 
-    # Preflight
     if not idx.exists():
         err(f"INDEX.md not found at {idx}")
         sys.exit(1)
@@ -472,7 +780,7 @@ def main():
 
     state = QueueState(st_path)
 
-    # ── Commands ──────────────────────────────────────────────────────────
+    # ── Reset ─────────────────────────────────────────────────────────────
     if args.reset:
         state.reset()
         ok("QUEUE_STATE.json cleared.")
@@ -480,9 +788,47 @@ def main():
             md_path.unlink()
         sys.exit(0)
 
+    # ── Retry (reset ERRORs → PENDING) ────────────────────────────────────
+    if args.retry:
+        error_entries = [e for e in state.all() if e.runner_status == "ERROR"]
+        if not error_entries:
+            info("No ERROR entries to retry.")
+            sys.exit(0)
+        # Reset in state
+        for e in error_entries:
+            e.runner_status = "PENDING"
+            e.error = ""
+            e.started_at = ""
+            e.finished_at = ""
+            e.duration_s = 0.0
+            e.log_file = ""
+            e.cost_usd = 0.0
+            e.input_tokens = 0
+            e.output_tokens = 0
+            state.upsert(e)
+        # Reset in INDEX.md
+        if idx.exists():
+            lines = idx.read_text(encoding="utf-8").splitlines()
+            for e in error_entries:
+                for i, line in enumerate(lines):
+                    if e.filename in line and "ERROR" in line:
+                        lines[i] = re.sub(
+                            r"\|\s*ERROR\s*\([^)]*\)\s*\|",
+                            "| PENDING |",
+                            line, count=1,
+                        )
+                        break
+            idx.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        ok(f"Reset {len(error_entries)} ERROR entry/entries back to PENDING:")
+        for e in error_entries:
+            print(f"  {C.YELLOW}⏳{C.RESET} {e.filename}")
+        info("Run again to process them.")
+        sys.exit(0)
+
+    # ── Sync (manual) ─────────────────────────────────────────────────────
     if args.sync:
         n = sync_to_index(idx, state)
-        ok(f"Merged {n} result(s) back into INDEX.md.")
+        ok(f"Merged {n} result(s) into INDEX.md.")
         info("Commit + push INDEX.md when ready.")
         sys.exit(0)
 
@@ -491,35 +837,35 @@ def main():
     if new:
         info(f"Discovered {len(new)} new prompt(s) from INDEX.md")
 
-    # Recover crashed RUNNING → PENDING
     stale = state.running_entry()
     if stale:
         warn(f"Stale RUNNING: {stale.filename} → reset to PENDING")
         stale.runner_status = "PENDING"
         state.upsert(stale)
 
-    write_status_md(md_path, state)
+    stats = SessionStats(
+        prompts_total=state.pending_count(),
+        branch=git_branch(root),
+    )
 
-    # ── Startup sync check ────────────────────────────────────────────────
-    unsynced = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
-    if unsynced and not args.dry_run:
-        warn(f"{len(unsynced)} unsynced result(s) from a previous session:")
-        for e in unsynced:
-            sym = "✓" if e.runner_status == "DONE" else "✗"
-            print(f"  {C.DIM}  {sym} {e.filename} → {e.runner_status}{C.RESET}")
-        if prompt_yn("Sync these into INDEX.md now before starting?"):
-            n = sync_to_index(idx, state)
-            ok(f"Merged {n} result(s) into INDEX.md.")
-            # Clear synced entries from state so they don't pile up
-            for e in unsynced:
-                state._entries.pop(e.filename, None)
-            state.save()
-            write_status_md(md_path, state)
-        else:
-            info("Skipped sync — results stay in QUEUE_STATE.json.")
+    write_status_md(md_path, state, stats)
+
+    # ── Startup cleanup ─────────────────────────────────────────────────
+    # If previous session crashed before cleaning state, completed entries
+    # may still be in QUEUE_STATE.json. INDEX.md was already updated live,
+    # so just clean them out.
+    stale_completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
+    if stale_completed and not args.dry_run:
+        info(f"Cleaning {len(stale_completed)} completed entry/entries from previous session state.")
+        # Ensure INDEX.md has the results (in case of crash before write)
+        sync_to_index(idx, state)
+        for e in stale_completed:
+            state._entries.pop(e.filename, None)
+        state.save()
+        write_status_md(md_path, state, stats)
 
     info(f"Root:    {root}")
-    info(f"Branch:  {git_branch(root)}")
+    info(f"Branch:  {stats.branch}")
     info(f"Tracked: {len(state.all())} · Pending: {state.pending_count()}")
     info(f"State:   {st_path.name} · Status: {md_path.name}")
     info(f"Poll:    {args.poll}s")
@@ -536,133 +882,167 @@ def main():
         nonlocal stop
         if stop:
             err("Force quit.")
+            clear_title()
             sys.exit(130)
         stop = True
         warn("Stopping after current prompt... (again to force)")
     signal.signal(signal.SIGINT, on_sig)
 
+    # ── Title updater ─────────────────────────────────────────────────────
+    title_updater = TitleUpdater(stats)
+    title_updater.start()
+
     # ── Watch loop ────────────────────────────────────────────────────────
     runs = 0
     info("Watcher started.\n")
 
-    while not stop:
-        # Pick up new prompts from INDEX.md every cycle
-        new = state.discover_new(read_index(idx))
-        if new:
-            info(f"New: {', '.join(e.filename for e in new)}")
-            write_status_md(md_path, state)
+    try:
+        while not stop:
+            new = state.discover_new(read_index(idx))
+            if new:
+                info(f"New: {', '.join(e.filename for e in new)}")
+                stats.prompts_total += len(new)
+                write_status_md(md_path, state, stats)
 
-        entry = state.next_pending()
-        if not entry:
-            if args.one:
-                info("No pending prompts.")
+            entry = state.next_pending()
+            if not entry:
+                if args.one:
+                    info("No pending prompts.")
+                    break
+                try:
+                    countdown(args.poll, stats)
+                except KeyboardInterrupt:
+                    stop = True
+                continue
+
+            prompt_path = pdir / entry.filename
+            if not prompt_path.exists():
+                err(f"Missing: {prompt_path}")
+                entry.runner_status = "ERROR"
+                entry.error = "file not found"
+                entry.finished_at = _now_iso()
+                state.upsert(entry)
+                update_index_entry(idx, entry)
+                stats.prompts_failed += 1
+                write_status_md(md_path, state, stats)
+                continue
+
+            runs += 1
+            if runs > args.max_runs:
+                warn(f"Safety cap ({args.max_runs}). Restart to continue.")
                 break
-            try:
-                countdown(args.poll)
-            except KeyboardInterrupt:
-                stop = True
-            continue
 
-        prompt_path = pdir / entry.filename
-        if not prompt_path.exists():
-            err(f"Missing: {prompt_path}")
-            entry.runner_status = "ERROR"
-            entry.error = "file not found"
+            banner(f"[{runs}] {entry.version} — {entry.filename}  ({state.pending_count()} pending)")
+            info(f"Theme: {entry.theme}")
+
+            # Mark RUNNING
+            entry.runner_status = "RUNNING"
+            entry.started_at = _now_iso()
+            state.upsert(entry)
+            update_index_entry(idx, entry)
+
+            stats.current_prompt = entry.filename
+            stats.current_version = entry.version
+            stats.current_start = time.monotonic()
+            stats._prev_cost = 0
+            stats._prev_in = 0
+            stats._prev_out = 0
+
+            write_status_md(md_path, state, stats)
+
+            task = build_task(prompt_path, runner if runner.exists() else None, entry)
+            log_file = logd / f"{_now_file()}_{entry.filename.replace('.md','')}.log"
+
+            result = run_claude(task, root, log_file, args.timeout, stats)
+
+            entry.duration_s = result.duration_s
+            entry.log_file = str(log_file)
             entry.finished_at = _now_iso()
+            entry.cost_usd = result.cost_usd
+            entry.input_tokens = result.input_tokens
+            entry.output_tokens = result.output_tokens
+            entry.model = result.model
+
+            stats.current_prompt = ""
+            stats.current_version = ""
+            stats.current_start = 0
+
+            if result.exit_code != 0:
+                err(f"Exit {result.exit_code} — log: {log_file}")
+                entry.runner_status = "ERROR"
+                entry.error = f"exit code {result.exit_code}"
+                stats.prompts_failed += 1
+                state.upsert(entry)
+                update_index_entry(idx, entry)
+                write_status_md(md_path, state, stats)
+                continue
+
+            sha = git_short(root)
+            entry.runner_status = "DONE"
+            entry.commit_sha = sha
+            stats.prompts_done += 1
             state.upsert(entry)
-            write_status_md(md_path, state)
-            continue
+            update_index_entry(idx, entry)
+            write_status_md(md_path, state, stats)
 
-        runs += 1
-        if runs > args.max_runs:
-            warn(f"Safety cap ({args.max_runs}). Restart to continue.")
-            break
+            # Result line with cost info
+            parts = [f"✓ {entry.version} → {sha} ({fmt_duration(result.duration_s)})"]
+            if result.cost_usd > 0:
+                parts.append(fmt_cost(result.cost_usd))
+            if result.input_tokens + result.output_tokens > 0:
+                parts.append(f"{fmt_tokens(result.input_tokens + result.output_tokens)} tok")
+            ok(" · ".join(parts))
 
-        banner(f"[{runs}] {entry.version} — {entry.filename}  ({state.pending_count()} pending)")
-        info(f"Theme: {entry.theme}")
+            if args.one:
+                break
 
-        # Mark RUNNING
-        entry.runner_status = "RUNNING"
-        entry.started_at = _now_iso()
-        state.upsert(entry)
-        write_status_md(md_path, state)
+            if not stop:
+                info("Checking for more...")
+                time.sleep(3)
 
-        before = git_head(root)
-        task = build_task(prompt_path, runner if runner.exists() else None, entry)
-        log_file = logd / f"{_now_file()}_{entry.filename.replace('.md','')}.log"
-
-        code, dur = run_claude(task, root, log_file, args.timeout)
-
-        entry.duration_s = dur
-        entry.log_file = str(log_file)
-        entry.finished_at = _now_iso()
-
-        if code != 0:
-            err(f"Exit {code} — log: {log_file}")
-            entry.runner_status = "ERROR"
-            entry.error = f"exit code {code}"
-            state.upsert(entry)
-            write_status_md(md_path, state)
-            continue
-
-        sha = git_short(root)
-        entry.runner_status = "DONE"
-        entry.commit_sha = sha
-        state.upsert(entry)
-        write_status_md(md_path, state)
-
-        ok(f"✓ {entry.version} → {sha} ({dur:.0f}s)")
-
-        if args.one:
-            break
-
-        if not stop:
-            info("Checking for more...")
-            time.sleep(3)
+    finally:
+        title_updater.stop()
+        clear_title()
 
     # ── End ───────────────────────────────────────────────────────────────
-    write_status_md(md_path, state)
+    write_status_md(md_path, state, stats)
 
     if runs > 0:
-        print_summary(state)
+        print_summary(state, stats)
 
     info(f"Pending: {state.pending_count()}")
 
     # ── Exit sync prompt ──────────────────────────────────────────────────
-    syncable = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
-    if syncable:
+    completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
+    if completed:
         print()
-        info(f"{len(syncable)} result(s) ready to sync back to INDEX.md:")
-        for e in syncable:
-            sym = f"{C.GREEN}✓{C.RESET}" if e.runner_status == "DONE" else f"{C.RED}✗{C.RESET}"
-            sha = e.commit_sha or e.error
-            print(f"    {sym} {e.filename} → {sha}")
+        info(f"INDEX.md already updated for {len(completed)} prompt(s).")
 
-        if prompt_yn("\n  Sync into INDEX.md now?"):
-            n = sync_to_index(idx, state)
-            ok(f"Merged {n} result(s) into INDEX.md.")
+        # Check if there are uncommitted INDEX.md changes to push
+        idx_diff = git("diff", "--name-only", str(idx.relative_to(root)), cwd=root)
+        idx_staged = git("diff", "--cached", "--name-only", str(idx.relative_to(root)), cwd=root)
+        has_changes = bool(idx_diff.stdout.strip() or idx_staged.stdout.strip())
 
-            if prompt_yn("  Commit and push INDEX.md?"):
-                sha = git_commit_files(
-                    "queue: sync results to INDEX.md",
-                    [str(idx.relative_to(root))],
-                    root,
-                )
-                ok(f"Committed: {sha}")
-                if not args.no_push:
-                    if git_push(root):
-                        ok("Pushed.")
-                    else:
-                        warn("Push failed — do it manually.")
+        if has_changes and prompt_yn("Commit and push INDEX.md?"):
+            sha = git_commit_files(
+                "queue: mark completed prompts in INDEX.md",
+                [str(idx.relative_to(root))],
+                root,
+            )
+            ok(f"Committed: {sha}")
+            if not args.no_push:
+                if git_push(root):
+                    ok("Pushed.")
+                else:
+                    warn("Push failed — do it manually.")
 
-            # Clear synced entries
-            for e in syncable:
-                state._entries.pop(e.filename, None)
-            state.save()
-            write_status_md(md_path, state)
-        else:
-            info("Results stay in QUEUE_STATE.json. Run --sync anytime.")
+        # Clean completed entries from state so they don't nag on next start
+        for e in completed:
+            state._entries.pop(e.filename, None)
+        state.save()
+        write_status_md(md_path, state, stats)
 
+    # Recent commits
     r = git("log", "--oneline", "-5", cwd=root)
     if r.stdout.strip():
         print(f"\n{C.DIM}  Recent commits:{C.RESET}")

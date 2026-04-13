@@ -909,7 +909,7 @@ function ContainerCardCollapsed({ c, onEntityDetail }) {
 
 // ── VM / LXC card ─────────────────────────────────────────────────────────────
 
-function ProxmoxCardExpanded({ vm, onAction, confirm, showToast }) {
+function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
@@ -930,6 +930,11 @@ function ProxmoxCardExpanded({ vm, onAction, confirm, showToast }) {
   }
 
   const isLxc = vm.type === 'lxc'
+  const _pxHost = proxmoxHost || location.hostname
+  const _pxPort = proxmoxPort || 8006
+  const _pxBase = `https://${_pxHost}:${_pxPort}`
+  const openConsole = (type) =>
+    window.open(`${_pxBase}/?console=${type}&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')
 
   return (
     <>
@@ -944,12 +949,12 @@ function ProxmoxCardExpanded({ vm, onAction, confirm, showToast }) {
         vm.status === 'stopped'
           ? [
             <ActionBtn key="start" label={isLxc ? 'Start Container' : 'Start VM'} variant="urgent" loading={loading.start} onClick={() => act('start', 'start', null)} />,
-            <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
+            <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(_pxBase, '_blank')} />,
           ]
           : [
-            !isLxc && <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=kvm&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
-            isLxc && <ActionBtn key="console" label="Open Console" onClick={() => window.open(`https://${location.hostname}:8006/?console=lxc&vmid=${vm.vmid}&node=${vm.node_api}&novnc=1`, '_blank')} />,
-            <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(`https://${location.hostname}:8006`, '_blank')} />,
+            !isLxc && <ActionBtn key="console" label="Open Console" onClick={() => openConsole('kvm')} />,
+            isLxc && <ActionBtn key="console" label="Open Console" onClick={() => openConsole('lxc')} />,
+            <ActionBtn key="proxmox" label="View in Proxmox" onClick={() => window.open(_pxBase, '_blank')} />,
             isLxc && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', 'stop', `Stop ${vm.name}?`)} />,
             <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? It will be temporarily unreachable.`)} />,
           ].filter(Boolean)
@@ -1756,7 +1761,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
                     net={vm.ip || ''} uptime={vm.uptime || ''}
                     collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
-                    expanded={<ProxmoxCardExpanded vm={vm} onAction={load} confirm={confirm} showToast={showToast} />}
+                    expanded={<ProxmoxCardExpanded vm={vm} proxmoxHost={cluster.connection_host} proxmoxPort={cluster.connection_port || 8006} onAction={load} confirm={confirm} showToast={showToast} />}
                     compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                     entityForCompare={{
                       id: `proxmox:${vm.name}:${vm.vmid}`,

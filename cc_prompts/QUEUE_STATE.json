@@ -1,29 +1,69 @@
 {
-  "updated_at": "2026-04-13T11:10:57",
+  "updated_at": "2026-04-13T12:03:23",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
       "version": "v2.16.1",
       "theme": "Agent task templates in CommandPanel",
       "runner_status": "DONE",
-      "commit_sha": "b70f989",
+      "commit_sha": "f76a451",
       "error": "",
-      "started_at": "2026-04-13T11:09:11",
-      "finished_at": "2026-04-13T11:10:54",
-      "duration_s": 102.96063669997966,
-      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260413_110911_CC_PROMPT_v2.16.1.log"
+      "started_at": "2026-04-13T12:02:20",
+      "finished_at": "2026-04-13T12:02:53",
+      "duration_s": 32.29931959998794,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260413_120220_CC_PROMPT_v2.16.1.log",
+      "cost_usd": 0.33926625000000005,
+      "input_tokens": 7,
+      "output_tokens": 655,
+      "model": "claude-opus-4-6[1m]"
     },
     {
       "filename": "CC_PROMPT_v2.17.0.md",
       "version": "v2.17.0",
       "theme": "Entity timeline view in EntityDrawer",
+      "runner_status": "DONE",
+      "commit_sha": "f76a451",
+      "error": "",
+      "started_at": "2026-04-13T12:02:56",
+      "finished_at": "2026-04-13T12:03:20",
+      "duration_s": 24.41866409999784,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260413_120256_CC_PROMPT_v2.17.0.log",
+      "cost_usd": 0.27606800000000004,
+      "input_tokens": 5,
+      "output_tokens": 559,
+      "model": "claude-opus-4-6[1m]"
+    },
+    {
+      "filename": "CC_PROMPT_v2.17.1.md",
+      "version": "v2.17.1",
+      "theme": "Fix Proxmox noVNC console URL (uses actual Proxmox host)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-13T11:10:57",
+      "started_at": "2026-04-13T12:03:23",
       "finished_at": "",
       "duration_s": 0.0,
-      "log_file": ""
+      "log_file": "",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.18.0.md",
+      "version": "v2.18.0",
+      "theme": "Result store viewer in Logs tab",
+      "runner_status": "PENDING",
+      "commit_sha": "",
+      "error": "",
+      "started_at": "",
+      "finished_at": "",
+      "duration_s": 0.0,
+      "log_file": "",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
     }
   ]
 }
