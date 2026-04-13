@@ -62,7 +62,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.20.1.md | v2.20.1 | VM card action audit trail + visual feedback | PENDING |
 | CC_PROMPT_v2.20.2.md | v2.20.2 | VM card SSH log stream + live logs filter fix | PENDING |
 | CC_PROMPT_v2.21.0.md | v2.21.0 | Time-series metric_samples table + metric_trend agent tool | DONE (cdb44d6) |
-| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | RUNNING |
+| CC_PROMPT_v2.21.1.md | v2.21.1 | Container lifecycle events + collector snapshots to Elasticsearch | DONE (99e017c) |
 
 ---
 
