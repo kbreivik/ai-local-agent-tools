@@ -585,6 +585,115 @@ def proxmox_vm_power(vm_label: str, action: str) -> dict:
                 "data": None, "timestamp": _ts()}
 
 
+def service_placement(service_name: str) -> dict:
+    """Get task placement for a Swarm service: which node each task is on,
+    its current state, and the matching vm_host connection for SSH access.
+
+    Use when a service shows running replicas in Swarm but is behaving incorrectly
+    (e.g. Kafka broker shows 1/1 replicas but is not visible in the cluster).
+    This bridges: service name → node hostname → vm_host label → SSH-able connection.
+
+    Read-only — never requires plan_action.
+
+    Args:
+        service_name: Exact Swarm service name (e.g. "kafka_broker-1", "kafka_broker-2").
+                      Also accepts partial name (e.g. "kafka" returns all kafka services).
+    """
+    from api.connections import get_all_connections_for_platform
+    from api.collectors.vm_hosts import _resolve_credentials, _ssh_run
+
+    all_conns = get_all_connections_for_platform("vm_host")
+    manager_conn = next(
+        (c for c in all_conns if 'manager' in c.get("label", "").lower()),
+        None
+    )
+    if not manager_conn:
+        return {"status": "error",
+                "message": "No manager vm_host connection found.",
+                "data": None, "timestamp": _ts()}
+
+    host = manager_conn.get("host", "")
+    port = manager_conn.get("port") or 22
+    username, password, private_key = _resolve_credentials(manager_conn, all_conns)
+
+    try:
+        # Find all matching services
+        svc_list_out = _ssh_run(
+            host, port, username, password, private_key,
+            f"docker service ls --filter name={service_name} --format '{{{{.Name}}}}'",
+        )
+        services = [s.strip() for s in svc_list_out.strip().splitlines() if s.strip()]
+
+        if not services:
+            return {
+                "status": "error",
+                "message": f"No Swarm service matching '{service_name}' found.",
+                "data": None, "timestamp": _ts(),
+            }
+
+        placements = []
+        for svc in services:
+            ps_out = _ssh_run(
+                host, port, username, password, private_key,
+                f"docker service ps {svc} --no-trunc "
+                f"--format '{{{{.Name}}}}|{{{{.Node}}}}|{{{{.CurrentState}}}}|{{{{.DesiredState}}}}|{{{{.Error}}}}'",
+            )
+            for line in ps_out.strip().splitlines():
+                if not line or "|" not in line:
+                    continue
+                parts = line.split("|")
+                task_name    = parts[0].strip() if len(parts) > 0 else ""
+                node_name    = parts[1].strip() if len(parts) > 1 else ""
+                current_state = parts[2].strip() if len(parts) > 2 else ""
+                desired_state = parts[3].strip() if len(parts) > 3 else ""
+                error        = parts[4].strip() if len(parts) > 4 else ""
+
+                # Cross-reference node hostname against vm_host connections
+                vm_conn = _resolve_connection(node_name, all_conns)
+                placements.append({
+                    "service":       svc,
+                    "task":          task_name,
+                    "node":          node_name,
+                    "current_state": current_state,
+                    "desired_state": desired_state,
+                    "error":         error,
+                    "vm_host_label": vm_conn.get("label") if vm_conn else None,
+                    "vm_host_ip":    vm_conn.get("host") if vm_conn else None,
+                    "ssh_ready":     vm_conn is not None,
+                })
+
+        # Summary: healthy vs unhealthy tasks
+        running = [p for p in placements if "running" in p["current_state"].lower()]
+        failed  = [p for p in placements if p["current_state"] and "running" not in p["current_state"].lower()]
+        health  = "healthy" if not failed and running else "degraded" if running else "critical"
+
+        return {
+            "status": "ok",
+            "health": health,
+            "message": (
+                f"{len(services)} service(s), {len(running)} task(s) running, "
+                f"{len(failed)} failed/other"
+                + (f" — issues: {'; '.join(p['node'] + ' ' + p['current_state'] for p in failed[:3])}" if failed else "")
+            ),
+            "data": {
+                "placements":    placements,
+                "services":      services,
+                "running_count": len(running),
+                "failed_count":  len(failed),
+                "manager_used":  manager_conn.get("label"),
+                "hint": (
+                    "Use vm_host_label with vm_exec() to SSH to the node. "
+                    "Example: vm_exec(host='<vm_host_label>', command='docker ps --filter name=kafka')"
+                ) if placements else "",
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error",
+                "message": f"service_placement failed: {e}",
+                "data": None, "timestamp": _ts()}
+
+
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query the SSH capability map — which credentials can reach which hosts.
 

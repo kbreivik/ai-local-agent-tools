@@ -93,6 +93,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "result_fetch", "result_query",
     "entity_history", "entity_events",
     "swarm_node_status",
+    "service_placement",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -116,6 +117,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "result_fetch", "result_query",
     "entity_history", "entity_events",
     "swarm_node_status",
+    "service_placement",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -355,6 +357,20 @@ When kafka_broker_status returns degraded (missing broker):
 4. If task is Running but broker not in cluster: network issue — use service_placement()
    tool if available, or vm_exec to check docker service ps output.
 
+TOPOLOGY SHORTCUT:
+Instead of manually running docker service ps, use:
+  service_placement("kafka_broker-1")
+This returns: which node the task is on, its state, error message if any,
+AND the exact vm_host_label to pass to vm_exec() or kafka_exec().
+Example workflow:
+  1. service_placement("kafka_broker-1")
+     → {node: "ds-docker-worker-01", vm_host_label: "ds-docker-worker-01", current_state: "Running 3 hours ago"}
+  2. vm_exec(host="ds-docker-worker-01", command="docker ps --filter name=kafka")
+     → verify the container is actually running
+  3. kafka_exec(broker_label="ds-docker-worker-01",
+     command="kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
+     → check broker's view of the cluster
+
 To describe a specific topic: kafka_exec(broker_label="ds-docker-worker-01",
   command="kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
 To run preferred leader election: kafka_exec(broker_label="ds-docker-worker-01",
@@ -411,6 +427,8 @@ RULES:
             command="kafka-topics.sh --bootstrap-server localhost:9092 --list")
             → verify broker can see the cluster from its own side
     This chain narrows: cluster view → swarm view → task placement → broker self-check.
+    SHORTCUT: use service_placement("kafka_broker-1") to get node + vm_host_label in one call,
+    then vm_exec(host=<vm_host_label>, ...) to SSH to that exact node.
 
     TOOL NOTE: infra_lookup(query="worker-01") — param is 'query', never 'hostname'.
                run_ssh does NOT exist — use vm_exec(host=..., command=...) instead.

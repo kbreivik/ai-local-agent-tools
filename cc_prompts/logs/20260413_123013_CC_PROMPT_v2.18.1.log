@@ -1,0 +1,409 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.18.1.md (v2.18.1)
+Theme: Synthesis on all completion paths + Kafka diagnostic prompts
+
+Prompt content:
+
+# CC PROMPT — v2.18.1 — Agent synthesis on all completion paths + Kafka diagnostic guidance
+
+## What this does
+
+Two fixes:
+
+1. **Synthesis fires on all completion paths** — currently it only fires on halt and
+   max-steps. When an investigate agent ends normally (via audit_log or finish=stop)
+   with degraded findings, no synthesis fires and the user gets no actionable output.
+   Fix: check `_degraded_findings` on the audit_log completion path and the
+   finish=stop path.
+
+2. **Prompt guidance for Kafka diagnostic chain** — the agent tried `run_ssh`
+   (hallucinated) and `infra_lookup(hostname=...)` (wrong kwarg). Update
+   RESEARCH_PROMPT and STATUS_PROMPT with the correct Kafka diagnosis workflow:
+   kafka_broker_status degraded → swarm_node_status → vm_exec(manager, "docker service ps
+   kafka_broker-X") → kafka_exec to check from the broker's perspective.
+   Also fix the infra_lookup kwarg guidance to use `query=`, not `hostname=`.
+
+Version bump: 2.18.0 → 2.18.1
+
+---
+
+## Change 1 — api/routers/agent.py
+
+### 1a — Fire synthesis on audit_log completion path
+
+Find the audit_log completion check inside `_run_single_agent_step`:
+
+```python
+            _step_names = [tc.function.name for tc in msg.tool_calls]
+            if (_step_names and all(n == "audit_log" for n in _step_names)
+                    and _last_blocked_tool != "escalate"):
+                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                if is_final_step:
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                break
+```
+
+Replace with:
+
+```python
+            _step_names = [tc.function.name for tc in msg.tool_calls]
+            if (_step_names and all(n == "audit_log" for n in _step_names)
+                    and _last_blocked_tool != "escalate"):
+                # Synthesise degraded findings before broadcasting done
+                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                    try:
+                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_resp = client.chat.completions.create(
+                            model=_lm_model(),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a concise infrastructure ops assistant. "
+                                        "Based on the findings, provide:\n"
+                                        "1. Root cause in one sentence\n"
+                                        "2. What was checked (bullet list: tool → result)\n"
+                                        "3. Numbered fix steps (specific commands or actions)\n"
+                                        "4. Which fix steps the agent can run automatically "
+                                        "if re-run with an action task\n"
+                                        "Plain text only. No markdown headers."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Task: {task}\n\nFindings:\n{_synth_ctx}\n\n"
+                                        "Give root cause, what was checked, and remediation steps."
+                                    ),
+                                },
+                            ],
+                            tools=None,
+                            temperature=0.3,
+                            max_tokens=500,
+                        )
+                        _synth_text = _synth_resp.choices[0].message.content or ""
+                        if _synth_text.strip():
+                            last_reasoning = _synth_text.strip()
+                            await manager.send_line("reasoning", _synth_text, session_id=session_id)
+                    except Exception as _se:
+                        log.debug("Audit-log completion synthesis failed: %s", _se)
+                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                if is_final_step:
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                break
+```
+
+### 1b — Fire synthesis on finish=stop path
+
+Find the finish=stop completion block:
+
+```python
+            if finish == "stop" or not msg.tool_calls:
+```
+
+Find the part of that block that broadcasts "done" (the non-destructive intent path):
+
+```python
+                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                if is_final_step:
+                    payload = {
+                        "type":       "done",
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "content":    last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "status":     "ok",
+                        "choices":    choices or [],
+                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                    }
+                    log.debug("agent done choices=%s", choices)
+                    await manager.broadcast(payload)
+                break
+```
+
+Replace with:
+
+```python
+                # Synthesise degraded findings if present and summary is thin
+                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                    try:
+                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_resp = client.chat.completions.create(
+                            model=_lm_model(),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a concise infrastructure ops assistant. "
+                                        "Based on the findings, provide:\n"
+                                        "1. Root cause in one sentence\n"
+                                        "2. What was checked (bullet list: tool → result)\n"
+                                        "3. Numbered fix steps (specific commands or actions)\n"
+                                        "4. Which fix steps the agent can run automatically "
+                                        "if re-run with an action task\n"
+                                        "Plain text only. No markdown headers."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Task: {task}\n\nFindings:\n{_synth_ctx}\n\n"
+                                        "Give root cause, what was checked, and remediation steps."
+                                    ),
+                                },
+                            ],
+                            tools=None,
+                            temperature=0.3,
+                            max_tokens=500,
+                        )
+                        _synth_text = _synth_resp.choices[0].message.content or ""
+                        if _synth_text.strip():
+                            last_reasoning = _synth_text.strip()
+                            await manager.send_line("reasoning", _synth_text, session_id=session_id)
+                    except Exception as _se:
+                        log.debug("Stop-path synthesis failed: %s", _se)
+                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                if is_final_step:
+                    payload = {
+                        "type":       "done",
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "content":    last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "status":     "ok",
+                        "choices":    choices or [],
+                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                    }
+                    log.debug("agent done choices=%s", choices)
+                    await manager.broadcast(payload)
+                break
+```
+
+---
+
+## Change 2 — api/agents/router.py
+
+### 2a — Fix STATUS_PROMPT: add Kafka diagnostic chain + infra_lookup kwarg
+
+In STATUS_PROMPT, find the KAFKA INVESTIGATION section:
+
+```
+KAFKA INVESTIGATION:
+To check topic state on a specific broker: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
+To run preferred leader election: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-leader-election.sh --bootstrap-server localhost:9092 --election-type PREFERRED --all-topic-partitions")
+broker_label must exactly match a vm_host connection label. Call infra_lookup() first if unsure.
+```
+
+Replace with:
+
+```
+KAFKA INVESTIGATION:
+When kafka_broker_status returns degraded (missing broker):
+1. Call swarm_node_status() — check if the worker node is Down
+2. If node is Up: call vm_exec(host="<any-manager-label>",
+   command="docker service ps kafka_broker-1 --format '{{.Node}}|{{.CurrentState}}|{{.Error}}'")
+   This shows which node the broker task is on and its state.
+3. Then call kafka_exec(broker_label="<node-label-from-step-2>",
+   command="kafka-topics.sh --bootstrap-server localhost:9092 --list")
+   to verify the broker can see the cluster from its own perspective.
+4. If task is Running but broker not in cluster: network issue — use service_placement()
+   tool if available, or vm_exec to check docker service ps output.
+
+To describe a specific topic: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic hp1-logs")
+To run preferred leader election: kafka_exec(broker_label="ds-docker-worker-01",
+  command="kafka-leader-election.sh --bootstrap-server localhost:9092 --election-type PREFERRED --all-topic-partitions")
+broker_label must exactly match a vm_host connection label.
+
+infra_lookup correct usage: infra_lookup(query="worker-01") NOT infra_lookup(hostname="worker-01").
+The parameter is always 'query', never 'hostname'.
+```
+
+### 2b — Fix RESEARCH_PROMPT: same Kafka chain
+
+In RESEARCH_PROMPT, after the existing rule 4 update from v2.16.0, add a new rule 5c:
+
+Find the end of rule 5b (or rule 5 if 5b doesn't exist) in RESEARCH_PROMPT. Add after it:
+
+```
+5c. KAFKA DIAGNOSTIC CHAIN — follow this order when a broker is missing:
+    Step 1: kafka_broker_status() → if degraded, note which broker ID is missing
+    Step 2: swarm_node_status() → check if any worker node is Down
+    Step 3: vm_exec(host="<manager>", command="docker service ps kafka_broker-<N>
+            --format '{{.Node}}|{{.CurrentState}}|{{.Error}}'")
+            → find which node the task is on and whether it's Running or Failed
+    Step 4: kafka_exec(broker_label="<node-from-step-3>",
+            command="kafka-topics.sh --bootstrap-server localhost:9092 --list")
+            → verify broker can see the cluster from its own side
+    This chain narrows: cluster view → swarm view → task placement → broker self-check.
+
+    TOOL NOTE: infra_lookup(query="worker-01") — param is 'query', never 'hostname'.
+               run_ssh does NOT exist — use vm_exec(host=..., command=...) instead.
+```
+
+---
+
+## Do NOT touch
+
+- Any collector files
+- `mcp_server/tools/vm.py` — no changes (that's the next prompt)
+- `api/routers/escalations.py`
+- Any frontend files
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.18.0` → `2.18.1`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agent): v2.18.1 synthesis fires on all completion paths + Kafka diagnostic chain in prompts
+
+- Synthesis now fires on audit_log completion path (was only halt + max-steps)
+- Synthesis now fires on finish=stop path when _degraded_findings are present
+- Synthesis output: root cause + what was checked + numbered fix steps + automatable steps
+- STATUS_PROMPT: Kafka diagnostic chain (swarm_node_status → docker service ps → kafka_exec)
+- RESEARCH_PROMPT: 5c Kafka chain rule with exact tool usage
+- Both prompts: infra_lookup kwarg is 'query=' not 'hostname='; run_ssh does not exist"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-13 12:30:13
+========================================================================
+PROMPT COMPLETE: v2.18.1
+[STATUS] 2m21s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m23s
+========================================================================

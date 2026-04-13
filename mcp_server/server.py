@@ -750,6 +750,18 @@ def swarm_node_status() -> dict:
 
 
 @mcp.tool()
+def service_placement(service_name: str) -> dict:
+    """Find which Swarm nodes a service's tasks are running on, and the vm_host
+    connection for each node. Cross-references task placement with SSH-accessible
+    hosts so you can immediately follow up with vm_exec() or kafka_exec().
+    Read-only. Use when a service reports running replicas but behaves incorrectly.
+    Example: service_placement("kafka_broker-1")
+    """
+    from mcp_server.tools.vm import service_placement as _sp
+    return _sp(service_name=service_name)
+
+
+@mcp.tool()
 def proxmox_vm_power(vm_label: str, action: str) -> dict:
     """Start, stop, or reboot a Proxmox VM by name label.
     Use when a worker node is completely Down and unreachable via SSH.
