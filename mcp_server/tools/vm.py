@@ -39,6 +39,7 @@ def _validate_command(command):
         r'^docker system df', r'^docker volume ls', r'^docker volume inspect\b',
         r'^docker container inspect\b', r'^docker inspect\b',
         r'^docker ps\b', r'^docker images\b',
+        r'^docker logs\b',                         # read-only log fetch
         r'^docker exec \S+ kafka-[a-z-]+\.sh\b',  # kafka CLI tools in containers
         r'^docker service ps\b', r'^docker service inspect\b',
         r'^docker node inspect\b', r'^docker node ls\b',

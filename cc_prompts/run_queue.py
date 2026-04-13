@@ -810,19 +810,17 @@ def main():
 
     write_status_md(md_path, state, stats)
 
-    # ── Startup cleanup ─────────────────────────────────────────────────
-    # If previous session crashed before cleaning state, completed entries
-    # may still be in QUEUE_STATE.json. INDEX.md was already updated live,
-    # so just clean them out.
-    stale_completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
-    if stale_completed and not args.dry_run:
-        info(f"Cleaning {len(stale_completed)} completed entry/entries from previous session state.")
-        # Ensure INDEX.md has the results (in case of crash before write)
-        sync_to_index(idx, state)
-        for e in stale_completed:
-            state._entries.pop(e.filename, None)
-        state.save()
-        write_status_md(md_path, state, stats)
+    # ── Startup: ensure INDEX.md reflects state ─────────────────────────
+    # Completed entries stay in state permanently to prevent re-processing
+    # (Claude Desktop may overwrite INDEX.md with PENDING at any time).
+    completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
+    if completed and not args.dry_run:
+        n = sync_to_index(idx, state)
+        if n > 0:
+            info(f"Re-synced {n} result(s) into INDEX.md (Desktop may have overwritten).")
+        done_count = sum(1 for e in completed if e.runner_status == "DONE")
+        err_count = sum(1 for e in completed if e.runner_status == "ERROR")
+        info(f"Previously completed: {done_count} done, {err_count} error(s) (skipping these).")
 
     info(f"Root:    {root}")
     info(f"Branch:  {stats.branch}")
@@ -974,13 +972,12 @@ def main():
 
     info(f"Pending: {state.pending_count()}")
 
-    # ── Exit sync prompt ──────────────────────────────────────────────────
-    completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
-    if completed:
+    # ── Exit: sync INDEX.md one more time ────────────────────────────────
+    sync_to_index(idx, state)
+    new_completed = [e for e in state.all() if e.runner_status in ("DONE", "ERROR")]
+    if new_completed and runs > 0:
         print()
-        info(f"INDEX.md already updated for {len(completed)} prompt(s).")
-
-        # Check if there are uncommitted INDEX.md changes to push
+        # Check if there are uncommitted INDEX.md changes
         idx_diff = git("diff", "--name-only", str(idx.relative_to(root)), cwd=root)
         idx_staged = git("diff", "--cached", "--name-only", str(idx.relative_to(root)), cwd=root)
         has_changes = bool(idx_diff.stdout.strip() or idx_staged.stdout.strip())
@@ -998,11 +995,8 @@ def main():
                 else:
                     warn("Push failed — do it manually.")
 
-        # Clean completed entries from state so they don't nag on next start
-        for e in completed:
-            state._entries.pop(e.filename, None)
-        state.save()
-        write_status_md(md_path, state, stats)
+    # Completed entries stay in QUEUE_STATE.json to prevent re-processing.
+    # Use --reset to clear everything and start fresh.
 
     # Recent commits
     r = git("log", "--oneline", "-5", cwd=root)

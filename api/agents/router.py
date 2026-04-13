@@ -359,7 +359,9 @@ When kafka_broker_status returns degraded (missing broker):
 
 TOPOLOGY SHORTCUT:
 Instead of manually running docker service ps, use:
-  service_placement("kafka_broker-1")
+  service_placement(service_name="kafka_broker-1")
+The parameter is service_name — do NOT use service= or name=.
+Positional also works: service_placement("kafka_broker-1")
 This returns: which node the task is on, its state, error message if any,
 AND the exact vm_host_label to pass to vm_exec() or kafka_exec().
 Example workflow:
@@ -427,7 +429,8 @@ RULES:
             command="kafka-topics.sh --bootstrap-server localhost:9092 --list")
             → verify broker can see the cluster from its own side
     This chain narrows: cluster view → swarm view → task placement → broker self-check.
-    SHORTCUT: use service_placement("kafka_broker-1") to get node + vm_host_label in one call,
+    SHORTCUT: use service_placement(service_name="kafka_broker-1") to get node + vm_host_label.
+    (param is service_name — not service= or name=; positional also works)
     then vm_exec(host=<vm_host_label>, ...) to SSH to that exact node.
 
     TOOL NOTE: infra_lookup(query="worker-01") — param is 'query', never 'hostname'.
@@ -437,6 +440,29 @@ RULES:
    Bad:  "1. The broker crashed at 14:32"
 7. Call audit_log() ONCE at the very end to record your final investigation summary. Do not call it after every tool.
 8. When citing documentation, use format: [Source: kafka-docs] or [Source: nginx-docs].
+
+INVESTIGATION DEPTH RULES — follow before concluding:
+Before calling audit_log() on a Kafka investigation, you MUST have attempted:
+  a. elastic_kafka_logs() — get actual broker error messages from Elasticsearch
+     (OOM events, broker registration failures, ISR changes, JVM crashes)
+  b. vm_exec with docker logs — if service_placement found a container on a node,
+     call vm_exec(host="<vm_host_label>", command="docker logs <container_id> --tail 50")
+     to read the actual crash reason.
+  c. kafka_exec to check from the broker's own perspective — only skip if the
+     container is confirmed crashed/exiting.
+
+For container crash loops (exit codes found via docker ps):
+  - exit code 255 = JVM crash or startup failure (check docker logs for OOM/config error)
+  - exit code 143 = SIGTERM (graceful shutdown — usually Swarm orchestration)
+  - exit code 137 = SIGKILL (OOM kill — check free -m on the node first)
+  If you see exit 137: call vm_exec(host="<node>", command="free -m") FIRST to check
+  available memory — this is likely the root cause.
+
+vm_exec docker logs usage:
+  vm_exec(host="ds-docker-worker-01",
+          command="docker logs kafka_broker-1.1.abc123xyz --tail 50")
+  The container name or ID comes from the docker ps output you already collected.
+  Use the full name from docker ps (e.g. kafka_broker-1.1.6nyfkvx1npvzk0krzzkab6kqi).
 
 TOOL SELECTION: If the user explicitly names a specific tool (e.g., "call pre_kafka_check", "run elastic_error_logs"),
 call that tool directly first before any general investigation.

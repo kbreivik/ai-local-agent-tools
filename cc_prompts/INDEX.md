@@ -51,12 +51,14 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.15.9.md | v2.15.9 | Agent Swarm recovery tools + pre-flight bypass | DONE (b7f83e6) |
 | CC_PROMPT_v2.15.10.md | v2.15.10 | Escalation visibility: persistent banner + acknowledge | DONE (b9e87e7) |
 | CC_PROMPT_v2.16.0.md | v2.16.0 | Agent: investigate-on-degraded + halt synthesis | DONE (bd42b0c) |
-| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | DONE (f20e94e) |
-| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | DONE (39ab8dd) |
-| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | DONE (f7b118b) |
-| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | DONE (22c9709) |
-| CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | DONE (09119c4) |
-| CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | DONE (8b574c6) |
+| CC_PROMPT_v2.16.1.md | v2.16.1 | Agent task templates in CommandPanel | PENDING |
+| CC_PROMPT_v2.17.0.md | v2.17.0 | Entity timeline view in EntityDrawer | PENDING |
+| CC_PROMPT_v2.17.1.md | v2.17.1 | Fix Proxmox noVNC console URL (uses actual Proxmox host) | PENDING |
+| CC_PROMPT_v2.18.0.md | v2.18.0 | Result store viewer in Logs tab | PENDING |
+| CC_PROMPT_v2.18.1.md | v2.18.1 | Synthesis on all completion paths + Kafka diagnostic prompts | PENDING |
+| CC_PROMPT_v2.19.0.md | v2.19.0 | service_placement tool: swarm service → node → vm_host | PENDING |
+| CC_PROMPT_v2.19.1.md | v2.19.1 | docker logs allowlist + investigation depth rules | RUNNING |
+| CC_PROMPT_v2.20.0.md | v2.20.0 | Investigation quality: structured output + clarifying questions + evidence exhaustion | PENDING |
 
 ---
 
@@ -82,19 +84,24 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.18.0** — Result store viewer in Logs tab (browse active rs-* refs + rows).
 
 **v2.18.1** — Synthesis fires on all completion paths + Kafka diagnostic chain in prompts.
-audit_log completion path and finish=stop path now trigger synthesis when _degraded_findings
-are present. Synthesis output: root cause + what was checked + numbered fix steps + which
-steps agent can automate. STATUS_PROMPT and RESEARCH_PROMPT: Kafka diagnostic chain
-(kafka_broker_status → swarm_node_status → docker service ps via vm_exec → kafka_exec).
-infra_lookup kwarg corrected to 'query=' in both prompts. 'run_ssh' does not exist note added.
 
 **v2.19.0** — service_placement tool: swarm service → node → vm_host bridge.
-service_placement(service_name) SSHes to a manager, runs docker service ps, cross-references
-node hostnames to vm_host connections. Returns: task state, error, vm_host_label, vm_host_ip,
-ssh_ready flag. Partial service name supported. Added to OBSERVE and INVESTIGATE allowlists.
-STATUS_PROMPT and RESEARCH_PROMPT: topology shortcut section with example 3-step workflow
-(service_placement → vm_exec → kafka_exec). Closes the gap between Kafka cluster visibility
-and node-level SSH diagnosis.
+service_placement(service_name) SSHes to a manager, cross-references node to vm_host connections.
+Returns task state, error, vm_host_label, vm_host_ip, ssh_ready. Added to OBSERVE + INVESTIGATE.
+
+**v2.19.1** — docker logs allowlist + investigation depth rules.
+vm_exec allowlist: add `docker logs` (read-only, metachar filter already blocks writes).
+RESEARCH_PROMPT: investigation depth rules — elastic_kafka_logs required before concluding.
+Exit code interpretation: 137=OOM (check free -m), 255=JVM crash (read docker logs).
+service_placement param corrected: service_name= not service= in both prompts.
+
+**v2.20.0** — Investigation quality: structured output + clarifying questions + evidence exhaustion.
+RESEARCH_PROMPT: 4-section required output (Evidence/Root cause/Fix steps/Automatable).
+clarifying_question() guidance: call after gathering ambiguous evidence, not upfront.
+Evidence exhaustion tiers for Kafka (cluster→placement→logs→elastic), must complete before concluding.
+Tool priority for container logs: service_logs=local Docker host only; vm_exec for Swarm workers.
+STATUS_PROMPT: numbered 6-step investigation tool order for degraded Kafka.
+agent.py: all 3 synthesis calls use structured 4-section format.
 
 ---
 
@@ -103,10 +110,10 @@ and node-level SSH diagnosis.
 ```
 api/routers/logs.py                    — result-store endpoints (v2.18.0)
 api/routers/entities.py                — entity list + history endpoint (v2.17.0)
-api/routers/agent.py                   — synthesis on all paths (v2.18.1)
-api/agents/router.py                   — prompts + allowlists (v2.18.1, v2.19.0)
-mcp_server/tools/vm.py                 — service_placement tool (v2.19.0)
-mcp_server/server.py                   — tool registration (v2.19.0)
+api/routers/agent.py                   — synthesis on all paths + structured format (v2.18.1, v2.20.0)
+api/agents/router.py                   — prompts + allowlists (v2.18.1, v2.19.0, v2.19.1, v2.20.0)
+mcp_server/tools/vm.py                 — service_placement + docker logs allowlist (v2.19.0, v2.19.1)
+mcp_server/server.py                   — service_placement registration (v2.19.0)
 gui/src/components/TaskTemplates.jsx   — one-click task templates (v2.16.1)
 gui/src/components/EntityDrawer.jsx    — timeline section (v2.17.0)
 gui/src/components/ServiceCards.jsx    — Proxmox console URL fix (v2.17.1)
