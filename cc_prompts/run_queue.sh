@@ -136,9 +136,10 @@ while true; do
 
     BEFORE_HASH=$(git rev-parse HEAD)
 
-    # Write task to temp file and pipe via stdin with --print.
-    # Passing task as a positional arg leaves claude in interactive REPL mode.
-    # --print + stdin is non-interactive — exits cleanly when done.
+    # Write task to temp file — avoids shell expansion of special chars in content.
+    # Then pipe file + "exit" to claude WITHOUT --print so output streams live
+    # to terminal. Claude reads the task, runs it with full streaming output, then
+    # reads "exit" from the pipe and quits — no manual typing needed.
     TMPFILE=$(mktemp /tmp/deathstar_queue_XXXXXX.txt)
 
     cat > "$TMPFILE" << TASK_EOF
@@ -159,7 +160,8 @@ for $NEXT_FILE from 'PENDING' to 'DONE (SHA)' where SHA is the short git hash,
 then commit and push that index change too.
 TASK_EOF
 
-    if claude --dangerously-skip-permissions --print < "$TMPFILE"; then
+    # { cat file; echo exit } pipes task then "exit" — streaming output, auto-quits
+    if { cat "$TMPFILE"; echo "exit"; } | claude --dangerously-skip-permissions; then
         rm -f "$TMPFILE"
         AFTER_HASH=$(git rev-parse HEAD)
         if [ "$BEFORE_HASH" = "$AFTER_HASH" ]; then
