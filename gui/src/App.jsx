@@ -30,6 +30,8 @@ import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
+import SubtaskOfferBanner from './components/SubtaskOfferBanner'
+import RunbooksPanel from './components/RunbooksPanel'
 import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
@@ -1161,6 +1163,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
       />
 
       <EscalationBanner />
+      <SubtaskOfferBanner />
 
       {versionMismatch && (
         <div style={{
@@ -1246,6 +1249,13 @@ function AppShell() {
       .then(r => r.ok ? r.json() : null)
       .then(d => d?.role && setUserRole(d.role))
       .catch(() => {})
+  }, [])
+
+  // Navigate to Logs tab on event
+  useEffect(() => {
+    const handler = () => setActiveTab('Logs')
+    window.addEventListener('navigate-to-logs', handler)
+    return () => window.removeEventListener('navigate-to-logs', handler)
   }, [])
 
   const addToCompare = (entity) => {
@@ -1426,6 +1436,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden">
                 <OutputPanel onTab={setActiveTab} />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Runbooks' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden">
+                <RunbooksPanel />
               </div>
             </div>
           )}

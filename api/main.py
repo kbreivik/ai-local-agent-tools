@@ -35,6 +35,7 @@ from api.routers.errors import router as errors_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
 from api.routers.vm_exec_allowlist import router as vm_exec_allowlist_router
+from api.routers.runbooks import router as runbooks_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
@@ -169,6 +170,27 @@ async def lifespan(app: FastAPI):
         init_allowlist()
     except Exception as e:
         _log.debug("vm_exec_allowlist init skipped: %s", e)
+    try:
+        from api.db.subtask_proposals import init_subtask_proposals
+        init_subtask_proposals()
+    except Exception as e:
+        _log.debug("subtask_proposals init skipped: %s", e)
+    try:
+        from api.db.runbooks import init_runbooks
+        init_runbooks()
+    except Exception as e:
+        _log.debug("runbooks init skipped: %s", e)
+    # Migrate operations table: add parent_session_id if not present
+    try:
+        from api.db.base import get_engine as _ge
+        from sqlalchemy import text as _sqlt
+        async with _ge().begin() as _mc:
+            await _mc.execute(_sqlt(
+                "ALTER TABLE operations ADD COLUMN IF NOT EXISTS "
+                "parent_session_id TEXT NOT NULL DEFAULT ''"
+            ))
+    except Exception as _mige:
+        pass
     # Initialize metric_samples time-series table
     try:
         from api.db.metric_samples import init_metric_samples
@@ -340,6 +362,7 @@ app.include_router(layout_router)
 app.include_router(escalations_router)
 app.include_router(errors_router)
 app.include_router(vm_exec_allowlist_router)
+app.include_router(runbooks_router)
 
 
 def _get_host_ips() -> dict:

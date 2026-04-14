@@ -426,6 +426,66 @@ def escalate(reason: str) -> dict:
     }
 
 
+def propose_subtask(task: str, executable_steps: list, manual_steps: list = None) -> dict:
+    """Propose a follow-up sub-task after completing an investigation.
+
+    Call this when you have identified specific, actionable fix steps.
+    The system will offer the user two options:
+      (a) Run as an automated sub-agent in a separate window.
+      (b) Open as a manual runbook checklist the user can follow step-by-step.
+
+    Args:
+        task:             Concise description of what needs to be fixed.
+                          This becomes the sub-agent's task label.
+        executable_steps: List of steps the agent can execute autonomously.
+                          Each entry should be a specific action string.
+        manual_steps:     Steps requiring human physical access or credentials
+                          (shown in the manual runbook). Optional.
+
+    Only call this after a completed investigation with clear remediation steps.
+    Do not call for informational findings with no actionable path.
+    After calling this, write your final investigation summary.
+    """
+    # Body is intercepted by the agent loop — never executed directly
+    return {"status": "proposed", "message": "propose_subtask not intercepted"}
+
+
+def runbook_search(query: str) -> dict:
+    """Search saved runbooks for a known procedure matching the query.
+
+    Use this at the START of an investigation to check if there's already a
+    proven runbook for this type of problem (e.g. 'kafka broker restart',
+    'swarm node recovery'). If found, you can follow the runbook steps directly
+    rather than reinvestigating from scratch.
+
+    Args:
+        query: Keyword describing the problem or procedure (e.g. 'kafka broker',
+               'worker node down', 'docker service force update')
+    """
+    try:
+        from api.db.runbooks import search_runbooks
+        results = search_runbooks(query, limit=5)
+        if not results:
+            return {
+                "status": "ok", "message": f"No runbooks found for '{query}'",
+                "data": {"count": 0, "runbooks": []}, "timestamp": _ts(),
+            }
+        return {
+            "status": "ok",
+            "message": f"Found {len(results)} runbook(s) for '{query}'",
+            "data": {"count": len(results), "runbooks": [
+                {"id": r["id"], "title": r["title"],
+                 "description": r["description"],
+                 "steps": r["steps"][:10],  # first 10 steps
+                 "run_count": r["run_count"]}
+                for r in results
+            ]},
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": None, "timestamp": _ts()}
+
+
 def agent_status() -> dict:
     """Check agent's own health and performance metrics."""
     import httpx

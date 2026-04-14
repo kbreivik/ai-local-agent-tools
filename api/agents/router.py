@@ -105,6 +105,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "resolve_entity",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
+    "runbook_search",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -134,6 +135,8 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "resolve_entity",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
+    "propose_subtask",
+    "runbook_search",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -155,6 +158,7 @@ EXECUTE_KAFKA_TOOLS = frozenset({
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
+    "runbook_search",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
@@ -170,6 +174,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
+    "runbook_search",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -178,6 +183,7 @@ EXECUTE_PROXMOX_TOOLS = frozenset({
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
+    "runbook_search",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_GENERAL_TOOLS = frozenset({
@@ -192,6 +198,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
+    "runbook_search",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -205,6 +212,7 @@ BUILD_AGENT_TOOLS = frozenset({
     "agent_status", "postgres_health",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
+    "runbook_search",
 })
 
 # Backward-compat aliases
@@ -801,6 +809,22 @@ RESPONSE STYLE — Professional IT Support:
 - NEVER end with a closing announcement. Give the answer. Stop.
   Never say: "I have completed my check...", "I have finished analyzing...",
   "I will now summarize...", "This concludes my analysis.", or any similar phrase.
+
+RULE — PROPOSE SUB-TASK:
+After completing your investigation with clear, actionable fix steps, call:
+  propose_subtask(
+    task="<concise description of what needs to be fixed>",
+    executable_steps=["<step1 — specific direct instruction>", "<step2>", ...],
+    manual_steps=["<any step requiring physical access or external credentials>"]
+  )
+Only call this when you have specific, tested remediation steps. Do NOT call for
+informational findings with no clear fix path. Do NOT call if swarm/kafka is healthy.
+After calling propose_subtask(), write your final investigation summary.
+
+RULE — CHECK RUNBOOKS FIRST:
+At the START of an investigation into a known problem type (kafka, swarm, disk, network),
+call runbook_search("<problem keyword>") to check if a proven procedure already exists.
+If found, reference it in your investigation.
 
 Think step by step. Log reasoning. Never skip verifications."""
 

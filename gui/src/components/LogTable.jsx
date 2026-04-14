@@ -391,6 +391,35 @@ function RawOutputToggle({ sessionId }) {
   )
 }
 
+// ── Tree builder for parent/child operations ─────────────────────────────────
+
+function buildOpTree(ops) {
+  const bySession = {}
+  ops.forEach(op => { bySession[op.session_id] = op })
+
+  const roots = []
+  const childMap = {}
+
+  ops.forEach(op => {
+    if (op.parent_session_id && bySession[op.parent_session_id]) {
+      if (!childMap[op.parent_session_id]) childMap[op.parent_session_id] = []
+      childMap[op.parent_session_id].push(op)
+    } else {
+      roots.push(op)
+    }
+  })
+
+  // Flatten in depth-first order with depth info
+  const result = []
+  function visit(op, depth) {
+    result.push({ op, depth })
+    const children = childMap[op.session_id] || []
+    children.forEach(c => visit(c, depth + 1))
+  }
+  roots.forEach(r => visit(r, 0))
+  return result
+}
+
 // ── Operations view ───────────────────────────────────────────────────────────
 
 export function OpsView({ refreshTick }) {
@@ -398,6 +427,7 @@ export function OpsView({ refreshTick }) {
   const [loading, setLoading] = useState(false)
   const [detail, setDetail]   = useState(null)  // {op, tool_calls}
   const [ratedOnly, setRatedOnly] = useState(false)
+  const [treeMode, setTreeMode]   = useState(true)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -428,6 +458,14 @@ export function OpsView({ refreshTick }) {
         >
           Rated only
         </button>
+        <button
+          onClick={() => setTreeMode(m => !m)}
+          className={`text-xs px-2 py-0.5 rounded transition-colors ${
+            treeMode ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+          }`}
+        >
+          {treeMode ? 'Tree' : 'Flat'}
+        </button>
         <button onClick={load} className="ml-auto text-xs text-slate-500 hover:text-slate-300">↺</button>
       </div>
       <div className="flex-1 overflow-auto">
@@ -441,11 +479,14 @@ export function OpsView({ refreshTick }) {
               ))}</tr>
             </thead>
             <tbody>
-              {visible.map(op => (
+              {(treeMode ? buildOpTree(visible) : visible.map(op => ({ op, depth: 0 }))).map(({ op, depth }) => (
                 <>
                   <tr key={op.id} className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer"
                       onClick={() => openDetail(op)}>
                     <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
+                      {depth > 0 && (
+                        <span style={{ paddingLeft: depth * 12, color: '#334155', marginRight: 4 }}>└</span>
+                      )}
                       {fmtTs(op.started_at)}
                     </td>
                     <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>

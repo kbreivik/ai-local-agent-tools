@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T13:02:53",
+  "updated_at": "2026-04-14T13:38:21",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -373,10 +373,26 @@
       "filename": "CC_PROMPT_v2.23.4.md",
       "version": "v2.23.4",
       "theme": "Session output log: retention settings, full log view, raw output tab",
+      "runner_status": "DONE",
+      "commit_sha": "5c74ce2",
+      "error": "",
+      "started_at": "2026-04-14T13:02:53",
+      "finished_at": "2026-04-14T13:08:27",
+      "duration_s": 333.83978510001907,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_130253_CC_PROMPT_v2.23.4.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.24.0.md",
+      "version": "v2.24.0",
+      "theme": "Sub-agent proposals + manual runbook popups + runbook library",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T13:02:53",
+      "started_at": "2026-04-14T13:38:21",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -17,7 +17,8 @@ const NAV = [
   { section: 'OPERATE', items: [
     { key: 'Commands',  icon: '▶' },
     { key: 'Skills',    icon: '⚙' },
-    { key: 'Output',    icon: '◫' },
+    { key: 'Runbooks',  icon: '◫' },
+    { key: 'Output',    icon: '□' },
   ]},
   { section: 'TOOLS', items: [
     { key: 'Tests',     icon: '✓' },

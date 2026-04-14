@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 
 from api.websocket import manager
@@ -743,6 +743,85 @@ async def _run_single_agent_step(
                             "data":    {"question": question, "answer": answer},
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         }
+                    elif fn_name == "propose_subtask":
+                        # Parse arguments
+                        try:
+                            _pst_args = json.loads(tc.function.arguments or "{}")
+                        except Exception:
+                            _pst_args = {}
+
+                        _pst_task        = _pst_args.get("task", task)[:500]
+                        _pst_exec_steps  = _pst_args.get("executable_steps", [])
+                        _pst_manual_steps = _pst_args.get("manual_steps", []) or []
+                        _proposal_id     = str(uuid.uuid4())
+
+                        # Feasibility: check available connections
+                        _confidence = "medium"
+                        try:
+                            from api.connections import list_connections
+                            if list_connections("vm_host"):
+                                _confidence = "high"
+                        except Exception:
+                            pass
+
+                        # Save to DB
+                        try:
+                            from api.db.subtask_proposals import save_proposal
+                            save_proposal(
+                                proposal_id=_proposal_id,
+                                parent_session_id=session_id,
+                                parent_op_id=operation_id,
+                                task=_pst_task,
+                                executable_steps=_pst_exec_steps,
+                                manual_steps=_pst_manual_steps,
+                                confidence=_confidence,
+                            )
+                        except Exception as _spe:
+                            log.debug("save_proposal failed: %s", _spe)
+
+                        # Broadcast
+                        await manager.broadcast({
+                            "type": "subtask_proposed",
+                            "session_id": session_id,
+                            "proposal_id": _proposal_id,
+                            "task": _pst_task,
+                            "executable_steps": _pst_exec_steps,
+                            "manual_steps": _pst_manual_steps,
+                            "confidence": _confidence,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+                        await manager.send_line(
+                            "step",
+                            f"[subtask] Proposal recorded — '{_pst_task[:70]}' "
+                            f"({_confidence} confidence). User notified.",
+                            status="ok", session_id=session_id,
+                        )
+
+                        # Return result to model (no waiting — model can finish with summary)
+                        _pst_result = {
+                            "status": "proposed",
+                            "proposal_id": _proposal_id,
+                            "confidence": _confidence,
+                            "message": (
+                                "Proposal recorded. User will see an offer to run this as an automated "
+                                "sub-agent or as a manual runbook checklist. "
+                                "Please provide your final investigation summary now."
+                            ),
+                        }
+                        messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps(_pst_result),
+                        })
+                        await logger_mod.log_tool_call(
+                            operation_id=operation_id, tool_name="propose_subtask",
+                            params=_pst_args, result=_pst_result, model_used=_lm_model(),
+                            duration_ms=0, status="ok",
+                        )
+                        tools_used_names.append("propose_subtask")
+                        continue  # let model write final answer
+
                     elif fn_name == "escalate" and agent_type in ("action", "execute") and not plan_action_called:
                         # Fix 2: Block premature escalation — agent must plan first
                         _last_blocked_tool = "escalate"
@@ -1101,7 +1180,9 @@ async def _run_single_agent_step(
     }
 
 
-async def _stream_agent(task: str, session_id: str, operation_id: str, owner_user: str = "admin"):
+async def _stream_agent(task: str, session_id: str, operation_id: str,
+                        owner_user: str = "admin", parent_context: str = "",
+                        parent_session_id: str = ""):
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
     from api.agents.router import classify_task, filter_tools, get_prompt, detect_domain
@@ -1119,6 +1200,30 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
         first_intent = "action"
 
     system_prompt = get_prompt(first_intent)
+
+    # Inject parent investigation context for sub-agent tasks
+    if parent_context:
+        _parent_prefix = (
+            "═══ PARENT INVESTIGATION CONTEXT ═══\n"
+            "The user has already investigated this issue. Key findings:\n"
+            f"{parent_context[:1200]}\n"
+            "═══════════════════════════════════\n"
+            "Proceed DIRECTLY to remediation. Do NOT re-investigate what is already known.\n\n"
+        )
+        system_prompt = _parent_prefix + system_prompt
+
+    # Store parent linkage in operations table for Tree view in Logs
+    if parent_session_id:
+        try:
+            from api.db.base import get_engine as _lge
+            from sqlalchemy import text as _lt
+            async with _lge().begin() as _lconn:
+                await _lconn.execute(
+                    _lt("UPDATE operations SET parent_session_id=:psid WHERE id=:oid"),
+                    {"psid": parent_session_id, "oid": operation_id},
+                )
+        except Exception as _ple:
+            log.debug("parent_session_id update failed: %s", _ple)
 
     # ── Domain-specific capability injection (e.g. available VM hosts) ────────
     try:
@@ -1616,6 +1721,76 @@ async def stop_agent(req: StopRequest, _: str = Depends(get_current_user)):
     except Exception as _e:
         log.debug("stop_agent DB update failed: %s", _e)
     return {"status": "ok", "message": f"Cancel signal sent for session '{sid}'"}
+
+
+class SubtaskRequest(BaseModel):
+    proposal_id: str
+    task: str
+    parent_session_id: str = ""
+
+@router.post("/subtask", response_model=RunResponse)
+async def run_subtask(req: SubtaskRequest, background_tasks: BackgroundTasks,
+                      user: str = Depends(get_current_user)):
+    """Start an execute sub-agent from a proposal, injecting parent investigation context."""
+    session_id   = str(uuid.uuid4())
+    operation_id = await logger_mod.log_operation(session_id, req.task, owner_user=user)
+
+    # Fetch parent final_answer for context injection
+    parent_context = ""
+    if req.parent_session_id:
+        try:
+            from api.db.base import get_engine
+            from api.db import queries as q
+            async with get_engine().connect() as conn:
+                parent_op = await q.get_operation_by_session(conn, req.parent_session_id)
+                if parent_op:
+                    parent_context = parent_op.get("final_answer", "")
+        except Exception as _pce:
+            log.debug("parent context fetch failed: %s", _pce)
+
+    # Update proposal status
+    try:
+        from api.db.subtask_proposals import update_proposal_status
+        update_proposal_status(req.proposal_id, "accepted")
+    except Exception:
+        pass
+
+    background_tasks.add_task(
+        _stream_agent, req.task, session_id, operation_id, user,
+        parent_context, req.parent_session_id,
+    )
+    return RunResponse(
+        session_id=session_id,
+        operation_id=operation_id,
+        message="Sub-agent started",
+    )
+
+
+@router.get("/proposals")
+async def list_proposals(
+    status: str = Query("pending"),
+    limit: int = Query(10, ge=1, le=50),
+    _: str = Depends(get_current_user),
+):
+    """Return subtask proposals filtered by status."""
+    from api.db.subtask_proposals import list_proposals as _lp
+    return {"proposals": _lp(status=status, limit=limit)}
+
+
+@router.get("/proposals/{proposal_id}")
+async def get_proposal(proposal_id: str, _: str = Depends(get_current_user)):
+    from api.db.subtask_proposals import get_proposal as _gp
+    p = _gp(proposal_id)
+    if not p:
+        raise HTTPException(404, "Proposal not found")
+    return p
+
+
+@router.post("/proposals/{proposal_id}/dismiss")
+async def dismiss_proposal(proposal_id: str, _: str = Depends(get_current_user)):
+    from api.db.subtask_proposals import update_proposal_status
+    update_proposal_status(proposal_id, "dismissed")
+    return {"status": "ok"}
 
 
 @router.get("/models")
