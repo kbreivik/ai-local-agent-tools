@@ -634,6 +634,26 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
           <span className="text-[9px] text-gray-700">ports </span>{c.ports.join(' · ')}
         </div>
       )}
+      {/* Reachable endpoint — from ip_port (VM LAN IP + host port) */}
+      {(() => {
+        const ep = c.ip_port ? _displayIp(c.ip_port) : ''
+        if (!ep) return null
+        const href = `http://${ep}`
+        return (
+          <div className="text-[10px] font-mono mb-1.5">
+            <span className="text-[9px] text-gray-700">endpoint </span>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#00c8ee] hover:underline"
+              onClick={e => e.stopPropagation()}
+            >
+              {ep}
+            </a>
+          </div>
+        )
+      })()}
       {/* Docker networks */}
       {c.networks?.length > 0 && (
         <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
@@ -641,10 +661,10 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
           {c.networks.join(' · ')}
         </div>
       )}
-      {/* All IP addresses */}
+      {/* Internal Docker IPs — dimmed, secondary info */}
       {c.ip_addresses?.length > 0 && (
-        <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
-          <span className="text-[9px] text-gray-700">ips </span>
+        <div className="text-[10px] text-gray-700 font-mono mb-1.5">
+          <span className="text-[9px] text-gray-800">int.ips </span>
           {c.ip_addresses.join(' · ')}
         </div>
       )}

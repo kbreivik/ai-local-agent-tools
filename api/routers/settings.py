@@ -37,6 +37,7 @@ SETTINGS_KEYS: dict[str, dict] = {
     "swarmWorkerIPs":        {"env": "",                        "sens": False, "default": ""},
     "ghcrToken":             {"env": "GHCR_TOKEN",             "sens": True,  "default": ""},
     "agentDockerHost":       {"env": "AGENT01_DOCKER_HOST",    "sens": False, "default": ""},
+    "agentHostIp":           {"env": "AGENT01_IP",             "sens": False, "default": ""},
     # Infrastructure — Proxmox
     "proxmoxHost":           {"env": "PROXMOX_HOST",            "sens": False, "default": ""},
     "proxmoxTokenId":        {"env": "PROXMOX_TOKEN_ID",        "sens": False, "default": ""},

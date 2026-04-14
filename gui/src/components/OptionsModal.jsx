@@ -165,6 +165,9 @@ function InfrastructureTab({ draft, update }) {
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />
         </Field>
+        <Field label="Agent Host IP" hint="LAN IP of the agent-01 VM — used for clickable container endpoint links (e.g. 192.168.199.10)">
+          <TextInput value={draft.agentHostIp} onChange={v => update('agentHostIp', v)} placeholder="192.168.199.10" />
+        </Field>
       </div>
 
       {/* Messaging / Observability */}

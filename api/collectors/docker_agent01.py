@@ -14,7 +14,46 @@ from api.collectors.base import BaseCollector
 
 log = logging.getLogger(__name__)
 
-VM_IP = os.environ.get("AGENT01_IP", "127.0.0.1")
+def _get_agent01_ip() -> str:
+    """Resolve the LAN IP of agent-01.
+
+    Priority:
+      1. Settings DB key 'agentHostIp' (set via UI Infrastructure tab)
+      2. AGENT01_IP env var
+      3. docker_host connection's host field (if it's a plain IP, not unix://)
+      4. '127.0.0.1' fallback
+    """
+    # 1. Settings DB
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        val = get_backend().get_setting("agentHostIp")
+        if val and str(val).strip() and str(val).strip() not in ("", "127.0.0.1"):
+            return str(val).strip()
+    except Exception:
+        pass
+    # 2. Env var
+    env_val = os.environ.get("AGENT01_IP", "")
+    if env_val and env_val not in ("", "127.0.0.1"):
+        return env_val
+    # 3. docker_host connection host
+    try:
+        from api.connections import get_all_connections_for_platform
+        conns = get_all_connections_for_platform("docker_host")
+        local = [c for c in conns
+                 if (c.get("config") or {}).get("role") == "standalone"
+                 or c.get("label", "").lower() in ("agent-01", "local", "self")]
+        if local:
+            h = local[0].get("host", "")
+            # Only use if it looks like a plain IP (not unix://)
+            if h and not h.startswith("unix://") and not h.startswith("/"):
+                # Strip tcp:// prefix if present
+                h = h.replace("tcp://", "").split(":")[0]
+                if h and h != "127.0.0.1":
+                    return h
+    except Exception:
+        pass
+    # 4. Fallback
+    return os.environ.get("AGENT01_IP", "127.0.0.1")
 
 
 def _get_agent01_docker_host() -> str:
@@ -50,11 +89,12 @@ class DockerAgent01Collector(BaseCollector):
         import docker
         from docker.errors import DockerException
 
+        vm_ip = _get_agent01_ip()
         docker_host = _get_agent01_docker_host()
         try:
             client = docker.DockerClient(base_url=docker_host, timeout=10)
         except Exception as e:
-            return {"health": "error", "error": str(e), "containers": [], "agent01_ip": VM_IP}
+            return {"health": "error", "error": str(e), "containers": [], "agent01_ip": vm_ip}
 
         try:
             containers = client.containers.list(all=True)
@@ -102,7 +142,7 @@ class DockerAgent01Collector(BaseCollector):
 
                 dot, problem = _classify_container(state_str, health_str)
                 first_port = ports[0].split("→")[0] if ports else ""
-                ip_port = f"{VM_IP}:{first_port}" if first_port else ""
+                ip_port = f"{vm_ip}:{first_port}" if first_port else ""
 
                 # Docker networks and container IP addresses
                 net_settings = attrs.get("NetworkSettings", {})
@@ -143,28 +183,28 @@ class DockerAgent01Collector(BaseCollector):
             # Connection metadata for frontend Section header
             connection_id = ""
             connection_label = "agent-01"
-            connection_host = VM_IP
+            connection_host = vm_ip
             try:
                 from api.connections import get_connection_for_platform
                 docker_conn = get_connection_for_platform("docker_host")
                 if docker_conn:
                     connection_id = str(docker_conn.get("id", ""))
                     connection_label = docker_conn.get("label", "agent-01")
-                    connection_host = docker_conn.get("host", VM_IP)
+                    connection_host = docker_conn.get("host", vm_ip)
             except Exception:
                 pass
 
             return {
                 "health": overall,
                 "containers": cards,
-                "agent01_ip": VM_IP,
+                "agent01_ip": vm_ip,
                 "connection_id": connection_id,
                 "connection_label": connection_label,
                 "connection_host": connection_host,
             }
 
         except DockerException as e:
-            return {"health": "error", "error": str(e), "containers": [], "agent01_ip": VM_IP}
+            return {"health": "error", "error": str(e), "containers": [], "agent01_ip": vm_ip}
         finally:
             try:
                 client.close()

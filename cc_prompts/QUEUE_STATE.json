@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-13T15:58:53",
+  "updated_at": "2026-04-14T10:34:11",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -277,10 +277,26 @@
       "filename": "CC_PROMPT_v2.22.5.md",
       "version": "v2.22.5",
       "theme": "Fix GHCR tag pagination + version status display",
+      "runner_status": "DONE",
+      "commit_sha": "2239261",
+      "error": "",
+      "started_at": "2026-04-13T15:58:53",
+      "finished_at": "2026-04-13T16:00:50",
+      "duration_s": 117.08220099995378,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260413_155853_CC_PROMPT_v2.22.5.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.22.6.md",
+      "version": "v2.22.6",
+      "theme": "agentHostIp setting + clickable container endpoints",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-13T15:58:53",
+      "started_at": "2026-04-14T10:34:11",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

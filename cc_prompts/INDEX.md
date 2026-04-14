@@ -70,6 +70,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.22.3.md | v2.22.3 | Root error boundary + per-section + frontend crash reporting | DONE (5acdd54) |
 | CC_PROMPT_v2.22.4.md | v2.22.4 | ESLint TDZ rule + source maps + API version gate + Dockerfile | DONE (0b2e69b) |
 | CC_PROMPT_v2.22.5.md | v2.22.5 | Fix GHCR tag pagination + version status display | DONE (35d8069) |
+| CC_PROMPT_v2.22.6.md | v2.22.6 | agentHostIp setting + clickable container endpoints | RUNNING |
 
 ---
 
@@ -95,6 +96,11 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.22.3** — Root error boundary + per-section + frontend crash reporting.
 **v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
 
+**v2.22.6** — agentHostIp setting (Infrastructure tab) + clickable container endpoints.
+Collector reads LAN IP from settings DB (priority over env var). Container card expanded
+view gains a clickable `endpoint` link from `ip_port`. Internal Docker IPs demoted to
+dimmed `int.ips` row.
+
 **v2.22.5** — Fix GHCR tag pagination + version status display.
 _fetch_ghcr_tags() stopped pagination as soon as it accumulated 20 semver-matching tags.
 GHCR returns tags alphabetically so the first 20 matches were always the oldest ones
@@ -109,6 +115,10 @@ Latest button hidden when update_available=false (digests match, no pull needed)
 ## Key file paths
 
 ```
+api/routers/settings.py                  — agentHostIp setting key (v2.22.6)
+api/collectors/docker_agent01.py         — _get_agent01_ip() reads settings DB (v2.22.6)
+gui/src/components/OptionsModal.jsx      — Agent Host IP field in Infrastructure tab (v2.22.6)
+gui/src/components/ServiceCards.jsx      — clickable endpoint + dimmed int.ips (v2.22.6)
 gui/src/components/ServiceCards.jsx      — GHCR version status + pull button fix (v2.22.5)
 api/routers/dashboard.py                 — _fetch_ghcr_tags pagination fix (v2.22.5)
 gui/src/context/DashboardDataContext.jsx — shared dashboard state + version gate (v2.22.0, v2.22.4)
