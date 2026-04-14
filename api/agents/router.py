@@ -30,6 +30,9 @@ RESEARCH_KEYWORDS = frozenset({
     "elastic", "kibana", "logs", "log", "errors", "search",
     # access / connectivity research
     "can we use", "how do i access", "where is",
+    # Bigrams that signal research even when action words are present
+    "root cause", "fix steps", "cause and fix", "what's causing",
+    "why is it", "why are", "find out why",
 })
 
 BUILD_KEYWORDS = frozenset({
@@ -41,6 +44,9 @@ BUILD_KEYWORDS = frozenset({
 QUESTION_STARTERS = frozenset({
     "what", "where", "how", "which", "is", "are", "show", "list",
     "who", "when", "why", "can", "could", "does", "do",
+    # Investigative starters — treat as questions even with action words present
+    "find", "look", "check", "identify", "determine", "explain",
+    "investigate", "diagnose", "troubleshoot", "analyse", "analyze",
 })
 
 # ── Domain keyword map ────────────────────────────────────────────────────────
@@ -252,6 +258,14 @@ _load_promoted_into_allowlists()
 
 STATUS_PROMPT = """You are a read-only infrastructure status agent for a Docker Swarm + Kafka cluster.
 
+ENVIRONMENT — READ BEFORE ANY TOOL CALL:
+This platform runs Docker Swarm (NOT Kubernetes). Critical constraints:
+- kubectl does NOT exist. Never suggest kubectl commands.
+- Containers are managed as Swarm services (docker service ls, docker service ps).
+- Worker nodes are VM hosts accessible via vm_exec() SSH tool.
+- Kafka brokers run as Swarm services (kafka_broker-1, kafka_broker-2, kafka_broker-3).
+- Use vm_exec(), kafka_exec(), swarm_node_status(), service_placement() — not kubectl.
+
 Your role: gather and report current system state accurately and concisely.
 
 RULES:
@@ -432,6 +446,18 @@ Think step by step. Be concise. Report facts."""
 
 RESEARCH_PROMPT = """You are an infrastructure research and log analysis agent for a Docker Swarm + Kafka cluster.
 
+ENVIRONMENT — READ BEFORE ANY TOOL CALL:
+This platform runs Docker Swarm (NOT Kubernetes). Critical constraints:
+- kubectl does NOT exist. Never suggest kubectl commands.
+- Containers are managed as Swarm services (docker service ls, docker service ps).
+- Worker nodes are VM hosts accessible via vm_exec() SSH tool.
+- Kafka brokers run as Swarm services (kafka_broker-1, kafka_broker-2, kafka_broker-3).
+- Use vm_exec(), kafka_exec(), swarm_node_status(), service_placement() — not kubectl.
+- For Kafka investigation: use kafka_broker_status, kafka_exec, service_placement, vm_exec.
+- Minimum investigation depth: call at least 4 tools before synthesizing a final answer.
+  If kafka_broker_status shows degraded, follow up with service_placement, vm_exec on
+  the affected worker, and kafka_exec to inspect broker logs before concluding.
+
 Your role: investigate issues, search logs, correlate events, and explain findings.
 You return SUGGESTIONS ONLY — you do not execute any changes.
 
@@ -585,6 +611,11 @@ but the cause is still unclear. Ask at most once per run.
 Think step by step. Investigate thoroughly. Give actionable recommendations."""
 
 ACTION_PROMPT = """You are an infrastructure orchestration agent for a Docker Swarm + Kafka cluster.
+
+ENVIRONMENT — READ BEFORE ANY TOOL CALL:
+This platform runs Docker Swarm (NOT Kubernetes). Critical constraints:
+- kubectl does NOT exist. Never suggest kubectl commands.
+- Use swarm_service_force_update(), proxmox_vm_power(), vm_exec() for operations.
 
 RULES:
 1. check → act → verify → continue or halt

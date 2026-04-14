@@ -31,7 +31,7 @@ const TOOL_HUMAN = {
   post_upgrade_verify:         '🔍 Verifying upgrade',
   plan_action:                 '📋 Preparing plan…',
   clarifying_question:         '❓ Asking for clarification',
-  escalate:                    '⚠ Escalating',
+  escalate:                    'Escalating',
   checkpoint_save:             '💾 Saved checkpoint',
   checkpoint_restore:          '🔄 Restoring checkpoint',
   service_upgrade:             '⚙ Upgrading service…',
@@ -151,16 +151,29 @@ function MarkdownContent({ content }) {
 // ── Feed line renderers ───────────────────────────────────────────────────────
 
 function ToolLine({ item }) {
-  const isErr = item.status === 'error' || item.status === 'degraded' || item.status === 'failed'
+  const isErr      = item.status === 'error' || item.status === 'failed'
+  const isDegraded = item.status === 'degraded'
+  const isEscalated = item.status === 'escalated' || item.toolName === 'escalate'
   const human = humanizeTool(item.toolName)
+
+  let icon, suffix, color
+  if (isErr) {
+    icon = '⚠'; suffix = ' failed'; color = '#d97706'
+  } else if (isDegraded) {
+    icon = '⚠'; suffix = ' — degraded'; color = '#ca8a04'
+  } else if (isEscalated) {
+    icon = '⚠'; suffix = ' — human review required'; color = '#f59e0b'
+  } else {
+    icon = '✓'; suffix = ''; color = '#6b7280'
+  }
+
   return (
     <div style={{
-      fontSize: 11, lineHeight: 1.6,
-      color: isErr ? '#d97706' : '#6b7280',
+      fontSize: 11, lineHeight: 1.6, color,
       display: 'flex', alignItems: 'baseline', gap: 5,
     }}>
-      <span style={{ flexShrink: 0, fontSize: 10 }}>{isErr ? '⚠' : '✓'}</span>
-      <span>{human}{isErr ? ' failed' : ''}</span>
+      <span style={{ flexShrink: 0, fontSize: 10 }}>{icon}</span>
+      <span>{human}{suffix}</span>
     </div>
   )
 }

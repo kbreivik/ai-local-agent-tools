@@ -1,0 +1,591 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.23.1.md (v2.23.1)
+Theme: Entity cross-reference registry + resolve_entity tool
+
+Prompt content:
+
+# CC PROMPT — v2.23.1 — Entity cross-reference: resolve_entity tool + infra registry
+
+## What this does
+Adds cross-system entity resolution so the agent can answer "what is kafka broker status
+on worker 2?" by resolving the ambiguous name to all known identities (connection label,
+IP, hostname, Proxmox VM name, Swarm node, Kafka broker).
+Three changes: (1) extend infra_inventory.py with a `resolve_entity` multi-source search
+and cross-reference write functions; (2) wire the Proxmox collector to populate the
+inventory with VM names, vmids, IPs and node mappings; (3) add a `resolve_entity` MCP
+tool to vm.py with agent allowlist registration.
+Version bump: 2.23.0 → 2.23.1
+
+---
+
+## Change 1 — api/db/infra_inventory.py: Add resolve_entity and cross_reference support
+
+Add the following new functions at the end of the file (before any existing end-of-file
+comments):
+
+```python
+# ── Cross-system reference storage ─────────────────────────────────────────────
+
+def write_cross_reference(connection_id: str, platform: str, label: str,
+                          aliases: list = None, ips: list = None,
+                          hostname: str = "", meta: dict = None):
+    """Write a cross-system reference to infra_inventory.
+
+    Called by collectors to record entity identities from their perspective.
+    For example, the Proxmox collector writes VM name, vmid, node so the
+    vm_hosts collector's entry for the same physical host can be linked.
+
+    Uses connection_id as the primary key — same host discovered by two collectors
+    will have separate rows (one per collector's connection). The resolve_entity
+    function merges them by IP overlap.
+    """
+    upsert_entity(
+        connection_id=connection_id,
+        platform=platform,
+        label=label,
+        hostname=hostname,
+        ips=ips or [],
+        aliases=aliases or [],
+        meta=meta or {},
+    )
+
+
+def resolve_entity(query: str) -> dict:
+    """Resolve any entity name across all known infrastructure systems.
+
+    Search order and sources:
+    1. infra_inventory: label exact, hostname exact, IP match, alias match, label partial
+    2. connections table: label search across all platforms
+    3. Cross-inventory: when a match is found, find other entries with overlapping IPs
+       to build a complete cross-system identity map.
+
+    Returns a merged dict with all known identities for the entity, or None.
+    """
+    if not query:
+        return None
+    q = query.lower().strip()
+
+    if not _is_pg():
+        return None  # Only supported on PostgreSQL
+
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+
+        # Step 1: Search infra_inventory
+        cur.execute("""
+            SELECT * FROM infra_inventory
+            WHERE lower(label) = %(q)s
+               OR lower(hostname) = %(q)s
+               OR lower(label) LIKE %(like)s
+               OR ips::text ILIKE %(iplike)s
+               OR aliases::text ILIKE %(iplike)s
+            ORDER BY CASE
+                WHEN lower(label) = %(q)s THEN 1
+                WHEN lower(hostname) = %(q)s THEN 2
+                WHEN lower(label) LIKE %(like)s THEN 3
+                ELSE 4 END
+            LIMIT 5
+        """, {"q": q, "like": f"%{q}%", "iplike": f"%{q}%"})
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Step 2: Search connections table (labels, hosts)
+        cur.execute("""
+            SELECT id::text, platform, label, host,
+                   COALESCE(config::text, '{}') as config_raw
+            FROM connections
+            WHERE lower(label) ILIKE %(like)s
+               OR host = %(q)s
+            LIMIT 10
+        """, {"q": q, "like": f"%{q}%"})
+        conn_cols = [d[0] for d in cur.description]
+        conn_rows = [dict(zip(conn_cols, r)) for r in cur.fetchall()]
+
+        # Deserialize JSONB fields
+        for r in rows:
+            for f in ("ips", "aliases", "ports", "meta"):
+                if isinstance(r.get(f), str):
+                    try:
+                        import json as _json
+                        r[f] = _json.loads(r[f])
+                    except Exception:
+                        pass
+
+        if not rows and not conn_rows:
+            cur.close()
+            conn.close()
+            return None
+
+        # Step 3: Collect all IPs from primary matches to find related entries
+        all_ips = set()
+        for r in rows:
+            for ip in (r.get("ips") or []):
+                all_ips.add(ip)
+        for c in conn_rows:
+            if c.get("host"):
+                all_ips.add(c["host"])
+
+        # Find other inventory entries that share IPs (same physical host)
+        related_rows = []
+        if all_ips:
+            ip_conditions = " OR ".join(["ips::text ILIKE %s"] * len(all_ips))
+            cur.execute(f"""
+                SELECT * FROM infra_inventory
+                WHERE {ip_conditions}
+            """, [f"%{ip}%" for ip in all_ips])
+            related_cols = [d[0] for d in cur.description]
+            all_related = [dict(zip(related_cols, r)) for r in cur.fetchall()]
+            for r in all_related:
+                for f in ("ips", "aliases", "ports", "meta"):
+                    if isinstance(r.get(f), str):
+                        try:
+                            import json as _json
+                            r[f] = _json.loads(r[f])
+                        except Exception:
+                            pass
+            related_rows = [r for r in all_related
+                            if not any(r["id"] == row["id"] for row in rows)]
+
+        cur.close()
+        conn.close()
+
+        # Merge into a unified identity dict
+        primary = rows[0] if rows else None
+        result = {
+            "query": query,
+            "found": bool(primary or conn_rows),
+            "canonical_label": primary["label"] if primary else (conn_rows[0].get("label") if conn_rows else query),
+            "hostname": primary["hostname"] if primary else "",
+            "ips": list(all_ips),
+            # All system-specific identities grouped by platform
+            "identities": {},
+            # Raw entries from each source
+            "inventory_matches": rows,
+            "connection_matches": conn_rows,
+            "related_entries": related_rows,
+        }
+
+        # Build identities map: platform → what that system calls this entity
+        for r in rows + related_rows:
+            plat = r.get("platform", "unknown")
+            meta = r.get("meta") or {}
+            identity = {
+                "label": r.get("label", ""),
+                "hostname": r.get("hostname", ""),
+                "ips": r.get("ips", []),
+                "connection_id": r.get("connection_id", ""),
+                "aliases": r.get("aliases", []),
+            }
+            identity.update({k: v for k, v in meta.items()
+                             if k in ("vmid", "node", "role", "os_type", "swarm_node_id",
+                                      "kafka_broker_id", "proxmox_connection_id")})
+            result["identities"][plat] = result["identities"].get(plat, [])
+            result["identities"][plat].append(identity)
+
+        for c in conn_rows:
+            plat = c.get("platform", "connection")
+            identity = {
+                "label": c.get("label", ""),
+                "host": c.get("host", ""),
+                "connection_id": c.get("id", ""),
+            }
+            result["identities"][plat] = result["identities"].get(plat, [])
+            result["identities"][plat].append(identity)
+
+        return result
+
+    except Exception as e:
+        log.debug("resolve_entity failed: %s", e)
+        return None
+```
+
+---
+
+## Change 2 — api/collectors/proxmox_vms.py: Write VMs to infra_inventory
+
+In `_poll_single_connection`, after building the `vms` and `lxc_list` lists and
+before the health calculation, add a block that writes each VM and LXC to
+infra_inventory. Insert this after the for-loop over nodes:
+
+Find the comment/block that starts the health calculation:
+```python
+        if nodes_ok == 0:
+            return {"health": "error", "vms": [], "lxc": [],
+```
+
+Just before it (after the for loop that builds `vms` and `lxc_list`), insert:
+
+```python
+        # Write each discovered VM/LXC to infra_inventory for cross-reference
+        try:
+            from api.db.infra_inventory import write_cross_reference
+            for vm in vms:
+                vmid = vm.get("vmid")
+                vm_name = vm.get("name", "")
+                vm_node = vm.get("node", "")
+                vm_ip = vm.get("ip", "")
+                aliases = [f"vmid-{vmid}", vm_name] if vmid else [vm_name]
+                # Common name patterns: hp1-worker-01 → worker-01, worker-1
+                if vm_name:
+                    # Strip common prefixes to create short aliases
+                    for prefix in ("hp1-", "ds-", "prod-", "dev-"):
+                        if vm_name.startswith(prefix):
+                            short = vm_name[len(prefix):]
+                            if short not in aliases:
+                                aliases.append(short)
+                write_cross_reference(
+                    connection_id=f"proxmox:{conn_id}:vm:{vmid}",
+                    platform="proxmox_vm",
+                    label=vm_name,
+                    hostname="",
+                    ips=[vm_ip] if vm_ip else [],
+                    aliases=aliases,
+                    meta={
+                        "vmid": vmid,
+                        "node": vm_node,
+                        "proxmox_connection_id": conn_id,
+                        "proxmox_label": conn_label,
+                        "type": "qemu",
+                    },
+                )
+            for ct in lxc_list:
+                vmid = ct.get("vmid")
+                ct_name = ct.get("name", "")
+                ct_node = ct.get("node", "")
+                aliases = [f"vmid-{vmid}", ct_name] if vmid else [ct_name]
+                write_cross_reference(
+                    connection_id=f"proxmox:{conn_id}:lxc:{vmid}",
+                    platform="proxmox_lxc",
+                    label=ct_name,
+                    hostname="",
+                    ips=[],
+                    aliases=aliases,
+                    meta={
+                        "vmid": vmid,
+                        "node": ct_node,
+                        "proxmox_connection_id": conn_id,
+                        "proxmox_label": conn_label,
+                        "type": "lxc",
+                    },
+                )
+        except Exception as _inv_err:
+            log.debug("infra_inventory write failed (non-fatal): %s", _inv_err)
+```
+
+---
+
+## Change 3 — mcp_server/tools/vm.py: Add `resolve_entity` tool
+
+Add a new function `resolve_entity` at the end of the file (after the `ssh_capabilities`
+function):
+
+```python
+def resolve_entity(query: str) -> dict:
+    """Resolve any infrastructure entity name to its identities across all systems.
+
+    Use this BEFORE executing any action that involves an ambiguous entity name.
+    The query can be any of: vm_host connection label, IP address, hostname,
+    Proxmox VM name, Swarm node name, short alias (e.g. "worker-02", "worker 2",
+    "192.168.199.32", "hp1-worker-01", "ds-docker-worker-02").
+
+    Returns all known identities for the entity:
+    - vm_host: SSH connection label + IP (what to use with vm_exec)
+    - proxmox_vm: VM name, vmid, node (what to use with proxmox_vm_power)
+    - swarm node: node name (what to use with swarm_service_force_update)
+    - IPs: all known IP addresses for cross-referencing
+
+    If ambiguous (multiple entities match), all candidates are returned.
+    If not found, returns an error with a clarifying question to ask the user.
+
+    Args:
+        query: Any name, IP, alias, or partial label for the infrastructure entity.
+               Examples: "worker-02", "worker 2", "192.168.199.32",
+                         "hp1-worker-01", "ds-docker-worker-02", "kafka broker 2"
+    """
+    # Normalize: "worker 2" → "worker-02", "worker-2" → "worker-02"
+    import re as _re
+    normalized = _re.sub(r'\s+', '-', query.strip().lower())
+    # Also try without leading zeros: "worker-2" as well as "worker-02"
+    queries = [query, normalized]
+    if _re.search(r'-0*(\d+)$', normalized):
+        stripped = _re.sub(r'-0+(\d+)$', r'-\1', normalized)
+        if stripped not in queries:
+            queries.append(stripped)
+
+    try:
+        from api.db.infra_inventory import resolve_entity as _resolve
+
+        # Try each normalized form
+        result = None
+        for q in queries:
+            result = _resolve(q)
+            if result and result.get("found"):
+                break
+
+        if not result or not result.get("found"):
+            # Try a broader search via connections table
+            from api.connections import get_all_connections_for_platform
+            all_platforms = ["vm_host", "docker_host", "proxmox"]
+            all_conns = []
+            for plat in all_platforms:
+                try:
+                    all_conns.extend(get_all_connections_for_platform(plat))
+                except Exception:
+                    pass
+            q_lower = query.lower()
+            partial = [c for c in all_conns
+                       if q_lower in c.get("label", "").lower()
+                       or c.get("host", "") == query]
+            if partial:
+                return {
+                    "status": "ok",
+                    "message": f"Found {len(partial)} connection(s) matching '{query}' (no inventory entry yet)",
+                    "data": {
+                        "query": query,
+                        "found": True,
+                        "identities": {
+                            c["platform"]: [{
+                                "label": c.get("label", ""),
+                                "host": c.get("host", ""),
+                                "connection_id": str(c.get("id", "")),
+                            }] for c in partial
+                        },
+                        "clarifying_question": (
+                            f"Found {len(partial)} connection(s): "
+                            + ", ".join(f"{c.get('label')} ({c.get('host')})" for c in partial[:5])
+                            + ". Which one did you mean?"
+                        ) if len(partial) > 1 else None,
+                    },
+                    "timestamp": _ts(),
+                }
+            return {
+                "status": "error",
+                "message": f"No infrastructure entity found for '{query}'",
+                "data": {
+                    "query": query,
+                    "found": False,
+                    "clarifying_question": (
+                        f"I couldn't find any infrastructure entity matching '{query}'. "
+                        "Could you provide more context? For example: the IP address, "
+                        "the Proxmox VM name, the connection label from Settings → Connections, "
+                        "or the Swarm node name."
+                    ),
+                },
+                "timestamp": _ts(),
+            }
+
+        # Format a clean human summary
+        identities = result.get("identities", {})
+        vm_host_ids = identities.get("vm_host", [])
+        proxmox_ids = identities.get("proxmox_vm", [])
+        connection_ids = [i for plat, ids in identities.items()
+                         for i in ids if plat not in ("vm_host", "proxmox_vm", "proxmox_lxc")]
+
+        summary_parts = []
+        if vm_host_ids:
+            summary_parts.append(f"vm_host: {vm_host_ids[0].get('label')} ({', '.join(result.get('ips', []))})")
+        if proxmox_ids:
+            p = proxmox_ids[0]
+            summary_parts.append(f"proxmox: {p.get('label')} (vmid {p.get('vmid')}, node {p.get('node')})")
+
+        return {
+            "status": "ok",
+            "message": f"Resolved '{query}' → {result.get('canonical_label')}. " + " | ".join(summary_parts),
+            "data": {
+                "query": query,
+                "found": True,
+                "canonical_label": result.get("canonical_label", ""),
+                "hostname": result.get("hostname", ""),
+                "ips": result.get("ips", []),
+                "identities": identities,
+                # Convenience: pre-resolved values for common operations
+                "vm_exec_host": vm_host_ids[0].get("label") if vm_host_ids else None,
+                "proxmox_vm_label": proxmox_ids[0].get("label") if proxmox_ids else None,
+                "proxmox_vmid": proxmox_ids[0].get("vmid") if proxmox_ids else None,
+                "proxmox_node": proxmox_ids[0].get("node") if proxmox_ids else None,
+            },
+            "timestamp": _ts(),
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": f"resolve_entity failed: {e}",
+                "data": None, "timestamp": _ts()}
+```
+
+---
+
+## Change 4 — api/agents/router.py: Register resolve_entity in allowlists
+
+Find the `_OBSERVE_BASE` constant (or whichever frozenset contains the observe-type tools):
+Add `"resolve_entity"` to the observe, investigate, and execute tool allowlists so all
+agent types can call it.
+
+Find the line(s) that define the tool allowlists. They look like:
+```python
+_OBSERVE_BASE = frozenset({
+    "plan_action", "escalate", ...
+```
+
+In whichever sets contain `"infra_lookup"`, also add `"resolve_entity"` next to it.
+This ensures all agent types that can call `infra_lookup` can also call `resolve_entity`.
+
+---
+
+## Change 5 — api/db/infra_inventory.py: Ensure `init_inventory` is called on startup
+
+Check `api/main.py` — if `init_inventory()` is already called in the lifespan function,
+no change needed. If not, add the call:
+
+In `api/main.py`, find the lifespan startup section and add after other DB init calls:
+```python
+    try:
+        from api.db.infra_inventory import init_inventory
+        init_inventory()
+    except Exception as e:
+        log.warning("infra_inventory init failed (non-fatal): %s", e)
+```
+
+Only add this if `init_inventory` is not already called in main.py.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.23.0` → `2.23.1`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(agent): entity cross-reference registry + resolve_entity tool"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 11:05:32
+========================================================================
+PROMPT COMPLETE: v2.23.1
+[STATUS] 3m26s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m28s
+========================================================================

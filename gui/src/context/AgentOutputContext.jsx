@@ -176,10 +176,19 @@ export function AgentOutputProvider({ children }) {
       // ── update inline feed ─────────────────────────────────────────────────
       if (t === 'tool') {
         const toolName = msg.tool   || ''
-        const status   = msg.status || 'ok'
+        const rawStatus = msg.status || 'ok'
+        // Map 'escalated' status to its own category (not 'error')
+        const status = rawStatus === 'escalated' ? 'escalated' : rawStatus
         // Skip audit_log and blocked calls in the inline feed
         if (toolName !== 'audit_log' && status !== 'blocked') {
-          setFeedLines(prev => [...prev, { type: 'tool', toolName, status, content: msg.content }])
+          setFeedLines(prev => {
+            // Deduplicate escalate entries
+            if (toolName === 'escalate') {
+              const alreadyEscalated = prev.some(l => l.type === 'tool' && l.toolName === 'escalate')
+              if (alreadyEscalated) return prev
+            }
+            return [...prev, { type: 'tool', toolName, status, content: msg.content }]
+          })
         }
       } else if (t === 'reasoning') {
         // Keep only the latest thought — replace any previous one
@@ -188,7 +197,12 @@ export function AgentOutputProvider({ children }) {
           return [...without, { type: 'thought', content: msg.content }]
         })
       } else if (t === 'halt') {
-        setFeedLines(prev => [...prev, { type: 'tool', toolName: 'escalate', status: 'error', content: msg.content }])
+        // Deduplicate: only add if no escalate line already present
+        setFeedLines(prev => {
+          const alreadyEscalated = prev.some(l => l.type === 'tool' && l.toolName === 'escalate')
+          if (alreadyEscalated) return prev
+          return [...prev, { type: 'tool', toolName: 'escalate', status: 'escalated', content: msg.content }]
+        })
       } else if (t === 'done') {
         const elapsed = feedStartRef.current
           ? ((Date.now() - feedStartRef.current) / 1000).toFixed(1)

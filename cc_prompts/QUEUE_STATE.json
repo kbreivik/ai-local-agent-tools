@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T11:05:32",
+  "updated_at": "2026-04-14T12:05:46",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -325,10 +325,26 @@
       "filename": "CC_PROMPT_v2.23.1.md",
       "version": "v2.23.1",
       "theme": "Entity cross-reference registry + resolve_entity tool",
+      "runner_status": "DONE",
+      "commit_sha": "aac205c",
+      "error": "",
+      "started_at": "2026-04-14T11:05:32",
+      "finished_at": "2026-04-14T11:09:00",
+      "duration_s": 208.12297109997598,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_110532_CC_PROMPT_v2.23.1.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.23.2.md",
+      "version": "v2.23.2",
+      "theme": "Fix task classifier, kubectl hallucination, escalation UI",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T11:05:32",
+      "started_at": "2026-04-14T12:05:46",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
