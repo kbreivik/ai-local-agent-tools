@@ -74,6 +74,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.23.0.md | v2.23.0 | Fix VM host reboot + Proxmox action credential bugs | DONE (bbc6039) |
 | CC_PROMPT_v2.23.1.md | v2.23.1 | Entity cross-reference registry + resolve_entity tool | DONE (f5b51b7) |
 | CC_PROMPT_v2.23.2.md | v2.23.2 | Fix task classifier, kubectl hallucination, escalation UI | DONE (9445cca) |
+| CC_PROMPT_v2.23.3.md | v2.23.3 | DB-backed vm_exec allowlist + session/permanent approval flow | RUNNING |
 
 ---
 
@@ -130,7 +131,13 @@ Latest button hidden when update_available=false (digests match, no pull needed)
 ## Key file paths
 
 ```
-api/routers/settings.py                  — agentHostIp setting key (v2.22.6)
+api/db/vm_exec_allowlist.py               — allowlist table + cache + session purge (v2.23.3)
+api/routers/vm_exec_allowlist.py          — REST API for allowlist management (v2.23.3)
+mcp_server/tools/vm.py                    — _validate_command DB-backed + 3 new tools (v2.23.3)
+api/agents/router.py                      — new allowlist tools in all allowlists (v2.23.3)
+api/routers/agent.py                      — session purge on cleanup (v2.23.3)
+gui/src/components/OptionsModal.jsx       — Allowlist tab (v2.23.3)
+api/routers/settings.py                   — agentHostIp setting key (v2.22.6)
 api/collectors/docker_agent01.py         — _get_agent01_ip() reads settings DB (v2.22.6)
 gui/src/components/OptionsModal.jsx      — Agent Host IP field in Infrastructure tab (v2.22.6)
 gui/src/components/ServiceCards.jsx      — clickable endpoint + dimmed int.ips (v2.22.6)

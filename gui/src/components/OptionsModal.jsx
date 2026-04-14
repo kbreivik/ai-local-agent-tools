@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Permissions', 'Access', 'Naming', 'Display', 'Notifications', 'Layouts']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Allowlist', 'Permissions', 'Access', 'Naming', 'Display', 'Notifications', 'Layouts']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -1724,6 +1724,194 @@ function UpdateStatus() {
   )
 }
 
+// ── Tab: Allowlist ────────────────────────────────────────────────────────────
+
+function AllowlistTab() {
+  const [patterns, setPatterns] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [addOpen, setAddOpen] = useState(false)
+  const [form, setForm] = useState({ pattern: '', description: '', scope: 'permanent' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const fetchPatterns = () => {
+    setLoading(true)
+    fetch(`${BASE}/api/vm-exec-allowlist`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : { patterns: [] })
+      .then(d => { setPatterns(d.patterns || []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  useEffect(() => { fetchPatterns() }, [])
+
+  const save = async () => {
+    if (!form.pattern.trim() || !form.description.trim()) {
+      setError('Pattern and description are required'); return
+    }
+    setSaving(true); setError('')
+    try {
+      const r = await fetch(`${BASE}/api/vm-exec-allowlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(form),
+      })
+      if (r.ok) {
+        setForm({ pattern: '', description: '', scope: 'permanent' })
+        setAddOpen(false)
+        fetchPatterns()
+      } else {
+        const d = await r.json()
+        setError(d.detail || 'Failed to add pattern')
+      }
+    } catch (e) { setError(e.message) }
+    setSaving(false)
+  }
+
+  const remove = async (id) => {
+    if (!window.confirm('Remove this pattern?')) return
+    await fetch(`${BASE}/api/vm-exec-allowlist/${id}`, {
+      method: 'DELETE', headers: { ...authHeaders() }
+    })
+    fetchPatterns()
+  }
+
+  const base = patterns.filter(p => p.is_base)
+  const custom = patterns.filter(p => !p.is_base)
+  const session = custom.filter(p => p.scope === 'session')
+  const permanent = custom.filter(p => p.scope === 'permanent')
+
+  const _scopeBadge = (p) => {
+    if (p.is_base) return { label: 'base', bg: 'var(--bg-3)', color: 'var(--text-3)' }
+    if (p.scope === 'session') return { label: 'session', bg: 'rgba(0,200,238,0.12)', color: 'var(--cyan)' }
+    return { label: 'permanent', bg: 'rgba(0,170,68,0.12)', color: 'var(--green)' }
+  }
+
+  return (
+    <div>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-3)' }}>
+        Commands the agent can run via <code className="text-xs">vm_exec</code>. Base patterns are built-in.
+        Custom patterns can be added permanently or per-session (auto-deleted when agent session ends).
+        The agent can also request approval via <code className="text-xs">vm_exec_allowlist_request()</code>.
+      </p>
+
+      {/* Summary */}
+      <div className="flex gap-4 mb-4 text-xs" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+        <span><span style={{ color: 'var(--text-1)' }}>{base.length}</span> base</span>
+        <span><span style={{ color: 'var(--green)' }}>{permanent.length}</span> custom permanent</span>
+        <span><span style={{ color: 'var(--cyan)' }}>{session.length}</span> session</span>
+      </div>
+
+      {/* Add button */}
+      <div className="flex justify-between items-center mb-3">
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          CUSTOM PATTERNS
+        </span>
+        <button
+          onClick={() => setAddOpen(o => !o)}
+          className="text-[10px] px-2 py-1 rounded"
+          style={{ background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
+        >
+          {addOpen ? 'Cancel' : '+ Add Pattern'}
+        </button>
+      </div>
+
+      {/* Add form */}
+      {addOpen && (
+        <div className="mb-4 p-3 rounded" style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}>
+          <div className="mb-2">
+            <label className="text-[10px] block mb-1" style={{ color: 'var(--text-3)' }}>Regex pattern</label>
+            <input
+              className="w-full text-[10px] px-2 py-1 rounded"
+              style={{ background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}
+              placeholder={String.raw`^ss\b`}
+              value={form.pattern}
+              onChange={e => setForm(f => ({ ...f, pattern: e.target.value }))}
+            />
+          </div>
+          <div className="mb-2">
+            <label className="text-[10px] block mb-1" style={{ color: 'var(--text-3)' }}>Description</label>
+            <input
+              className="w-full text-[10px] px-2 py-1 rounded"
+              style={{ background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-1)' }}
+              placeholder="Socket statistics (ss -tlnp)"
+              value={form.description}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            />
+          </div>
+          <div className="mb-3">
+            <label className="text-[10px] block mb-1" style={{ color: 'var(--text-3)' }}>Scope</label>
+            <div className="flex gap-3">
+              {[['permanent', 'Permanent'], ['session', 'Session only']].map(([v, l]) => (
+                <label key={v} className="flex items-center gap-1.5 cursor-pointer text-[10px]" style={{ color: 'var(--text-1)' }}>
+                  <input type="radio" value={v} checked={form.scope === v} onChange={() => setForm(f => ({ ...f, scope: v }))} />
+                  {l}
+                </label>
+              ))}
+            </div>
+          </div>
+          {error && <div className="text-[10px] mb-2" style={{ color: 'var(--red)' }}>{error}</div>}
+          <button
+            onClick={save} disabled={saving}
+            className="text-[10px] px-3 py-1 rounded"
+            style={{ background: 'var(--accent)', color: '#fff', opacity: saving ? 0.5 : 1 }}
+          >
+            {saving ? 'Adding...' : 'Add Pattern'}
+          </button>
+        </div>
+      )}
+
+      {/* Custom patterns */}
+      {custom.length === 0 && !addOpen && (
+        <div className="text-[10px] mb-4" style={{ color: 'var(--text-3)' }}>
+          No custom patterns. The agent can request additions via <code>vm_exec_allowlist_request()</code>.
+        </div>
+      )}
+      {custom.map(p => {
+        const badge = _scopeBadge(p)
+        return (
+          <div key={p.id} className="flex items-start justify-between mb-2 p-2 rounded"
+               style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[10px]" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{p.pattern}</span>
+                <span className="text-[8px] px-1.5 py-px rounded" style={{ background: badge.bg, color: badge.color }}>{badge.label}</span>
+              </div>
+              <div className="text-[9px]" style={{ color: 'var(--text-3)' }}>
+                {p.description}
+                {p.added_by && p.added_by !== 'system' && ` · added by ${p.added_by}`}
+                {p.approved_by && ` · approved by ${p.approved_by}`}
+              </div>
+            </div>
+            <button
+              onClick={() => remove(p.id)}
+              className="text-[9px] ml-2 flex-shrink-0"
+              style={{ color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}
+            >X</button>
+          </div>
+        )
+      })}
+
+      {/* Base patterns (collapsible) */}
+      <details className="mt-4">
+        <summary className="text-[10px] cursor-pointer" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          BASE PATTERNS ({base.length}) — built-in, read-only
+        </summary>
+        <div className="mt-2 space-y-1">
+          {base.map(p => (
+            <div key={p.pattern} className="flex items-center gap-2 px-2 py-1 rounded"
+                 style={{ background: 'var(--bg-2)' }}>
+              <span className="text-[9px] flex-1" style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>{p.pattern}</span>
+              <span className="text-[9px]" style={{ color: 'var(--text-3)' }}>{p.description}</span>
+            </div>
+          ))}
+        </div>
+      </details>
+
+      {loading && <div className="text-[10px] mt-2" style={{ color: 'var(--text-3)' }}>Loading...</div>}
+    </div>
+  )
+}
+
 // ── Root modal ─────────────────────────────────────────────────────────────────
 
 export default function OptionsModal() {
@@ -1844,6 +2032,7 @@ export default function OptionsModal() {
                 {tab === 'Infrastructure' && <InfrastructureTab draft={draft} update={update} />}
                 {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
                 {tab === 'Connections'    && <ConnectionsTab />}
+                {tab === 'Allowlist'      && <AllowlistTab />}
                 {tab === 'Permissions'    && <PermissionsTab />}
                 {tab === 'Access'        && <AccessTab />}
                 {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
@@ -1944,4 +2133,4 @@ export function NotificationsTab({ draft, update }) {
 }
 
 // Named exports for SettingsPage
-export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, UpdateStatus }
+export { GeneralTab, InfrastructureTab, AIServicesTab, ConnectionsTab, AllowlistTab, PermissionsTab, AccessTab, NamingTab, DisplayTab, UpdateStatus }

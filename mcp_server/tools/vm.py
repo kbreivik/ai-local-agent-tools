@@ -7,75 +7,78 @@ def _ts():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _validate_command(command):
-    """Validate a command against the read-only allowlist.
+def _suggest_pattern(segment: str) -> str:
+    """Generate a safe regex pattern suggestion for a blocked command segment."""
+    import re as _re
+    # Take the first word (command name)
+    first_word = segment.strip().split()[0] if segment.strip() else segment
+    # Escape for regex, anchor at start
+    return r'^' + _re.escape(first_word) + r'\b'
 
-    Allows pipes (cmd1 | cmd2 | cmd3) where ALL segments match the allowlist.
-    Allows '2>/dev/null' (stderr discard only — not file writes).
-    Blocks semicolons, backticks, $(), stdout redirects, file writes.
-    'docker system df -v' is supported (the pattern matches 'docker system df' prefix).
-    Returns (is_valid, cleaned_command_or_error_message).
+
+def _load_allowlist(session_id: str = "") -> list[str]:
+    """Load allowlist patterns from DB (cached 30s). Falls back to base patterns."""
+    try:
+        from api.db.vm_exec_allowlist import get_patterns
+        return get_patterns(session_id=session_id)
+    except Exception:
+        # Fallback: hardcoded base patterns (avoids import of DB module at module level)
+        try:
+            from api.db.vm_exec_allowlist import BASE_PATTERNS
+            return [p for p, _ in BASE_PATTERNS]
+        except Exception:
+            return []
+
+
+def _validate_command(command: str, session_id: str = "") -> tuple:
+    """Validate a command against the allowlist (DB-backed, 30s cache).
+
+    Returns:
+        (True, cleaned_command)  — command is allowed
+        (False, error_dict)      — command blocked; error_dict has:
+            {"blocked": True, "message": str, "segment": str,
+             "pattern_suggestion": str, "hint": str}
+        (False, error_str)       — shell metachar rejected (not a pattern issue)
     """
+    import re as _re
+
     # Strip '2>/dev/null' before metachar check — safe stderr discard.
-    cleaned = re.sub(r'\s*2>/dev/null', '', command).strip()
+    cleaned = _re.sub(r'\s*2>/dev/null', '', command).strip()
 
     # Strip Go template --format arguments before metachar check.
-    # Pattern: --format '{{...}}' or --format "{{...}}" — safe, read-only Docker inspect option.
-    sanitized = re.sub(r"""--format\s+['"]?\{\{[^'"]*\}\}['"]?""", '--format TEMPLATE', cleaned)
+    sanitized = _re.sub(r"""--format\s+['"]?\{\{[^'"]*\}\}['"]?""", '--format TEMPLATE', cleaned)
 
-    # Block remaining shell injection chars (stdout redirects, chaining, subshells)
+    # Block remaining shell injection chars
     if any(c in sanitized for c in [';', '`', '$', '>', '<', '&&', '||']):
         return False, f"Shell metacharacters not allowed: {command!r}"
 
-    # Split on pipe — allow up to 3 segments (e.g. du -sh /* | sort -hr | head -20)
+    # Split on pipe — allow up to 3 segments
     parts = [p.strip() for p in sanitized.split('|')]
     if len(parts) > 3:
         return False, "Maximum two pipes allowed (e.g. cmd | sort -hr | head -20)"
 
-    _ALLOWLIST = [
-        # Read-only
-        r'^df\b', r'^du\b', r'^free\b', r'^uptime$', r'^uname\b',
-        r'^journalctl\b', r'^find\b', r'^ps\b',
-        r'^docker system df', r'^docker volume ls', r'^docker volume inspect\b',
-        r'^docker container inspect\b', r'^docker inspect\b',
-        r'^docker ps\b', r'^docker images\b',
-        r'^docker logs\b',                         # read-only log fetch
-        r'^docker exec \S+ kafka-[a-z-]+\.sh\b',  # kafka CLI tools in containers
-        r'^docker service ps\b', r'^docker service inspect\b',
-        r'^docker node inspect\b', r'^docker node ls\b',
-        r'^apt list', r'^apt-cache\b',
-        r'^systemctl list', r'^systemctl status\b',
-        r'^cat /etc/os-release$', r'^cat /proc/[\w/]+$',
-        r'^hostname$', r'^whoami$',
-        r'^ls\b', r'^stat\b', r'^wc\b', r'^sort\b',
-        r'^head\b', r'^tail\b', r'^grep\b', r'^awk\b', r'^cut\b',
-        r'^xargs\b',
-        # Write (agent enforces plan_action approval via ACTION_PROMPT rule 11)
-        r'^docker image prune\b',
-        r'^docker container prune\b',
-        r'^docker volume prune\b',
-        r'^docker system prune\b',
-        r'^docker builder prune\b',
-        r'^journalctl --vacuum',
-        r'^apt-get autoremove\b',
-        r'^apt-get clean$',
-        r'^apt-get autoclean$',
-    ]
+    allowlist = _load_allowlist(session_id=session_id)
 
     for part in parts:
-        if not any(re.match(p, part) for p in _ALLOWLIST):
-            return False, (
-                f"Command segment not in allowlist: {part!r}. "
-                "Allowed: df, du, free, uptime, journalctl, find, ps, "
-                "docker system df, docker volume ls, docker volume inspect, "
-                "docker container inspect, docker inspect, docker ps, apt list, "
-                "systemctl, ls, stat, sort, head, tail, grep, awk, cut, "
-                "docker image/container/volume/system/builder prune, "
-                "journalctl --vacuum, apt-get autoremove/clean. "
-                "Tip: use docker_df tool for structured Docker disk data instead."
-            )
+        if not any(_re.match(p, part) for p in allowlist):
+            suggestion = _suggest_pattern(part)
+            return False, {
+                "blocked": True,
+                "segment": part,
+                "pattern_suggestion": suggestion,
+                "message": (
+                    f"Command segment not in allowlist: {part!r}. "
+                    "Call vm_exec_allowlist_request() to request approval for this session "
+                    "or permanent addition."
+                ),
+                "hint": (
+                    f"Call vm_exec_allowlist_request(command={command!r}, "
+                    f"reason='<why you need this>', scope='session') "
+                    f"then plan_action() then vm_exec_allowlist_add(pattern={suggestion!r}, ...)"
+                ),
+            }
 
-    return True, cleaned  # return cleaned (2>/dev/null stripped), NOT sanitized (template replaced)
+    return True, cleaned
 
 
 def _resolve_connection(host, all_conns):
@@ -154,6 +157,18 @@ def vm_exec(host: str, command: str) -> dict:
     """
     valid, result_or_error = _validate_command(command)
     if not valid:
+        if isinstance(result_or_error, dict) and result_or_error.get("blocked"):
+            return {
+                "status": "blocked",
+                "message": result_or_error["message"],
+                "data": {
+                    "command": command,
+                    "blocked_segment": result_or_error.get("segment", ""),
+                    "pattern_suggestion": result_or_error.get("pattern_suggestion", ""),
+                    "hint": result_or_error.get("hint", ""),
+                },
+                "timestamp": _ts(),
+            }
         return {"status": "error", "message": result_or_error, "data": None, "timestamp": _ts()}
 
     safe_cmd = result_or_error
@@ -877,3 +892,142 @@ def ssh_capabilities(host: str = "", days: int = 7) -> dict:
         }
     except Exception as e:
         return {"status": "error", "message": f"ssh_capabilities error: {e}", "data": None, "timestamp": _ts()}
+
+
+def vm_exec_allowlist_request(command: str, reason: str, scope: str = "session") -> dict:
+    """Request approval to add a blocked command to the vm_exec allowlist.
+
+    Call this when vm_exec returns status='blocked'. It suggests a regex pattern
+    and returns instructions for the approval flow.
+
+    Flow after calling this tool:
+    1. Call plan_action() with the suggested pattern and reason
+    2. After user approves, call vm_exec_allowlist_add() with the pattern
+    3. Retry vm_exec() with the original command
+
+    Args:
+        command: The full command that was blocked (e.g. "ss -tlnp")
+        reason:  Why this command is needed for the current task
+        scope:   'session' (expires when this session ends) or 'permanent' (persists)
+    """
+    if scope not in ("session", "permanent"):
+        scope = "session"
+
+    suggestion = _suggest_pattern(command.strip().split()[0] if command.strip() else command)
+
+    # Also try to load similar existing patterns for context
+    existing_context = ""
+    try:
+        from api.db.vm_exec_allowlist import list_all
+        patterns = list_all(include_base=True)
+        similar = [p["pattern"] for p in patterns
+                   if command.strip().split()[0].lower() in p.get("description", "").lower()]
+        if similar:
+            existing_context = f" (similar patterns already allowed: {similar[:2]})"
+    except Exception:
+        pass
+
+    scope_note = (
+        "This session only — pattern will be deleted when the session ends."
+        if scope == "session" else
+        "Permanent — pattern will persist across sessions and be visible in Settings → Allowlist."
+    )
+
+    return {
+        "status": "ok",
+        "message": f"Allowlist request prepared for: {command!r}",
+        "data": {
+            "command": command,
+            "reason": reason,
+            "scope": scope,
+            "scope_note": scope_note,
+            "suggested_pattern": suggestion,
+            "existing_context": existing_context,
+            "next_steps": [
+                f"1. Call plan_action(summary='Add {command!r} to vm_exec allowlist ({scope})', "
+                f"steps=['Add pattern: {suggestion}', 'Scope: {scope}', 'Reason: {reason}'], "
+                f"risk_level='low', reversible=True)",
+                f"2. After approval: call vm_exec_allowlist_add(pattern={suggestion!r}, "
+                f"description={reason!r}, scope={scope!r})",
+                "3. Retry: call vm_exec() with the original command",
+            ],
+        },
+        "timestamp": _ts(),
+    }
+
+
+def vm_exec_allowlist_add(pattern: str, description: str,
+                          scope: str = "session", session_id: str = "") -> dict:
+    """Add a pattern to the vm_exec allowlist after plan_action approval.
+
+    Only call this AFTER the user has approved via plan_action().
+    For session scope, the pattern is automatically deleted when the session ends.
+    For permanent scope, it persists and appears in Settings → Allowlist.
+
+    Args:
+        pattern:     Regex pattern to allow (e.g. r'^ss\\b'). Use the suggested_pattern
+                     from vm_exec_allowlist_request().
+        description: Human-readable description of what the pattern allows.
+        scope:       'session' (expires with this session) or 'permanent' (persists).
+        session_id:  Current session ID (required for session scope — use the session_id
+                     from the current agent context if known, or leave blank).
+    """
+    import re as _re
+    # Validate the pattern compiles
+    try:
+        _re.compile(pattern)
+    except _re.error as e:
+        return {"status": "error", "message": f"Invalid regex pattern: {e}",
+                "data": None, "timestamp": _ts()}
+
+    try:
+        from api.db.vm_exec_allowlist import add_pattern
+        result = add_pattern(
+            pattern=pattern,
+            description=description,
+            scope=scope,
+            session_id=session_id,
+            added_by="agent",
+            approved_by="user",
+        )
+        if result.get("ok"):
+            return {
+                "status": "ok",
+                "message": f"Pattern {pattern!r} added ({scope}). Retry vm_exec() now.",
+                "data": result,
+                "timestamp": _ts(),
+            }
+        return {"status": "error", "message": result.get("error", "Failed to add pattern"),
+                "data": None, "timestamp": _ts()}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": None, "timestamp": _ts()}
+
+
+def vm_exec_allowlist_list() -> dict:
+    """Show all vm_exec allowlist patterns — base (built-in) and custom (user-added).
+
+    Use to understand what commands are currently allowed before attempting vm_exec,
+    or to verify a pattern was successfully added after vm_exec_allowlist_add().
+    """
+    try:
+        from api.db.vm_exec_allowlist import list_all
+        patterns = list_all(include_base=True)
+        base = [p for p in patterns if p.get("is_base")]
+        custom = [p for p in patterns if not p.get("is_base")]
+        session = [p for p in custom if p.get("scope") == "session"]
+        permanent = [p for p in custom if p.get("scope") == "permanent"]
+        return {
+            "status": "ok",
+            "message": f"{len(patterns)} patterns ({len(base)} base, {len(permanent)} custom permanent, {len(session)} session)",
+            "data": {
+                "total": len(patterns),
+                "base_count": len(base),
+                "custom_permanent": permanent,
+                "custom_session": session,
+                "base_sample": [p["pattern"] for p in base[:10]],
+            },
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"vm_exec_allowlist_list failed: {e}",
+                "data": None, "timestamp": _ts()}

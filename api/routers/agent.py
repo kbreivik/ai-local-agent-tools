@@ -1524,6 +1524,12 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             await logger_mod.complete_operation(operation_id, final_status)
         except Exception as _comp_e:
             log.error("complete_operation failed for %s: %s", operation_id, _comp_e)
+        # Purge session-scoped allowlist entries for this session
+        try:
+            from api.db.vm_exec_allowlist import purge_session
+            purge_session(session_id)
+        except Exception as _al_e:
+            log.debug("allowlist session purge failed: %s", _al_e)
 
 
 @router.post("/run", response_model=RunResponse)

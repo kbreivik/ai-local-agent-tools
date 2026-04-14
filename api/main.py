@@ -34,6 +34,7 @@ from api.routers.escalations import router as escalations_router, init_escalatio
 from api.routers.errors import router as errors_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
+from api.routers.vm_exec_allowlist import router as vm_exec_allowlist_router
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
 from api.session_store import ensure_started as _start_session_store
@@ -162,6 +163,12 @@ async def lifespan(app: FastAPI):
         init_vm_action_log()
     except Exception as e:
         _log.debug("VM action log init skipped: %s", e)
+    # Initialize vm_exec allowlist table
+    try:
+        from api.db.vm_exec_allowlist import init_allowlist
+        init_allowlist()
+    except Exception as e:
+        _log.debug("vm_exec_allowlist init skipped: %s", e)
     # Initialize metric_samples time-series table
     try:
         from api.db.metric_samples import init_metric_samples
@@ -318,6 +325,7 @@ app.include_router(cred_profiles_router)
 app.include_router(layout_router)
 app.include_router(escalations_router)
 app.include_router(errors_router)
+app.include_router(vm_exec_allowlist_router)
 
 
 def _get_host_ips() -> dict:

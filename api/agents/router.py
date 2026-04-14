@@ -103,6 +103,8 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "metric_trend",
     "list_metrics",
     "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -130,6 +132,8 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "metric_trend",
     "list_metrics",
     "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -148,6 +152,9 @@ EXECUTE_KAFKA_TOOLS = frozenset({
     "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
     "swarm_node_status", "swarm_service_force_update",
     "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
@@ -160,11 +167,17 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "entity_history", "entity_events",
     "swarm_node_status", "swarm_service_force_update",
     "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
     # Populated at startup by _load_promoted_into_allowlists().
     # Only plan_action / escalate / audit_log in base until proxmox skills are promoted.
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_GENERAL_TOOLS = frozenset({
@@ -176,6 +189,9 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "entity_history", "entity_events",
     "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
     "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -187,6 +203,8 @@ BUILD_AGENT_TOOLS = frozenset({
     "skill_compat_check", "skill_compat_check_all", "skill_export_prompt",
     "plan_action", "audit_log", "escalate",
     "agent_status", "postgres_health",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
 })
 
 # Backward-compat aliases

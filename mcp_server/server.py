@@ -795,6 +795,36 @@ def ssh_capabilities(host: str = "", days: int = 7) -> dict:
 
 
 @mcp.tool()
+def vm_exec_allowlist_request(command: str, reason: str, scope: str = "session") -> dict:
+    """Request approval to add a blocked command to the vm_exec allowlist.
+    Call when vm_exec returns status='blocked'. Returns a suggested regex pattern
+    and instructions for the approval flow (plan_action → vm_exec_allowlist_add → retry).
+    """
+    from mcp_server.tools.vm import vm_exec_allowlist_request as _req
+    return _req(command=command, reason=reason, scope=scope)
+
+
+@mcp.tool()
+def vm_exec_allowlist_add(pattern: str, description: str,
+                          scope: str = "session", session_id: str = "") -> dict:
+    """Add a pattern to the vm_exec allowlist after plan_action approval.
+    Only call AFTER user approves via plan_action(). Session-scoped patterns
+    auto-delete when the session ends; permanent patterns persist.
+    """
+    from mcp_server.tools.vm import vm_exec_allowlist_add as _add
+    return _add(pattern=pattern, description=description, scope=scope, session_id=session_id)
+
+
+@mcp.tool()
+def vm_exec_allowlist_list() -> dict:
+    """Show all vm_exec allowlist patterns — base (built-in) and custom (user-added).
+    Use to check what commands are allowed before attempting vm_exec.
+    """
+    from mcp_server.tools.vm import vm_exec_allowlist_list as _list
+    return _list()
+
+
+@mcp.tool()
 def entity_history(entity_id: str, hours: int = 24, field: str = "") -> dict:
     """Get field-level change history for an infrastructure entity.
     Returns what changed (old → new values) within the time window.
