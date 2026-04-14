@@ -1002,6 +1002,37 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
             <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? It will be temporarily unreachable.`)} />,
           ].filter(Boolean)
       } />
+      {/* Maintenance toggle */}
+      {vm.entity_id && (
+        <div style={{ marginTop: 6, borderTop: '1px solid var(--bg-3)', paddingTop: 6 }}>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation()
+              const BASE = import.meta.env.VITE_API_BASE ?? ''
+              const headers = { 'Content-Type': 'application/json', ...authHeaders() }
+              if (vm.maintenance) {
+                await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, { method: 'DELETE', headers })
+              } else {
+                await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, {
+                  method: 'POST', headers,
+                  body: JSON.stringify({ reason: 'Set from dashboard' })
+                })
+              }
+              // Trigger a data refresh
+              window.dispatchEvent(new CustomEvent('ds:refresh-dashboard'))
+            }}
+            style={{
+              padding: '2px 10px', fontSize: 9, fontFamily: 'var(--font-mono)',
+              background: vm.maintenance ? 'var(--amber-dim)' : 'transparent',
+              color: vm.maintenance ? 'var(--amber)' : 'var(--text-3)',
+              border: `1px solid ${vm.maintenance ? 'var(--amber)' : 'var(--border)'}`,
+              borderRadius: 2, cursor: 'pointer',
+            }}
+          >
+            {vm.maintenance ? '\u2691 Clear Maintenance' : '\u2691 Set Maintenance'}
+          </button>
+        </div>
+      )}
     </>
   )
 }
@@ -1017,6 +1048,13 @@ function ProxmoxCardCollapsed({ vm, onEntityDetail }) {
         {vm.problem
           ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
           : <>{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></>}
+        {vm.maintenance && (
+          <span style={{
+            fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
+          }}>MAINT</span>
+        )}
         {onEntityDetail && (
           <button
             className="text-[10px] px-1 py-px ml-auto"

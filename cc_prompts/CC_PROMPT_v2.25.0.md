@@ -1,0 +1,444 @@
+# CC PROMPT — v2.25.0 — Per-entity maintenance mode + Proxmox allowlist additions
+
+## What this does
+Builds the maintenance mode subsystem from scratch. Operators can mark any VM, LXC container,
+or Swarm service as "in maintenance" — it gets a grey dot, a MAINT tag, and is excluded from
+section health calculations. If ALL faults in a section are in maintenance, the section shows
+healthy/green instead of degraded. Also adds `dmesg`, `qm list`, and `pct list` to the
+vm_exec allowlist so the agent can actually diagnose Proxmox issues.
+Version bump: v2.24.6 → v2.25.0
+
+---
+
+## Change 1 — api/db/entity_maintenance.py  (NEW FILE)
+
+Create this file:
+
+```python
+"""entity_maintenance — per-entity maintenance flag.
+
+Stored in DB. When an entity is in maintenance:
+  - Its dot is overridden to "grey" (no red/amber)
+  - It is excluded from section health aggregation
+  - The collector reports problem=None and maintenance=True on the card
+
+Table schema:
+  entity_id   TEXT PK   — e.g. "proxmox_vms:pve1:vm:100"
+  reason      TEXT      — optional operator note
+  set_by      TEXT      — username who set it
+  set_at      TIMESTAMPTZ
+  expires_at  TIMESTAMPTZ NULL — None = no expiry
+"""
+import logging
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS entity_maintenance (
+    entity_id  TEXT PRIMARY KEY,
+    reason     TEXT    NOT NULL DEFAULT '',
+    set_by     TEXT    NOT NULL DEFAULT 'operator',
+    set_at     TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS idx_maint_expires ON entity_maintenance(expires_at);
+"""
+
+_initialized = False
+
+
+def init_maintenance():
+    """Create table if absent. Called on startup."""
+    global _initialized
+    if _initialized:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in _DDL.strip().split(";"):
+            s = stmt.strip()
+            if s:
+                cur.execute(s)
+        cur.close(); conn.close()
+        _initialized = True
+        log.info("entity_maintenance table ready")
+    except Exception as e:
+        log.warning("entity_maintenance init failed: %s", e)
+
+
+def get_maintenance_set() -> set[str]:
+    """Return set of entity_ids currently in maintenance (excluding expired)."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT entity_id FROM entity_maintenance "
+            "WHERE expires_at IS NULL OR expires_at > NOW()"
+        )
+        rows = {r[0] for r in cur.fetchall()}
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("get_maintenance_set failed: %s", e)
+        return set()
+
+
+def set_maintenance(entity_id: str, reason: str = "", set_by: str = "operator",
+                    expires_at=None) -> dict:
+    """Set an entity in maintenance. Upserts."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO entity_maintenance (entity_id, reason, set_by, set_at, expires_at)
+               VALUES (%s, %s, %s, NOW(), %s)
+               ON CONFLICT (entity_id) DO UPDATE SET
+                 reason=EXCLUDED.reason, set_by=EXCLUDED.set_by,
+                 set_at=NOW(), expires_at=EXCLUDED.expires_at""",
+            (entity_id, reason, set_by, expires_at)
+        )
+        conn.commit(); cur.close(); conn.close()
+        log.info("entity_maintenance: SET %s by %s", entity_id, set_by)
+        return {"ok": True, "entity_id": entity_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def clear_maintenance(entity_id: str) -> dict:
+    """Remove an entity from maintenance."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM entity_maintenance WHERE entity_id = %s", (entity_id,))
+        deleted = cur.rowcount
+        conn.commit(); cur.close(); conn.close()
+        log.info("entity_maintenance: CLEAR %s (deleted=%d)", entity_id, deleted)
+        return {"ok": True, "entity_id": entity_id, "was_set": deleted > 0}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def list_maintenance() -> list[dict]:
+    """Return all active maintenance entries."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT entity_id, reason, set_by, set_at, expires_at "
+            "FROM entity_maintenance "
+            "WHERE expires_at IS NULL OR expires_at > NOW() "
+            "ORDER BY set_at DESC"
+        )
+        cols = [d[0] for d in cur.description]
+        rows = []
+        for r in cur.fetchall():
+            row = dict(zip(cols, r))
+            for k in ("set_at", "expires_at"):
+                if row.get(k) and hasattr(row[k], "isoformat"):
+                    row[k] = row[k].isoformat()
+            rows.append(row)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("list_maintenance failed: %s", e)
+        return []
+```
+
+---
+
+## Change 2 — api/routers/maintenance.py  (NEW FILE)
+
+Create this file:
+
+```python
+"""Maintenance mode API endpoints."""
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+
+from api.auth import get_current_user
+from api.db.entity_maintenance import (
+    set_maintenance, clear_maintenance, list_maintenance
+)
+
+router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
+
+
+class MaintenanceRequest(BaseModel):
+    reason: str = ""
+    expires_at: Optional[str] = None
+
+
+@router.get("")
+async def get_all_maintenance(_: str = Depends(get_current_user)):
+    """List all entities currently in maintenance."""
+    return {"maintenance": list_maintenance()}
+
+
+@router.post("/{entity_id:path}")
+async def set_entity_maintenance(
+    entity_id: str,
+    body: MaintenanceRequest,
+    user: str = Depends(get_current_user),
+):
+    """Set an entity in maintenance mode."""
+    from datetime import datetime
+    expires = None
+    if body.expires_at:
+        try:
+            expires = datetime.fromisoformat(body.expires_at.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(400, "Invalid expires_at format — use ISO 8601")
+    result = set_maintenance(entity_id, reason=body.reason, set_by=user, expires_at=expires)
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "Failed"))
+    return result
+
+
+@router.delete("/{entity_id:path}")
+async def clear_entity_maintenance(
+    entity_id: str,
+    _: str = Depends(get_current_user),
+):
+    """Remove an entity from maintenance mode."""
+    result = clear_maintenance(entity_id)
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "Failed"))
+    return result
+```
+
+---
+
+## Change 3 — api/main.py
+
+### 3a. Import the new router and init function. Find:
+```python
+from api.routers.runbooks import router as runbooks_router
+```
+Add after it:
+```python
+from api.routers.maintenance import router as maintenance_router
+from api.db.entity_maintenance import init_maintenance
+```
+
+### 3b. Call init_maintenance() during lifespan startup. Find the block:
+```python
+    # Initialize connections table
+    try:
+        from api.connections import init_connections
+        init_connections()
+    except Exception as e:
+        _log.debug("Connections table init skipped: %s", e)
+```
+Add after it:
+```python
+    # Initialize entity maintenance table
+    try:
+        init_maintenance()
+    except Exception as e:
+        _log.debug("entity_maintenance init skipped: %s", e)
+```
+
+### 3c. Mount the router. Find where other routers are included, e.g.:
+```python
+    app.include_router(runbooks_router)
+```
+Add alongside it:
+```python
+    app.include_router(maintenance_router)
+```
+
+---
+
+## Change 4 — api/collectors/proxmox_vms.py
+
+### 4a. In `_poll_single_connection`, load the maintenance set before processing VMs.
+Find the start of the try block after ProxmoxAPI is created:
+```python
+        nodes = [n["node"] for n in prox.nodes.get() if n.get("node")]
+```
+Add BEFORE that line:
+```python
+        # Load maintenance flags once per poll — used by _classify_with_maint()
+        try:
+            from api.db.entity_maintenance import get_maintenance_set
+            _maint = get_maintenance_set()
+        except Exception:
+            _maint = set()
+```
+
+### 4b. Pass the maintenance set and conn_id into the VM/LXC card builders.
+Find:
+```python
+                for vm in prox.nodes(node).qemu.get():
+                    vms.append(_build_vm_card_proxmoxer(prox, node, vm))
+                for ct in prox.nodes(node).lxc.get():
+                    lxc_list.append(_build_lxc_card(node, ct))
+```
+Replace with:
+```python
+                for vm in prox.nodes(node).qemu.get():
+                    vms.append(_build_vm_card_proxmoxer(prox, node, vm, conn_id, _maint))
+                for ct in prox.nodes(node).lxc.get():
+                    lxc_list.append(_build_lxc_card(node, ct, conn_id, _maint))
+```
+
+### 4c. Update health aggregation to exclude maintained entities from fault counting.
+Find:
+```python
+        all_items = vms + lxc_list
+        if not all_items or all(v["dot"] == "green" for v in all_items):
+            health = "healthy"
+        elif all(v["dot"] == "red" for v in all_items):
+            health = "critical"
+        else:
+            health = "degraded"
+```
+Replace with:
+```python
+        all_items = vms + lxc_list
+        # Exclude maintained entities from health calculation
+        active = [v for v in all_items if not v.get("maintenance")]
+        if not active or all(v["dot"] == "green" for v in active):
+            health = "healthy"
+        elif all(v["dot"] in ("red", "amber") for v in active):
+            health = "critical" if all(v["dot"] == "red" for v in active) else "degraded"
+        else:
+            health = "degraded"
+```
+
+### 4d. Update `_build_vm_card_proxmoxer` signature to accept maint params.
+Find:
+```python
+def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:
+```
+Replace with:
+```python
+def _build_vm_card_proxmoxer(prox, node: str, vm: dict, conn_id: str = "", maint: set | None = None) -> dict:
+```
+Then inside the function, after `dot, problem = _classify(status, disks)`, add:
+```python
+    entity_id = f"proxmox_vms:{node}:vm:{vmid}"
+    in_maintenance = maint is not None and entity_id in maint
+    if in_maintenance:
+        dot, problem = "grey", None
+```
+And add `"maintenance": in_maintenance, "entity_id": entity_id,` to the returned dict.
+
+### 4e. Update `_build_lxc_card` signature similarly.
+Find:
+```python
+def _build_lxc_card(node: str, ct: dict) -> dict:
+```
+Replace with:
+```python
+def _build_lxc_card(node: str, ct: dict, conn_id: str = "", maint: set | None = None) -> dict:
+```
+Then inside the function, after `dot, problem = _classify(status, disks)`, add:
+```python
+    entity_id = f"proxmox_vms:{node}:lxc:{vmid}"
+    in_maintenance = maint is not None and entity_id in maint
+    if in_maintenance:
+        dot, problem = "grey", None
+```
+And add `"maintenance": in_maintenance, "entity_id": entity_id,` to the returned dict.
+
+---
+
+## Change 5 — gui/src/components/ServiceCards.jsx
+
+Find the Proxmox VM/LXC card rendering section. The card should already render `vm.dot` and `vm.problem`.
+
+### 5a. Add a maintenance toggle to the expanded VM card detail area.
+
+In the expanded VM card section (where actions like reboot/shutdown are shown), add a maintenance toggle button. Find the block that renders VM actions (contains "Reboot", "Shutdown", or similar buttons) — it's in the VM card expand area.
+
+Add a maintenance toggle section alongside the existing actions. The pattern: call `POST /api/maintenance/{entity_id}` to set, `DELETE /api/maintenance/{entity_id}` to clear.
+
+Find the section where expanded card content is rendered for proxmox VMs (look for `vm.problem` or `vm.dot` used in the expanded area). Add this maintenance button block:
+
+```jsx
+{/* Maintenance toggle */}
+{vm.entity_id && (
+  <div style={{ marginTop: 6, borderTop: '1px solid var(--bg-3)', paddingTop: 6 }}>
+    <button
+      onClick={async (e) => {
+        e.stopPropagation()
+        const BASE = import.meta.env.VITE_API_BASE ?? ''
+        const headers = { 'Content-Type': 'application/json', ...authHeaders() }
+        if (vm.maintenance) {
+          await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, { method: 'DELETE', headers })
+        } else {
+          await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, {
+            method: 'POST', headers,
+            body: JSON.stringify({ reason: 'Set from dashboard' })
+          })
+        }
+        // Trigger a data refresh
+        window.dispatchEvent(new CustomEvent('ds:refresh-dashboard'))
+      }}
+      style={{
+        padding: '2px 10px', fontSize: 9, fontFamily: 'var(--font-mono)',
+        background: vm.maintenance ? 'var(--amber-dim)' : 'transparent',
+        color: vm.maintenance ? 'var(--amber)' : 'var(--text-3)',
+        border: `1px solid ${vm.maintenance ? 'var(--amber)' : 'var(--border)'}`,
+        borderRadius: 2, cursor: 'pointer',
+      }}
+    >
+      {vm.maintenance ? '⚑ Clear Maintenance' : '⚑ Set Maintenance'}
+    </button>
+  </div>
+)}
+```
+
+### 5b. Show MAINT tag on the VM card header when `vm.maintenance` is true.
+In the card header dot/status area, where `vm.dot` determines the dot color, add alongside the status tag:
+```jsx
+{vm.maintenance && (
+  <span style={{
+    fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+    background: 'var(--amber-dim)', color: 'var(--amber)',
+    borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
+  }}>MAINT</span>
+)}
+```
+
+Note: CC should find the exact location by searching for where `vm.dot` or `vm.problem` is used in the card header and add the MAINT tag nearby. The exact JSX structure will vary but the placement pattern is: after the status dot/tag for each card.
+
+---
+
+## Change 6 — api/db/vm_exec_allowlist.py
+
+Add missing diagnostic commands to BASE_PATTERNS. Find:
+```python
+    (r'^docker exec \S+ kafka-[a-z-]+\.sh\b', 'Kafka CLI tools in containers'),
+```
+Add after it:
+```python
+    # ── Proxmox host diagnostics ──────────────────────────────────────────────
+    (r'^qm list$',                         'Proxmox: list all VMs and status'),
+    (r'^qm status\b',                      'Proxmox: VM status by VMID'),
+    (r'^pct list$',                        'Proxmox: list all LXC containers'),
+    (r'^pct status\b',                     'Proxmox: LXC status by VMID'),
+    # ── Kernel diagnostics ────────────────────────────────────────────────────
+    (r'^dmesg\b',                          'Kernel ring buffer (OOM, hardware errors)'),
+```
+
+---
+
+## Version bump
+Update VERSION file: v2.24.6 → v2.25.0
+
+## Commit
+```
+git add -A
+git commit -m "feat(maintenance): per-entity maintenance mode + Proxmox/dmesg allowlist (v2.25.0)"
+git push origin main
+```

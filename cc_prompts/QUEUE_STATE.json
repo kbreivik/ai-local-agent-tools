@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T19:18:34",
+  "updated_at": "2026-04-14T19:41:58",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -485,10 +485,26 @@
       "filename": "CC_PROMPT_v2.24.6.md",
       "version": "v2.24.6",
       "theme": "ES card in Platform Core + ES/Kafka health thresholds in settings",
+      "runner_status": "DONE",
+      "commit_sha": "7f57010",
+      "error": "",
+      "started_at": "2026-04-14T19:18:34",
+      "finished_at": "2026-04-14T19:21:02",
+      "duration_s": 148.1029872999643,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_191834_CC_PROMPT_v2.24.6.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.25.0.md",
+      "version": "v2.25.0",
+      "theme": "Per-entity maintenance mode + Proxmox/dmesg allowlist",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T19:18:34",
+      "started_at": "2026-04-14T19:41:58",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

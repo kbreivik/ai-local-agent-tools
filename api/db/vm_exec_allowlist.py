@@ -85,6 +85,13 @@ BASE_PATTERNS: list[tuple[str, str]] = [
     (r'^docker port\b',                'Container port mappings'),
     (r'^docker network\s+(ls|inspect)\b', 'Docker network list/inspect'),
     (r'^docker exec \S+ kafka-[a-z-]+\.sh\b', 'Kafka CLI tools in containers'),
+    # ── Proxmox host diagnostics ──────────────────────────────────────────────
+    (r'^qm list$',                         'Proxmox: list all VMs and status'),
+    (r'^qm status\b',                      'Proxmox: VM status by VMID'),
+    (r'^pct list$',                        'Proxmox: list all LXC containers'),
+    (r'^pct status\b',                     'Proxmox: LXC status by VMID'),
+    # ── Kernel diagnostics ────────────────────────────────────────────────────
+    (r'^dmesg\b',                          'Kernel ring buffer (OOM, hardware errors)'),
     (r'^docker service ps\b',          'Swarm service task list'),
     (r'^docker service inspect\b',     'Swarm service details'),
     (r'^docker node inspect\b',        'Swarm node details'),

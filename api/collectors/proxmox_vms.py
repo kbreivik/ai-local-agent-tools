@@ -159,6 +159,13 @@ def _poll_single_connection(conn: dict) -> dict:
             timeout=10,
         )
 
+        # Load maintenance flags once per poll — used by _classify_with_maint()
+        try:
+            from api.db.entity_maintenance import get_maintenance_set
+            _maint = get_maintenance_set()
+        except Exception:
+            _maint = set()
+
         nodes = [n["node"] for n in prox.nodes.get() if n.get("node")]
         if not nodes:
             nodes = [n.strip() for n in os.environ.get("PROXMOX_NODES", "").split(",") if n.strip()]
@@ -175,9 +182,9 @@ def _poll_single_connection(conn: dict) -> dict:
         for node in nodes:
             try:
                 for vm in prox.nodes(node).qemu.get():
-                    vms.append(_build_vm_card_proxmoxer(prox, node, vm))
+                    vms.append(_build_vm_card_proxmoxer(prox, node, vm, conn_id, _maint))
                 for ct in prox.nodes(node).lxc.get():
-                    lxc_list.append(_build_lxc_card(node, ct))
+                    lxc_list.append(_build_lxc_card(node, ct, conn_id, _maint))
                 nodes_ok += 1
             except Exception as e:
                 log.warning("Proxmox node %s error: %s", node, e)
@@ -244,10 +251,12 @@ def _poll_single_connection(conn: dict) -> dict:
                     "connection_host": conn_host}
 
         all_items = vms + lxc_list
-        if not all_items or all(v["dot"] == "green" for v in all_items):
+        # Exclude maintained entities from health calculation
+        active = [v for v in all_items if not v.get("maintenance")]
+        if not active or all(v["dot"] == "green" for v in active):
             health = "healthy"
-        elif all(v["dot"] == "red" for v in all_items):
-            health = "critical"
+        elif all(v["dot"] in ("red", "amber") for v in active):
+            health = "critical" if all(v["dot"] == "red" for v in active) else "degraded"
         else:
             health = "degraded"
 
@@ -268,7 +277,7 @@ def _poll_single_connection(conn: dict) -> dict:
                 "connection_host": conn_host}
 
 
-def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:
+def _build_vm_card_proxmoxer(prox, node: str, vm: dict, conn_id: str = "", maint: set | None = None) -> dict:
     """Build a VM card dict from proxmoxer data. Matches _build_vm_card output shape."""
     vmid = vm["vmid"]
     status = vm.get("status", "unknown")
@@ -298,6 +307,10 @@ def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:
         disks = [{"mountpoint": "/", "used_bytes": vm.get("disk") or 0, "total_bytes": vm["maxdisk"]}]
 
     dot, problem = _classify(status, disks)
+    entity_id = f"proxmox_vms:{node}:vm:{vmid}"
+    in_maintenance = maint is not None and entity_id in maint
+    if in_maintenance:
+        dot, problem = "grey", None
 
     return {
         "type": "vm",
@@ -315,10 +328,12 @@ def _build_vm_card_proxmoxer(prox, node: str, vm: dict) -> dict:
         "disks": disks,
         "dot": dot,
         "problem": problem,
+        "maintenance": in_maintenance,
+        "entity_id": entity_id,
     }
 
 
-def _build_lxc_card(node: str, ct: dict) -> dict:
+def _build_lxc_card(node: str, ct: dict, conn_id: str = "", maint: set | None = None) -> dict:
     vmid = ct["vmid"]
     status = ct.get("status", "unknown")
     cpu_pct = round(ct.get("cpu", 0) * 100, 1) if status == "running" else None
@@ -336,6 +351,10 @@ def _build_lxc_card(node: str, ct: dict) -> dict:
         disks = [{"mountpoint": "/", "used_bytes": disk_used or 0, "total_bytes": disk_max}]
 
     dot, problem = _classify(status, disks)
+    entity_id = f"proxmox_vms:{node}:lxc:{vmid}"
+    in_maintenance = maint is not None and entity_id in maint
+    if in_maintenance:
+        dot, problem = "grey", None
 
     return {
         "type": "lxc",
@@ -355,6 +374,8 @@ def _build_lxc_card(node: str, ct: dict) -> dict:
         "disks": disks,
         "dot": dot,
         "problem": problem,
+        "maintenance": in_maintenance,
+        "entity_id": entity_id,
     }
 
 
