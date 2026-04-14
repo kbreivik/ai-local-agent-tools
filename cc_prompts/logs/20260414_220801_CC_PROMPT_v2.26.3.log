@@ -1,0 +1,275 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.26.3.md (v2.26.3)
+Theme: Prompt quality: propose_subtask priority, non-Kafka paths, observe format
+
+Prompt content:
+
+# CC PROMPT — v2.26.3 — Prompt quality: propose_subtask priority, non-Kafka investigation, observe format
+
+## What this does
+Three targeted improvements to agent system prompts:
+1. RESEARCH_PROMPT: adds early propose_subtask reminder before evidence exhaustion rules
+   (propose is critical but buried at bottom — model often skips it)
+2. RESEARCH_PROMPT: adds non-Kafka investigation section for storage/network/security paths
+3. STATUS_PROMPT: adds structured summary template at end of STOPPING RULES section
+   (observe agent has no output format guide — results are inconsistent)
+Version bump: v2.26.2 → v2.26.3
+
+All changes are ADDITIONS to existing prompts, not rewrites.
+The FIND strings target unique multi-line anchors in api/agents/router.py.
+
+---
+
+## Change 1 — api/agents/router.py
+
+### 1a — RESEARCH_PROMPT: add early propose_subtask reminder
+
+Find the anchor just after rule 8 in RESEARCH_PROMPT (citation format rule):
+
+FIND (exact):
+```
+8. When citing documentation, use format: [Source: kafka-docs] or [Source: nginx-docs].
+
+INVESTIGATION DEPTH RULES — follow before concluding:
+```
+
+REPLACE WITH:
+```
+8. When citing documentation, use format: [Source: kafka-docs] or [Source: nginx-docs].
+
+CRITICAL — PROPOSE SUBTASK AFTER EVERY SUCCESSFUL INVESTIGATION:
+After gathering evidence and writing fix steps, you MUST call propose_subtask() if:
+  - Root cause is confirmed (not speculative)
+  - At least one fix step is executable by the execute agent
+  - Fix steps are specific (name the exact service, node, or command)
+Failure to call propose_subtask when these conditions are met is a run failure.
+This must happen BEFORE audit_log(). Call order: evidence → propose_subtask → audit_log → STOP.
+
+INVESTIGATION DEPTH RULES — follow before concluding:
+```
+
+### 1b — RESEARCH_PROMPT: add non-Kafka investigation section
+
+Find the anchor after the KAFKA INVESTIGATION section (TOOL PRIORITY FOR CONTAINER LOGS):
+
+FIND (exact):
+```
+TOOL PRIORITY FOR CONTAINER LOGS:
+  1. service_logs(service_name=...) — ONLY for containers on the local Docker host (agent-01)
+     This uses Docker SDK on the local socket. Does NOT reach remote Swarm workers.
+  2. vm_exec(host="<worker-label>", command="docker logs <container_id> --tail 50")
+     Use this for containers on Swarm workers. Requires the container ID from docker ps first.
+  Never call service_logs() for a Kafka broker — it's on a Swarm worker, not local.
+```
+
+REPLACE WITH:
+```
+TOOL PRIORITY FOR CONTAINER LOGS:
+  1. service_logs(service_name=...) — ONLY for containers on the local Docker host (agent-01)
+     This uses Docker SDK on the local socket. Does NOT reach remote Swarm workers.
+  2. vm_exec(host="<worker-label>", command="docker logs <container_id> --tail 50")
+     Use this for containers on Swarm workers. Requires the container ID from docker ps first.
+  Never call service_logs() for a Kafka broker — it's on a Swarm worker, not local.
+
+NON-KAFKA INVESTIGATION PATHS:
+
+STORAGE (TrueNAS / PBS):
+  1. elastic_error_logs(service="truenas") or elastic_error_logs(service="pbs")
+     — search for backup failures, pool degradation events
+  2. entity_history(entity_id="truenas:<label>:pool:<name>", hours=48)
+     — see when pool status or usage_pct changed
+  3. vm_exec(host="<truenas-host>", command="df -h") if reachable via SSH
+  Root cause format: "Pool <name> degraded at <time> due to <disk failure / quota>."
+
+NETWORK (FortiGate / UniFi):
+  1. elastic_error_logs(service="fortigate") — interface error spikes
+  2. entity_history(entity_id="fortigate:<label>:iface:<name>", hours=24)
+     — when did the interface go down?
+  3. entity_events(entity_id="unifi:<label>:device:<mac>", hours=24)
+     — device disconnect/reconnect events
+  Root cause format: "Interface <name> link dropped at <time>. Client count fell from X to Y."
+
+COMPUTE (Proxmox VM / LXC):
+  1. entity_history(entity_id="proxmox_vms:<node>:vm:<vmid>", hours=48)
+     — status changes, disk usage changes
+  2. vm_exec(host="<node>", command="qm status <vmid>") if node is reachable
+  3. Check if Swarm worker node went Down (swarm_node_status)
+  Root cause format: "VM <name> stopped at <time>. Worker node <x> is Down."
+
+SECURITY (Elasticsearch / Wazuh):
+  1. elastic_cluster_health() + elastic_index_stats()
+  2. elastic_error_logs() for cluster-level errors
+  3. entity_history for shard count / node count changes
+```
+
+### 1c — STATUS_PROMPT: add structured summary format at end of STOPPING RULES
+
+Find this section near the end of STATUS_PROMPT:
+
+FIND (exact):
+```
+STOPPING RULES (MANDATORY):
+- Once you have gathered all data and written your summary, output it as plain text with NO tool calls.
+- After you call audit_log(), output NOTHING MORE — the run ends immediately after.
+- Never call audit_log() more than once per session.
+- Do NOT keep calling tools after you have the answer.
+```
+
+REPLACE WITH:
+```
+STOPPING RULES (MANDATORY):
+- Once you have gathered all data and written your summary, output it as plain text with NO tool calls.
+- After you call audit_log(), output NOTHING MORE — the run ends immediately after.
+- Never call audit_log() more than once per session.
+- Do NOT keep calling tools after you have the answer.
+
+REQUIRED SUMMARY FORMAT — use this at the end of every observe run:
+
+STATUS: HEALTHY | DEGRADED | CRITICAL
+  (one word — pick the worst finding)
+
+FINDINGS:
+- <component>: <status> — <specific value or count>
+- (one bullet per component checked; omit if healthy unless it confirms baseline)
+
+ACTION NEEDED:
+- <specific next step> — or "None" if healthy
+  (use exact names: "force-update kafka_broker-3", not "restart the service")
+```
+
+---
+
+## Version bump
+Update VERSION: 2.26.2 → 2.26.3
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(prompts): v2.26.3 propose_subtask priority, non-Kafka paths, observe summary format"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 22:08:01
+========================================================================
+PROMPT COMPLETE: v2.26.3
+[STATUS] 1m48s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m49s
+========================================================================
