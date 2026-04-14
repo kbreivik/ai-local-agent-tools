@@ -183,8 +183,12 @@ function VMCard({ vm, onAction }) {
     setOutput(null)
     try {
       const r = await dashboardAction(path)
-      setOutput(r.output || r.message || 'Done')
-      if (onAction) setTimeout(onAction, 2000)
+      if (r && r.ok === false) {
+        setOutput('Error: ' + (r.error || r.message || 'Action failed'))
+      } else {
+        setOutput(r.output || r.message || 'Done')
+        if (onAction) setTimeout(onAction, 2000)
+      }
     } catch (e) {
       setOutput('Error: ' + String(e))
     }

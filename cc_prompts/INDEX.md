@@ -71,6 +71,8 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.22.4.md | v2.22.4 | ESLint TDZ rule + source maps + API version gate + Dockerfile | DONE (0b2e69b) |
 | CC_PROMPT_v2.22.5.md | v2.22.5 | Fix GHCR tag pagination + version status display | DONE (35d8069) |
 | CC_PROMPT_v2.22.6.md | v2.22.6 | agentHostIp setting + clickable container endpoints | DONE (76b9c1b) |
+| CC_PROMPT_v2.23.0.md | v2.23.0 | Fix VM host reboot + Proxmox action credential bugs | RUNNING |
+| CC_PROMPT_v2.23.1.md | v2.23.1 | Entity cross-reference registry + resolve_entity tool | PENDING |
 
 ---
 
@@ -96,6 +98,18 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.22.3** — Root error boundary + per-section + frontend crash reporting.
 **v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
 
+**v2.23.0** — Fix VM host reboot + Proxmox action silent failures.
+_vm_ssh_exec used raw credentials dict instead of _resolve_credentials — broke reboot/update
+on any connection using a credential profile. _do_proxmox_action imported non-existent
+NODES constant (ImportError on every call) — rewritten with proxmoxer + connection DB.
+VMCard act() now shows error text when ok=false.
+
+**v2.23.1** — Entity cross-reference registry + resolve_entity agent tool.
+infra_inventory extended with resolve_entity (multi-source: infra_inventory + connections
+table + IP overlap merge). Proxmox collector writes VM name/vmid/node/aliases to inventory
+on every poll. New resolve_entity MCP tool resolves ambiguous names like 'worker 2' across
+all systems. Registered in all agent allowlists.
+
 **v2.22.6** — agentHostIp setting (Infrastructure tab) + clickable container endpoints.
 Collector reads LAN IP from settings DB (priority over env var). Container card expanded
 view gains a clickable `endpoint` link from `ip_port`. Internal Docker IPs demoted to
@@ -119,6 +133,12 @@ api/routers/settings.py                  — agentHostIp setting key (v2.22.6)
 api/collectors/docker_agent01.py         — _get_agent01_ip() reads settings DB (v2.22.6)
 gui/src/components/OptionsModal.jsx      — Agent Host IP field in Infrastructure tab (v2.22.6)
 gui/src/components/ServiceCards.jsx      — clickable endpoint + dimmed int.ips (v2.22.6)
+api/routers/dashboard.py                 — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0)
+gui/src/components/VMHostsSection.jsx    — act() error feedback (v2.23.0)
+api/db/infra_inventory.py                — resolve_entity + write_cross_reference (v2.23.1)
+api/collectors/proxmox_vms.py            — write VMs to infra_inventory (v2.23.1)
+mcp_server/tools/vm.py                   — resolve_entity tool (v2.23.1)
+api/agents/router.py                     — resolve_entity in allowlists (v2.23.1)
 gui/src/components/ServiceCards.jsx      — GHCR version status + pull button fix (v2.22.5)
 api/routers/dashboard.py                 — _fetch_ghcr_tags pagination fix (v2.22.5)
 gui/src/context/DashboardDataContext.jsx — shared dashboard state + version gate (v2.22.0, v2.22.4)
