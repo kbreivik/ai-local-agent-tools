@@ -814,6 +814,7 @@ function PlatformCoreCards() {
 
   // Keep fetching status (kafka/es health) + memHealth separately — not in summary
   const [fullStatus, setFullStatus] = useState(null)
+  const [esExpanded, setEsExpanded] = useState(false)
   useEffect(() => {
     const load = () => {
       fetchStatus().then(setFullStatus).catch(() => {})
@@ -854,8 +855,14 @@ function PlatformCoreCards() {
   // Extract data for right-side values
   const kafkaHealth = fullStatus?.kafka?.health || 'unknown'
   const kafkaBrokers = fullStatus?.kafka?.data?.brokers?.length ?? fullStatus?.kafka?.data?.count ?? ''
-  const esHealth = fullStatus?.elasticsearch?.health || 'unknown'
-  const esNodes = fullStatus?.elasticsearch?.data?.node_count ?? fullStatus?.elasticsearch?.data?.nodes ?? ''
+  const esData   = fullStatus?.elasticsearch || {}
+  const esHealth = esData.health || 'unknown'
+  const esNodes  = esData.nodes ?? esData.data?.nodes ?? ''
+  const esShards = esData.shards || {}
+  const esClusterName = esData.cluster_name || ''
+  const esClusterStatus = esData.cluster_health || ''
+  const esFilebeat = esData.filebeat?.status || 'unknown'
+  const esDataNodes = esData.data_nodes ?? esNodes
   // MuninnDB: use dedicated memory health endpoint
   const muninnOk = memHealth?.status === 'ok' || memHealth?.healthy === true
   const muninnHealth = muninnOk ? 'healthy' : memHealth ? 'error' : 'unknown'
@@ -883,7 +890,81 @@ function PlatformCoreCards() {
         {_row(_healthDot(pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'), pgLabel, pgHealth, pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey', pgVersion)}
         {_row(_healthDot(muninnHealth), 'DS-muninndb', muninnHealth.toUpperCase(), _healthTag(muninnHealth), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
         {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
-        {_row(_healthDot(esHealth), 'Elasticsearch', esHealth.toUpperCase(), _healthTag(esHealth), esNodes ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '')}
+        {/* Elasticsearch — expandable */}
+        <div style={{ borderTop: '1px solid var(--bg-3)' }}>
+          <div
+            onClick={() => setEsExpanded(e => !e)}
+            style={{
+              display: 'flex', alignItems: 'center', padding: '4px 0',
+              fontSize: 10, gap: 6, cursor: 'pointer',
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: _healthDot(esHealth), flexShrink: 0 }} />
+            <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>Elasticsearch</span>
+            {esClusterName && (
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{esClusterName}</span>
+            )}
+            {esNodes !== '' && (
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>
+                {esNodes}n
+              </span>
+            )}
+            <span style={{
+              fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+              background: esHealth === 'healthy' ? 'var(--green-dim)' : esHealth === 'degraded' ? 'var(--amber-dim)' : esHealth === 'critical' ? 'var(--red-dim)' : 'var(--bg-3)',
+              color: esHealth === 'healthy' ? 'var(--green)' : esHealth === 'degraded' ? 'var(--amber)' : esHealth === 'critical' ? 'var(--red)' : 'var(--text-3)',
+              borderRadius: 2, letterSpacing: 0.5,
+            }}>
+              {esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase()}
+            </span>
+            <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 2 }}>
+              {esExpanded ? '−' : '+'}
+            </span>
+          </div>
+
+          {esExpanded && (
+            <div style={{
+              padding: '6px 0 6px 12px',
+              fontSize: 9, fontFamily: 'var(--font-mono)',
+              color: 'var(--text-3)', lineHeight: 1.8,
+            }}>
+              {/* Shard breakdown */}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
+                <span>active <span style={{ color: 'var(--text-2)' }}>{esShards.active ?? '—'}</span></span>
+                <span>primary <span style={{ color: 'var(--text-2)' }}>{esShards.primary ?? '—'}</span></span>
+                <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-3)' }}>
+                  unassigned <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-2)' }}>{esShards.unassigned ?? 0}</span>
+                </span>
+                {(esShards.initializing || 0) > 0 && (
+                  <span>init <span style={{ color: 'var(--cyan)' }}>{esShards.initializing}</span></span>
+                )}
+                {(esShards.relocating || 0) > 0 && (
+                  <span>reloc <span style={{ color: 'var(--cyan)' }}>{esShards.relocating}</span></span>
+                )}
+              </div>
+              {/* Nodes */}
+              <div style={{ marginBottom: 4 }}>
+                <span>nodes <span style={{ color: 'var(--text-2)' }}>{esNodes ?? '—'}</span></span>
+                {esDataNodes !== esNodes && (
+                  <span style={{ marginLeft: 12 }}>data <span style={{ color: 'var(--text-2)' }}>{esDataNodes}</span></span>
+                )}
+              </div>
+              {/* Unassigned explanation for single-node */}
+              {(esShards.unassigned || 0) > 0 && esDataNodes === 1 && (
+                <div style={{ color: 'var(--amber)', fontSize: 8, marginBottom: 4 }}>
+                  ⚠ single-node: replica shards cannot be placed — set replicas=0 or enable single-node mode
+                </div>
+              )}
+              {/* Filebeat */}
+              <div>
+                filebeat{' '}
+                <span style={{ color: esFilebeat === 'active' ? 'var(--green)' : 'var(--amber)' }}>
+                  {esFilebeat}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* COLLECTORS */}

@@ -1,0 +1,283 @@
+# CC PROMPT — v2.24.6 — Elasticsearch card in Platform Core + service health settings
+
+## What this does
+Two related improvements:
+1. Adds a dedicated expandable Elasticsearch card in Platform Core (matching the Kafka row style)
+   showing cluster name, node count, shard breakdown, and filebeat status — so operators
+   can see WHY ES is degraded without running an agent task.
+2. Adds service health threshold settings to the Infrastructure tab: Elasticsearch (single-node
+   mode, expected replicas) and Kafka (expected brokers, under-replicated threshold). The
+   collector reads these to avoid false-positive degraded states on expected configurations.
+Version bump: v2.24.5 → v2.24.6
+
+---
+
+## Change 1 — api/settings_manager.py
+
+### 1a. Add new keys to CATEGORIES dict. Find:
+```python
+    "notificationWebhookUrl": "notifications",
+    "notifyOnRecovery":       "notifications",
+```
+Add after it:
+```python
+    # Elasticsearch health thresholds
+    "elasticsearchSingleNode":        "infrastructure",
+    "elasticsearchExpectedReplicas":  "infrastructure",
+    # Kafka health thresholds
+    "kafkaExpectedBrokers":           "infrastructure",
+    "kafkaUnderReplicatedThreshold":  "infrastructure",
+```
+
+---
+
+## Change 2 — api/collectors/elastic.py
+
+### 2a. After computing `health`, add single-node mode adjustment.
+Find this block:
+```python
+                # Map ES status to our health vocabulary
+                health_map = {"green": "healthy", "yellow": "degraded", "red": "critical"}
+                health = health_map.get(cluster_status, "error")
+```
+Replace with:
+```python
+                # Map ES status to our health vocabulary
+                health_map = {"green": "healthy", "yellow": "degraded", "red": "critical"}
+                health = health_map.get(cluster_status, "error")
+
+                # Single-node mode: yellow is expected (replicas can't be placed on same node)
+                # Suppress degraded → healthy when configured as single-node
+                if health == "degraded" and cluster_status == "yellow":
+                    try:
+                        from api.settings_manager import get_setting
+                        single_node_val = get_setting("elasticsearchSingleNode").get("value", "false")
+                        single_node = str(single_node_val).lower() in ("true", "1", "yes")
+                        data_nodes = health_data.get("number_of_data_nodes", 0)
+                        if single_node or data_nodes == 1:
+                            health = "healthy"
+                            cluster_status = "yellow_single_node"  # preserve for display
+                    except Exception:
+                        pass
+```
+
+### 2b. Propagate `cluster_status` correctly in the return dict.
+Find:
+```python
+                "cluster_health": cluster_status,
+```
+This is correct — no change needed. The display layer will handle `yellow_single_node`.
+
+---
+
+## Change 3 — gui/src/App.jsx
+
+### 3a. Replace the simple Elasticsearch row in PlatformCoreCards with an expandable card.
+
+In `PlatformCoreCards`, find:
+```jsx
+  const esHealth = fullStatus?.elasticsearch?.health || 'unknown'
+  const esNodes = fullStatus?.elasticsearch?.data?.node_count ?? fullStatus?.elasticsearch?.data?.nodes ?? ''
+```
+Replace with:
+```jsx
+  const esData   = fullStatus?.elasticsearch || {}
+  const esHealth = esData.health || 'unknown'
+  const esNodes  = esData.nodes ?? esData.data?.nodes ?? ''
+  const esShards = esData.shards || {}
+  const esClusterName = esData.cluster_name || ''
+  const esClusterStatus = esData.cluster_health || ''
+  const esFilebeat = esData.filebeat?.status || 'unknown'
+  const esDataNodes = esData.data_nodes ?? esNodes
+```
+
+Then add an expand state near the other state declarations in PlatformCoreCards:
+After `const [fullStatus, setFullStatus] = useState(null)` add:
+```jsx
+  const [esExpanded, setEsExpanded] = useState(false)
+```
+
+Find the existing Elasticsearch _row call:
+```jsx
+        {_row(_healthDot(esHealth), 'Elasticsearch', esHealth.toUpperCase(), _healthTag(esHealth), esNodes ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '')}
+```
+Replace it with:
+```jsx
+        {/* Elasticsearch — expandable */}
+        <div style={{ borderTop: '1px solid var(--bg-3)' }}>
+          <div
+            onClick={() => setEsExpanded(e => !e)}
+            style={{
+              display: 'flex', alignItems: 'center', padding: '4px 0',
+              fontSize: 10, gap: 6, cursor: 'pointer',
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: _healthDot(esHealth), flexShrink: 0 }} />
+            <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>Elasticsearch</span>
+            {esClusterName && (
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{esClusterName}</span>
+            )}
+            {esNodes !== '' && (
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>
+                {esNodes}n
+              </span>
+            )}
+            <span style={{
+              fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+              background: esHealth === 'healthy' ? 'var(--green-dim)' : esHealth === 'degraded' ? 'var(--amber-dim)' : esHealth === 'critical' ? 'var(--red-dim)' : 'var(--bg-3)',
+              color: esHealth === 'healthy' ? 'var(--green)' : esHealth === 'degraded' ? 'var(--amber)' : esHealth === 'critical' ? 'var(--red)' : 'var(--text-3)',
+              borderRadius: 2, letterSpacing: 0.5,
+            }}>
+              {esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase()}
+            </span>
+            <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 2 }}>
+              {esExpanded ? '−' : '+'}
+            </span>
+          </div>
+
+          {esExpanded && (
+            <div style={{
+              padding: '6px 0 6px 12px',
+              fontSize: 9, fontFamily: 'var(--font-mono)',
+              color: 'var(--text-3)', lineHeight: 1.8,
+            }}>
+              {/* Shard breakdown */}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
+                <span>active <span style={{ color: 'var(--text-2)' }}>{esShards.active ?? '—'}</span></span>
+                <span>primary <span style={{ color: 'var(--text-2)' }}>{esShards.primary ?? '—'}</span></span>
+                <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-3)' }}>
+                  unassigned <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-2)' }}>{esShards.unassigned ?? 0}</span>
+                </span>
+                {(esShards.initializing || 0) > 0 && (
+                  <span>init <span style={{ color: 'var(--cyan)' }}>{esShards.initializing}</span></span>
+                )}
+                {(esShards.relocating || 0) > 0 && (
+                  <span>reloc <span style={{ color: 'var(--cyan)' }}>{esShards.relocating}</span></span>
+                )}
+              </div>
+              {/* Nodes */}
+              <div style={{ marginBottom: 4 }}>
+                <span>nodes <span style={{ color: 'var(--text-2)' }}>{esNodes ?? '—'}</span></span>
+                {esDataNodes !== esNodes && (
+                  <span style={{ marginLeft: 12 }}>data <span style={{ color: 'var(--text-2)' }}>{esDataNodes}</span></span>
+                )}
+              </div>
+              {/* Unassigned explanation for single-node */}
+              {(esShards.unassigned || 0) > 0 && esDataNodes === 1 && (
+                <div style={{ color: 'var(--amber)', fontSize: 8, marginBottom: 4 }}>
+                  ⚠ single-node: replica shards cannot be placed — set replicas=0 or enable single-node mode
+                </div>
+              )}
+              {/* Filebeat */}
+              <div>
+                filebeat{' '}
+                <span style={{ color: esFilebeat === 'active' ? 'var(--green)' : 'var(--amber)' }}>
+                  {esFilebeat}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+```
+
+---
+
+## Change 4 — gui/src/components/OptionsModal.jsx
+
+### 4a. Add ES and Kafka health settings to InfrastructureTab.
+
+Find the "Messaging / Observability" section closing div — look for:
+```jsx
+        <Field label="MuninnDB URL">
+          <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://muninndb:9475" />
+        </Field>
+      </div>
+```
+Replace with:
+```jsx
+        <Field label="MuninnDB URL">
+          <TextInput value={draft.muninndbUrl} onChange={v => update('muninndbUrl', v)} placeholder="http://muninndb:9475" />
+        </Field>
+      </div>
+
+      {/* Elasticsearch health thresholds */}
+      <div className="mb-5">
+        <SectionHeader label="Elasticsearch" />
+        <Field
+          label="Single-node cluster"
+          hint="Yellow status is expected on a single-node cluster (replicas can't be placed). Enable to treat yellow as healthy."
+        >
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.elasticsearchSingleNode === true || draft.elasticsearchSingleNode === 'true'}
+              onChange={e => update('elasticsearchSingleNode', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Single-node mode (yellow → healthy)</span>
+          </label>
+        </Field>
+        <Field
+          label="Expected replica count"
+          hint="Number of replicas per shard. Use 0 for single-node, 1+ for multi-node clusters."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0} max={5}
+              value={draft.elasticsearchExpectedReplicas ?? 1}
+              onChange={e => update('elasticsearchExpectedReplicas', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">replicas per shard</span>
+          </div>
+        </Field>
+      </div>
+
+      {/* Kafka health thresholds */}
+      <div className="mb-5">
+        <SectionHeader label="Kafka" />
+        <Field
+          label="Expected broker count"
+          hint="Alert when fewer brokers are in the cluster than expected."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1} max={9}
+              value={draft.kafkaExpectedBrokers ?? 3}
+              onChange={e => update('kafkaExpectedBrokers', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">brokers</span>
+          </div>
+        </Field>
+        <Field
+          label="Under-replicated partition threshold"
+          hint="Report DEGRADED when under-replicated partition count exceeds this value. Use 0 to require all partitions fully replicated."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0} max={100}
+              value={draft.kafkaUnderReplicatedThreshold ?? 1}
+              onChange={e => update('kafkaUnderReplicatedThreshold', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">partitions</span>
+          </div>
+        </Field>
+      </div>
+```
+
+---
+
+## Version bump
+Update VERSION file: v2.24.5 → v2.24.6
+
+## Commit
+```
+git add -A
+git commit -m "feat(ui): ES card in Platform Core + ES/Kafka health thresholds in settings (v2.24.6)"
+git push origin main
+```

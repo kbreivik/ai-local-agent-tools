@@ -217,6 +217,75 @@ function InfrastructureTab({ draft, update }) {
         </Field>
       </div>
 
+      {/* Elasticsearch health thresholds */}
+      <div className="mb-5">
+        <SectionHeader label="Elasticsearch" />
+        <Field
+          label="Single-node cluster"
+          hint="Yellow status is expected on a single-node cluster (replicas can't be placed). Enable to treat yellow as healthy."
+        >
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.elasticsearchSingleNode === true || draft.elasticsearchSingleNode === 'true'}
+              onChange={e => update('elasticsearchSingleNode', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Single-node mode (yellow → healthy)</span>
+          </label>
+        </Field>
+        <Field
+          label="Expected replica count"
+          hint="Number of replicas per shard. Use 0 for single-node, 1+ for multi-node clusters."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0} max={5}
+              value={draft.elasticsearchExpectedReplicas ?? 1}
+              onChange={e => update('elasticsearchExpectedReplicas', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">replicas per shard</span>
+          </div>
+        </Field>
+      </div>
+
+      {/* Kafka health thresholds */}
+      <div className="mb-5">
+        <SectionHeader label="Kafka" />
+        <Field
+          label="Expected broker count"
+          hint="Alert when fewer brokers are in the cluster than expected."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1} max={9}
+              value={draft.kafkaExpectedBrokers ?? 3}
+              onChange={e => update('kafkaExpectedBrokers', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">brokers</span>
+          </div>
+        </Field>
+        <Field
+          label="Under-replicated partition threshold"
+          hint="Report DEGRADED when under-replicated partition count exceeds this value. Use 0 to require all partitions fully replicated."
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0} max={100}
+              value={draft.kafkaUnderReplicatedThreshold ?? 1}
+              onChange={e => update('kafkaUnderReplicatedThreshold', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">partitions</span>
+          </div>
+        </Field>
+      </div>
+
       {/* Service connections note */}
       <div className="text-[11px] p-3 rounded-md" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
         Proxmox, FortiGate, TrueNAS, and other service connections are managed in the <strong>Connections</strong> tab.

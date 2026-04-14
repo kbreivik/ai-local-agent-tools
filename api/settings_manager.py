@@ -46,6 +46,12 @@ CATEGORIES = {
     # Notifications
     "notificationWebhookUrl": "notifications",
     "notifyOnRecovery":       "notifications",
+    # Elasticsearch health thresholds
+    "elasticsearchSingleNode":        "infrastructure",
+    "elasticsearchExpectedReplicas":  "infrastructure",
+    # Kafka health thresholds
+    "kafkaExpectedBrokers":           "infrastructure",
+    "kafkaUnderReplicatedThreshold":  "infrastructure",
 }
 
 

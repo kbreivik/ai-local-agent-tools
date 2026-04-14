@@ -72,6 +72,20 @@ class ElasticCollector(BaseCollector):
                 health_map = {"green": "healthy", "yellow": "degraded", "red": "critical"}
                 health = health_map.get(cluster_status, "error")
 
+                # Single-node mode: yellow is expected (replicas can't be placed on same node)
+                # Suppress degraded → healthy when configured as single-node
+                if health == "degraded" and cluster_status == "yellow":
+                    try:
+                        from api.settings_manager import get_setting
+                        single_node_val = get_setting("elasticsearchSingleNode").get("value", "false")
+                        single_node = str(single_node_val).lower() in ("true", "1", "yes")
+                        data_nodes = health_data.get("number_of_data_nodes", 0)
+                        if single_node or data_nodes == 1:
+                            health = "healthy"
+                            cluster_status = "yellow_single_node"  # preserve for display
+                    except Exception:
+                        pass
+
             # Run log-based alert checks after successful poll (non-blocking)
             try:
                 from api.elastic_alerter import run_elastic_alerts
