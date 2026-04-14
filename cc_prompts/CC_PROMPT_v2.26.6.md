@@ -1,8 +1,38 @@
-"""
-GET /api/entities        — canonical per-resource health list (auth required)
-GET /api/entities/health — global rollup status (no auth)
-GET /api/entities/section/{section} — filtered by section (auth required)
-"""
+# CC PROMPT — v2.26.6 — Entity detail performance: entity-by-ID endpoint + EntityDrawer fast path
+
+## What this does
+EntityDrawer currently loads ALL entities (N sequential DB snapshots) just to find one,
+causing 200-500ms latency on every click. This adds a fast-path endpoint
+GET /api/entities/find/{entity_id} that loads only the relevant collector's snapshot
+(1 DB query) and returns the matching entity with a 30s in-memory cache.
+EntityDrawer switches to this endpoint: typically ~5ms vs ~300ms.
+Version bump: v2.26.5 → v2.26.6
+
+---
+
+## Change 1 — api/routers/entities.py
+
+### 1a — Add cache + component mapping + GET /api/entities/find/{entity_id:path}
+
+FIND (exact — the existing import block at the top):
+```
+import json
+import logging
+
+from fastapi import APIRouter, Depends
+
+from api.auth import get_current_user
+from api.db.base import get_engine
+from api.db import queries as q
+
+router = APIRouter(prefix="/api/entities", tags=["entities"])
+log = logging.getLogger(__name__)
+
+_STATUS_PRIORITY = ["error", "degraded", "unknown", "maintenance", "healthy"]
+```
+
+REPLACE WITH:
+```
 import json
 import logging
 import time as _time
@@ -40,89 +70,23 @@ def _entity_id_to_component(entity_id: str) -> str | None:
         "kafka":             "kafka_cluster",
         "elasticsearch":     "elasticsearch",
     }
+    prefix = entity_id.split(":")[0]
+    return _PREFIX_MAP.get(prefix)
+```
 
+### 1b — Add GET /api/entities/find/{entity_id:path} endpoint
 
-async def _build_entities() -> list[dict]:
-    from api.collectors.manager import manager
-    result: list[dict] = []
-    async with get_engine().connect() as conn:
-        for component, collector in manager._collectors.items():
-            try:
-                snap = await q.get_latest_snapshot(conn, component)
-                if not snap:
-                    continue
-                state = snap.get("state") or {}
-                if isinstance(state, str):
-                    try:
-                        state = json.loads(state)
-                    except Exception:
-                        continue
-                entities = collector.to_entities(state)
-                ts = snap.get("timestamp")
-                for e in entities:
-                    d = e.to_dict()
-                    if ts:
-                        d["last_seen"] = ts if isinstance(ts, str) else ts.isoformat()
-                    result.append(d)
-            except Exception as exc:
-                log.warning("to_entities failed for %s: %s", component, exc)
-    return result
+Add this BEFORE the existing `@router.get("/{entity_id:path}/history")` endpoint.
+Insert it after the `entities_by_section` endpoint.
 
+FIND (exact):
+```
+@router.get("/{entity_id:path}/history")
+async def entity_history(
+```
 
-def _rollup(entities: list[dict]) -> str:
-    active = [e for e in entities if e.get("status") != "maintenance"]
-    if not active:
-        return "unknown"
-    return min(
-        (e["status"] for e in active),
-        key=lambda s: _STATUS_PRIORITY.index(s) if s in _STATUS_PRIORITY else 99,
-        default="unknown",
-    )
-
-
-@router.get("/health")
-async def entities_health():
-    """Unauthenticated global health rollup."""
-    try:
-        entities = await _build_entities()
-    except Exception as exc:
-        log.warning("entities_health: %s", exc)
-        return {"status": "unknown", "entity_count": 0, "error_count": 0}
-
-    if not entities:
-        return {"status": "unknown", "entity_count": 0, "error_count": 0}
-
-    active = [e for e in entities if e.get("status") != "maintenance"]
-    error_count = sum(1 for e in active if e["status"] == "error")
-    section_summary: dict[str, dict] = {}
-    for e in entities:
-        sec = e.get("section", "UNKNOWN")
-        entry = section_summary.setdefault(sec, {"total": 0, "error": 0, "degraded": 0, "healthy": 0})
-        entry["total"] += 1
-        st = e.get("status", "unknown")
-        if st in entry:
-            entry[st] += 1
-
-    return {
-        "status": _rollup(entities),
-        "entity_count": len(entities),
-        "error_count": error_count,
-        "section_summary": section_summary,
-    }
-
-
-@router.get("")
-async def list_entities(_: str = Depends(get_current_user)):
-    """All current entities across all collectors."""
-    return await _build_entities()
-
-
-@router.get("/section/{section}")
-async def entities_by_section(section: str, _: str = Depends(get_current_user)):
-    """Entities for a specific section."""
-    return [e for e in await _build_entities() if e.get("section") == section.upper()]
-
-
+REPLACE WITH:
+```
 @router.get("/find/{entity_id:path}")
 async def get_entity_by_id(entity_id: str, _: str = Depends(get_current_user)):
     """Fast single-entity lookup by ID.
@@ -187,22 +151,64 @@ async def get_entity_by_id(entity_id: str, _: str = Depends(get_current_user)):
 
 @router.get("/{entity_id:path}/history")
 async def entity_history(
-    entity_id: str,
-    hours: int = 48,
-    _: str = Depends(get_current_user),
-):
-    """Return recent field changes and discrete events for one entity.
+```
 
-    entity_id is path-encoded (may contain colons, e.g. proxmox:hp1:100).
-    hours: look-back window, default 48h, max 168h (7 days).
-    """
-    hours = min(max(1, hours), 168)
-    from api.db.entity_history import get_changes, get_events
-    changes = get_changes(entity_id, hours=hours, limit=50)
-    events  = get_events(entity_id,  hours=hours, limit=50)
-    return {
-        "entity_id": entity_id,
-        "hours":     hours,
-        "changes":   changes,
-        "events":    events,
-    }
+---
+
+## Change 2 — gui/src/components/EntityDrawer.jsx
+
+### 2a — Switch from full entity list fetch to entity-by-ID endpoint
+
+FIND (exact — the load function body):
+```
+  const load = useCallback(() => {
+    if (!entityId) return
+    setLoading(true)
+    setError(null)
+    fetch(`${BASE}/api/entities`, { headers: { ...authHeaders() } })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(entities => {
+        const match = entities.find(e => e.id === entityId)
+        setEntity(match || null)
+        if (!match) setError('Entity not found')
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [entityId])
+```
+
+REPLACE WITH:
+```
+  const load = useCallback(() => {
+    if (!entityId) return
+    setLoading(true)
+    setError(null)
+    // Fast path: entity-by-ID endpoint (~5ms) vs full list (~300ms)
+    fetch(`${BASE}/api/entities/find/${encodeURIComponent(entityId)}`, { headers: { ...authHeaders() } })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(entity => {
+        setEntity(entity || null)
+        if (!entity) setError('Entity not found')
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [entityId])
+```
+
+---
+
+## Version bump
+Update VERSION: 2.26.5 → 2.26.6
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(entities): v2.26.6 entity-by-ID fast path + 30s cache (~5ms vs ~300ms)"
+git push origin main
+```

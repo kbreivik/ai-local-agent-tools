@@ -1,0 +1,410 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.26.5.md (v2.26.5)
+Theme: EntityDrawer Ask: 300→600 tokens + platform-aware suggestions
+
+Prompt content:
+
+# CC PROMPT — v2.26.5 — EntityDrawer Ask: token limit + richer entity-aware suggestions
+
+## What this does
+Two improvements to the EntityDrawer Ask feature (/api/agent/ask and /api/agent/ask/suggestions):
+1. Increase max_tokens from 300 → 600 — current limit truncates most real answers
+2. Richer suggestions: entity metadata-aware questions instead of generic status/section ones
+   (e.g. for a stopped VM: "What would cause this VM to stop?", for Kafka: "Is this broker in ISR?")
+Version bump: v2.26.4 → v2.26.5
+
+---
+
+## Change 1 — api/routers/agent.py
+
+### 1a — Increase max_tokens in /api/agent/ask endpoint
+
+FIND (exact):
+```
+            stream = client.chat.completions.create(
+                model=_lm_model(),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                stream=True,
+                max_tokens=300,
+                temperature=0.3,
+            )
+```
+
+REPLACE WITH:
+```
+            stream = client.chat.completions.create(
+                model=_lm_model(),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                stream=True,
+                max_tokens=600,
+                temperature=0.3,
+            )
+```
+
+### 1b — Richer entity-aware ask/suggestions endpoint
+
+FIND (exact — the entire ask_suggestions function body):
+```
+@router.get("/ask/suggestions")
+async def ask_suggestions(status: str = "", section: str = "", _: str = Depends(get_current_user)):
+    """Return suggested questions based on entity status and section."""
+    suggestions = ["What does this component do?", "Is this status expected?"]
+
+    if status == "error":
+        suggestions = [
+            "Why might this be failing?",
+            "What are common causes for this error?",
+            "What should I check first?",
+        ]
+    elif status == "degraded":
+        suggestions = [
+            "What could cause this degradation?",
+            "Is this a warning or something serious?",
+            "What thresholds trigger degraded status?",
+        ]
+    elif status == "healthy":
+        suggestions = [
+            "What does this component do?",
+            "What would cause this to degrade?",
+        ]
+
+    if section == "STORAGE":
+        suggestions.append("What happens when storage is full?")
+    elif section == "COMPUTE":
+        suggestions.append("How does this affect other services?")
+    elif section == "NETWORK":
+        suggestions.append("What services depend on this?")
+    elif section == "SECURITY":
+        suggestions.append("What alerts should I watch for?")
+
+    return {"suggestions": suggestions[:4]}
+```
+
+REPLACE WITH:
+```
+@router.get("/ask/suggestions")
+async def ask_suggestions(
+    status: str = "",
+    section: str = "",
+    platform: str = "",
+    entity_id: str = "",
+    _: str = Depends(get_current_user),
+):
+    """Return suggested questions based on entity status, section, platform, and entity_id."""
+
+    # Platform-specific suggestions take priority
+    platform_suggestions: dict[str, list[str]] = {
+        "proxmox": {
+            "error": [
+                "What would cause this VM or container to stop?",
+                "Is there a snapshot I can restore from?",
+                "How do I check if the host node is healthy?",
+                "What Proxmox logs would show the stop reason?",
+            ],
+            "degraded": [
+                "What thresholds trigger a degraded VM status?",
+                "Is disk usage causing this?",
+                "How do I check memory pressure on the host?",
+            ],
+            "healthy": [
+                "What resources does this VM consume?",
+                "When was the last snapshot taken?",
+                "What services run inside this VM?",
+            ],
+        },
+        "docker": {
+            "error": [
+                "What exit code did this container have?",
+                "Is there an OOM kill in dmesg?",
+                "What does the container log show on last exit?",
+                "Is this a dependency failing at startup?",
+            ],
+            "degraded": [
+                "Is the health check endpoint responding?",
+                "Is this container on the latest image?",
+                "What are the restart conditions?",
+            ],
+            "healthy": [
+                "What image version is running?",
+                "What volumes does this container use?",
+                "What ports are exposed?",
+            ],
+        },
+        "kafka": {
+            "error": [
+                "Is this broker missing from the ISR?",
+                "Which Swarm worker node is this broker on?",
+                "What does the broker log show on last crash?",
+            ],
+            "degraded": [
+                "Which partitions are under-replicated?",
+                "What is the current consumer lag?",
+                "Is the broker registered in the cluster?",
+            ],
+            "healthy": [
+                "How many partitions does this broker lead?",
+                "What is the current replication factor?",
+                "Is consumer lag within normal range?",
+            ],
+        },
+        "unifi": {
+            "error": [
+                "When did this device disconnect?",
+                "How many clients lost connectivity?",
+                "Is the controller reachable from the device?",
+            ],
+            "degraded": [
+                "How many clients are on this device?",
+                "Is the firmware up to date?",
+                "Are there interference or error rates?",
+            ],
+            "healthy": [
+                "How many clients is this device serving?",
+                "What firmware version is running?",
+                "What is the uplink port/speed?",
+            ],
+        },
+        "truenas": {
+            "error": [
+                "Which drive failed in this pool?",
+                "Can the pool be repaired with a spare?",
+                "Is there a recent scrub result?",
+            ],
+            "degraded": [
+                "What is the current usage percentage?",
+                "Are there any failed drives?",
+                "When was the last scrub completed?",
+            ],
+            "healthy": [
+                "How much free space remains?",
+                "When is the next scrub scheduled?",
+                "What datasets use this pool?",
+            ],
+        },
+        "pbs": {
+            "error": [
+                "Which backup jobs are failing?",
+                "Is the datastore full?",
+                "What does the task log show?",
+            ],
+            "degraded": [
+                "What percentage of space is used?",
+                "Are there any failed backup tasks?",
+                "When was garbage collection last run?",
+            ],
+            "healthy": [
+                "How many snapshots are stored?",
+                "When was the last successful backup?",
+                "What is the retention policy?",
+            ],
+        },
+        "fortigate": {
+            "error": [
+                "Which interface is down?",
+                "Is this the WAN or LAN interface?",
+                "Are there error counters on the port?",
+            ],
+            "degraded": [
+                "How many errors are on this interface?",
+                "Is this affecting routing?",
+                "Is HA failover active?",
+            ],
+            "healthy": [
+                "What traffic is passing through this interface?",
+                "What VLANs are on this interface?",
+                "Is this interface in an HA pair?",
+            ],
+        },
+    }
+
+    # Section-level fallbacks when no platform match
+    section_suggestions: dict[str, dict[str, list[str]]] = {
+        "STORAGE": {
+            "error": ["Is this affecting backup jobs?", "What happens when storage is full?"],
+            "degraded": ["What is the usage threshold for this storage?", "Is data at risk?"],
+            "healthy": ["What services depend on this storage?", "What is the retention policy?"],
+        },
+        "COMPUTE": {
+            "error": ["What services depend on this component?", "Is there a failover option?"],
+            "degraded": ["Is resource exhaustion causing this?", "How does this affect other services?"],
+            "healthy": ["What is the normal resource usage?", "When was this last restarted?"],
+        },
+        "NETWORK": {
+            "error": ["What services are affected by this?", "Is there a redundant path?"],
+            "degraded": ["What traffic is impacted?", "What services depend on this?"],
+            "healthy": ["What services use this network path?", "What is the expected latency?"],
+        },
+        "SECURITY": {
+            "error": ["Are there active threats detected?", "What logs should I check?"],
+            "degraded": ["What alert thresholds are configured?", "Is monitoring coverage reduced?"],
+            "healthy": ["What events are being monitored?", "What alert rules are active?"],
+        },
+        "PLATFORM": {
+            "error": ["Is this blocking other services?", "What depends on this platform component?"],
+            "degraded": ["Is response latency acceptable?", "What would cause further degradation?"],
+            "healthy": ["What does this component do?", "What would cause this to degrade?"],
+        },
+    }
+
+    # Pick suggestions: platform-specific → section fallback → generic
+    plat = platform.lower() if platform else ""
+    stat = status.lower() if status else "healthy"
+
+    if plat in platform_suggestions and stat in platform_suggestions[plat]:
+        suggestions = platform_suggestions[plat][stat]
+    elif section in section_suggestions and stat in section_suggestions[section]:
+        suggestions = section_suggestions[section][stat]
+    elif stat == "error":
+        suggestions = ["What caused this failure?", "What should I check first?", "Is there a recovery procedure?"]
+    elif stat == "degraded":
+        suggestions = ["What is causing this degradation?", "How serious is this?", "What are the fix steps?"]
+    elif stat == "maintenance":
+        suggestions = ["Why is this in maintenance?", "What work is being done?", "When will it be restored?"]
+    else:
+        suggestions = ["What does this component do?", "What would cause this to degrade?"]
+
+    return {"suggestions": suggestions[:4]}
+```
+
+---
+
+## Version bump
+Update VERSION: 2.26.4 → 2.26.5
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(drawer): v2.26.5 Ask token limit 300→600, platform-aware suggestions"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 22:11:35
+========================================================================
+PROMPT COMPLETE: v2.26.5
+[STATUS] 1m56s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m58s
+========================================================================

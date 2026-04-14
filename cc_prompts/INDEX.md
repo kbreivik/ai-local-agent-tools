@@ -17,9 +17,6 @@ bash cc_prompts/run_queue.sh --one       # run next one (supervised)
 bash cc_prompts/run_queue.sh             # run all
 ```
 
-Use `--dangerously-skip-permissions` (already in run_queue.sh) so CC runs without
-per-file approval prompts. The prompts are reviewed — git is the safety net.
-
 ---
 
 ## Phase Queue
@@ -85,12 +82,14 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.24.6.md | v2.24.6 | ES card in Platform Core + ES/Kafka health thresholds in settings | DONE (b23f5c1) |
 | CC_PROMPT_v2.25.0.md | v2.25.0 | Per-entity maintenance mode + Proxmox/dmesg allowlist | DONE (d28196a) |
 | CC_PROMPT_v2.25.1.md | v2.25.1 | SUPERSEDED by v2.26.0+v2.26.1 — DO NOT RUN | SUPERSEDED |
-| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | DONE (276ddfb) |
-| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | DONE (c879f1c) |
-| CC_PROMPT_v2.26.2.md | v2.26.2 | Agent routing: proxmox allowlist, node_activate, ambiguous→observe | DONE (a087a01) |
-| CC_PROMPT_v2.26.3.md | v2.26.3 | Prompt quality: propose_subtask priority, non-Kafka paths, observe format | DONE (1ad014f) |
-| CC_PROMPT_v2.26.4.md | v2.26.4 | Seed 4 base runbooks (kafka recovery, disk cleanup, swarm, reintegration) | DONE (451a642) |
-| CC_PROMPT_v2.26.5.md | v2.26.5 | EntityDrawer Ask: 300→600 tokens + platform-aware suggestions | DONE (e850068) |
+| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | PENDING |
+| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | PENDING |
+| CC_PROMPT_v2.26.2.md | v2.26.2 | Agent routing: proxmox allowlist, node_activate, ambiguous→observe | PENDING |
+| CC_PROMPT_v2.26.3.md | v2.26.3 | Prompt quality: propose_subtask priority, non-Kafka paths, observe format | PENDING |
+| CC_PROMPT_v2.26.4.md | v2.26.4 | Seed 4 base runbooks (kafka recovery, disk cleanup, swarm, reintegration) | PENDING |
+| CC_PROMPT_v2.26.5.md | v2.26.5 | EntityDrawer Ask: 300→600 tokens + platform-aware suggestions | PENDING |
+| CC_PROMPT_v2.26.6.md | v2.26.6 | Entity detail performance: /find/{id} endpoint + 30s cache | RUNNING |
+| CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | PENDING |
 
 ---
 
@@ -105,34 +104,15 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 
 ## Phase summaries
 
-**v2.16.0–v2.16.1** — Agent investigate-on-degraded + task templates.
-**v2.17.0–v2.17.1** — Entity timeline + Proxmox console URL fix.
-**v2.18.0–v2.18.1** — Result store viewer + synthesis on all completion paths.
-**v2.19.0–v2.19.1** — service_placement tool + docker logs allowlist.
-**v2.20.0–v2.20.2** — Investigation quality + VM card feedback + SSH log stream.
-**v2.21.0–v2.21.2** — Time-series metrics + ES indexing + data pipeline health tab.
-**v2.22.0–v2.22.1** — Dashboard summary endpoint + DashboardDataContext + skeleton loading.
-**v2.22.2** (DONE feb929d) — TDZ hotfix.
-**v2.22.3** — Root error boundary + per-section + frontend crash reporting.
-**v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
-
-**v2.23.0** — Fix VM host reboot + Proxmox action silent failures.
-**v2.23.1** — Entity cross-reference registry + resolve_entity agent tool.
-**v2.22.6** — agentHostIp setting (Infrastructure tab) + clickable container endpoints.
-**v2.22.5** — Fix GHCR tag pagination + version status display.
-
-**v2.25.1** — SUPERSEDED. Replaced by v2.26.0+v2.26.1.
-
 **v2.26.0** — Universal entity_id on all collector card types.
-Adds entity_id field to every card dict (containers, swarm services, external services,
-UniFi devices, PBS datastores, TrueNAS pools, FortiGate interfaces). Proxmox VMs/LXCs
-already had entity_id. Adds custom to_entities() to DockerAgent01Collector and
-SwarmCollector. Entity IDs match existing to_entities() output formats across all collectors.
+Adds entity_id to every card dict (containers, swarm services, external services, UniFi
+devices, PBS datastores, TrueNAS pools, FortiGate interfaces). Adds custom to_entities()
+to DockerAgent01Collector and SwarmCollector.
 
 **v2.26.1** — InfraCard universal ⌘/› entity buttons + VM entity ID fix.
-Moves entity detail (›) and agent ask (⌘) buttons into InfraCard itself, driven by
-entityId + onEntityDetail props. All 8 card types get both buttons when entity_id present.
-Fixes VM entity ID bug (qemu→vm). Optimistic maintenance toggle.
+Moves entity detail (›) and agent ask (⌘) buttons into InfraCard itself. All 8 card types
+get both buttons when entity_id is present. Fixes VM entity ID bug (qemu→vm). Optimistic
+maintenance toggle.
 
 **v2.26.2** — Agent routing correctness fixes.
 EXECUTE_PROXMOX_TOOLS was nearly empty — adds proxmox_vm_power, vm_exec, swarm_node_status,
@@ -155,22 +135,35 @@ results were inconsistent across runs.
 Adds BASE_RUNBOOKS constant and seed_base_runbooks() to api/db/runbooks.py, called from
 init_runbooks() on startup. Seeds: kafka broker missing + worker node recovery (8 steps),
 docker disk cleanup (6 steps), swarm service not converging + force update (6 steps),
-worker node reintegration after reboot (7 steps). Runbooks are idempotent on title —
-safe to restart without duplicate insertion. Agents call runbook_search() at the start
-of every investigation — previously returned empty for all queries.
+worker node reintegration after reboot (7 steps). Runbooks are idempotent on title.
 
 **v2.26.5** — EntityDrawer Ask improvements.
-Increases max_tokens from 300 to 600 in /api/agent/ask endpoint (300 was too short for
-any real diagnostic answer). Rewrites /api/agent/ask/suggestions to be platform-aware:
-now accepts platform + entity_id query params and returns different suggestions per
-platform (proxmox/docker/kafka/unifi/truenas/pbs/fortigate) and per status (error/
-degraded/healthy/maintenance). Was previously only section-level and static.
+Increases max_tokens from 300 to 600 in /api/agent/ask. Rewrites /api/agent/ask/suggestions
+to be platform-aware: accepts platform + entity_id query params, returns suggestions per
+platform (proxmox/docker/kafka/unifi/truenas/pbs/fortigate) and per status.
+
+**v2.26.6** — Entity detail performance.
+Adds GET /api/entities/find/{entity_id:path} endpoint. Loads only the relevant collector's
+snapshot (1 DB query, prefix-mapped). 30s in-memory cache. Falls back to full scan for
+bare labels (vm_host). EntityDrawer switches to this endpoint: ~5ms vs ~300ms.
+
+**v2.26.7** — VM Hosts entity detail + naming.
+vm_hosts.py: stamps entity_id=label on every VM card; adds to_entities() to VMHostsCollector.
+VMHostsSection.jsx: adds onEntityDetail prop to VMCard; adds ⌘ and › buttons in header.
+App.jsx: passes onEntityDetail to VMHostsSection. DashboardLayout.jsx: adds
+TILE_DISPLAY_NAMES — "VM_HOSTS" tile renders as "VM Hosts", all others cleaned up too.
 
 ---
 
 ## Key file paths
 
 ```
+api/routers/entities.py                   — /find/{id} fast path + cache (v2.26.6)
+gui/src/components/EntityDrawer.jsx       — uses /find/{id} endpoint (v2.26.6)
+api/collectors/vm_hosts.py                — entity_id + to_entities() (v2.26.7)
+gui/src/components/VMHostsSection.jsx     — ask/detail buttons + onEntityDetail (v2.26.7)
+gui/src/App.jsx                           — onEntityDetail passed to VMHostsSection (v2.26.7)
+gui/src/components/DashboardLayout.jsx    — TILE_DISPLAY_NAMES, "VM Hosts" label (v2.26.7)
 api/agents/router.py                      — allowlists, prompts, classifier (v2.26.2, v2.26.3)
 api/routers/agent.py                      — loop, plan gate, ambiguous label (v2.26.2, v2.26.5)
 api/db/runbooks.py                        — BASE_RUNBOOKS + seed_base_runbooks() (v2.26.4)

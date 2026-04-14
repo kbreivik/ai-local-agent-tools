@@ -49,15 +49,15 @@ export default function EntityDrawer({ entityId, onClose }) {
     if (!entityId) return
     setLoading(true)
     setError(null)
-    fetch(`${BASE}/api/entities`, { headers: { ...authHeaders() } })
+    // Fast path: entity-by-ID endpoint (~5ms) vs full list (~300ms)
+    fetch(`${BASE}/api/entities/find/${encodeURIComponent(entityId)}`, { headers: { ...authHeaders() } })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
-      .then(entities => {
-        const match = entities.find(e => e.id === entityId)
-        setEntity(match || null)
-        if (!match) setError('Entity not found')
+      .then(entity => {
+        setEntity(entity || null)
+        if (!entity) setError('Entity not found')
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
