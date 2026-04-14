@@ -235,7 +235,7 @@ function useConfirm() {
 
 const _SLOT_COLORS = ['#00aa44','#00c8ee','#cc8800','#7c6af7']
 
-function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare }) {
+function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare, entityId, onEntityDetail }) {
   const isOpen = forceExpanded || (openKeys || new Set()).has(cardKey)
   const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
   const compareId = entityForCompare?.id
@@ -324,7 +324,26 @@ function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpene
           <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
           <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{isOpen ? '▾' : '▸'}</span>
         </div>
-        {subText && <span className="text-[10px] mono shrink-0 ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+        <div className="flex items-center gap-0 shrink-0 ml-1" onClick={e => e.stopPropagation()}>
+          {entityId && onEntityDetail && (
+            <>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Ask agent about this entity"
+                style={{ color: 'var(--amber)', background: 'none', border: 'none',
+                         cursor: 'pointer', fontSize: 10, padding: '1px 3px',
+                         opacity: 0.65, lineHeight: 1 }}
+              >⌘</button>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Entity detail"
+                style={{ color: 'var(--cyan)', background: 'none', border: 'none',
+                         cursor: 'pointer', fontSize: 10, padding: '1px 3px', lineHeight: 1 }}
+              >›</button>
+            </>
+          )}
+          {subText && <span className="text-[10px] mono ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+        </div>
       </div>
 
       {/* Row 2 — IP + uptime (collapsed only) */}
@@ -934,18 +953,10 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   )
 }
 
-function ContainerCardCollapsed({ c, onEntityDetail }) {
+function ContainerCardCollapsed({ c }) {
   return (
     <div className="flex items-center gap-1">
       {c.problem && <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>}
-      {onEntityDetail && (
-        <button
-          className="text-[10px] px-1 py-px ml-auto"
-          style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
-          onClick={e => { e.stopPropagation(); onEntityDetail(`docker:${c.name || c.id}`) }}
-          title="Entity detail"
-        >›</button>
-      )}
     </div>
   )
 }
@@ -1041,7 +1052,7 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
   )
 }
 
-function ProxmoxCardCollapsed({ vm, onEntityDetail, onChat }) {
+function ProxmoxCardCollapsed({ vm }) {
   const typeBadge = vm.type === 'lxc'
     ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
     : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
@@ -1058,23 +1069,6 @@ function ProxmoxCardCollapsed({ vm, onEntityDetail, onChat }) {
             background: 'var(--amber-dim)', color: 'var(--amber)',
             borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
           }}>MAINT</span>
-        )}
-        <span style={{ flex: 1 }} />
-        {onChat && (
-          <button
-            className="text-[10px] px-1 py-px"
-            style={{ color: 'var(--amber)', background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }}
-            onClick={e => { e.stopPropagation(); onChat(vm.name) }}
-            title="Ask agent about this VM"
-          >⌘</button>
-        )}
-        {onEntityDetail && (
-          <button
-            className="text-[10px] px-1 py-px"
-            style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
-            onClick={e => { e.stopPropagation(); onEntityDetail(`proxmox_vms:${vm.node_api}:${vm.type === 'lxc' ? 'lxc' : 'qemu'}:${vm.vmid}`) }}
-            title="Entity detail"
-          >›</button>
         )}
       </div>
     </>
@@ -1369,7 +1363,7 @@ function ExternalCardExpanded({ svc, onAction }) {
   )
 }
 
-function ExternalCardCollapsed({ svc, onEntityDetail, compareMode, onCompareAdd }) {
+function ExternalCardCollapsed({ svc, compareMode, onCompareAdd }) {
   const [reconnecting, setReconnecting] = useState(false)
   const [reconnectResult, setReconnectResult] = useState(null)
   const latencyColor = !svc.reachable ? 'text-red-400' : svc.latency_ms > 100 ? 'text-amber-400' : 'text-green-400'
@@ -1395,14 +1389,6 @@ function ExternalCardCollapsed({ svc, onEntityDetail, compareMode, onCompareAdd 
                 onClick={reconnect} disabled={reconnecting}>
           {reconnecting ? '…' : reconnectResult === 'ok' ? '✓' : reconnectResult === 'fail' ? '✕' : 'Reconnect'}
         </button>
-      )}
-      {onEntityDetail && (
-        <button
-          className="text-[10px] px-1 py-px ml-auto"
-          style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
-          onClick={e => { e.stopPropagation(); onEntityDetail(`external_services:${svc.slug}`) }}
-          title="Entity detail"
-        >›</button>
       )}
     </div>
   )
@@ -1739,7 +1725,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
-                collapsed={<ContainerCardCollapsed c={c} onEntityDetail={onEntityDetail} />}
+                entityId={c.entity_id} onEntityDetail={onEntityDetail}
+                collapsed={<ContainerCardCollapsed c={c} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
                   onTagsLoaded={onTagsLoaded} onTab={onTab}
@@ -1767,6 +1754,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? _compactPort(s.ports[0]) : ''}
+                entityId={s.entity_id} onEntityDetail={onEntityDetail}
                 uptime={s.running_replicas != null ? `${s.running_replicas}/${s.desired_replicas} replicas` : ''}
                 collapsed={<ContainerCardCollapsed c={s} />}
                 expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
@@ -1854,7 +1842,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     name={vm.name}
                     sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
                     net={vm.ip || ''} uptime={vm.uptime || ''}
-                    collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} onChat={onChat} />}
+                    entityId={vm.entity_id} onEntityDetail={onEntityDetail}
+                    collapsed={<ProxmoxCardCollapsed vm={vm} />}
                     expanded={<ProxmoxCardExpanded vm={vm} proxmoxHost={cluster.connection_host} proxmoxPort={cluster.connection_port || 8006} onAction={load} confirm={confirm} showToast={showToast} />}
                     compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                     entityForCompare={{
@@ -1881,8 +1870,9 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
               <InfraCard
                 key={svc.slug} cardKey={`e-${svc.slug}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
                 dot={svc.dot} name={svc.name} sub={svc.service_type} net={svc.host_port}
+                entityId={svc.entity_id} onEntityDetail={onEntityDetail}
                 uptime={svc.latency_ms != null ? `${svc.latency_ms}ms` : ''}
-                collapsed={<ExternalCardCollapsed svc={svc} onEntityDetail={onEntityDetail} compareMode={compareMode} onCompareAdd={onCompareAdd} />}
+                collapsed={<ExternalCardCollapsed svc={svc} compareMode={compareMode} onCompareAdd={onCompareAdd} />}
                 expanded={<ExternalCardExpanded svc={svc} onAction={load} />}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{ id: `external_services:${svc.slug}`, label: svc.name, platform: svc.slug, section: svc.service_type === 'fortigate' ? 'NETWORK' : 'PLATFORM', metadata: { host_port: svc.host_port, latency_ms: svc.latency_ms, reachable: svc.reachable, dot: svc.dot } }}
@@ -1949,6 +1939,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     sub={`${dev.type_label} · ${dev.model}`}
                     net={_displayIp(dev.ip) || ''}
                     uptime={uptimeFmt}
+                    entityId={dev.entity_id} onEntityDetail={onEntityDetail}
                     collapsed={
                       <div className="text-[10px] mt-1" style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
                         {dev.clients} clients
@@ -2028,6 +2019,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     sub={`${Math.round(pct)}% used`}
                     net={''}
                     uptime={`${ds.total_gb} GB`}
+                    entityId={ds.entity_id} onEntityDetail={onEntityDetail}
                     collapsed={
                       <div style={{ marginTop: 4 }}>
                         <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
@@ -2126,6 +2118,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     sub={`${Math.round(pct)}% used`}
                     net={''}
                     uptime={`${pool.size_gb} GB`}
+                    entityId={pool.entity_id} onEntityDetail={onEntityDetail}
                     collapsed={
                       <div style={{ marginTop: 4 }}>
                         <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-3)', overflow: 'hidden' }}>
@@ -2246,6 +2239,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     sub={`${iface.type || ''} ${speed ? '· ' + speed : ''}`.trim()}
                     net={iface.ip || ''}
                     uptime={''}
+                    entityId={iface.entity_id} onEntityDetail={onEntityDetail}
                     collapsed={
                       <div style={{ marginTop: 4 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center',
