@@ -1,0 +1,179 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.24.2.md (v2.24.2)
+Theme: Fix operation_log timestamp str→datetime (asyncpg DataError)
+
+Prompt content:
+
+# CC PROMPT — v2.24.2 — Fix operation_log timestamp type (asyncpg DataError)
+
+## What this does
+The operation_log flush in `session_store.py` passes `timestamp` as an ISO string, but asyncpg
+requires a `datetime` object for TIMESTAMPTZ columns. Every row insert fails with:
+`invalid input for query argument $6: '...' (expected a datetime.date or datetime.datetime instance, got 'str')`
+Fix: parse the string with `datetime.fromisoformat()` before binding. Version bump: v2.24.1 → v2.24.2
+
+## Change 1 — api/session_store.py
+
+In `_flush_loop`, find the `conn.execute(_INSERT, {...})` call and change the `p_ts` value from
+the raw string to a parsed datetime. The `datetime` class is already imported at the top of the file.
+
+Find this block (inside `for item in items:`):
+```python
+                        await conn.execute(_INSERT, {
+                            "p_id":      item["id"],
+                            "p_sid":     item["session_id"],
+                            "p_type":    item["type"],
+                            "p_content": item.get("content", "") or "",
+                            "p_meta":    item.get("metadata", "{}") or "{}",
+                            "p_ts":      item["timestamp"],
+                        })
+```
+
+Replace with:
+```python
+                        await conn.execute(_INSERT, {
+                            "p_id":      item["id"],
+                            "p_sid":     item["session_id"],
+                            "p_type":    item["type"],
+                            "p_content": item.get("content", "") or "",
+                            "p_meta":    item.get("metadata", "{}") or "{}",
+                            "p_ts":      datetime.fromisoformat(item["timestamp"]),
+                        })
+```
+
+That is the only change needed in this file.
+
+## Version bump
+Update VERSION file: v2.24.1 → v2.24.2
+
+## Commit
+```
+git add -A
+git commit -m "fix(session_store): parse timestamp str→datetime before asyncpg bind (v2.24.2)"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 17:28:44
+========================================================================
+PROMPT COMPLETE: v2.24.2
+[STATUS] 1m00s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m02s
+========================================================================

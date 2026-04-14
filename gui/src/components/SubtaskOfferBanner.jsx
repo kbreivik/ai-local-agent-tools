@@ -80,7 +80,6 @@ export default function SubtaskOfferBanner() {
       alignItems: 'center',
       gap: 10,
       flexShrink: 0,
-      flexWrap: 'wrap',
     }}>
       {/* Pulsing dot */}
       <span style={{
@@ -105,8 +104,9 @@ export default function SubtaskOfferBanner() {
 
       {/* Task text */}
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
-                     color: 'var(--text-2)', flex: 1, minWidth: 0 }}>
-        {latest.task?.slice(0, 120)}
+                     color: 'var(--text-2)', maxWidth: 340, minWidth: 0,
+                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {latest.task?.slice(0, 80)}
         {extra > 0 && (
           <span style={{ color: 'var(--cyan)', marginLeft: 6 }}>+{extra} more</span>
         )}
