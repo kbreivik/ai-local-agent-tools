@@ -1,0 +1,400 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.24.1.md (v2.24.1)
+Theme: Fix propose_subtask not called + operation_log silent failures
+
+Prompt content:
+
+# CC PROMPT — v2.24.1 — Fix propose_subtask not called + operation_log writes
+
+## What this does
+Three targeted fixes for bugs found in v2.24.0:
+
+(1) RESEARCH_PROMPT was missing the propose_subtask and runbook_search rules —
+CC placed them only in ACTION_PROMPT. The investigate agent never sees them so it
+never calls propose_subtask after completing an investigation with clear fix steps.
+
+(2) propose_subtask and runbook_search are not in `_ALWAYS_INCLUDE` inside
+`rank_tools_for_task`. With top_n=10 and 30+ investigate tools, semantic ranking
+silently drops propose_subtask before the model ever sees it.
+
+(3) session_store._flush_loop silently swallows all DB write errors at log.debug
+level. asyncpg's handling of SQLAlchemy text() with dict parameters may be failing.
+Rewrite the flush to use explicit bindparam() syntax and log errors at ERROR level
+so failures are visible, plus add a diagnostic endpoint to verify the table exists
+and has rows.
+
+Version bump: 2.24.0 → 2.24.1
+
+---
+
+## Change 1 — api/agents/router.py: Add rules to RESEARCH_PROMPT
+
+Find the end of the RESEARCH_PROMPT string. It currently ends with:
+
+```python
+WHEN TO CALL clarifying_question():
+After gathering evidence, if the root cause is genuinely ambiguous (multiple equally
+likely causes, or evidence points in conflicting directions), call clarifying_question()
+with targeted options BEFORE concluding:
+  clarifying_question(
+    question="Broker-1 container is running but not joining the cluster. Most likely cause?",
+    options=["Recent config change to advertised.listeners", "Network overlay issue (try force-update)", "Insufficient heap memory (check free -m)"]
+  )
+NEVER ask at the start of an investigation for clear tasks. Ask only when evidence is gathered
+but the cause is still unclear. Ask at most once per run.
+
+Think step by step. Investigate thoroughly. Give actionable recommendations."""
+```
+
+Replace the final two lines (`Think step by step...`) with:
+
+```python
+NEVER ask at the start of an investigation for clear tasks. Ask only when evidence is gathered
+but the cause is still unclear. Ask at most once per run.
+
+RULE — CHECK RUNBOOKS FIRST:
+At the START of an investigation into a known problem type (kafka, swarm, disk, network),
+call runbook_search("<problem keyword>") to check if a proven procedure already exists.
+If a runbook is found, cite it in your evidence section and follow its steps.
+
+RULE — PROPOSE SUB-TASK:
+After completing your investigation with clear, specific, actionable fix steps, call:
+  propose_subtask(
+    task="<concise description of what needs to be fixed — max 80 chars>",
+    executable_steps=["<step1 — specific direct instruction with tool>", "<step2>", ...],
+    manual_steps=["<any step requiring physical access or credentials the agent lacks>"]
+  )
+Call this ONLY when:
+  - You have specific, confirmed evidence of the root cause
+  - Fix steps are concrete (not speculative)
+  - At least one step is executable by the execute agent
+
+Do NOT call if:
+  - Investigation found no clear fix path
+  - swarm/kafka is healthy
+  - Fix requires only manual human steps (use manual_steps list instead)
+
+After calling propose_subtask(), write your final investigation summary.
+
+Think step by step. Investigate thoroughly. Give actionable recommendations."""
+```
+
+---
+
+## Change 2 — api/agents/router.py: Add propose_subtask to _ALWAYS_INCLUDE
+
+Find the `rank_tools_for_task` function. Inside it, find:
+
+```python
+    # Always include these structural tools regardless of ranking
+    _ALWAYS_INCLUDE = {"plan_action", "escalate", "audit_log", "clarifying_question",
+                       "result_fetch", "result_query"}
+```
+
+Replace with:
+
+```python
+    # Always include these structural tools regardless of ranking
+    _ALWAYS_INCLUDE = {"plan_action", "escalate", "audit_log", "clarifying_question",
+                       "result_fetch", "result_query",
+                       # Sub-task proposal — must always be visible to investigate agents
+                       "propose_subtask", "runbook_search"}
+```
+
+---
+
+## Change 3 — api/session_store.py: Fix flush loop + add error visibility
+
+Replace the entire `_flush_loop` function with a robust version that:
+- Uses explicit bindparam() syntax to avoid asyncpg dialect issues with text()
+- Logs errors at ERROR level (not DEBUG)
+- Retries individual failed items rather than dropping all on a single error
+- Verifies table exists before first flush
+
+Find:
+```python
+async def _flush_loop():
+    from api.db.base import get_engine
+    from sqlalchemy import text
+
+    while True:
+        await asyncio.sleep(_FLUSH_INTERVAL)
+        items: list[dict] = []
+        while _queue and not _queue.empty():
+            try:
+                items.append(_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not items:
+            continue
+        try:
+            engine = get_engine()
+            async with engine.begin() as conn:
+                for item in items:
+                    await conn.execute(
+                        text(
+                            "INSERT INTO operation_log (id, session_id, type, content, metadata, timestamp) "
+                            "VALUES (:id, :session_id, :type, :content, :metadata, :timestamp)"
+                        ),
+                        item,
+                    )
+        except Exception as e:
+            log.debug("operation_log flush error: %s", e)
+```
+
+Replace with:
+
+```python
+_TABLE_VERIFIED: bool = False
+
+
+async def _ensure_table(conn) -> bool:
+    """Verify operation_log table exists. Creates it if missing (safety net)."""
+    global _TABLE_VERIFIED
+    if _TABLE_VERIFIED:
+        return True
+    try:
+        from sqlalchemy import text as _t
+        await conn.execute(_t(
+            """CREATE TABLE IF NOT EXISTS operation_log (
+                id         TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type       TEXT NOT NULL,
+                content    TEXT,
+                metadata   TEXT,
+                timestamp  TEXT NOT NULL
+            )"""
+        ))
+        await conn.execute(_t(
+            "CREATE INDEX IF NOT EXISTS idx_oplog_session ON operation_log(session_id)"
+        ))
+        await conn.execute(_t(
+            "CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operation_log(timestamp)"
+        ))
+        _TABLE_VERIFIED = True
+        return True
+    except Exception as e:
+        log.error("operation_log table check failed: %s", e)
+        return False
+
+
+async def _flush_loop():
+    from api.db.base import get_engine
+    from sqlalchemy import text, bindparam
+
+    # Pre-build the insert statement with explicit bindparams to avoid asyncpg issues
+    _INSERT = text(
+        "INSERT INTO operation_log "
+        "(id, session_id, type, content, metadata, timestamp) "
+        "VALUES (:p_id, :p_sid, :p_type, :p_content, :p_meta, :p_ts) "
+        "ON CONFLICT (id) DO NOTHING"
+    ).bindparams(
+        bindparam("p_id"),
+        bindparam("p_sid"),
+        bindparam("p_type"),
+        bindparam("p_content"),
+        bindparam("p_meta"),
+        bindparam("p_ts"),
+    )
+
+    while True:
+        await asyncio.sleep(_FLUSH_INTERVAL)
+        items: list[dict] = []
+        while _queue and not _queue.empty():
+            try:
+                items.append(_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not items:
+            continue
+        try:
+            engine = get_engine()
+            async with engine.begin() as conn:
+                await _ensure_table(conn)
+                for item in items:
+                    try:
+                        await conn.execute(_INSERT, {
+                            "p_id":      item["id"],
+                            "p_sid":     item["session_id"],
+                            "p_type":    item["type"],
+                            "p_content": item.get("content", "") or "",
+                            "p_meta":    item.get("metadata", "{}") or "{}",
+                            "p_ts":      item["timestamp"],
+                        })
+                    except Exception as row_e:
+                        log.error("operation_log row insert failed: %s | item=%s",
+                                  row_e, {k: str(v)[:80] for k, v in item.items()})
+        except Exception as e:
+            log.error("operation_log flush error (%d items): %s", len(items), e)
+```
+
+---
+
+## Change 4 — api/routers/logs.py: Add diagnostic endpoint
+
+Add a diagnostic endpoint to verify the table and row counts (useful for debugging):
+
+```python
+@router.get("/session-log/stats")
+async def session_log_stats(_: str = Depends(get_current_user)):
+    """Diagnostic: check operation_log table size and most recent sessions."""
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text as _t
+        engine = get_engine()
+        async with engine.connect() as conn:
+            total = (await conn.execute(_t(
+                "SELECT COUNT(*) FROM operation_log"
+            ))).scalar()
+            recent = await conn.execute(_t(
+                "SELECT session_id, COUNT(*) as cnt, MAX(timestamp) as latest "
+                "FROM operation_log GROUP BY session_id "
+                "ORDER BY latest DESC LIMIT 10"
+            ))
+            rows = [{"session_id": r[0], "count": r[1], "latest": str(r[2])}
+                    for r in recent]
+        return {"total_rows": total, "recent_sessions": rows}
+    except Exception as e:
+        return {"error": str(e), "total_rows": 0}
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.24.0` → `2.24.1`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agent): propose_subtask in RESEARCH_PROMPT + _ALWAYS_INCLUDE + operation_log writes"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 14:48:31
+========================================================================
+PROMPT COMPLETE: v2.24.1
+[STATUS] 1m56s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m58s
+========================================================================

@@ -95,7 +95,7 @@ async def _flush_loop():
                             "p_type":    item["type"],
                             "p_content": item.get("content", "") or "",
                             "p_meta":    item.get("metadata", "{}") or "{}",
-                            "p_ts":      item["timestamp"],
+                            "p_ts":      datetime.fromisoformat(item["timestamp"]),
                         })
                     except Exception as row_e:
                         log.error("operation_log row insert failed: %s | item=%s",
