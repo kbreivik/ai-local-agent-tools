@@ -118,6 +118,36 @@ function GeneralTab({ draft, update }) {
           ]}
         />
       </Field>
+
+      <div className="mb-2 mt-5">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Data Retention
+        </h3>
+        <Field label="Session log retention" hint="Days to keep raw agent output logs (operation_log table). Cleanup runs hourly.">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1} max={365}
+              value={draft.opLogRetentionDays ?? 30}
+              onChange={e => update('opLogRetentionDays', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">days</span>
+          </div>
+        </Field>
+        <Field label="Max lines per session" hint="Trim oldest lines when a session exceeds this count. Applied when session ends.">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={100} max={5000} step={100}
+              value={draft.opLogMaxLinesPerSession ?? 500}
+              onChange={e => update('opLogMaxLinesPerSession', Number(e.target.value))}
+              className="w-24 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">lines</span>
+          </div>
+        </Field>
+      </div>
     </div>
   )
 }

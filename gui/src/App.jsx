@@ -1321,6 +1321,13 @@ function AppShell() {
     return () => window.removeEventListener('navigate-to-output', handler)
   }, [])
 
+  // "Full log →" with session_id navigates to Logs tab (session output view)
+  useEffect(() => {
+    const handler = () => setActiveTab('Logs')
+    window.addEventListener('navigate-to-logs', handler)
+    return () => window.removeEventListener('navigate-to-logs', handler)
+  }, [])
+
   // CSS grid column widths:
   //   Commands tab active → full width (0px panel col + 1fr main)
   //   Panel open          → 360px panel col + 1fr main

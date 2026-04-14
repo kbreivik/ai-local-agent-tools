@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, resolveEscalation, fetchStats, authHeaders } from '../api'
 
 const FEEDBACK_ICON = { thumbs_up: '👍', thumbs_down: '👎' }
@@ -240,6 +240,157 @@ export function ToolCallsView({ refreshTick }) {
   )
 }
 
+// ── Session raw output view ───────────────────────────────────────────────────
+
+const OUTPUT_TYPES = ['all', 'step', 'tool', 'reasoning', 'memory', 'halt', 'done', 'error']
+
+const OUTPUT_ICON = {
+  step:      { icon: '──', color: '#64748b' },
+  reasoning: { icon: '\u{1F4AD}', color: '#cbd5e1' },
+  tool:      { icon: '\u2699',  color: '#93c5fd' },
+  memory:    { icon: '\u25C8',  color: '#64748b' },
+  halt:      { icon: '\u26A0',  color: '#fb923c' },
+  done:      { icon: '\u2713',  color: '#4ade80' },
+  error:     { icon: '\u2717',  color: '#f87171' },
+}
+
+export function SessionOutputView({ sessionId, onClose }) {
+  const [lines, setLines] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKw, setDebouncedKw] = useState('')
+  const [count, setCount] = useState(0)
+  const bottomRef = useRef(null)
+
+  // Debounce keyword
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedKw(keyword), 300)
+    return () => clearTimeout(t)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!sessionId) return
+    setLoading(true)
+    const params = new URLSearchParams({ limit: '1000' })
+    if (typeFilter !== 'all') params.set('type_filter', typeFilter)
+    if (debouncedKw) params.set('keyword', debouncedKw)
+    fetch(`${BASE}/api/logs/session/${sessionId}/output?${params}`, {
+      headers: { ...authHeaders() }
+    })
+      .then(r => r.ok ? r.json() : { lines: [], count: 0 })
+      .then(d => { setLines(d.lines || []); setCount(d.count || 0) })
+      .catch(() => setLines([]))
+      .finally(() => setLoading(false))
+  }, [sessionId, typeFilter, debouncedKw])
+
+  useEffect(() => {
+    if (!loading && lines.length > 0) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [loading])
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100%',
+      background: '#0f172a', fontFamily: 'var(--font-mono, monospace)',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 10px', borderBottom: '1px solid #1e293b',
+                    flexShrink: 0 }}>
+        <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
+          RAW OUTPUT
+        </span>
+        <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)' }}>
+          {sessionId?.substring(0, 8)}\u2026
+        </span>
+        <span style={{ fontSize: 9, color: '#475569', marginLeft: 4 }}>{count} lines</span>
+        {/* Type filter chips */}
+        <div style={{ display: 'flex', gap: 3, marginLeft: 8, flexWrap: 'wrap' }}>
+          {OUTPUT_TYPES.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)}
+              style={{
+                fontSize: 9, padding: '1px 6px', borderRadius: 2,
+                cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                background: typeFilter === t ? '#3b82f6' : '#1e293b',
+                color: typeFilter === t ? '#fff' : '#64748b',
+                border: 'none',
+              }}>{t}</button>
+          ))}
+        </div>
+        {/* Keyword search */}
+        <input
+          value={keyword}
+          onChange={e => setKeyword(e.target.value)}
+          placeholder="filter content\u2026"
+          style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 2, marginLeft: 'auto',
+            background: '#1e293b', border: '1px solid #334155',
+            color: '#cbd5e1', fontFamily: 'var(--font-mono)', width: 140, outline: 'none',
+          }}
+        />
+        {onClose && (
+          <button onClick={onClose} style={{ color: '#475569', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, lineHeight: 1, marginLeft: 4 }}>\u00D7</button>
+        )}
+      </div>
+
+      {/* Lines */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+        {loading && (
+          <div style={{ padding: '12px 10px', fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+            Loading\u2026
+          </div>
+        )}
+        {!loading && lines.length === 0 && (
+          <div style={{ padding: '12px 10px', fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+            No lines found{typeFilter !== 'all' || debouncedKw ? ' \u2014 try adjusting filters' : ' \u2014 session may have been purged or not started yet'}.
+          </div>
+        )}
+        {lines.map((line, i) => {
+          const style = OUTPUT_ICON[line.type] ?? { icon: '\u00B7', color: '#475569' }
+          const ts = line.timestamp ? new Date(line.timestamp).toLocaleTimeString() : ''
+          return (
+            <div key={line.id || i} style={{
+              display: 'flex', gap: 6, alignItems: 'flex-start',
+              padding: '1px 10px', borderBottom: '1px solid #0f172a',
+              fontSize: 11, lineHeight: 1.5,
+            }}>
+              <span style={{ color: '#334155', flexShrink: 0, width: 58, fontSize: 9 }}>{ts}</span>
+              <span style={{ color: style.color, flexShrink: 0, width: 16 }}>{style.icon}</span>
+              <span style={{ color: line.type === 'tool' ? style.color : '#94a3b8',
+                             whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
+                {line.content || ''}
+              </span>
+            </div>
+          )
+        })}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  )
+}
+
+function RawOutputToggle({ sessionId }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div>
+      <button
+        onClick={() => setShow(s => !s)}
+        className="text-xs text-blue-500 hover:text-blue-400 underline"
+      >
+        {show ? '\u2212 Hide raw output' : '+ Raw output log'}
+      </button>
+      {show && (
+        <div style={{ height: 380, marginTop: 6, borderRadius: 4, overflow: 'hidden',
+                      border: '1px solid #1e293b' }}>
+          <SessionOutputView sessionId={sessionId} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Operations view ───────────────────────────────────────────────────────────
 
 export function OpsView({ refreshTick }) {
@@ -348,6 +499,11 @@ export function OpsView({ refreshTick }) {
                               </div>
                             ))}
                           </div>
+                        )}
+
+                        {/* Raw output log */}
+                        {detail.operation.session_id && (
+                          <RawOutputToggle sessionId={detail.operation.session_id} />
                         )}
 
                         <CorrelationView operationId={op.id} />
@@ -480,14 +636,30 @@ const VIEWS = ['Tool Calls', 'Operations', 'Escalations', 'Stats']
 
 export default function LogTable({ refreshTick }) {
   const [view, setView] = useState('Tool Calls')
+  const [sessionOutputId, setSessionOutputId] = useState(null)
+
+  // Listen for open-session-output events from AgentFeed
+  useEffect(() => {
+    const handler = (e) => {
+      const sid = e.detail?.session_id
+      if (sid) {
+        setSessionOutputId(sid)
+        setView('Session Output')
+      }
+    }
+    window.addEventListener('open-session-output', handler)
+    return () => window.removeEventListener('open-session-output', handler)
+  }, [])
+
+  const allViews = [...VIEWS, ...(sessionOutputId ? ['Session Output'] : [])]
 
   return (
     <div className="flex flex-col h-full">
       {/* View switcher */}
-      <div className="flex items-center gap-0 px-3 border-b border-slate-700 shrink-0 pt-1">
-        {VIEWS.map(v => (
+      <div className="flex items-center gap-0 px-3 border-b border-slate-700 shrink-0 pt-1 overflow-x-auto">
+        {allViews.map(v => (
           <button key={v} onClick={() => setView(v)}
-            className={`text-xs px-3 py-1.5 border-b-2 transition-colors ${
+            className={`text-xs px-3 py-1.5 border-b-2 transition-colors whitespace-nowrap ${
               view === v
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-500 hover:text-slate-300'
@@ -498,10 +670,16 @@ export default function LogTable({ refreshTick }) {
       </div>
 
       <div className="flex-1 overflow-hidden min-h-0">
-        {view === 'Tool Calls'  && <ToolCallsView refreshTick={refreshTick} />}
-        {view === 'Operations'  && <OpsView refreshTick={refreshTick} />}
-        {view === 'Escalations' && <EscView refreshTick={refreshTick} />}
-        {view === 'Stats'       && <StatsView />}
+        {view === 'Tool Calls'     && <ToolCallsView refreshTick={refreshTick} />}
+        {view === 'Operations'     && <OpsView refreshTick={refreshTick} />}
+        {view === 'Escalations'    && <EscView refreshTick={refreshTick} />}
+        {view === 'Stats'          && <StatsView />}
+        {view === 'Session Output' && sessionOutputId && (
+          <SessionOutputView
+            sessionId={sessionOutputId}
+            onClose={() => { setView('Operations'); setSessionOutputId(null) }}
+          />
+        )}
       </div>
     </div>
   )

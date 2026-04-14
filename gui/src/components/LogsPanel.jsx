@@ -5,7 +5,7 @@
  * Other tabs: agent tool-call / operation / escalation / stats tables.
  */
 import { useEffect, useState, useRef } from 'react'
-import { ToolCallsView, OpsView, EscView, StatsView } from './LogTable'
+import { ToolCallsView, OpsView, EscView, StatsView, SessionOutputView } from './LogTable'
 import { createUnifiedLogStream, authHeaders, fetchResultRefs, fetchResultRef, fetchPipelineHealth } from '../api'
 
 const _CONN_BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -625,12 +625,28 @@ const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', '
 
 export default function LogsPanel() {
   const [tab, setTab] = useState('Live Logs')
+  const [sessionOutputId, setSessionOutputId] = useState(null)
+
+  // Listen for open-session-output events from AgentFeed
+  useEffect(() => {
+    const handler = (e) => {
+      const sid = e.detail?.session_id
+      if (sid) {
+        setSessionOutputId(sid)
+        setTab('Session Output')
+      }
+    }
+    window.addEventListener('open-session-output', handler)
+    return () => window.removeEventListener('open-session-output', handler)
+  }, [])
+
+  const allTabs = [...TABS, ...(sessionOutputId ? ['Session Output'] : [])]
 
   return (
     <div className="flex flex-col h-full bg-slate-950">
       {/* Sub-tab bar */}
-      <div className="flex items-center border-b border-slate-700 shrink-0 px-3 pt-1">
-        {TABS.map(t => (
+      <div className="flex items-center border-b border-slate-700 shrink-0 px-3 pt-1 overflow-x-auto">
+        {allTabs.map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -646,13 +662,19 @@ export default function LogsPanel() {
       </div>
 
       <div className="flex-1 overflow-hidden min-h-0">
-        {tab === 'Live Logs'   && <LiveLogsView />}
-        {tab === 'Tool Calls'  && <ToolCallsView refreshTick={0} />}
-        {tab === 'Operations'  && <OpsView refreshTick={0} />}
-        {tab === 'Escalations' && <EscView refreshTick={0} />}
-        {tab === 'Stats'       && <StatsView />}
-        {tab === 'Result Refs' && <ResultRefsView />}
-        {tab === 'Data Health' && <DataHealthView />}
+        {tab === 'Live Logs'      && <LiveLogsView />}
+        {tab === 'Tool Calls'     && <ToolCallsView refreshTick={0} />}
+        {tab === 'Operations'     && <OpsView refreshTick={0} />}
+        {tab === 'Escalations'    && <EscView refreshTick={0} />}
+        {tab === 'Stats'          && <StatsView />}
+        {tab === 'Result Refs'    && <ResultRefsView />}
+        {tab === 'Data Health'    && <DataHealthView />}
+        {tab === 'Session Output' && sessionOutputId && (
+          <SessionOutputView
+            sessionId={sessionOutputId}
+            onClose={() => { setTab('Operations'); setSessionOutputId(null) }}
+          />
+        )}
       </div>
     </div>
   )

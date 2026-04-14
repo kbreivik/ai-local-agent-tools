@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T12:49:39",
+  "updated_at": "2026-04-14T13:02:53",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -357,10 +357,26 @@
       "filename": "CC_PROMPT_v2.23.3.md",
       "version": "v2.23.3",
       "theme": "DB-backed vm_exec allowlist + session/permanent approval flow",
+      "runner_status": "DONE",
+      "commit_sha": "b7aab7d",
+      "error": "",
+      "started_at": "2026-04-14T12:49:39",
+      "finished_at": "2026-04-14T12:56:52",
+      "duration_s": 433.31371930002933,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_124939_CC_PROMPT_v2.23.3.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.23.4.md",
+      "version": "v2.23.4",
+      "theme": "Session output log: retention settings, full log view, raw output tab",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T12:49:39",
+      "started_at": "2026-04-14T13:02:53",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -236,7 +236,14 @@ function DoneFooter({ steps, elapsed, sessionId, onFullLog }) {
           </>
         ) : null}
         <button
-          onClick={onFullLog}
+          onClick={() => {
+            if (sessionId) {
+              window.dispatchEvent(new CustomEvent('open-session-output', { detail: { session_id: sessionId } }))
+              window.dispatchEvent(new CustomEvent('navigate-to-logs'))
+            } else {
+              onFullLog?.()
+            }
+          }}
           style={{
             fontSize: 10, color: '#3b82f6', background: 'none',
             border: 'none', cursor: 'pointer', padding: 0,

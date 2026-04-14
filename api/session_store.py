@@ -111,6 +111,68 @@ async def get_replay_lines(session_id: str, limit: int = REPLAY_LINES) -> list[d
         return []
 
 
+async def trim_session_log(session_id: str, max_lines: int = 500) -> int:
+    """Delete oldest lines for a session if count exceeds max_lines.
+
+    Called after session ends to enforce per-session line cap.
+    Returns number of rows deleted.
+    """
+    if not session_id or max_lines <= 0:
+        return 0
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM operation_log WHERE session_id = :sid"),
+                {"sid": session_id},
+            )
+            total = result.scalar() or 0
+            if total <= max_lines:
+                return 0
+            delete_count = total - max_lines
+            await conn.execute(
+                text("""
+                    DELETE FROM operation_log WHERE id IN (
+                        SELECT id FROM operation_log
+                        WHERE session_id = :sid
+                        ORDER BY timestamp ASC
+                        LIMIT :n
+                    )
+                """),
+                {"sid": session_id, "n": delete_count},
+            )
+            log.debug("operation_log: trimmed %d rows for session %s", delete_count, session_id)
+            return delete_count
+    except Exception as e:
+        log.debug("trim_session_log error: %s", e)
+        return 0
+
+
+async def cleanup_old_logs(retention_days: int = 30) -> int:
+    """Delete operation_log rows older than retention_days. Returns rows deleted."""
+    if retention_days <= 0:
+        return 0
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    f"DELETE FROM operation_log WHERE timestamp < NOW() - INTERVAL '{int(retention_days)} days'"
+                )
+            )
+            deleted = result.rowcount or 0
+            if deleted:
+                log.info("operation_log cleanup: deleted %d rows older than %d days", deleted, retention_days)
+            return deleted
+    except Exception as e:
+        log.debug("cleanup_old_logs error: %s", e)
+        return 0
+
+
 async def get_active_sessions() -> list[dict]:
     """Return sessions with status=running from operations table."""
     try:

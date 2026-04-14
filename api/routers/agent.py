@@ -1530,6 +1530,14 @@ async def _stream_agent(task: str, session_id: str, operation_id: str, owner_use
             purge_session(session_id)
         except Exception as _al_e:
             log.debug("allowlist session purge failed: %s", _al_e)
+        # Trim session log to max_lines setting
+        try:
+            from mcp_server.tools.skills.storage import get_backend as _gb2
+            max_lines = int(_gb2().get_setting("opLogMaxLinesPerSession") or 500)
+            from api.session_store import trim_session_log
+            await trim_session_log(session_id, max_lines)
+        except Exception as _tl_e:
+            log.debug("session log trim failed: %s", _tl_e)
 
 
 @router.post("/run", response_model=RunResponse)

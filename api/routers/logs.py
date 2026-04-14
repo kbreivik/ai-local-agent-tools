@@ -310,6 +310,71 @@ async def mark_capability_reviewed(
 
 # ── Result Store ─────────────────────────────────────────────────────────────
 
+@router.get("/session/{session_id}/output")
+async def get_session_output(
+    session_id: str,
+    type_filter: str = Query("", description="Comma-separated types: step,tool,reasoning,halt,done,error,memory"),
+    keyword: str = Query("", description="Case-insensitive keyword filter on content"),
+    limit: int = Query(500, ge=1, le=2000),
+    _: str = Depends(get_current_user),
+):
+    """Return the full raw WS output log for a session from operation_log table.
+
+    Used by 'View full log' and the Raw Output sub-panel in Operations detail.
+    Lines are in chronological order (oldest first).
+    """
+    try:
+        import json as _json
+
+        types = [t.strip() for t in type_filter.split(",") if t.strip()] if type_filter else []
+
+        where_clauses = ["session_id = :sid"]
+        params: dict = {"sid": session_id, "lim": limit}
+
+        if types:
+            where_clauses.append("type = ANY(:types)")
+            params["types"] = types
+
+        if keyword:
+            where_clauses.append("content ILIKE :kw")
+            params["kw"] = f"%{keyword}%"
+
+        where = " AND ".join(where_clauses)
+        sql = f"""
+            SELECT id, type, content, metadata, timestamp
+            FROM operation_log
+            WHERE {where}
+            ORDER BY timestamp ASC
+            LIMIT :lim
+        """
+
+        async with get_engine().connect() as conn:
+            rows = await conn.execute(text(sql), params)
+            lines = []
+            for row in rows:
+                meta = {}
+                try:
+                    meta = _json.loads(row[3]) if row[3] else {}
+                except Exception:
+                    pass
+                lines.append({
+                    "id": row[0],
+                    "type": row[1],
+                    "content": row[2] or "",
+                    "timestamp": row[4].isoformat() if row[4] else "",
+                    **meta,
+                })
+
+        return {
+            "session_id": session_id,
+            "count": len(lines),
+            "lines": lines,
+            "filters": {"types": types, "keyword": keyword},
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Session output fetch failed: {e}")
+
+
 @router.get("/result-store")
 async def list_result_refs(
     limit: int = 50,

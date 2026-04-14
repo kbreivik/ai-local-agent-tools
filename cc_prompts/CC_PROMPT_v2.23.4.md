@@ -1,0 +1,630 @@
+# CC PROMPT — v2.23.4 — Session output log: settings-backed retention, full log view, raw output sub-tab
+
+## What this does
+Three problems fixed: (1) `operation_log` grows unbounded with no cleanup — add
+`opLogRetentionDays` and `opLogMaxLinesPerSession` to the settings system so they appear
+in Settings → General → Data Retention and drive nightly cleanup + per-session trim.
+(2) "View full log →" in the agent feed navigates to OutputPanel which only shows
+in-memory data lost on refresh — fix it to navigate to Logs → Operations and auto-open
+the raw session output for that session_id. (3) The Operations detail panel has no way
+to see the verbatim WS stream — add a "Raw Output" sub-section fetching from a new
+`GET /api/logs/session/{session_id}/output` endpoint with type-filter chips and keyword
+search.
+Version bump: 2.23.3 → 2.23.4
+
+---
+
+## Change 1 — api/routers/settings.py: Add retention settings
+
+In `SETTINGS_KEYS`, add two new keys in the UI section (after `dashboardRefreshInterval`):
+
+```python
+    "dashboardRefreshInterval": {"env": None,                   "sens": False, "default": 15000},
+    # Data retention
+    "opLogRetentionDays":       {"env": None,                   "sens": False, "default": 30},
+    "opLogMaxLinesPerSession":  {"env": None,                   "sens": False, "default": 500},
+```
+
+---
+
+## Change 2 — api/session_store.py: Add trim + cleanup functions
+
+Add these two functions at the end of `session_store.py`:
+
+```python
+async def trim_session_log(session_id: str, max_lines: int = 500) -> int:
+    """Delete oldest lines for a session if count exceeds max_lines.
+
+    Called after session ends to enforce per-session line cap.
+    Returns number of rows deleted.
+    """
+    if not session_id or max_lines <= 0:
+        return 0
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        async with engine.begin() as conn:
+            # Count total lines for session
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM operation_log WHERE session_id = :sid"),
+                {"sid": session_id},
+            )
+            total = result.scalar() or 0
+            if total <= max_lines:
+                return 0
+            # Delete oldest rows beyond the cap
+            delete_count = total - max_lines
+            await conn.execute(
+                text("""
+                    DELETE FROM operation_log WHERE id IN (
+                        SELECT id FROM operation_log
+                        WHERE session_id = :sid
+                        ORDER BY timestamp ASC
+                        LIMIT :n
+                    )
+                """),
+                {"sid": session_id, "n": delete_count},
+            )
+            log.debug("operation_log: trimmed %d rows for session %s", delete_count, session_id)
+            return delete_count
+    except Exception as e:
+        log.debug("trim_session_log error: %s", e)
+        return 0
+
+
+async def cleanup_old_logs(retention_days: int = 30) -> int:
+    """Delete operation_log rows older than retention_days. Returns rows deleted."""
+    if retention_days <= 0:
+        return 0
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    "DELETE FROM operation_log "
+                    "WHERE timestamp < NOW() - INTERVAL ':days days'"
+                    if False else  # parametrized interval needs special handling
+                    f"DELETE FROM operation_log WHERE timestamp < NOW() - INTERVAL '{int(retention_days)} days'"
+                )
+            )
+            deleted = result.rowcount or 0
+            if deleted:
+                log.info("operation_log cleanup: deleted %d rows older than %d days", deleted, retention_days)
+            return deleted
+    except Exception as e:
+        log.debug("cleanup_old_logs error: %s", e)
+        return 0
+```
+
+---
+
+## Change 3 — api/main.py: Add hourly operation_log cleanup loop
+
+In the lifespan function, add this cleanup task alongside the other daily cleanup loops
+(after the `_daily_metric_cleanup` task):
+
+```python
+    # Schedule hourly operation_log cleanup (retention + per-session trim)
+    async def _operation_log_cleanup_loop():
+        while True:
+            await _aio.sleep(3600)  # every hour
+            try:
+                from mcp_server.tools.skills.storage import get_backend as _gb
+                retention_days = int(_gb().get_setting("opLogRetentionDays") or 30)
+                from api.session_store import cleanup_old_logs
+                n = await cleanup_old_logs(retention_days)
+                if n:
+                    _log.info("operation_log: purged %d rows older than %d days", n, retention_days)
+            except Exception as _ole:
+                _log.debug("operation_log cleanup failed: %s", _ole)
+    _aio.create_task(_operation_log_cleanup_loop())
+```
+
+---
+
+## Change 4 — api/routers/agent.py: Trim session log on session end
+
+In `_stream_agent`, in the `finally` block (right after the allowlist session purge added
+in v2.23.3), add session log trimming:
+
+```python
+        # Trim session log to max_lines setting
+        try:
+            from mcp_server.tools.skills.storage import get_backend as _gb2
+            max_lines = int(_gb2().get_setting("opLogMaxLinesPerSession") or 500)
+            from api.session_store import trim_session_log
+            await trim_session_log(session_id, max_lines)
+        except Exception as _tl_e:
+            log.debug("session log trim failed: %s", _tl_e)
+```
+
+---
+
+## Change 5 — api/routers/logs.py: Add session output endpoint
+
+Add this new endpoint to `logs.py`:
+
+```python
+@router.get("/session/{session_id}/output")
+async def get_session_output(
+    session_id: str,
+    type_filter: str = Query("", description="Comma-separated types: step,tool,reasoning,halt,done,error,memory"),
+    keyword: str = Query("", description="Case-insensitive keyword filter on content"),
+    limit: int = Query(500, ge=1, le=2000),
+    _: str = Depends(get_current_user),
+):
+    """Return the full raw WS output log for a session from operation_log table.
+
+    Used by 'View full log' and the Raw Output sub-panel in Operations detail.
+    Lines are in chronological order (oldest first).
+    """
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text as _text
+        import json as _json
+
+        # Build filter
+        types = [t.strip() for t in type_filter.split(",") if t.strip()] if type_filter else []
+
+        where_clauses = ["session_id = :sid"]
+        params: dict = {"sid": session_id, "lim": limit}
+
+        if types:
+            # Use ANY with array — safe parameterisation
+            where_clauses.append("type = ANY(:types)")
+            params["types"] = types
+
+        if keyword:
+            where_clauses.append("content ILIKE :kw")
+            params["kw"] = f"%{keyword}%"
+
+        where = " AND ".join(where_clauses)
+        sql = f"""
+            SELECT id, type, content, metadata, timestamp
+            FROM operation_log
+            WHERE {where}
+            ORDER BY timestamp ASC
+            LIMIT :lim
+        """
+
+        engine = get_engine()
+        async with engine.connect() as conn:
+            rows = await conn.execute(_text(sql), params)
+            lines = []
+            for row in rows:
+                meta = {}
+                try:
+                    meta = _json.loads(row[3]) if row[3] else {}
+                except Exception:
+                    pass
+                lines.append({
+                    "id": row[0],
+                    "type": row[1],
+                    "content": row[2] or "",
+                    "timestamp": row[4].isoformat() if row[4] else "",
+                    **meta,
+                })
+
+        return {
+            "session_id": session_id,
+            "count": len(lines),
+            "lines": lines,
+            "filters": {"types": types, "keyword": keyword},
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Session output fetch failed: {e}")
+```
+
+---
+
+## Change 6 — gui/src/components/LogTable.jsx: Add Raw Output sub-section + SessionOutputView
+
+### 6a. Add a SessionOutputView component before the OpsView function
+
+Insert this new component before `export function OpsView`:
+
+```javascript
+// ── Session raw output view ───────────────────────────────────────────────────
+
+const OUTPUT_TYPES = ['all', 'step', 'tool', 'reasoning', 'memory', 'halt', 'done', 'error']
+
+const OUTPUT_ICON = {
+  step:      { icon: '──', color: '#64748b' },
+  reasoning: { icon: '💭', color: '#cbd5e1' },
+  tool:      { icon: '⚙',  color: '#93c5fd' },
+  memory:    { icon: '◈',  color: '#64748b' },
+  halt:      { icon: '⚠',  color: '#fb923c' },
+  done:      { icon: '✓',  color: '#4ade80' },
+  error:     { icon: '✗',  color: '#f87171' },
+}
+
+function SessionOutputView({ sessionId, onClose }) {
+  const [lines, setLines] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKw, setDebouncedKw] = useState('')
+  const [count, setCount] = useState(0)
+  const bottomRef = useRef(null)
+
+  // Debounce keyword
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedKw(keyword), 300)
+    return () => clearTimeout(t)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!sessionId) return
+    setLoading(true)
+    const params = new URLSearchParams({ limit: 1000 })
+    if (typeFilter !== 'all') params.set('type_filter', typeFilter)
+    if (debouncedKw) params.set('keyword', debouncedKw)
+    fetch(`${BASE}/api/logs/session/${sessionId}/output?${params}`, {
+      headers: { ...authHeaders() }
+    })
+      .then(r => r.ok ? r.json() : { lines: [], count: 0 })
+      .then(d => { setLines(d.lines || []); setCount(d.count || 0) })
+      .catch(() => setLines([]))
+      .finally(() => setLoading(false))
+  }, [sessionId, typeFilter, debouncedKw])
+
+  useEffect(() => {
+    if (!loading && lines.length > 0) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [loading])
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100%',
+      background: '#0f172a', fontFamily: 'var(--font-mono, monospace)',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 10px', borderBottom: '1px solid #1e293b',
+                    flexShrink: 0 }}>
+        <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
+          RAW OUTPUT
+        </span>
+        <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)' }}>
+          {sessionId?.substring(0, 8)}…
+        </span>
+        <span style={{ fontSize: 9, color: '#475569', marginLeft: 4 }}>{count} lines</span>
+        {/* Type filter chips */}
+        <div style={{ display: 'flex', gap: 3, marginLeft: 8, flexWrap: 'wrap' }}>
+          {OUTPUT_TYPES.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)}
+              style={{
+                fontSize: 9, padding: '1px 6px', borderRadius: 2,
+                cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                background: typeFilter === t ? '#3b82f6' : '#1e293b',
+                color: typeFilter === t ? '#fff' : '#64748b',
+                border: 'none',
+              }}>{t}</button>
+          ))}
+        </div>
+        {/* Keyword search */}
+        <input
+          value={keyword}
+          onChange={e => setKeyword(e.target.value)}
+          placeholder="filter content…"
+          style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 2, marginLeft: 'auto',
+            background: '#1e293b', border: '1px solid #334155',
+            color: '#cbd5e1', fontFamily: 'var(--font-mono)', width: 140, outline: 'none',
+          }}
+        />
+        {onClose && (
+          <button onClick={onClose} style={{ color: '#475569', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, lineHeight: 1, marginLeft: 4 }}>×</button>
+        )}
+      </div>
+
+      {/* Lines */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+        {loading && (
+          <div style={{ padding: '12px 10px', fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+            Loading…
+          </div>
+        )}
+        {!loading && lines.length === 0 && (
+          <div style={{ padding: '12px 10px', fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+            No lines found{typeFilter !== 'all' || debouncedKw ? ' — try adjusting filters' : ' — session may have been purged or not started yet'}.
+          </div>
+        )}
+        {lines.map((line, i) => {
+          const style = OUTPUT_ICON[line.type] ?? { icon: '·', color: '#475569' }
+          const ts = line.timestamp ? new Date(line.timestamp).toLocaleTimeString() : ''
+          return (
+            <div key={line.id || i} style={{
+              display: 'flex', gap: 6, alignItems: 'flex-start',
+              padding: '1px 10px', borderBottom: '1px solid #0f172a',
+              fontSize: 11, lineHeight: 1.5,
+            }}>
+              <span style={{ color: '#334155', flexShrink: 0, width: 58, fontSize: 9 }}>{ts}</span>
+              <span style={{ color: style.color, flexShrink: 0, width: 16 }}>{style.icon}</span>
+              <span style={{ color: line.type === 'tool' ? style.color : '#94a3b8',
+                             whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
+                {line.content || ''}
+              </span>
+            </div>
+          )
+        })}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  )
+}
+```
+
+### 6b. Update OpsView operation detail to include Raw Output section
+
+In the `OpsView` component, find the expanded detail row. It contains:
+- Task section
+- Final Answer section
+- Tool calls section
+- `<CorrelationView operationId={op.id} />`
+
+Add a "Raw Output" collapsible section after the Tool calls section and before CorrelationView:
+
+```javascript
+                        {/* Raw session output */}
+                        {detail.operation.session_id && (() => {
+                          const [showRaw, setShowRaw] = useState(false)
+                          return (
+                            <div>
+                              <button
+                                onClick={() => setShowRaw(s => !s)}
+                                className="text-xs text-blue-500 hover:text-blue-400 underline"
+                              >
+                                {showRaw ? '− Hide raw output' : '+ Raw output log'}
+                              </button>
+                              {showRaw && (
+                                <div style={{ height: 360, marginTop: 6, borderRadius: 4, overflow: 'hidden',
+                                              border: '1px solid #1e293b' }}>
+                                  <SessionOutputView sessionId={detail.operation.session_id} />
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
+```
+
+**Important:** The inline `useState` inside a render is invalid React. Instead, extract the raw output toggle into a small wrapper component. Replace the above with a proper component approach:
+
+Add this small component just before the OpsView function:
+
+```javascript
+function RawOutputToggle({ sessionId }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div>
+      <button
+        onClick={() => setShow(s => !s)}
+        className="text-xs text-blue-500 hover:text-blue-400 underline"
+      >
+        {show ? '− Hide raw output' : '+ Raw output log'}
+      </button>
+      {show && (
+        <div style={{ height: 380, marginTop: 6, borderRadius: 4, overflow: 'hidden',
+                      border: '1px solid #1e293b' }}>
+          <SessionOutputView sessionId={sessionId} />
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+Then in the detail row, after the tool calls section and before CorrelationView, add:
+
+```javascript
+                        {/* Raw output log */}
+                        {detail.operation.session_id && (
+                          <RawOutputToggle sessionId={detail.operation.session_id} />
+                        )}
+```
+
+### 6c. Add a standalone "Session Output" view to LogTable root
+
+Update `VIEWS` to include a conditional Session Output view. Add state for the active session:
+
+Find the `LogTable` root component. Update it to:
+
+```javascript
+const VIEWS = ['Tool Calls', 'Operations', 'Escalations', 'Stats']
+
+export default function LogTable({ refreshTick }) {
+  const [view, setView] = useState('Tool Calls')
+  const [sessionOutputId, setSessionOutputId] = useState(null)
+
+  // Listen for open-session-output events from AgentFeed
+  useEffect(() => {
+    const handler = (e) => {
+      const sid = e.detail?.session_id
+      if (sid) {
+        setSessionOutputId(sid)
+        setView('Session Output')
+      }
+    }
+    window.addEventListener('open-session-output', handler)
+    return () => window.removeEventListener('open-session-output', handler)
+  }, [])
+
+  const allViews = [...VIEWS, ...(sessionOutputId ? ['Session Output'] : [])]
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* View switcher */}
+      <div className="flex items-center gap-0 px-3 border-b border-slate-700 shrink-0 pt-1 overflow-x-auto">
+        {allViews.map(v => (
+          <button key={v} onClick={() => setView(v)}
+            className={`text-xs px-3 py-1.5 border-b-2 transition-colors whitespace-nowrap ${
+              view === v
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}>
+            {v}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 overflow-hidden min-h-0">
+        {view === 'Tool Calls'     && <ToolCallsView refreshTick={refreshTick} />}
+        {view === 'Operations'     && <OpsView refreshTick={refreshTick} />}
+        {view === 'Escalations'    && <EscView refreshTick={refreshTick} />}
+        {view === 'Stats'          && <StatsView />}
+        {view === 'Session Output' && sessionOutputId && (
+          <SessionOutputView
+            sessionId={sessionOutputId}
+            onClose={() => { setView('Operations'); setSessionOutputId(null) }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 7 — gui/src/components/AgentFeed.jsx: Fix "View full log →" button
+
+### 7a. Fix DoneFooter to dispatch the correct event
+
+Find the `DoneFooter` component. It currently has:
+```javascript
+  const navigateToOutput = () =>
+    window.dispatchEvent(new CustomEvent('navigate-to-output'))
+```
+
+And the button:
+```javascript
+        <button
+          onClick={onFullLog}
+          ...
+        >
+          Full log →
+        </button>
+```
+
+`onFullLog` is passed as `onFullLog={navigateToOutput}` from `AgentFeed`. Change
+`navigateToOutput` to dispatch `open-session-output` with the session_id:
+
+In `DoneFooter`, the component receives `sessionId` as a prop. Update it to:
+```javascript
+function DoneFooter({ steps, elapsed, sessionId, onFullLog }) {
+```
+
+And update the button onClick to dispatch the session event:
+```javascript
+        <button
+          onClick={() => {
+            if (sessionId) {
+              window.dispatchEvent(new CustomEvent('open-session-output', { detail: { session_id: sessionId } }))
+              // Also navigate to logs tab
+              window.dispatchEvent(new CustomEvent('navigate-to-logs'))
+            } else {
+              onFullLog?.()
+            }
+          }}
+          style={{
+            fontSize: 10, color: '#3b82f6', background: 'none',
+            border: 'none', cursor: 'pointer', padding: 0,
+            textDecoration: 'underline',
+          }}
+        >
+          Full log →
+        </button>
+```
+
+### 7b. Handle navigate-to-logs in App.jsx or Sidebar
+
+The `navigate-to-logs` event needs to be caught somewhere to switch the main view to Logs.
+Find where `navigate-to-output` is handled (likely in App.jsx or a navigation context).
+Add a listener for `navigate-to-logs` that switches to the Logs section.
+
+Search for `navigate-to-output` in the codebase and add alongside it:
+```javascript
+window.addEventListener('navigate-to-logs', () => {
+  // Switch to Logs view — use the same mechanism as navigate-to-output
+  // but target the Logs sidebar item
+  setActiveView('logs')  // or whatever the Logs tab identifier is
+})
+```
+
+CC should find where `navigate-to-output` is handled in App.jsx and add the Logs
+navigation event handler in the same location using the correct state setter.
+
+---
+
+## Change 8 — gui/src/components/OptionsModal.jsx: Add Data Retention section to General tab
+
+In `GeneralTab`, add a Data Retention section after the existing Dashboard Refresh Interval field:
+
+```javascript
+function GeneralTab({ draft, update }) {
+  return (
+    <div>
+      <Field label="Theme">
+        ...existing theme radio group...
+      </Field>
+
+      <Field label="Dashboard Refresh Interval">
+        ...existing select...
+      </Field>
+
+      <div className="mb-2 mt-5">
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Data Retention
+        </h3>
+        <Field label="Session log retention" hint="Days to keep raw agent output logs (operation_log table). Cleanup runs hourly.">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1} max={365}
+              value={draft.opLogRetentionDays ?? 30}
+              onChange={e => update('opLogRetentionDays', Number(e.target.value))}
+              className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">days</span>
+          </div>
+        </Field>
+        <Field label="Max lines per session" hint="Trim oldest lines when a session exceeds this count. Applied when session ends.">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={100} max={5000} step={100}
+              value={draft.opLogMaxLinesPerSession ?? 500}
+              onChange={e => update('opLogMaxLinesPerSession', Number(e.target.value))}
+              className="w-24 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+            />
+            <span className="text-xs text-[color:var(--text-3)]">lines</span>
+          </div>
+        </Field>
+      </div>
+    </div>
+  )
+}
+```
+
+CC should merge this into the existing GeneralTab, preserving the existing Theme and
+Dashboard Refresh Interval fields, and appending the Data Retention section.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.23.3` → `2.23.4`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(logs): session output endpoint, full log view, retention settings"
+git push origin main
+```

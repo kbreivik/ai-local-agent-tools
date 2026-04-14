@@ -275,6 +275,20 @@ async def lifespan(app: FastAPI):
             except Exception as _e:
                 _log.debug("metric_samples cleanup failed: %s", _e)
     _aio.create_task(_daily_metric_cleanup())
+    # Schedule hourly operation_log cleanup (retention + per-session trim)
+    async def _operation_log_cleanup_loop():
+        while True:
+            await _aio.sleep(3600)
+            try:
+                from mcp_server.tools.skills.storage import get_backend as _gb
+                retention_days = int(_gb().get_setting("opLogRetentionDays") or 30)
+                from api.session_store import cleanup_old_logs
+                n = await cleanup_old_logs(retention_days)
+                if n:
+                    _log.info("operation_log: purged %d rows older than %d days", n, retention_days)
+            except Exception as _ole:
+                _log.debug("operation_log cleanup failed: %s", _ole)
+    _aio.create_task(_operation_log_cleanup_loop())
     yield
     try:
         stop_auto_update()
