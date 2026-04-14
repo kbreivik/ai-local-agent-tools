@@ -3,6 +3,7 @@ import { useAgentOutput } from '../context/AgentOutputContext'
 import { useTask } from '../context/TaskContext'
 import ChoiceBar from './ChoiceBar'
 import ClarificationWidget from './ClarificationWidget'
+import SubtaskOfferCard from './SubtaskOfferCard'
 
 const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
@@ -53,7 +54,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -126,6 +127,9 @@ export default function OutputPanel({ onTab }) {
         }
         <div ref={bottomRef} />
         {/* View in logs — shown after run completes */}
+        {runState !== 'running' && pendingProposals?.length > 0 && (
+          <SubtaskOfferCard proposals={pendingProposals} />
+        )}
         {runState !== 'running' && outputLines.some(m => m.type === 'done' || m.type === 'error') && (
           <button
             onClick={() => onTab && onTab('Logs')}

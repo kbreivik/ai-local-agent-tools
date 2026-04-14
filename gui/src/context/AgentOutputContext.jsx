@@ -87,6 +87,10 @@ function _ensureWS(url) {
       if (msg.type === 'subtask_proposed') {
         window.dispatchEvent(new CustomEvent('ds:ws-message', { detail: msg }))
       }
+      if (msg.type === 'subtask_proposed' && msg.proposal_id) {
+        // Accumulate — deduplicate by proposal_id via listener set
+        _msgListeners.forEach(fn => fn({ ...msg, _isProposal: true }))
+      }
       // Dispatch ws:message for cross-component WS access (vm_action, etc.)
       window.dispatchEvent(new CustomEvent('ws:message', { detail: e.data }))
       if (!msg.content && !msg.text && !msg.message && !msg.type) return
@@ -122,6 +126,7 @@ export function AgentOutputProvider({ children }) {
   const [agentType,            setAgentType]            = useState(null)
   const [lastAgentType,        setLastAgentType]        = useState(null)
   const [currentSessionId,     setCurrentSessionId]     = useState(null)
+  const [pendingProposals,     setPendingProposals]     = useState([])
   const agentTypeRef    = useRef(null)
   const sessionIdRef    = useRef(null)
   const feedStartRef    = useRef(null)  // timestamp when current run started
@@ -150,6 +155,7 @@ export function AgentOutputProvider({ children }) {
         setAgentType(msg.agent_type || null)
         setCurrentSessionId(msg.session_id || null)
         setRunState('running')
+        setPendingProposals([])           // ← clear proposals on new run
         // Add to raw log stream
         setOutputLines(prev => [...prev.slice(-500), msg])
         // Reset inline feed
@@ -171,6 +177,22 @@ export function AgentOutputProvider({ children }) {
           sessionId: msg.session_id || '',
         })
         return
+      }
+
+      // ── accumulate subtask proposals ───────────────────────────────────────
+      if (msg._isProposal) {
+        setPendingProposals(prev => {
+          if (prev.some(p => p.proposal_id === msg.proposal_id)) return prev
+          return [...prev, {
+            proposal_id:       msg.proposal_id,
+            task:              msg.task              || '',
+            executable_steps:  msg.executable_steps  || [],
+            manual_steps:      msg.manual_steps      || [],
+            confidence:        msg.confidence        || 'medium',
+            parent_session_id: msg.parent_session_id || '',
+          }]
+        })
+        return  // don't add raw proposal messages to outputLines
       }
 
       // ── add every non-start message to the raw log ─────────────────────────
@@ -213,7 +235,17 @@ export function AgentOutputProvider({ children }) {
         const stepsMatch = msg.content?.match(/after (\d+) steps/)
         const steps = stepsMatch ? parseInt(stepsMatch[1]) : '?'
         const doneSessionId = sessionIdRef.current || msg.session_id || ''
-        setFeedLines(prev => [...prev, { type: 'done', steps, elapsed, sessionId: doneSessionId }])
+        setFeedLines(prev => {
+            const next = [...prev, { type: 'done', steps, elapsed, sessionId: doneSessionId }]
+            // Inject proposal offer inline if proposals were recorded for this run
+            setPendingProposals(proposals => {
+              if (proposals.length > 0) {
+                next.push({ type: 'subtask_offer', proposals })
+              }
+              return []  // clear after injecting
+            })
+            return next
+          })
       } else if (t === 'error') {
         const isCancelled = msg.status === 'cancelled'
         setFeedLines(prev => [
@@ -301,6 +333,7 @@ export function AgentOutputProvider({ children }) {
       pendingPlan, clearPlan,
       agentType, lastAgentType,
       currentSessionId, stopAgent,
+      pendingProposals,
     }}>
       {children}
     </AgentOutputContext.Provider>

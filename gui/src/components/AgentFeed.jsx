@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAgentOutput } from '../context/AgentOutputContext'
 import { submitFeedback } from '../api'
+import SubtaskOfferCard from './SubtaskOfferCard'
 
 // ── Tool humanization ─────────────────────────────────────────────────────────
 
@@ -263,6 +264,7 @@ export default function AgentFeed() {
   const { feedLines, agentType, lastAgentType } = useAgentOutput()
   const bottomRef   = useRef(null)
   const [visible,   setVisible] = useState(false)
+  const [dismissedOffers, setDismissedOffers] = useState(new Set())
 
   const accentColor = AGENT_COLOR[agentType || lastAgentType] || '#6b7280'
 
@@ -331,6 +333,17 @@ export default function AgentFeed() {
             <div key={i} style={{ fontSize: 11, color: '#ef4444', lineHeight: 1.6, marginTop: 4 }}>
               ✗ Something went wrong
             </div>
+          )
+        }
+
+        if (item.type === 'subtask_offer') {
+          if (dismissedOffers.has(i)) return null
+          return (
+            <SubtaskOfferCard
+              key={i}
+              proposals={item.proposals}
+              onDismiss={() => setDismissedOffers(prev => new Set([...prev, i]))}
+            />
           )
         }
 

@@ -30,7 +30,6 @@ import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
-import SubtaskOfferBanner from './components/SubtaskOfferBanner'
 import RunbooksPanel from './components/RunbooksPanel'
 import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
@@ -1163,7 +1162,6 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
       />
 
       <EscalationBanner />
-      <SubtaskOfferBanner />
 
       {versionMismatch && (
         <div style={{

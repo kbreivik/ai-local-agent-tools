@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T17:29:49",
+  "updated_at": "2026-04-14T18:33:28",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -437,10 +437,26 @@
       "filename": "CC_PROMPT_v2.24.3.md",
       "version": "v2.24.3",
       "theme": "Fix SubtaskOfferBanner buttons clipped by overflow-hidden parent",
+      "runner_status": "DONE",
+      "commit_sha": "9100c88",
+      "error": "",
+      "started_at": "2026-04-14T17:29:49",
+      "finished_at": "2026-04-14T17:30:44",
+      "duration_s": 54.51319680002052,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_172949_CC_PROMPT_v2.24.3.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.24.4.md",
+      "version": "v2.24.4",
+      "theme": "Inline sub-task offer in AgentFeed/OutputPanel; remove dashboard banner",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T17:29:49",
+      "started_at": "2026-04-14T18:33:28",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
