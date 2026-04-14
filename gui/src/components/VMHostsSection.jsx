@@ -70,7 +70,7 @@ function ServiceDots({ services }) {
   )
 }
 
-function VMCard({ vm, onAction }) {
+function VMCard({ vm, onAction, onEntityDetail }) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState({})
   const [output, setOutput] = useState(null)
@@ -246,6 +246,28 @@ function VMCard({ vm, onAction }) {
               : actionState.status === 'ok' ? '✓ DONE' : '✕ FAILED'}
           </span>
         )}
+        {entityId && onEntityDetail && (
+          <>
+            <button
+              onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+              title="Ask agent about this host"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 10, padding: '1px 3px', color: 'var(--amber)',
+                opacity: 0.65, lineHeight: 1, flexShrink: 0,
+              }}
+            >⌘</button>
+            <button
+              onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+              title="Entity detail"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 10, padding: '1px 3px', color: 'var(--cyan)',
+                opacity: 0.65, lineHeight: 1, flexShrink: 0,
+              }}
+            >›</button>
+          </>
+        )}
         <span style={{ fontSize: 8, color: 'var(--text-3)', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 0.1s' }}>▶</span>
       </div>
 
@@ -400,7 +422,7 @@ function VMCard({ vm, onAction }) {
   )
 }
 
-export default function VMHostsSection({ showFilter }) {
+export default function VMHostsSection({ showFilter, onEntityDetail }) {
   const { vmHostsData, summaryLoading, refreshSummary } = useDashboardData()
   const data = vmHostsData
   const loading = summaryLoading && !vmHostsData
@@ -427,7 +449,7 @@ export default function VMHostsSection({ showFilter }) {
         {issues > 0 && <span><span style={{ color: 'var(--red)' }}>{issues}</span> issues</span>}
         <span>{vms.length} total</span>
       </div>
-      {visible.map(vm => <VMCard key={vm.label || vm.host} vm={vm} onAction={refreshSummary} />)}
+      {visible.map(vm => <VMCard key={vm.label || vm.host} vm={vm} onAction={refreshSummary} onEntityDetail={onEntityDetail} />)}
     </div>
   )
 }

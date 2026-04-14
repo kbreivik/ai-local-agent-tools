@@ -1,0 +1,345 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.26.6.md (v2.26.6)
+Theme: Entity detail performance: /find/{id} endpoint + 30s cache
+
+Prompt content:
+
+# CC PROMPT — v2.26.6 — Entity detail performance: entity-by-ID endpoint + EntityDrawer fast path
+
+## What this does
+EntityDrawer currently loads ALL entities (N sequential DB snapshots) just to find one,
+causing 200-500ms latency on every click. This adds a fast-path endpoint
+GET /api/entities/find/{entity_id} that loads only the relevant collector's snapshot
+(1 DB query) and returns the matching entity with a 30s in-memory cache.
+EntityDrawer switches to this endpoint: typically ~5ms vs ~300ms.
+Version bump: v2.26.5 → v2.26.6
+
+---
+
+## Change 1 — api/routers/entities.py
+
+### 1a — Add cache + component mapping + GET /api/entities/find/{entity_id:path}
+
+FIND (exact — the existing import block at the top):
+```
+import json
+import logging
+
+from fastapi import APIRouter, Depends
+
+from api.auth import get_current_user
+from api.db.base import get_engine
+from api.db import queries as q
+
+router = APIRouter(prefix="/api/entities", tags=["entities"])
+log = logging.getLogger(__name__)
+
+_STATUS_PRIORITY = ["error", "degraded", "unknown", "maintenance", "healthy"]
+```
+
+REPLACE WITH:
+```
+import json
+import logging
+import time as _time
+
+from fastapi import APIRouter, Depends
+
+from api.auth import get_current_user
+from api.db.base import get_engine
+from api.db import queries as q
+
+router = APIRouter(prefix="/api/entities", tags=["entities"])
+log = logging.getLogger(__name__)
+
+_STATUS_PRIORITY = ["error", "degraded", "unknown", "maintenance", "healthy"]
+
+# ── Entity-by-ID cache ────────────────────────────────────────────────────────
+# Keyed by entity_id string. TTL matches poll interval (30s) so data stays fresh.
+_entity_cache: dict[str, tuple[dict, float]] = {}  # entity_id → (entity_dict, monotonic_ts)
+_ENTITY_CACHE_TTL = 30.0
+
+
+def _entity_id_to_component(entity_id: str) -> str | None:
+    """Map entity_id prefix to collector component name.
+    Returns None for bare labels (e.g. vm_host labels like 'ds-docker-worker-01')
+    which require a fallback full scan."""
+    _PREFIX_MAP = {
+        "proxmox_vms":       "proxmox_vms",
+        "docker":            "docker_agent01",
+        "swarm":             "swarm",
+        "external_services": "external_services",
+        "unifi":             "unifi",
+        "pbs":               "pbs",
+        "truenas":           "truenas",
+        "fortigate":         "fortigate",
+        "kafka":             "kafka_cluster",
+        "elasticsearch":     "elasticsearch",
+    }
+    prefix = entity_id.split(":")[0]
+    return _PREFIX_MAP.get(prefix)
+```
+
+### 1b — Add GET /api/entities/find/{entity_id:path} endpoint
+
+Add this BEFORE the existing `@router.get("/{entity_id:path}/history")` endpoint.
+Insert it after the `entities_by_section` endpoint.
+
+FIND (exact):
+```
+@router.get("/{entity_id:path}/history")
+async def entity_history(
+```
+
+REPLACE WITH:
+```
+@router.get("/find/{entity_id:path}")
+async def get_entity_by_id(entity_id: str, _: str = Depends(get_current_user)):
+    """Fast single-entity lookup by ID.
+
+    Strategy:
+    1. Check in-memory cache (30s TTL — matches poll interval)
+    2. Map entity_id prefix to collector component (1 DB query for that snapshot)
+    3. Run to_entities() on that state, find the match
+    4. Fallback: if prefix unknown (bare vm_host labels), scan all collectors
+
+    Typically ~5ms vs ~300ms for GET /api/entities (full list).
+    Returns the entity dict or null if not found.
+    """
+    # Cache hit
+    if entity_id in _entity_cache:
+        entity, cached_at = _entity_cache[entity_id]
+        if _time.monotonic() - cached_at < _ENTITY_CACHE_TTL:
+            return entity
+
+    from api.collectors.manager import manager
+
+    component = _entity_id_to_component(entity_id)
+
+    if component:
+        # Fast path: load only the relevant collector's snapshot
+        async with get_engine().connect() as conn:
+            snap = await q.get_latest_snapshot(conn, component)
+        if not snap:
+            return None
+        state = snap.get("state") or {}
+        if isinstance(state, str):
+            try:
+                state = json.loads(state)
+            except Exception:
+                return None
+        collector = manager._collectors.get(component)
+        if not collector:
+            return None
+        try:
+            entities = collector.to_entities(state)
+        except Exception as exc:
+            log.warning("get_entity_by_id to_entities failed for %s: %s", component, exc)
+            return None
+        ts = snap.get("timestamp")
+        for e in entities:
+            d = e.to_dict()
+            if ts:
+                d["last_seen"] = ts if isinstance(ts, str) else ts.isoformat()
+            if d.get("id") == entity_id:
+                _entity_cache[entity_id] = (d, _time.monotonic())
+                return d
+    else:
+        # Fallback: scan all collectors (handles bare vm_host labels, unknown types)
+        result = await _build_entities()
+        for entity in result:
+            if entity.get("id") == entity_id:
+                _entity_cache[entity_id] = (entity, _time.monotonic())
+                return entity
+
+    return None
+
+
+@router.get("/{entity_id:path}/history")
+async def entity_history(
+```
+
+---
+
+## Change 2 — gui/src/components/EntityDrawer.jsx
+
+### 2a — Switch from full entity list fetch to entity-by-ID endpoint
+
+FIND (exact — the load function body):
+```
+  const load = useCallback(() => {
+    if (!entityId) return
+    setLoading(true)
+    setError(null)
+    fetch(`${BASE}/api/entities`, { headers: { ...authHeaders() } })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(entities => {
+        const match = entities.find(e => e.id === entityId)
+        setEntity(match || null)
+        if (!match) setError('Entity not found')
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [entityId])
+```
+
+REPLACE WITH:
+```
+  const load = useCallback(() => {
+    if (!entityId) return
+    setLoading(true)
+    setError(null)
+    // Fast path: entity-by-ID endpoint (~5ms) vs full list (~300ms)
+    fetch(`${BASE}/api/entities/find/${encodeURIComponent(entityId)}`, { headers: { ...authHeaders() } })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(entity => {
+        setEntity(entity || null)
+        if (!entity) setError('Entity not found')
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [entityId])
+```
+
+---
+
+## Version bump
+Update VERSION: 2.26.5 → 2.26.6
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(entities): v2.26.6 entity-by-ID fast path + 30s cache (~5ms vs ~300ms)"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 22:38:33
+========================================================================
+PROMPT COMPLETE: v2.26.6
+[STATUS] 1m36s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m38s
+========================================================================

@@ -47,6 +47,17 @@ const TILE_META = {
   VM_HOSTS:   { icon: '⬢', badge: 'NODES' },
 }
 
+// Human-readable display names for tile headers (key → label)
+const TILE_DISPLAY_NAMES = {
+  PLATFORM:   'Platform',
+  COMPUTE:    'Compute',
+  CONTAINERS: 'Containers',
+  NETWORK:    'Network',
+  STORAGE:    'Storage',
+  SECURITY:   'Security',
+  VM_HOSTS:   'VM Hosts',
+}
+
 const ACTION_BTN = {
   fontSize: 9, cursor: 'pointer', background: 'none', border: 'none',
   padding: '5px 7px', margin: '-5px -3px', minWidth: 26, minHeight: 26,
@@ -213,7 +224,7 @@ function Tile({ name, flex, collapsed, heightMode, dragDropSide,
         <span style={{ cursor: 'grab', color: 'var(--text-3)', fontSize: 11 }}>⠿</span>
         <span style={{ fontSize: 11 }}>{meta.icon}</span>
         <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', letterSpacing: 0.5 }}>
-          {name}
+          {TILE_DISPLAY_NAMES[name] || name}
         </span>
         {meta.badge && (
           <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: 'var(--bg-3)', color: 'var(--text-3)', borderRadius: 2, letterSpacing: 1 }}>

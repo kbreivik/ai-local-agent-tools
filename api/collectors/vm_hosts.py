@@ -343,6 +343,7 @@ def _poll_one_vm(conn, all_conns):
         result = _parse_poll_output(output, label, host)
         result["connection_id"] = str(conn.get("id", ""))
         result["config"] = cfg
+        result["entity_id"] = label  # bare label — matches entity_history records
         result["jump_via_label"] = next(
             (c.get("label") for c in all_conns if str(c.get("id")) == cfg.get("jump_via", "")),
             None
@@ -443,6 +444,7 @@ def _poll_one_vm(conn, all_conns):
         log.warning("VMHostsCollector: %s (%s) failed: %s", label, host, e, exc_info=True)
         return {
             "id": label, "label": label, "host": host,
+            "entity_id": label,
             "connection_id": str(conn.get("id", "")),
             "config": cfg,
             "dot": "red", "problem": str(e)[:120],
@@ -553,3 +555,37 @@ class VMHostsCollector(BaseCollector):
         red   = sum(1 for v in vms if v.get("dot") == "red")
         health = "healthy" if red == 0 else ("degraded" if ok > 0 else "error")
         return {"health": health, "vms": vms, "total": total, "ok": ok, "issues": red}
+
+    def to_entities(self, state: dict):
+        """Return one Entity per polled VM host.
+
+        entity_id = bare label (e.g. 'ds-docker-worker-01') — intentionally no prefix,
+        kept consistent with entity_history records written by the collector.
+        """
+        from api.collectors.base import Entity
+        _DOT_STATUS = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        entities = []
+        for vm in state.get("vms", []):
+            label = vm.get("label") or vm.get("id") or "unknown"
+            disks = vm.get("disks", [])
+            max_disk_pct = max((d.get("usage_pct", 0) for d in disks), default=0)
+            entities.append(Entity(
+                id=label,
+                label=label,
+                component=self.component,
+                platform="vm_host",
+                section="COMPUTE",
+                status=_DOT_STATUS.get(vm.get("dot", "grey"), "unknown"),
+                last_error=vm.get("problem"),
+                metadata={
+                    "host":           vm.get("host", ""),
+                    "os":             vm.get("os", ""),
+                    "kernel":         vm.get("kernel", ""),
+                    "mem_pct":        vm.get("mem_pct"),
+                    "load_1":         vm.get("load_1"),
+                    "docker_version": vm.get("docker_version", ""),
+                    "uptime_fmt":     vm.get("uptime_fmt", ""),
+                    "max_disk_pct":   max_disk_pct,
+                }
+            ))
+        return entities if entities else super().to_entities(state)

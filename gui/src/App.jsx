@@ -1228,7 +1228,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     ) : null,
     VM_HOSTS: showSection('COMPUTE') ? (
       summaryLoading ? <SkeletonGrid count={5} /> :
-      <VMHostsSection showFilter={showFilter} />
+      <VMHostsSection showFilter={showFilter} onEntityDetail={onEntityClick} />
     ) : null,
   }
 
