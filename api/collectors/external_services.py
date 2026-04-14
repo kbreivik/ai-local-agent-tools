@@ -207,6 +207,7 @@ class ExternalServicesCollector(BaseCollector):
                 "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
                 "storage": None, "dot": "red", "problem": "unreachable",
                 "connection_id": conn.get("id"),
+                "entity_id": f"external_services:{platform}",
             }
 
         # Write latency sample for trending
@@ -234,6 +235,7 @@ class ExternalServicesCollector(BaseCollector):
             "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
             "storage": None, "dot": dot, "problem": problem,
             "connection_id": conn.get("id"),
+            "entity_id": f"external_services:{platform}",
         }
 
     def _probe_lm_studio(self) -> dict:
@@ -247,6 +249,7 @@ class ExternalServicesCollector(BaseCollector):
                 "latency_ms": None, "reachable": False,
                 "open_ui_url": None, "storage": None,
                 "dot": "grey", "problem": "not configured",
+                "entity_id": f"external_services:{cfg['slug']}",
             }
 
         base_url = host_raw.rstrip("/")
@@ -272,6 +275,7 @@ class ExternalServicesCollector(BaseCollector):
                 "latency_ms": None, "reachable": False,
                 "open_ui_url": None, "storage": None,
                 "dot": "red", "problem": "unreachable",
+                "entity_id": f"external_services:{cfg['slug']}",
             }
 
         dot, problem = _classify_external(reachable, latency_ms)
@@ -281,6 +285,7 @@ class ExternalServicesCollector(BaseCollector):
             "latency_ms": latency_ms, "reachable": reachable,
             "open_ui_url": None, "storage": None,
             "dot": dot, "problem": problem,
+            "entity_id": f"external_services:{cfg['slug']}",
         }
 
 

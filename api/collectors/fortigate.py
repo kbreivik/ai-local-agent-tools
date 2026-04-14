@@ -191,6 +191,9 @@ class FortiGateCollector(BaseCollector):
 
             # 2. Interface status
             interfaces = _collect_interfaces(base, params)
+            # Stamp entity_id using this connection's label
+            for iface in interfaces:
+                iface["entity_id"] = f"fortigate:{conn_label}:iface:{iface['name']}"
 
             # Determine health
             down_ifaces = [i for i in interfaces if not i["link"]]

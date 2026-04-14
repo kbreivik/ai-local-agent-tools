@@ -82,6 +82,29 @@ class DockerAgent01Collector(BaseCollector):
         super().__init__()
         self.interval = int(os.environ.get("DOCKER_POLL_INTERVAL", "30"))
 
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity
+        dot_to_status = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        entities = []
+        for c in state.get("containers", []):
+            name = c.get("name") or c.get("id", "unknown")
+            entities.append(Entity(
+                id=f"docker:{name}",
+                label=name,
+                component=self.component,
+                platform="docker",
+                section="COMPUTE",
+                status=dot_to_status.get(c.get("dot", "grey"), "unknown"),
+                last_error=c.get("problem"),
+                metadata={
+                    "image": c.get("image", ""),
+                    "state": c.get("state", ""),
+                    "uptime": c.get("uptime", ""),
+                    "ip_port": c.get("ip_port", ""),
+                },
+            ))
+        return entities if entities else super().to_entities(state)
+
     async def poll(self) -> dict:
         return await asyncio.to_thread(self._collect_sync)
 
@@ -171,6 +194,7 @@ class DockerAgent01Collector(BaseCollector):
                     "problem": problem,
                     "networks": network_names,
                     "ip_addresses": ip_addresses,
+                    "entity_id": f"docker:{name}",
                 })
 
             if not cards or all(c["dot"] == "green" for c in cards):

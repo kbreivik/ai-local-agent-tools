@@ -183,6 +183,9 @@ class PBSCollector(BaseCollector):
             r.raise_for_status()
 
             datastores = _collect_datastores(base, headers)
+            # Stamp entity_id using this connection's label
+            for ds in datastores:
+                ds["entity_id"] = f"pbs:{conn_label}:datastore:{ds['name']}"
             tasks = _collect_tasks(base, headers)
 
             has_full = any(ds["usage_pct"] > 95 for ds in datastores)

@@ -117,6 +117,38 @@ class SwarmCollector(BaseCollector):
         super().__init__()
         self.interval = int(os.environ.get("SWARM_POLL_INTERVAL", "30"))
 
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity
+        entities = []
+        for svc in state.get("services", []):
+            name = svc.get("name", "unknown")
+            running = svc.get("running_replicas", 0)
+            desired = svc.get("desired_replicas", 0)
+            if desired == 0:
+                status = "unknown"
+            elif running == 0:
+                status = "error"
+            elif running < desired:
+                status = "degraded"
+            else:
+                status = "healthy"
+            entities.append(Entity(
+                id=f"swarm:service:{name}",
+                label=name,
+                component=self.component,
+                platform="docker",
+                section="COMPUTE",
+                status=status,
+                last_error=None if status == "healthy" else f"{running}/{desired} replicas",
+                metadata={
+                    "image": svc.get("image", ""),
+                    "running_replicas": running,
+                    "desired_replicas": desired,
+                    "update_state": svc.get("update_state", ""),
+                },
+            ))
+        return entities if entities else super().to_entities(state)
+
     async def poll(self) -> dict:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._collect_sync)
@@ -231,6 +263,7 @@ class SwarmCollector(BaseCollector):
                     "mode": "replicated" if replicated else "global",
                     "update_state": update_st.get("State", ""),
                     "networks": svc_networks,
+                    "entity_id": f"swarm:service:{name}",
                 })
 
             client.close()

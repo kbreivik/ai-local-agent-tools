@@ -157,6 +157,9 @@ class TrueNASCollector(BaseCollector):
             r.raise_for_status()
 
             pools = _collect_pools(base, headers)
+            # Stamp entity_id using this connection's label
+            for pool in pools:
+                pool["entity_id"] = f"truenas:{conn_label}:pool:{pool['name']}"
 
             degraded = [p for p in pools if not p["healthy"] or p["status"] != "ONLINE"]
             high_usage = [p for p in pools if p["usage_pct"] > 90]

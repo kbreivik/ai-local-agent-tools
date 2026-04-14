@@ -1,0 +1,455 @@
+# CC PROMPT — v2.26.0 — Universal entity_id: add to all collector card types
+
+## What this does
+Adds `entity_id` field to every card dict produced by every collector so the frontend
+can pass it to EntityDrawer universally. Also adds custom `to_entities()` to
+DockerAgent01Collector and SwarmCollector which previously fell back to the single-entity
+default. Entity ID format matches what each collector's `to_entities()` already uses.
+Version bump: v2.25.0 → v2.26.0
+
+## Entity ID conventions (must match existing to_entities() output)
+- Container:      docker:{name}
+- Swarm service:  swarm:service:{name}
+- External svc:   external_services:{slug}
+- UniFi device:   unifi:{conn_label}:device:{mac}
+- PBS datastore:  pbs:{conn_label}:datastore:{name}
+- TrueNAS pool:   truenas:{conn_label}:pool:{name}
+- FortiGate iface: fortigate:{conn_label}:iface:{name}
+- Proxmox VM:     proxmox_vms:{node}:vm:{vmid}   (already set — no change needed)
+- Proxmox LXC:    proxmox_vms:{node}:lxc:{vmid}  (already set — no change needed)
+
+---
+
+## Change 1 — api/collectors/docker_agent01.py
+
+### 1a — Add entity_id to container card dict
+
+FIND (exact, inside DockerAgent01Collector._collect_sync, after the networks block):
+```
+                cards.append({
+                    "id": c.short_id,
+                    "name": name,
+                    "image": image,
+                    "state": state_str,
+                    "health": health_str,
+                    "ip_port": ip_port,
+                    "uptime": attrs.get("Status", ""),
+                    "ports": ports,
+                    "volumes": volumes,
+                    "last_pull_at": last_pull_at,
+                    "running_version": running_version,
+                    "built_at": built_at,
+                    "dot": dot,
+                    "problem": problem,
+                    "networks": network_names,
+                    "ip_addresses": ip_addresses,
+                })
+```
+
+REPLACE WITH:
+```
+                cards.append({
+                    "id": c.short_id,
+                    "name": name,
+                    "image": image,
+                    "state": state_str,
+                    "health": health_str,
+                    "ip_port": ip_port,
+                    "uptime": attrs.get("Status", ""),
+                    "ports": ports,
+                    "volumes": volumes,
+                    "last_pull_at": last_pull_at,
+                    "running_version": running_version,
+                    "built_at": built_at,
+                    "dot": dot,
+                    "problem": problem,
+                    "networks": network_names,
+                    "ip_addresses": ip_addresses,
+                    "entity_id": f"docker:{name}",
+                })
+```
+
+### 1b — Add to_entities() to DockerAgent01Collector
+
+FIND (exact, inside DockerAgent01Collector class, before the poll() method):
+```
+    async def poll(self) -> dict:
+        return await asyncio.to_thread(self._collect_sync)
+```
+
+REPLACE WITH:
+```
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity
+        dot_to_status = {"green": "healthy", "amber": "degraded", "red": "error", "grey": "unknown"}
+        entities = []
+        for c in state.get("containers", []):
+            name = c.get("name") or c.get("id", "unknown")
+            entities.append(Entity(
+                id=f"docker:{name}",
+                label=name,
+                component=self.component,
+                platform="docker",
+                section="COMPUTE",
+                status=dot_to_status.get(c.get("dot", "grey"), "unknown"),
+                last_error=c.get("problem"),
+                metadata={
+                    "image": c.get("image", ""),
+                    "state": c.get("state", ""),
+                    "uptime": c.get("uptime", ""),
+                    "ip_port": c.get("ip_port", ""),
+                },
+            ))
+        return entities if entities else super().to_entities(state)
+
+    async def poll(self) -> dict:
+        return await asyncio.to_thread(self._collect_sync)
+```
+
+---
+
+## Change 2 — api/collectors/swarm.py
+
+### 2a — Add entity_id to each service dict
+
+FIND (exact, inside SwarmCollector._collect_sync, the svc_data.append block):
+```
+                svc_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "name": name,
+                    "image": image,
+                    "image_digest": image_digest,
+                    "desired_replicas": desired,
+                    "running_replicas": running,
+                    "mode": "replicated" if replicated else "global",
+                    "update_state": update_st.get("State", ""),
+                    "networks": svc_networks,
+                })
+```
+
+REPLACE WITH:
+```
+                svc_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "name": name,
+                    "image": image,
+                    "image_digest": image_digest,
+                    "desired_replicas": desired,
+                    "running_replicas": running,
+                    "mode": "replicated" if replicated else "global",
+                    "update_state": update_st.get("State", ""),
+                    "networks": svc_networks,
+                    "entity_id": f"swarm:service:{name}",
+                })
+```
+
+### 2b — Add to_entities() to SwarmCollector
+
+FIND (exact, inside SwarmCollector class):
+```
+    async def poll(self) -> dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._collect_sync)
+```
+
+REPLACE WITH:
+```
+    def to_entities(self, state: dict) -> list:
+        from api.collectors.base import Entity
+        entities = []
+        for svc in state.get("services", []):
+            name = svc.get("name", "unknown")
+            running = svc.get("running_replicas", 0)
+            desired = svc.get("desired_replicas", 0)
+            if desired == 0:
+                status = "unknown"
+            elif running == 0:
+                status = "error"
+            elif running < desired:
+                status = "degraded"
+            else:
+                status = "healthy"
+            entities.append(Entity(
+                id=f"swarm:service:{name}",
+                label=name,
+                component=self.component,
+                platform="docker",
+                section="COMPUTE",
+                status=status,
+                last_error=None if status == "healthy" else f"{running}/{desired} replicas",
+                metadata={
+                    "image": svc.get("image", ""),
+                    "running_replicas": running,
+                    "desired_replicas": desired,
+                    "update_state": svc.get("update_state", ""),
+                },
+            ))
+        return entities if entities else super().to_entities(state)
+
+    async def poll(self) -> dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._collect_sync)
+```
+
+---
+
+## Change 3 — api/collectors/external_services.py
+
+### 3a — Add entity_id to _probe_connection return (success path)
+
+FIND (exact, at the end of the success return in _probe_connection):
+```
+        dot, problem = _classify_external(reachable, latency_ms)
+        try:
+            from api.connections import mark_connection_verified
+            mark_connection_verified(conn.get("id"), reachable)
+        except Exception:
+            pass
+        return {
+            "name": label, "slug": platform, "service_type": platform,
+            "host_port": f"{host}:{port}",
+            "summary": f"HTTP {r.status_code}" if reachable else f"HTTP {r.status_code}",
+            "latency_ms": latency_ms, "reachable": reachable,
+            "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
+            "storage": None, "dot": dot, "problem": problem,
+            "connection_id": conn.get("id"),
+        }
+```
+
+REPLACE WITH:
+```
+        dot, problem = _classify_external(reachable, latency_ms)
+        try:
+            from api.connections import mark_connection_verified
+            mark_connection_verified(conn.get("id"), reachable)
+        except Exception:
+            pass
+        return {
+            "name": label, "slug": platform, "service_type": platform,
+            "host_port": f"{host}:{port}",
+            "summary": f"HTTP {r.status_code}" if reachable else f"HTTP {r.status_code}",
+            "latency_ms": latency_ms, "reachable": reachable,
+            "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
+            "storage": None, "dot": dot, "problem": problem,
+            "connection_id": conn.get("id"),
+            "entity_id": f"external_services:{platform}",
+        }
+```
+
+### 3b — Add entity_id to _probe_connection error path
+
+FIND (exact):
+```
+            return {
+                "name": label, "slug": platform, "service_type": platform,
+                "host_port": f"{host}:{port}", "summary": str(e)[:80],
+                "latency_ms": None, "reachable": False,
+                "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
+                "storage": None, "dot": "red", "problem": "unreachable",
+                "connection_id": conn.get("id"),
+            }
+```
+
+REPLACE WITH:
+```
+            return {
+                "name": label, "slug": platform, "service_type": platform,
+                "host_port": f"{host}:{port}", "summary": str(e)[:80],
+                "latency_ms": None, "reachable": False,
+                "open_ui_url": f"{scheme}://{host}:{port}" if host else None,
+                "storage": None, "dot": "red", "problem": "unreachable",
+                "connection_id": conn.get("id"),
+                "entity_id": f"external_services:{platform}",
+            }
+```
+
+### 3c — Add entity_id to _probe_lm_studio returns
+
+FIND (exact, the lm_studio success return):
+```
+        dot, problem = _classify_external(reachable, latency_ms)
+        return {
+            "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+            "host_port": host_raw, "summary": f"HTTP {r.status_code}",
+            "latency_ms": latency_ms, "reachable": reachable,
+            "open_ui_url": None, "storage": None,
+            "dot": dot, "problem": problem,
+        }
+```
+
+REPLACE WITH:
+```
+        dot, problem = _classify_external(reachable, latency_ms)
+        return {
+            "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+            "host_port": host_raw, "summary": f"HTTP {r.status_code}",
+            "latency_ms": latency_ms, "reachable": reachable,
+            "open_ui_url": None, "storage": None,
+            "dot": dot, "problem": problem,
+            "entity_id": f"external_services:{cfg['slug']}",
+        }
+```
+
+Also add entity_id to the lm_studio error/unconfigured returns. FIND:
+```
+        return {
+            "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+            "host_port": "not configured", "summary": "not configured",
+            "latency_ms": None, "reachable": False,
+            "open_ui_url": None, "storage": None,
+            "dot": "grey", "problem": "not configured",
+        }
+```
+
+REPLACE WITH:
+```
+        return {
+            "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+            "host_port": "not configured", "summary": "not configured",
+            "latency_ms": None, "reachable": False,
+            "open_ui_url": None, "storage": None,
+            "dot": "grey", "problem": "not configured",
+            "entity_id": f"external_services:{cfg['slug']}",
+        }
+```
+
+Also add to the lm_studio unreachable return. FIND:
+```
+        except Exception:
+            return {
+                "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+                "host_port": host_raw, "summary": "unreachable",
+                "latency_ms": None, "reachable": False,
+                "open_ui_url": None, "storage": None,
+                "dot": "red", "problem": "unreachable",
+            }
+```
+
+REPLACE WITH:
+```
+        except Exception:
+            return {
+                "name": cfg["name"], "slug": cfg["slug"], "service_type": cfg["service_type"],
+                "host_port": host_raw, "summary": "unreachable",
+                "latency_ms": None, "reachable": False,
+                "open_ui_url": None, "storage": None,
+                "dot": "red", "problem": "unreachable",
+                "entity_id": f"external_services:{cfg['slug']}",
+            }
+```
+
+---
+
+## Change 4 — api/collectors/unifi.py
+
+### 4a — Add entity_id to each device dict in _build_result
+
+FIND (exact):
+```
+def _build_result(devices, client_count, wired, wireless,
+                  latency_ms, auth_mode, site, conn_label, conn_id) -> dict:
+    devices_up = sum(1 for d in devices if d["state"] == "connected")
+    devices_down = len(devices) - devices_up
+    health = ("critical" if devices_down == len(devices) > 0
+              else "degraded" if devices_down > 0
+              else "healthy")
+    return {
+```
+
+REPLACE WITH:
+```
+def _build_result(devices, client_count, wired, wireless,
+                  latency_ms, auth_mode, site, conn_label, conn_id) -> dict:
+    # Stamp entity_id onto each device so the frontend can open EntityDrawer
+    for dev in devices:
+        dev["entity_id"] = f"unifi:{conn_label}:device:{dev.get('mac') or dev.get('name', 'unknown')}"
+    devices_up = sum(1 for d in devices if d["state"] == "connected")
+    devices_down = len(devices) - devices_up
+    health = ("critical" if devices_down == len(devices) > 0
+              else "degraded" if devices_down > 0
+              else "healthy")
+    return {
+```
+
+---
+
+## Change 5 — api/collectors/pbs.py
+
+### 5a — Add entity_id to datastores in _poll_one_conn
+
+FIND (exact, inside _poll_one_conn, the datastores collection block):
+```
+            datastores = _collect_datastores(base, headers)
+            tasks = _collect_tasks(base, headers)
+```
+
+REPLACE WITH:
+```
+            datastores = _collect_datastores(base, headers)
+            # Stamp entity_id using this connection's label
+            for ds in datastores:
+                ds["entity_id"] = f"pbs:{conn_label}:datastore:{ds['name']}"
+            tasks = _collect_tasks(base, headers)
+```
+
+---
+
+## Change 6 — api/collectors/truenas.py
+
+### 6a — Add entity_id to pools in _collect_sync
+
+FIND (exact, inside TrueNASCollector._collect_sync, after pools collection):
+```
+            pools = _collect_pools(base, headers)
+
+            degraded = [p for p in pools if not p["healthy"] or p["status"] != "ONLINE"]
+```
+
+REPLACE WITH:
+```
+            pools = _collect_pools(base, headers)
+            # Stamp entity_id using this connection's label
+            for pool in pools:
+                pool["entity_id"] = f"truenas:{conn_label}:pool:{pool['name']}"
+
+            degraded = [p for p in pools if not p["healthy"] or p["status"] != "ONLINE"]
+```
+
+---
+
+## Change 7 — api/collectors/fortigate.py
+
+### 7a — Add entity_id to interfaces in _collect_sync
+
+FIND (exact, inside FortiGateCollector._collect_sync, after interfaces collection):
+```
+            # 2. Interface status
+            interfaces = _collect_interfaces(base, params)
+
+            # Determine health
+```
+
+REPLACE WITH:
+```
+            # 2. Interface status
+            interfaces = _collect_interfaces(base, params)
+            # Stamp entity_id using this connection's label
+            for iface in interfaces:
+                iface["entity_id"] = f"fortigate:{conn_label}:iface:{iface['name']}"
+
+            # Determine health
+```
+
+---
+
+## Version bump
+Update VERSION: 2.25.0 → 2.26.0
+
+---
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(collectors): v2.26.0 universal entity_id on all card types + docker/swarm to_entities()"
+git push origin main
+```

@@ -243,6 +243,9 @@ def _get_clients(client: httpx.Client, api_base: str) -> tuple[int, int, int]:
 
 def _build_result(devices, client_count, wired, wireless,
                   latency_ms, auth_mode, site, conn_label, conn_id) -> dict:
+    # Stamp entity_id onto each device so the frontend can open EntityDrawer
+    for dev in devices:
+        dev["entity_id"] = f"unifi:{conn_label}:device:{dev.get('mac') or dev.get('name', 'unknown')}"
     devices_up = sum(1 for d in devices if d["state"] == "connected")
     devices_down = len(devices) - devices_up
     health = ("critical" if devices_down == len(devices) > 0

@@ -84,7 +84,9 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.24.5.md | v2.24.5 | Fix exit-137 diagnosis: require dmesg before concluding OOM | DONE (5e8b61e) |
 | CC_PROMPT_v2.24.6.md | v2.24.6 | ES card in Platform Core + ES/Kafka health thresholds in settings | DONE (b23f5c1) |
 | CC_PROMPT_v2.25.0.md | v2.25.0 | Per-entity maintenance mode + Proxmox/dmesg allowlist | DONE (d28196a) |
-| CC_PROMPT_v2.25.1.md | v2.25.1 | Optimistic maintenance toggle + VM card ⌘ chat button | DONE (0ccbdb9) |
+| CC_PROMPT_v2.25.1.md | v2.25.1 | SUPERSEDED by v2.26.0+v2.26.1 — DO NOT RUN | SUPERSEDED |
+| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | RUNNING |
+| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | PENDING |
 
 ---
 
@@ -130,19 +132,27 @@ dimmed `int.ips` row.
 **v2.22.5** — Fix GHCR tag pagination + version status display.
 _fetch_ghcr_tags() stopped pagination as soon as it accumulated 20 semver-matching tags.
 GHCR returns tags alphabetically so the first 20 matches were always the oldest ones
-(2.14.0 → 2.19.1). Versions 2.20.x–2.22.x exist on GHCR (CI pushes them correctly)
-but were on a later page never fetched. Fix: remove early-exit, increase max pages
-to 10. Frontend: when running_version > tags[0] (severity='ahead') and update-status
-reports update_available=false, status badge shows '✓ latest' instead of '—'. Pull
-Latest button hidden when update_available=false (digests match, no pull needed).
+(2.14.0 → 2.19.1). Fix: remove early-exit, increase max pages to 10.
 
-**v2.25.1** — Proxmox card UX: optimistic maintenance toggle + ⌘ chat button.
-Set/Clear Maintenance button now updates instantly on click via localMaint optimistic state
-(synced back from vm.maintenance on the next 30s poll). ProxmoxCardCollapsed gains an amber
-⌘ button (between MAINT badge and › entity arrow) that pre-fills the agent task input with
-"Investigate <vm.name>" and switches to the Commands tab via ds:prefill-agent custom event.
-CommandPanel listens for ds:prefill-agent → setTask(). DashboardView wires the onChat prop
-through to the COMPUTE ServiceCards instance.
+**v2.25.1** — SUPERSEDED. Replaced by v2.26.0+v2.26.1.
+
+**v2.26.0** — Universal entity_id on all collector card types.
+Adds entity_id field to every card dict (containers, swarm services, external services,
+UniFi devices, PBS datastores, TrueNAS pools, FortiGate interfaces). Proxmox VMs/LXCs
+already had entity_id. Adds custom to_entities() to DockerAgent01Collector and
+SwarmCollector (previously fell back to single-entity default). Entity IDs match
+existing to_entities() output formats across all collectors so entity_history and
+EntityDrawer work uniformly.
+
+**v2.26.1** — InfraCard universal ⌘/› entity buttons + VM entity ID fix.
+Moves entity detail (›) and agent ask (⌘) buttons into InfraCard component itself,
+driven by entityId + onEntityDetail props. All 8 card types automatically get both
+buttons when entity_id is present in card data (set by v2.26.0). Removes per-type
+entity buttons from ProxmoxCardCollapsed, ContainerCardCollapsed, ExternalCardCollapsed.
+Fixes VM entity ID bug: ProxmoxCardCollapsed was constructing proxmox_vms:node:qemu:vmid
+but entity system uses proxmox_vms:node:vm:vmid — fix: use vm.entity_id directly.
+Also fixes ProxmoxCardExpanded maintenance toggle: optimistic localMaint state updates
+button instantly without waiting for the 30s poll.
 
 ---
 
@@ -156,33 +166,24 @@ api/agents/router.py                      — new allowlist tools in all allowli
 api/routers/agent.py                      — session purge on cleanup (v2.23.3)
 gui/src/components/OptionsModal.jsx       — Allowlist tab (v2.23.3)
 api/routers/settings.py                   — agentHostIp setting key (v2.22.6)
-api/collectors/docker_agent01.py         — _get_agent01_ip() reads settings DB (v2.22.6)
-gui/src/components/OptionsModal.jsx      — Agent Host IP field in Infrastructure tab (v2.22.6)
-gui/src/components/ServiceCards.jsx      — clickable endpoint + dimmed int.ips (v2.22.6)
-api/routers/dashboard.py                 — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0)
-gui/src/components/VMHostsSection.jsx    — act() error feedback (v2.23.0)
-api/db/infra_inventory.py                — resolve_entity + write_cross_reference (v2.23.1)
-api/collectors/proxmox_vms.py            — write VMs to infra_inventory (v2.23.1)
-mcp_server/tools/vm.py                   — resolve_entity tool (v2.23.1)
-api/agents/router.py                     — resolve_entity in allowlists (v2.23.1)
-gui/src/components/ServiceCards.jsx      — GHCR version status + pull button fix (v2.22.5)
-api/routers/dashboard.py                 — _fetch_ghcr_tags pagination fix (v2.22.5)
-gui/src/context/DashboardDataContext.jsx — shared dashboard state + version gate (v2.22.0, v2.22.4)
-gui/src/components/SkeletonCard.jsx      — shimmer skeleton components (v2.22.1)
-gui/src/components/DashboardLayout.jsx   — SectionErrorBoundary (v2.22.3)
-gui/src/App.jsx                          — RootErrorBoundary (v2.22.3)
-api/routers/errors.py                    — /api/errors/frontend crash reporting (v2.22.3)
-api/alerts.py                            — health_change WS broadcast (v2.22.1)
-eslint.config.js                         — no-use-before-define rule (v2.22.4)
-gui/vite.config.js                       — sourcemap: hidden (v2.22.4)
-.dockerignore                            — excludes build artifacts (v2.22.4)
-api/db/metric_samples.py                 — time-series metrics (v2.21.0)
-mcp_server/tools/metric_tools.py         — metric_trend + list_metrics (v2.21.0)
-api/collectors/base.py                   — ES snapshot indexing (v2.21.1)
-api/db/vm_action_log.py                  — vm action audit table (v2.20.1)
-api/agents/router.py                     — prompts + allowlists (v2.18.1–v2.21.0)
-mcp_server/tools/vm.py                   — service_placement + docker logs (v2.19.0, v2.19.1)
-gui/src/components/ServiceCards.jsx      — optimistic maintenance + ⌘ chat button (v2.25.1)
-gui/src/components/CommandPanel.jsx      — ds:prefill-agent listener (v2.25.1)
-gui/src/App.jsx                          — onChat callback in DashboardView (v2.25.1)
+api/collectors/docker_agent01.py          — entity_id + to_entities() per container (v2.26.0)
+api/collectors/swarm.py                   — entity_id + to_entities() per service (v2.26.0)
+api/collectors/external_services.py      — entity_id on all probe returns (v2.26.0)
+api/collectors/unifi.py                   — entity_id per device in _build_result (v2.26.0)
+api/collectors/pbs.py                     — entity_id per datastore in _poll_one_conn (v2.26.0)
+api/collectors/truenas.py                 — entity_id per pool in _collect_sync (v2.26.0)
+api/collectors/fortigate.py               — entity_id per interface in _collect_sync (v2.26.0)
+gui/src/components/ServiceCards.jsx       — InfraCard universal entity buttons (v2.26.1)
+api/routers/dashboard.py                  — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0)
+gui/src/components/VMHostsSection.jsx     — act() error feedback (v2.23.0)
+api/db/infra_inventory.py                 — resolve_entity + write_cross_reference (v2.23.1)
+api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.23.1)
+mcp_server/tools/vm.py                    — resolve_entity tool (v2.23.1)
+gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
+api/db/metric_samples.py                  — time-series metrics (v2.21.0)
+mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
+api/collectors/base.py                    — ES snapshot indexing (v2.21.1)
+api/db/vm_action_log.py                   — vm action audit table (v2.20.1)
+api/agents/router.py                      — prompts + allowlists (v2.18.1–v2.21.0)
+mcp_server/tools/vm.py                    — service_placement + docker logs (v2.19.0, v2.19.1)
 ```
