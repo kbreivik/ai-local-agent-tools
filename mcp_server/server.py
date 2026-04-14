@@ -773,6 +773,18 @@ def proxmox_vm_power(vm_label: str, action: str) -> dict:
 
 
 @mcp.tool()
+def resolve_entity(query: str) -> dict:
+    """Resolve any infrastructure entity name to its cross-system identities.
+    Use BEFORE any action involving an ambiguous name. Returns all known identities:
+    vm_host label + IP, Proxmox VM name + vmid, Swarm node, Kafka broker.
+    Accepts: connection labels, IPs, hostnames, short aliases ("worker-02", "worker 2").
+    Example: resolve_entity("worker-02")
+    """
+    from mcp_server.tools.vm import resolve_entity as _re
+    return _re(query=query)
+
+
+@mcp.tool()
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query SSH capability map — which credentials can reach which hosts.
     Returns verified pairs with success rates and latency. Use to audit

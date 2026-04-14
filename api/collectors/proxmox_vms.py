@@ -182,6 +182,61 @@ def _poll_single_connection(conn: dict) -> dict:
             except Exception as e:
                 log.warning("Proxmox node %s error: %s", node, e)
 
+        # Write each discovered VM/LXC to infra_inventory for cross-reference
+        try:
+            from api.db.infra_inventory import write_cross_reference
+            for vm in vms:
+                vmid = vm.get("vmid")
+                vm_name = vm.get("name", "")
+                vm_node = vm.get("node", "")
+                vm_ip = vm.get("ip", "")
+                aliases = [f"vmid-{vmid}", vm_name] if vmid else [vm_name]
+                # Common name patterns: hp1-worker-01 → worker-01, worker-1
+                if vm_name:
+                    # Strip common prefixes to create short aliases
+                    for prefix in ("hp1-", "ds-", "prod-", "dev-"):
+                        if vm_name.startswith(prefix):
+                            short = vm_name[len(prefix):]
+                            if short not in aliases:
+                                aliases.append(short)
+                write_cross_reference(
+                    connection_id=f"proxmox:{conn_id}:vm:{vmid}",
+                    platform="proxmox_vm",
+                    label=vm_name,
+                    hostname="",
+                    ips=[vm_ip] if vm_ip else [],
+                    aliases=aliases,
+                    meta={
+                        "vmid": vmid,
+                        "node": vm_node,
+                        "proxmox_connection_id": conn_id,
+                        "proxmox_label": conn_label,
+                        "type": "qemu",
+                    },
+                )
+            for ct in lxc_list:
+                vmid = ct.get("vmid")
+                ct_name = ct.get("name", "")
+                ct_node = ct.get("node", "")
+                aliases = [f"vmid-{vmid}", ct_name] if vmid else [ct_name]
+                write_cross_reference(
+                    connection_id=f"proxmox:{conn_id}:lxc:{vmid}",
+                    platform="proxmox_lxc",
+                    label=ct_name,
+                    hostname="",
+                    ips=[],
+                    aliases=aliases,
+                    meta={
+                        "vmid": vmid,
+                        "node": ct_node,
+                        "proxmox_connection_id": conn_id,
+                        "proxmox_label": conn_label,
+                        "type": "lxc",
+                    },
+                )
+        except Exception as _inv_err:
+            log.debug("infra_inventory write failed (non-fatal): %s", _inv_err)
+
         if nodes_ok == 0:
             return {"health": "error", "vms": [], "lxc": [],
                     "error": f"{conn_label} ({host}): No nodes responded",

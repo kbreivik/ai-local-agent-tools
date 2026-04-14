@@ -1,0 +1,326 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.23.0.md (v2.23.0)
+Theme: Fix VM host reboot + Proxmox action credential bugs
+
+Prompt content:
+
+# CC PROMPT — v2.23.0 — Fix VM host reboot + Proxmox action credential bugs
+
+## What this does
+Two silent failures fixed: (1) `_vm_ssh_exec` in dashboard.py ignores credential profiles,
+so reboot/update actions on vm_host connections that use shared credential profiles fail
+silently — fixed by using `_resolve_credentials` from the vm_hosts collector.
+(2) `_do_proxmox_action` imports a `NODES` constant that does not exist in proxmox_vms.py,
+causing an ImportError on every Proxmox VM power action — fixed by removing the NODES check
+and rewriting to use proxmoxer + the connection DB directly.
+Version bump: 2.22.6 → 2.23.0
+
+---
+
+## Change 1 — api/routers/dashboard.py: Fix `_vm_ssh_exec`
+
+Find and replace the entire `_vm_ssh_exec` function:
+
+```python
+def _vm_ssh_exec(conn, command):
+    """Execute a command on a VM via SSH.
+
+    Uses the full credential resolution chain (own creds → profile → shared fallback)
+    and jump host routing, identical to the collector. This ensures vm_host connections
+    that use credential profiles work correctly for reboot/update actions.
+    """
+    from api.collectors.vm_hosts import _resolve_credentials, _resolve_jump_host, _ssh_run
+    from api.connections import get_all_connections_for_platform
+
+    try:
+        all_conns = get_all_connections_for_platform("vm_host")
+        username, password, private_key = _resolve_credentials(conn, all_conns)
+        jump_host = _resolve_jump_host(conn, all_conns)
+    except Exception as e:
+        return {"ok": False, "error": f"Credential resolution failed: {e}"}
+
+    host = conn.get("host", "")
+    port = conn.get("port") or 22
+    try:
+        out = _ssh_run(
+            host, port, username, password, private_key, command,
+            jump_host=jump_host,
+            _log_meta={
+                "connection_id": str(conn.get("id", "")),
+                "resolved_label": conn.get("label", host),
+                "triggered_by": "vm_action",
+            },
+        )
+        return {"ok": True, "output": out}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+```
+
+---
+
+## Change 2 — api/routers/dashboard.py: Fix `_do_proxmox_action`
+
+Find and replace the entire `_do_proxmox_action` function. The current version imports
+a non-existent `NODES` constant and reads raw env vars. Replace with proxmoxer + connection DB:
+
+```python
+def _do_proxmox_action(pve_type: str, node: str, vmid: int, action: str) -> dict:
+    """Execute a Proxmox VM/LXC action (start/stop/reboot/shutdown) via proxmoxer.
+
+    pve_type: 'qemu' for VMs, 'lxc' for containers.
+    Reads Proxmox credentials from the connections DB (first proxmox connection).
+    Falls back to env vars if no DB connection configured.
+    """
+    try:
+        from proxmoxer import ProxmoxAPI
+        from api.connections import get_connection_for_platform
+    except ImportError as e:
+        return {"ok": False, "error": f"proxmoxer not available: {e}"}
+
+    # Resolve credentials — DB first, env var fallback
+    conn = None
+    try:
+        conn = get_connection_for_platform("proxmox")
+    except Exception:
+        pass
+
+    if conn:
+        creds = conn.get("credentials", {}) or {}
+        host = conn.get("host", "")
+        port = conn.get("port") or 8006
+        pve_user = creds.get("user", "")
+        token_name = creds.get("token_name", "")
+        token_secret = creds.get("secret", "")
+    else:
+        host = os.environ.get("PROXMOX_HOST", "")
+        port = int(os.environ.get("PROXMOX_PORT", "8006"))
+        pve_user = os.environ.get("PROXMOX_USER", "")
+        # Support both PROXMOX_TOKEN_ID (user@pve!token) and separate vars
+        token_id_raw = os.environ.get("PROXMOX_TOKEN_ID", "")
+        if "!" in token_id_raw:
+            pve_user, token_name = token_id_raw.split("!", 1)
+        else:
+            token_name = token_id_raw
+        token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+
+    if not host:
+        return {"ok": False, "error": "No Proxmox host configured. Add a proxmox connection in Settings → Connections."}
+
+    try:
+        prox = ProxmoxAPI(
+            host, port=port,
+            user=pve_user, token_name=token_name, token_value=token_secret,
+            verify_ssl=False, timeout=10,
+        )
+        endpoint = getattr(prox.nodes(node), pve_type)(vmid).status
+        if action == "start":
+            task = endpoint.start.post()
+        elif action == "stop":
+            task = endpoint.stop.post()
+        elif action == "reboot":
+            task = endpoint.reboot.post()
+        elif action == "shutdown":
+            task = endpoint.shutdown.post()
+        else:
+            return {"ok": False, "error": f"Unknown action: {action!r}"}
+
+        log.info("Proxmox %s: %s %s/%s vmid=%d task=%s", action, node, pve_type, action, vmid, task)
+        return {"ok": True, "task_id": str(task), "node": node, "vmid": vmid, "action": action}
+    except Exception as e:
+        log.error("_do_proxmox_action failed: %s", e)
+        return {"ok": False, "error": str(e)}
+```
+
+Also remove the now-unused import line if it exists:
+```python
+from api.collectors.proxmox_vms import NODES
+```
+This line should be deleted anywhere it appears in the file (it was inside the old function body).
+
+---
+
+## Change 3 — gui/src/components/VMHostsSection.jsx: Show error feedback on reboot
+
+The `act` function in `VMCard` currently shows `r.output || r.message || 'Done'`.
+The reboot route returns `{ok, message, action_id}` with no `output` field, but also
+fires a WS event. However if SSH fails, the error is returned in the async task and
+never shown. Add explicit error display.
+
+Find the `act` function in VMCard:
+```javascript
+  const act = async (key, path, confirmMsg) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return
+    setLoading(l => ({ ...l, [key]: true }))
+    setOutput(null)
+    try {
+      const r = await dashboardAction(path)
+      setOutput(r.output || r.message || 'Done')
+      if (onAction) setTimeout(onAction, 2000)
+    } catch (e) {
+      setOutput('Error: ' + String(e))
+    }
+    setLoading(l => ({ ...l, [key]: false }))
+  }
+```
+
+Replace with:
+```javascript
+  const act = async (key, path, confirmMsg) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return
+    setLoading(l => ({ ...l, [key]: true }))
+    setOutput(null)
+    try {
+      const r = await dashboardAction(path)
+      if (r && r.ok === false) {
+        setOutput('Error: ' + (r.error || r.message || 'Action failed'))
+      } else {
+        setOutput(r.output || r.message || 'Done')
+        if (onAction) setTimeout(onAction, 2000)
+      }
+    } catch (e) {
+      setOutput('Error: ' + String(e))
+    }
+    setLoading(l => ({ ...l, [key]: false }))
+  }
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.22.6` → `2.23.0`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(vm-actions): credential profile resolution + Proxmox action ImportError"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 11:03:20
+========================================================================
+PROMPT COMPLETE: v2.23.0
+[STATUS] 2m06s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m08s
+========================================================================

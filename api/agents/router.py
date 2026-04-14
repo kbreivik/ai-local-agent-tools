@@ -96,6 +96,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "service_placement",
     "metric_trend",
     "list_metrics",
+    "resolve_entity",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -122,6 +123,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "service_placement",
     "metric_trend",
     "list_metrics",
+    "resolve_entity",
 })
 
 # Execute agent — destructive tools, filtered by domain
@@ -139,6 +141,7 @@ EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
     "swarm_node_status", "swarm_service_force_update",
+    "resolve_entity",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
@@ -150,6 +153,7 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "result_fetch", "result_query",
     "entity_history", "entity_events",
     "swarm_node_status", "swarm_service_force_update",
+    "resolve_entity",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
@@ -165,6 +169,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "result_fetch", "result_query",
     "entity_history", "entity_events",
     "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
+    "resolve_entity",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)

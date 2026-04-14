@@ -695,6 +695,138 @@ def service_placement(service_name: str) -> dict:
                 "data": None, "timestamp": _ts()}
 
 
+def resolve_entity(query: str) -> dict:
+    """Resolve any infrastructure entity name to its identities across all systems.
+
+    Use this BEFORE executing any action that involves an ambiguous entity name.
+    The query can be any of: vm_host connection label, IP address, hostname,
+    Proxmox VM name, Swarm node name, short alias (e.g. "worker-02", "worker 2",
+    "192.168.199.32", "hp1-worker-01", "ds-docker-worker-02").
+
+    Returns all known identities for the entity:
+    - vm_host: SSH connection label + IP (what to use with vm_exec)
+    - proxmox_vm: VM name, vmid, node (what to use with proxmox_vm_power)
+    - swarm node: node name (what to use with swarm_service_force_update)
+    - IPs: all known IP addresses for cross-referencing
+
+    If ambiguous (multiple entities match), all candidates are returned.
+    If not found, returns an error with a clarifying question to ask the user.
+
+    Args:
+        query: Any name, IP, alias, or partial label for the infrastructure entity.
+               Examples: "worker-02", "worker 2", "192.168.199.32",
+                         "hp1-worker-01", "ds-docker-worker-02", "kafka broker 2"
+    """
+    # Normalize: "worker 2" → "worker-02", "worker-2" → "worker-02"
+    import re as _re
+    normalized = _re.sub(r'\s+', '-', query.strip().lower())
+    # Also try without leading zeros: "worker-2" as well as "worker-02"
+    queries = [query, normalized]
+    if _re.search(r'-0*(\d+)$', normalized):
+        stripped = _re.sub(r'-0+(\d+)$', r'-\1', normalized)
+        if stripped not in queries:
+            queries.append(stripped)
+
+    try:
+        from api.db.infra_inventory import resolve_entity as _resolve
+
+        # Try each normalized form
+        result = None
+        for q in queries:
+            result = _resolve(q)
+            if result and result.get("found"):
+                break
+
+        if not result or not result.get("found"):
+            # Try a broader search via connections table
+            from api.connections import get_all_connections_for_platform
+            all_platforms = ["vm_host", "docker_host", "proxmox"]
+            all_conns = []
+            for plat in all_platforms:
+                try:
+                    all_conns.extend(get_all_connections_for_platform(plat))
+                except Exception:
+                    pass
+            q_lower = query.lower()
+            partial = [c for c in all_conns
+                       if q_lower in c.get("label", "").lower()
+                       or c.get("host", "") == query]
+            if partial:
+                return {
+                    "status": "ok",
+                    "message": f"Found {len(partial)} connection(s) matching '{query}' (no inventory entry yet)",
+                    "data": {
+                        "query": query,
+                        "found": True,
+                        "identities": {
+                            c["platform"]: [{
+                                "label": c.get("label", ""),
+                                "host": c.get("host", ""),
+                                "connection_id": str(c.get("id", "")),
+                            }] for c in partial
+                        },
+                        "clarifying_question": (
+                            f"Found {len(partial)} connection(s): "
+                            + ", ".join(f"{c.get('label')} ({c.get('host')})" for c in partial[:5])
+                            + ". Which one did you mean?"
+                        ) if len(partial) > 1 else None,
+                    },
+                    "timestamp": _ts(),
+                }
+            return {
+                "status": "error",
+                "message": f"No infrastructure entity found for '{query}'",
+                "data": {
+                    "query": query,
+                    "found": False,
+                    "clarifying_question": (
+                        f"I couldn't find any infrastructure entity matching '{query}'. "
+                        "Could you provide more context? For example: the IP address, "
+                        "the Proxmox VM name, the connection label from Settings → Connections, "
+                        "or the Swarm node name."
+                    ),
+                },
+                "timestamp": _ts(),
+            }
+
+        # Format a clean human summary
+        identities = result.get("identities", {})
+        vm_host_ids = identities.get("vm_host", [])
+        proxmox_ids = identities.get("proxmox_vm", [])
+        connection_ids = [i for plat, ids in identities.items()
+                         for i in ids if plat not in ("vm_host", "proxmox_vm", "proxmox_lxc")]
+
+        summary_parts = []
+        if vm_host_ids:
+            summary_parts.append(f"vm_host: {vm_host_ids[0].get('label')} ({', '.join(result.get('ips', []))})")
+        if proxmox_ids:
+            p = proxmox_ids[0]
+            summary_parts.append(f"proxmox: {p.get('label')} (vmid {p.get('vmid')}, node {p.get('node')})")
+
+        return {
+            "status": "ok",
+            "message": f"Resolved '{query}' → {result.get('canonical_label')}. " + " | ".join(summary_parts),
+            "data": {
+                "query": query,
+                "found": True,
+                "canonical_label": result.get("canonical_label", ""),
+                "hostname": result.get("hostname", ""),
+                "ips": result.get("ips", []),
+                "identities": identities,
+                # Convenience: pre-resolved values for common operations
+                "vm_exec_host": vm_host_ids[0].get("label") if vm_host_ids else None,
+                "proxmox_vm_label": proxmox_ids[0].get("label") if proxmox_ids else None,
+                "proxmox_vmid": proxmox_ids[0].get("vmid") if proxmox_ids else None,
+                "proxmox_node": proxmox_ids[0].get("node") if proxmox_ids else None,
+            },
+            "timestamp": _ts(),
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": f"resolve_entity failed: {e}",
+                "data": None, "timestamp": _ts()}
+
+
 def ssh_capabilities(host: str = "", days: int = 7) -> dict:
     """Query the SSH capability map — which credentials can reach which hosts.
 
