@@ -154,16 +154,22 @@ EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
     "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
     "swarm_node_status", "swarm_service_force_update",
+    "vm_exec", "infra_lookup",                   # SSH diagnostics on workers
+    "service_list", "service_health",             # Swarm service state
+    "entity_history", "entity_events",            # change tracking
+    "result_fetch", "result_query",               # large result retrieval
     "resolve_entity",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
     "runbook_search",
+    "propose_subtask",                            # offer automated fix run to user
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_SWARM_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_upgrade",
-    "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
+    "service_rollback", "node_drain", "node_activate",   # node_activate un-drains a node
+    "pre_upgrade_check", "post_upgrade_verify",
     "service_current_version", "service_resolve_image",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
@@ -175,19 +181,31 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
     "runbook_search",
+    "propose_subtask",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_PROXMOX_TOOLS = frozenset({
-    # Populated at startup by _load_promoted_into_allowlists().
-    # Only plan_action / escalate / audit_log in base until proxmox skills are promoted.
+    # Core Proxmox operations
+    "proxmox_vm_power",                # start/stop/reboot VMs via Proxmox API
+    "swarm_node_status",               # check which Swarm worker nodes are Down
+    "swarm_service_force_update",      # force-update a Swarm service after node recovery
+    "vm_exec", "infra_lookup",         # SSH to VM hosts for diagnostics
+    "service_list", "service_health",  # check Swarm services after VM recovery
+    "service_placement",               # locate which node a service task is on
+    "entity_history", "entity_events", # change tracking
+    "result_fetch", "result_query",    # large result retrieval
+    "resolve_entity",                  # cross-reference entity names
+    # Allowlist management
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
     "runbook_search",
+    "propose_subtask",
+    # Note: promoted skills injected here at startup via _load_promoted_into_allowlists()
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 EXECUTE_GENERAL_TOOLS = frozenset({
-    "service_upgrade", "service_rollback", "node_drain",
+    "service_upgrade", "service_rollback", "node_drain", "node_activate",
     "docker_engine_update", "vm_exec", "infra_lookup",
     "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
@@ -199,6 +217,7 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
     "runbook_search",
+    "propose_subtask",
 }) | _EXECUTE_BASE | _DIAGNOSTICS
 
 # Build agent — skill management tools only (no destructive infra tools)
@@ -1079,6 +1098,7 @@ def filter_tools(tools_spec: list, agent_type: str, domain: str = "general") -> 
         'investigate': INVESTIGATE_AGENT_TOOLS,
         'research':    INVESTIGATE_AGENT_TOOLS,  # alias
         'build':       BUILD_AGENT_TOOLS,
+        'ambiguous':   OBSERVE_AGENT_TOOLS,      # ambiguous: safe read-only default
     }
     allowlist = allowlist_map.get(agent_type)
     if allowlist is None:
@@ -1096,4 +1116,5 @@ def get_prompt(agent_type: str) -> str:
         'execute':     ACTION_PROMPT,
         'action':      ACTION_PROMPT,
         'build':       BUILD_PROMPT,
-    }.get(agent_type, ACTION_PROMPT)
+        'ambiguous':   STATUS_PROMPT,  # ambiguous: gather info first, ask clarifying_question
+    }.get(agent_type, STATUS_PROMPT)

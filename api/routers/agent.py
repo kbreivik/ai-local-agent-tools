@@ -287,7 +287,7 @@ _AGENT_LABEL = {
     'research':    'Investigate',
     'investigate': 'Investigate',
     'build':       'Build',
-    'ambiguous':   'Execute',
+    'ambiguous':   'Observe',   # gather info first, then user can re-run with intent
 }
 
 _AGENT_BADGE_COLOR = {
@@ -298,7 +298,7 @@ _AGENT_BADGE_COLOR = {
     'research':    'purple',
     'investigate': 'purple',
     'build':       'yellow',
-    'ambiguous':   'orange',
+    'ambiguous':   'blue',     # same as observe
 }
 
 

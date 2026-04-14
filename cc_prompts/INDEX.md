@@ -85,8 +85,12 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.24.6.md | v2.24.6 | ES card in Platform Core + ES/Kafka health thresholds in settings | DONE (b23f5c1) |
 | CC_PROMPT_v2.25.0.md | v2.25.0 | Per-entity maintenance mode + Proxmox/dmesg allowlist | DONE (d28196a) |
 | CC_PROMPT_v2.25.1.md | v2.25.1 | SUPERSEDED by v2.26.0+v2.26.1 — DO NOT RUN | SUPERSEDED |
-| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | DONE (53088d4) |
-| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | DONE (ce10777) |
+| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | DONE (276ddfb) |
+| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | DONE (c879f1c) |
+| CC_PROMPT_v2.26.2.md | v2.26.2 | Agent routing: proxmox allowlist, node_activate, ambiguous→observe | RUNNING |
+| CC_PROMPT_v2.26.3.md | v2.26.3 | Prompt quality: propose_subtask priority, non-Kafka paths, observe format | PENDING |
+| CC_PROMPT_v2.26.4.md | v2.26.4 | Seed 4 base runbooks (kafka recovery, disk cleanup, swarm, reintegration) | PENDING |
+| CC_PROMPT_v2.26.5.md | v2.26.5 | EntityDrawer Ask: 300→600 tokens + platform-aware suggestions | PENDING |
 
 ---
 
@@ -113,26 +117,9 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 **v2.22.4** — ESLint TDZ rule + source maps + API version gate + Dockerfile hardening.
 
 **v2.23.0** — Fix VM host reboot + Proxmox action silent failures.
-_vm_ssh_exec used raw credentials dict instead of _resolve_credentials — broke reboot/update
-on any connection using a credential profile. _do_proxmox_action imported non-existent
-NODES constant (ImportError on every call) — rewritten with proxmoxer + connection DB.
-VMCard act() now shows error text when ok=false.
-
 **v2.23.1** — Entity cross-reference registry + resolve_entity agent tool.
-infra_inventory extended with resolve_entity (multi-source: infra_inventory + connections
-table + IP overlap merge). Proxmox collector writes VM name/vmid/node/aliases to inventory
-on every poll. New resolve_entity MCP tool resolves ambiguous names like 'worker 2' across
-all systems. Registered in all agent allowlists.
-
 **v2.22.6** — agentHostIp setting (Infrastructure tab) + clickable container endpoints.
-Collector reads LAN IP from settings DB (priority over env var). Container card expanded
-view gains a clickable `endpoint` link from `ip_port`. Internal Docker IPs demoted to
-dimmed `int.ips` row.
-
 **v2.22.5** — Fix GHCR tag pagination + version status display.
-_fetch_ghcr_tags() stopped pagination as soon as it accumulated 20 semver-matching tags.
-GHCR returns tags alphabetically so the first 20 matches were always the oldest ones
-(2.14.0 → 2.19.1). Fix: remove early-exit, increase max pages to 10.
 
 **v2.25.1** — SUPERSEDED. Replaced by v2.26.0+v2.26.1.
 
@@ -140,30 +127,56 @@ GHCR returns tags alphabetically so the first 20 matches were always the oldest 
 Adds entity_id field to every card dict (containers, swarm services, external services,
 UniFi devices, PBS datastores, TrueNAS pools, FortiGate interfaces). Proxmox VMs/LXCs
 already had entity_id. Adds custom to_entities() to DockerAgent01Collector and
-SwarmCollector (previously fell back to single-entity default). Entity IDs match
-existing to_entities() output formats across all collectors so entity_history and
-EntityDrawer work uniformly.
+SwarmCollector. Entity IDs match existing to_entities() output formats across all collectors.
 
 **v2.26.1** — InfraCard universal ⌘/› entity buttons + VM entity ID fix.
-Moves entity detail (›) and agent ask (⌘) buttons into InfraCard component itself,
-driven by entityId + onEntityDetail props. All 8 card types automatically get both
-buttons when entity_id is present in card data (set by v2.26.0). Removes per-type
-entity buttons from ProxmoxCardCollapsed, ContainerCardCollapsed, ExternalCardCollapsed.
-Fixes VM entity ID bug: ProxmoxCardCollapsed was constructing proxmox_vms:node:qemu:vmid
-but entity system uses proxmox_vms:node:vm:vmid — fix: use vm.entity_id directly.
-Also fixes ProxmoxCardExpanded maintenance toggle: optimistic localMaint state updates
-button instantly without waiting for the 30s poll.
+Moves entity detail (›) and agent ask (⌘) buttons into InfraCard itself, driven by
+entityId + onEntityDetail props. All 8 card types get both buttons when entity_id present.
+Fixes VM entity ID bug (qemu→vm). Optimistic maintenance toggle.
+
+**v2.26.2** — Agent routing correctness fixes.
+EXECUTE_PROXMOX_TOOLS was nearly empty — adds proxmox_vm_power, vm_exec, swarm_node_status,
+service_list/health, service_placement, entity_history, entity_events, resolve_entity,
+result_fetch/query, propose_subtask. EXECUTE_KAFKA_TOOLS adds vm_exec, infra_lookup,
+service_list, entity_history, result_fetch, propose_subtask. EXECUTE_SWARM_TOOLS and
+EXECUTE_GENERAL_TOOLS add node_activate (was missing — agents could drain but not un-drain).
+All execute allowlists get propose_subtask. Ambiguous classifier result now routes to
+Observe agent + STATUS_PROMPT instead of Execute agent (was wrong default).
+
+**v2.26.3** — Prompt quality improvements.
+RESEARCH_PROMPT: adds early propose_subtask reminder right after rule 8 (propose was
+buried at bottom, model consistently missed it). Adds NON-KAFKA INVESTIGATION PATHS section
+covering storage (TrueNAS/PBS), network (FortiGate/UniFi), and compute (Proxmox) paths
+with specific tool chains and root cause formats. STATUS_PROMPT: adds REQUIRED SUMMARY FORMAT
+template (STATUS / FINDINGS / ACTION NEEDED) — observe agent had no output format guide,
+results were inconsistent across runs.
+
+**v2.26.4** — Seed 4 base runbooks.
+Adds BASE_RUNBOOKS constant and seed_base_runbooks() to api/db/runbooks.py, called from
+init_runbooks() on startup. Seeds: kafka broker missing + worker node recovery (8 steps),
+docker disk cleanup (6 steps), swarm service not converging + force update (6 steps),
+worker node reintegration after reboot (7 steps). Runbooks are idempotent on title —
+safe to restart without duplicate insertion. Agents call runbook_search() at the start
+of every investigation — previously returned empty for all queries.
+
+**v2.26.5** — EntityDrawer Ask improvements.
+Increases max_tokens from 300 to 600 in /api/agent/ask endpoint (300 was too short for
+any real diagnostic answer). Rewrites /api/agent/ask/suggestions to be platform-aware:
+now accepts platform + entity_id query params and returns different suggestions per
+platform (proxmox/docker/kafka/unifi/truenas/pbs/fortigate) and per status (error/
+degraded/healthy/maintenance). Was previously only section-level and static.
 
 ---
 
 ## Key file paths
 
 ```
+api/agents/router.py                      — allowlists, prompts, classifier (v2.26.2, v2.26.3)
+api/routers/agent.py                      — loop, plan gate, ambiguous label (v2.26.2, v2.26.5)
+api/db/runbooks.py                        — BASE_RUNBOOKS + seed_base_runbooks() (v2.26.4)
 api/db/vm_exec_allowlist.py               — allowlist table + cache + session purge (v2.23.3)
 api/routers/vm_exec_allowlist.py          — REST API for allowlist management (v2.23.3)
 mcp_server/tools/vm.py                    — _validate_command DB-backed + 3 new tools (v2.23.3)
-api/agents/router.py                      — new allowlist tools in all allowlists (v2.23.3)
-api/routers/agent.py                      — session purge on cleanup (v2.23.3)
 gui/src/components/OptionsModal.jsx       — Allowlist tab (v2.23.3)
 api/routers/settings.py                   — agentHostIp setting key (v2.22.6)
 api/collectors/docker_agent01.py          — entity_id + to_entities() per container (v2.26.0)
@@ -175,15 +188,9 @@ api/collectors/truenas.py                 — entity_id per pool in _collect_syn
 api/collectors/fortigate.py               — entity_id per interface in _collect_sync (v2.26.0)
 gui/src/components/ServiceCards.jsx       — InfraCard universal entity buttons (v2.26.1)
 api/routers/dashboard.py                  — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0)
-gui/src/components/VMHostsSection.jsx     — act() error feedback (v2.23.0)
 api/db/infra_inventory.py                 — resolve_entity + write_cross_reference (v2.23.1)
 api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.23.1)
-mcp_server/tools/vm.py                    — resolve_entity tool (v2.23.1)
 gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
 api/db/metric_samples.py                  — time-series metrics (v2.21.0)
 mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
-api/collectors/base.py                    — ES snapshot indexing (v2.21.1)
-api/db/vm_action_log.py                   — vm action audit table (v2.20.1)
-api/agents/router.py                      — prompts + allowlists (v2.18.1–v2.21.0)
-mcp_server/tools/vm.py                    — service_placement + docker logs (v2.19.0, v2.19.1)
 ```
