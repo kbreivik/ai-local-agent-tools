@@ -5,6 +5,12 @@ on:
     branches: [main, 'v2/**']
     tags: ['v*']
 
+# Cancel in-progress builds on the same branch — only the latest commit's
+# build pushes :latest, preventing older commits from overwriting it.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ghcr.io/kbreivik/hp1-ai-agent
