@@ -417,6 +417,29 @@ async def list_result_refs(
         return {"refs": [], "count": 0, "error": str(e)}
 
 
+@router.get("/session-log/stats")
+async def session_log_stats(_: str = Depends(get_current_user)):
+    """Diagnostic: check operation_log table size and most recent sessions."""
+    try:
+        from api.db.base import get_engine
+        from sqlalchemy import text as _t
+        engine = get_engine()
+        async with engine.connect() as conn:
+            total = (await conn.execute(_t(
+                "SELECT COUNT(*) FROM operation_log"
+            ))).scalar()
+            recent = await conn.execute(_t(
+                "SELECT session_id, COUNT(*) as cnt, MAX(timestamp) as latest "
+                "FROM operation_log GROUP BY session_id "
+                "ORDER BY latest DESC LIMIT 10"
+            ))
+            rows = [{"session_id": r[0], "count": r[1], "latest": str(r[2])}
+                    for r in recent]
+        return {"total_rows": total, "recent_sessions": rows}
+    except Exception as e:
+        return {"error": str(e), "total_rows": 0}
+
+
 @router.get("/result-store/{ref}")
 async def get_result_ref(
     ref: str,

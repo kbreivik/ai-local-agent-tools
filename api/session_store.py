@@ -21,9 +21,57 @@ MAX_LINES_PER_SESSION = 500
 REPLAY_LINES = 150
 
 
+_TABLE_VERIFIED: bool = False
+
+
+async def _ensure_table(conn) -> bool:
+    """Verify operation_log table exists. Creates it if missing (safety net)."""
+    global _TABLE_VERIFIED
+    if _TABLE_VERIFIED:
+        return True
+    try:
+        from sqlalchemy import text as _t
+        await conn.execute(_t(
+            """CREATE TABLE IF NOT EXISTS operation_log (
+                id         TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type       TEXT NOT NULL,
+                content    TEXT,
+                metadata   TEXT,
+                timestamp  TEXT NOT NULL
+            )"""
+        ))
+        await conn.execute(_t(
+            "CREATE INDEX IF NOT EXISTS idx_oplog_session ON operation_log(session_id)"
+        ))
+        await conn.execute(_t(
+            "CREATE INDEX IF NOT EXISTS idx_oplog_ts ON operation_log(timestamp)"
+        ))
+        _TABLE_VERIFIED = True
+        return True
+    except Exception as e:
+        log.error("operation_log table check failed: %s", e)
+        return False
+
+
 async def _flush_loop():
     from api.db.base import get_engine
-    from sqlalchemy import text
+    from sqlalchemy import text, bindparam
+
+    # Pre-build the insert statement with explicit bindparams to avoid asyncpg issues
+    _INSERT = text(
+        "INSERT INTO operation_log "
+        "(id, session_id, type, content, metadata, timestamp) "
+        "VALUES (:p_id, :p_sid, :p_type, :p_content, :p_meta, :p_ts) "
+        "ON CONFLICT (id) DO NOTHING"
+    ).bindparams(
+        bindparam("p_id"),
+        bindparam("p_sid"),
+        bindparam("p_type"),
+        bindparam("p_content"),
+        bindparam("p_meta"),
+        bindparam("p_ts"),
+    )
 
     while True:
         await asyncio.sleep(_FLUSH_INTERVAL)
@@ -38,16 +86,22 @@ async def _flush_loop():
         try:
             engine = get_engine()
             async with engine.begin() as conn:
+                await _ensure_table(conn)
                 for item in items:
-                    await conn.execute(
-                        text(
-                            "INSERT INTO operation_log (id, session_id, type, content, metadata, timestamp) "
-                            "VALUES (:id, :session_id, :type, :content, :metadata, :timestamp)"
-                        ),
-                        item,
-                    )
+                    try:
+                        await conn.execute(_INSERT, {
+                            "p_id":      item["id"],
+                            "p_sid":     item["session_id"],
+                            "p_type":    item["type"],
+                            "p_content": item.get("content", "") or "",
+                            "p_meta":    item.get("metadata", "{}") or "{}",
+                            "p_ts":      item["timestamp"],
+                        })
+                    except Exception as row_e:
+                        log.error("operation_log row insert failed: %s | item=%s",
+                                  row_e, {k: str(v)[:80] for k, v in item.items()})
         except Exception as e:
-            log.debug("operation_log flush error: %s", e)
+            log.error("operation_log flush error (%d items): %s", len(items), e)
 
 
 async def ensure_started():

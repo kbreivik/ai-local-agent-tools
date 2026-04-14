@@ -1,0 +1,1896 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.24.0.md (v2.24.0)
+Theme: Sub-agent proposals + manual runbook popups + runbook library
+
+Prompt content:
+
+# CC PROMPT — v2.24.0 — Sub-agent proposals + manual runbooks + runbook library
+
+## What this does
+When an investigate agent finishes and has specific fix steps, it calls `propose_subtask()`.
+The agent loop intercepts this, saves a proposal to DB, and broadcasts a `subtask_proposed`
+WS event. A cyan offer banner appears with two choices:
+
+"Run Sub-agent" — opens a detachable OS popup window (`/subtask/:sessionId`) showing a
+live execute agent working through the steps, with plan confirmation and stop button.
+
+"Manual Runbook" — opens a second popup (`/runbook/:proposalId`) with a step-by-step
+checklist (checkbox per step, copy button for commands). When all steps are ticked, a
+Save button stores the runbook to a `runbooks` DB table, retrievable by agents via a new
+`runbook_search()` tool and by users via a new Runbooks section in the sidebar.
+
+Logs → Operations gains a Flat/Tree toggle (default Tree) that indents child operations
+under their parent using the new `parent_session_id` column.
+
+Version bump: 2.23.4 → 2.24.0
+
+---
+
+## Change 1 — api/db/subtask_proposals.py (NEW FILE)
+
+```python
+"""Subtask proposals — agent-generated offers to run a follow-up execute task."""
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS subtask_proposals (
+    id                TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL DEFAULT '',
+    parent_op_id      TEXT NOT NULL DEFAULT '',
+    task              TEXT NOT NULL,
+    executable_steps  JSONB NOT NULL DEFAULT '[]',
+    manual_steps      JSONB NOT NULL DEFAULT '[]',
+    confidence        TEXT NOT NULL DEFAULT 'medium',
+    status            TEXT NOT NULL DEFAULT 'pending',
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status  ON subtask_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_session ON subtask_proposals(parent_session_id);
+"""
+
+_initialized = False
+
+def _ts():
+    return datetime.now(timezone.utc).isoformat()
+
+def init_subtask_proposals():
+    global _initialized
+    if _initialized: return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in _DDL.strip().split(";"):
+            s = stmt.strip()
+            if s: cur.execute(s)
+        cur.close(); conn.close()
+        _initialized = True
+        log.info("subtask_proposals table ready")
+    except Exception as e:
+        log.warning("subtask_proposals init failed: %s", e)
+
+def save_proposal(proposal_id: str, parent_session_id: str, parent_op_id: str,
+                  task: str, executable_steps: list, manual_steps: list,
+                  confidence: str = "medium") -> bool:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO subtask_proposals
+               (id, parent_session_id, parent_op_id, task, executable_steps,
+                manual_steps, confidence, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'pending')""",
+            (proposal_id, parent_session_id, parent_op_id, task,
+             json.dumps(executable_steps), json.dumps(manual_steps), confidence),
+        )
+        conn.commit(); cur.close(); conn.close()
+        return True
+    except Exception as e:
+        log.debug("save_proposal failed: %s", e)
+        return False
+
+def update_proposal_status(proposal_id: str, status: str) -> bool:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            "UPDATE subtask_proposals SET status=%s WHERE id=%s",
+            (status, proposal_id),
+        )
+        conn.commit(); cur.close(); conn.close()
+        return True
+    except Exception as e:
+        log.debug("update_proposal_status failed: %s", e)
+        return False
+
+def get_proposal(proposal_id: str) -> dict | None:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """SELECT id, parent_session_id, parent_op_id, task,
+                      executable_steps, manual_steps, confidence, status, created_at
+               FROM subtask_proposals WHERE id=%s""",
+            (proposal_id,),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row: return None
+        return {
+            "id": row[0], "parent_session_id": row[1], "parent_op_id": row[2],
+            "task": row[3], "executable_steps": row[4] or [],
+            "manual_steps": row[5] or [], "confidence": row[6],
+            "status": row[7], "created_at": row[8].isoformat() if row[8] else "",
+        }
+    except Exception as e:
+        log.debug("get_proposal failed: %s", e)
+        return None
+
+def list_proposals(status: str = "pending", limit: int = 10) -> list:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """SELECT id, parent_session_id, task, executable_steps,
+                      manual_steps, confidence, status, created_at
+               FROM subtask_proposals WHERE status=%s
+               ORDER BY created_at DESC LIMIT %s""",
+            (status, limit),
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [
+            {"id": r[0], "parent_session_id": r[1], "task": r[2],
+             "executable_steps": r[3] or [], "manual_steps": r[4] or [],
+             "confidence": r[5], "status": r[6],
+             "created_at": r[7].isoformat() if r[7] else ""}
+            for r in rows
+        ]
+    except Exception as e:
+        log.debug("list_proposals failed: %s", e)
+        return []
+```
+
+---
+
+## Change 2 — api/db/runbooks.py (NEW FILE)
+
+```python
+"""Runbooks — saved step-by-step procedures, created from manual checklist completions
+or agent proposals. Searchable by agents via runbook_search() tool."""
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS runbooks (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    steps       JSONB NOT NULL DEFAULT '[]',
+    source      TEXT NOT NULL DEFAULT 'manual_completion',
+    proposal_id TEXT NOT NULL DEFAULT '',
+    tags        TEXT[] NOT NULL DEFAULT '{}',
+    run_count   INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT NOT NULL DEFAULT 'user',
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_runbooks_source ON runbooks(source);
+CREATE INDEX IF NOT EXISTS idx_runbooks_tags   ON runbooks USING gin(tags);
+"""
+
+_initialized = False
+
+def _ts():
+    return datetime.now(timezone.utc).isoformat()
+
+def init_runbooks():
+    global _initialized
+    if _initialized: return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in _DDL.strip().split(";"):
+            s = stmt.strip()
+            if s: cur.execute(s)
+        cur.close(); conn.close()
+        _initialized = True
+        log.info("runbooks table ready")
+    except Exception as e:
+        log.warning("runbooks init failed: %s", e)
+
+def create_runbook(title: str, description: str, steps: list,
+                   source: str = "manual_completion", proposal_id: str = "",
+                   tags: list = None, created_by: str = "user") -> str:
+    """Insert a new runbook. Returns the runbook ID."""
+    rid = str(uuid.uuid4())
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO runbooks
+               (id, title, description, steps, source, proposal_id, tags, created_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (rid, title, description, json.dumps(steps),
+             source, proposal_id or "", tags or [], created_by),
+        )
+        conn.commit(); cur.close(); conn.close()
+        return rid
+    except Exception as e:
+        log.debug("create_runbook failed: %s", e)
+        return ""
+
+def search_runbooks(query: str, limit: int = 5) -> list:
+    """Full-text search on title + description + tags. Used by runbook_search() tool."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """SELECT id, title, description, steps, source, tags, run_count, created_at
+               FROM runbooks
+               WHERE title ILIKE %s OR description ILIKE %s
+                  OR %s = ANY(tags)
+               ORDER BY run_count DESC, created_at DESC
+               LIMIT %s""",
+            (f"%{query}%", f"%{query}%", query.lower(), limit),
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [
+            {"id": r[0], "title": r[1], "description": r[2],
+             "steps": r[3] or [], "source": r[4], "tags": list(r[5] or []),
+             "run_count": r[6], "created_at": r[7].isoformat() if r[7] else ""}
+            for r in rows
+        ]
+    except Exception as e:
+        log.debug("search_runbooks failed: %s", e)
+        return []
+
+def list_runbooks(limit: int = 50) -> list:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """SELECT id, title, description, steps, source, tags, run_count, created_by, created_at
+               FROM runbooks ORDER BY created_at DESC LIMIT %s""",
+            (limit,),
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [
+            {"id": r[0], "title": r[1], "description": r[2],
+             "steps": r[3] or [], "source": r[4], "tags": list(r[5] or []),
+             "run_count": r[6], "created_by": r[7],
+             "created_at": r[8].isoformat() if r[8] else ""}
+            for r in rows
+        ]
+    except Exception as e:
+        log.debug("list_runbooks failed: %s", e)
+        return []
+
+def delete_runbook(runbook_id: str) -> bool:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute("DELETE FROM runbooks WHERE id=%s", (runbook_id,))
+        conn.commit(); cur.close(); conn.close()
+        return True
+    except Exception as e:
+        log.debug("delete_runbook failed: %s", e)
+        return False
+
+def increment_run_count(runbook_id: str):
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            "UPDATE runbooks SET run_count=run_count+1, updated_at=NOW() WHERE id=%s",
+            (runbook_id,),
+        )
+        conn.commit(); cur.close(); conn.close()
+    except Exception:
+        pass
+```
+
+---
+
+## Change 3 — api/db migration: add parent_session_id to operations
+
+In `api/main.py`, in the lifespan function, after `await init_db()`, add:
+
+```python
+    # Migrate operations table: add parent_session_id if not present
+    try:
+        from api.db.base import get_engine as _ge
+        from sqlalchemy import text as _sqlt
+        async with _ge().begin() as _mc:
+            await _mc.execute(_sqlt(
+                "ALTER TABLE operations ADD COLUMN IF NOT EXISTS "
+                "parent_session_id TEXT NOT NULL DEFAULT ''"
+            ))
+    except Exception as _mige:
+        pass
+```
+
+---
+
+## Change 4 — mcp_server/tools/orchestration.py: add two new tools
+
+Add after the `escalate` function:
+
+```python
+def propose_subtask(task: str, executable_steps: list, manual_steps: list = None) -> dict:
+    """Propose a follow-up sub-task after completing an investigation.
+
+    Call this when you have identified specific, actionable fix steps.
+    The system will offer the user two options:
+      (a) Run as an automated sub-agent in a separate window.
+      (b) Open as a manual runbook checklist the user can follow step-by-step.
+
+    Args:
+        task:             Concise description of what needs to be fixed.
+                          This becomes the sub-agent's task label.
+        executable_steps: List of steps the agent can execute autonomously.
+                          Each entry should be a specific action string.
+        manual_steps:     Steps requiring human physical access or credentials
+                          (shown in the manual runbook). Optional.
+
+    Only call this after a completed investigation with clear remediation steps.
+    Do not call for informational findings with no actionable path.
+    After calling this, write your final investigation summary.
+    """
+    # Body is intercepted by the agent loop — never executed directly
+    return {"status": "proposed", "message": "propose_subtask not intercepted"}
+
+
+def runbook_search(query: str) -> dict:
+    """Search saved runbooks for a known procedure matching the query.
+
+    Use this at the START of an investigation to check if there's already a
+    proven runbook for this type of problem (e.g. 'kafka broker restart',
+    'swarm node recovery'). If found, you can follow the runbook steps directly
+    rather than reinvestigating from scratch.
+
+    Args:
+        query: Keyword describing the problem or procedure (e.g. 'kafka broker',
+               'worker node down', 'docker service force update')
+    """
+    try:
+        from api.db.runbooks import search_runbooks
+        results = search_runbooks(query, limit=5)
+        if not results:
+            return {
+                "status": "ok", "message": f"No runbooks found for '{query}'",
+                "data": {"count": 0, "runbooks": []}, "timestamp": _ts(),
+            }
+        return {
+            "status": "ok",
+            "message": f"Found {len(results)} runbook(s) for '{query}'",
+            "data": {"count": len(results), "runbooks": [
+                {"id": r["id"], "title": r["title"],
+                 "description": r["description"],
+                 "steps": r["steps"][:10],  # first 10 steps
+                 "run_count": r["run_count"]}
+                for r in results
+            ]},
+            "timestamp": _ts(),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": None, "timestamp": _ts()}
+```
+
+---
+
+## Change 5 — api/routers/agent.py: intercept propose_subtask + subtask endpoint
+
+### 5a. Intercept propose_subtask in _run_single_agent_step
+
+In `_run_single_agent_step`, find the tool call processing loop — the section that handles
+intercepted tools like `plan_action` and `clarifying_question`. Add a new branch for
+`propose_subtask` alongside them:
+
+Find the code block that checks `tc.function.name == "plan_action"` or
+`tc.function.name == "clarifying_question"`. Add this branch in the same if/elif chain:
+
+```python
+elif tc.function.name == "propose_subtask":
+    # Parse arguments
+    try:
+        _pst_args = json.loads(tc.function.arguments or "{}")
+    except Exception:
+        _pst_args = {}
+
+    _pst_task        = _pst_args.get("task", task)[:500]
+    _pst_exec_steps  = _pst_args.get("executable_steps", [])
+    _pst_manual_steps = _pst_args.get("manual_steps", []) or []
+    _proposal_id     = str(uuid.uuid4())
+
+    # Feasibility: check available connections
+    _confidence = "medium"
+    try:
+        from api.connections import list_connections
+        if list_connections("vm_host"):
+            _confidence = "high"
+    except Exception:
+        pass
+
+    # Save to DB
+    try:
+        from api.db.subtask_proposals import save_proposal
+        save_proposal(
+            proposal_id=_proposal_id,
+            parent_session_id=session_id,
+            parent_op_id=operation_id,
+            task=_pst_task,
+            executable_steps=_pst_exec_steps,
+            manual_steps=_pst_manual_steps,
+            confidence=_confidence,
+        )
+    except Exception as _spe:
+        log.debug("save_proposal failed: %s", _spe)
+
+    # Broadcast
+    await manager.broadcast({
+        "type": "subtask_proposed",
+        "session_id": session_id,
+        "proposal_id": _proposal_id,
+        "task": _pst_task,
+        "executable_steps": _pst_exec_steps,
+        "manual_steps": _pst_manual_steps,
+        "confidence": _confidence,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await manager.send_line(
+        "step",
+        f"[subtask] Proposal recorded — '{_pst_task[:70]}' "
+        f"({_confidence} confidence). User notified.",
+        status="ok", session_id=session_id,
+    )
+
+    # Return result to model (no waiting — model can finish with summary)
+    _pst_result = {
+        "status": "proposed",
+        "proposal_id": _proposal_id,
+        "confidence": _confidence,
+        "message": (
+            "Proposal recorded. User will see an offer to run this as an automated "
+            "sub-agent or as a manual runbook checklist. "
+            "Please provide your final investigation summary now."
+        ),
+    }
+    messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tc.id,
+        "content": json.dumps(_pst_result),
+    })
+    await logger_mod.log_tool_call(
+        operation_id=operation_id, tool_name="propose_subtask",
+        params=_pst_args, result=_pst_result, model_used=_lm_model(),
+        duration_ms=0, status="ok",
+    )
+    tools_used_names.append("propose_subtask")
+    continue  # let model write final answer
+```
+
+### 5b. Modify _stream_agent signature to accept parent context
+
+Find the `async def _stream_agent(task, session_id, operation_id, owner_user):` definition.
+Add two optional parameters:
+
+```python
+async def _stream_agent(task: str, session_id: str, operation_id: str,
+                        owner_user: str, parent_context: str = "",
+                        parent_session_id: str = ""):
+```
+
+Near the top of `_stream_agent`, after `system_prompt` is first built (before or after
+RAG injection), add parent context injection:
+
+```python
+    # Inject parent investigation context for sub-agent tasks
+    if parent_context:
+        _parent_prefix = (
+            "═══ PARENT INVESTIGATION CONTEXT ═══\n"
+            "The user has already investigated this issue. Key findings:\n"
+            f"{parent_context[:1200]}\n"
+            "═══════════════════════════════════\n"
+            "Proceed DIRECTLY to remediation. Do NOT re-investigate what is already known.\n\n"
+        )
+        system_prompt = _parent_prefix + system_prompt
+```
+
+Also, when `parent_session_id` is provided, store it in the operation:
+
+```python
+    # Store parent linkage in operations table for Tree view in Logs
+    if parent_session_id:
+        try:
+            from api.db.base import get_engine as _lge
+            from sqlalchemy import text as _lt
+            async with _lge().begin() as _lconn:
+                await _lconn.execute(
+                    _lt("UPDATE operations SET parent_session_id=:psid WHERE id=:oid"),
+                    {"psid": parent_session_id, "oid": operation_id},
+                )
+        except Exception as _ple:
+            log.debug("parent_session_id update failed: %s", _ple)
+```
+
+### 5c. Add POST /api/agent/subtask and GET /api/agent/proposals endpoints
+
+Add these routes to the agent router (in `api/routers/agent.py`):
+
+```python
+class SubtaskRequest(BaseModel):
+    proposal_id: str
+    task: str
+    parent_session_id: str = ""
+
+@router.post("/subtask", response_model=RunResponse)
+async def run_subtask(req: SubtaskRequest, background_tasks: BackgroundTasks,
+                      user: str = Depends(get_current_user)):
+    """Start an execute sub-agent from a proposal, injecting parent investigation context."""
+    session_id   = str(uuid.uuid4())
+    operation_id = await logger_mod.log_operation(session_id, req.task, owner_user=user)
+
+    # Fetch parent final_answer for context injection
+    parent_context = ""
+    if req.parent_session_id:
+        try:
+            from api.db.base import get_engine
+            from api.db import queries as q
+            async with get_engine().connect() as conn:
+                parent_op = await q.get_operation_by_session(conn, req.parent_session_id)
+                if parent_op:
+                    parent_context = parent_op.get("final_answer", "")
+        except Exception as _pce:
+            log.debug("parent context fetch failed: %s", _pce)
+
+    # Update proposal status
+    try:
+        from api.db.subtask_proposals import update_proposal_status
+        update_proposal_status(req.proposal_id, "accepted")
+    except Exception:
+        pass
+
+    background_tasks.add_task(
+        _stream_agent, req.task, session_id, operation_id, user,
+        parent_context, req.parent_session_id,
+    )
+    return RunResponse(
+        session_id=session_id,
+        operation_id=operation_id,
+        message="Sub-agent started",
+    )
+
+
+@router.get("/proposals")
+async def list_proposals(
+    status: str = Query("pending"),
+    limit: int = Query(10, ge=1, le=50),
+    _: str = Depends(get_current_user),
+):
+    """Return subtask proposals filtered by status."""
+    from api.db.subtask_proposals import list_proposals as _lp
+    return {"proposals": _lp(status=status, limit=limit)}
+
+
+@router.get("/proposals/{proposal_id}")
+async def get_proposal(proposal_id: str, _: str = Depends(get_current_user)):
+    from api.db.subtask_proposals import get_proposal as _gp
+    p = _gp(proposal_id)
+    if not p:
+        raise HTTPException(404, "Proposal not found")
+    return p
+
+
+@router.post("/proposals/{proposal_id}/dismiss")
+async def dismiss_proposal(proposal_id: str, _: str = Depends(get_current_user)):
+    from api.db.subtask_proposals import update_proposal_status
+    update_proposal_status(proposal_id, "dismissed")
+    return {"status": "ok"}
+```
+
+---
+
+## Change 6 — api/routers/runbooks.py (NEW FILE)
+
+```python
+"""GET/POST/DELETE /api/runbooks — manage saved runbooks."""
+import logging
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from api.auth import get_current_user
+
+log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/runbooks", tags=["runbooks"])
+
+
+class CreateRunbookRequest(BaseModel):
+    title: str
+    description: str = ""
+    steps: list       # [{order, title, description, command, notes}]
+    source: str = "manual_completion"
+    proposal_id: str = ""
+    tags: list = []
+
+
+@router.get("")
+def list_all(_: str = Depends(get_current_user)):
+    from api.db.runbooks import list_runbooks
+    return {"runbooks": list_runbooks()}
+
+
+@router.post("")
+def create(body: CreateRunbookRequest, user: str = Depends(get_current_user)):
+    from api.db.runbooks import create_runbook
+    rid = create_runbook(
+        title=body.title, description=body.description, steps=body.steps,
+        source=body.source, proposal_id=body.proposal_id,
+        tags=body.tags, created_by=user,
+    )
+    if not rid:
+        raise HTTPException(500, "Failed to create runbook")
+    return {"status": "ok", "id": rid}
+
+
+@router.get("/{runbook_id}")
+def get_one(runbook_id: str, _: str = Depends(get_current_user)):
+    from api.db.runbooks import list_runbooks
+    rbs = [r for r in list_runbooks(limit=500) if r["id"] == runbook_id]
+    if not rbs:
+        raise HTTPException(404, "Runbook not found")
+    return rbs[0]
+
+
+@router.delete("/{runbook_id}")
+def delete(runbook_id: str, _: str = Depends(get_current_user)):
+    from api.db.runbooks import delete_runbook
+    ok = delete_runbook(runbook_id)
+    if not ok:
+        raise HTTPException(404, "Runbook not found or delete failed")
+    return {"status": "ok"}
+```
+
+---
+
+## Change 7 — api/main.py: init tables + register routers
+
+In lifespan, add near the other init blocks:
+```python
+    try:
+        from api.db.subtask_proposals import init_subtask_proposals
+        init_subtask_proposals()
+    except Exception as e:
+        _log.debug("subtask_proposals init skipped: %s", e)
+    try:
+        from api.db.runbooks import init_runbooks
+        init_runbooks()
+    except Exception as e:
+        _log.debug("runbooks init skipped: %s", e)
+```
+
+Add imports and router registrations:
+```python
+from api.routers.runbooks import router as runbooks_router
+# ...
+app.include_router(runbooks_router)
+```
+
+---
+
+## Change 8 — api/agents/router.py: add tools to allowlists + update RESEARCH_PROMPT
+
+### 8a. Add to allowlists
+
+Add `"propose_subtask"` to `INVESTIGATE_AGENT_TOOLS` and `RESEARCH_AGENT_TOOLS`.
+Add `"runbook_search"` to ALL allowlists (observe, investigate, execute, build).
+
+### 8b. Add instruction to RESEARCH_PROMPT (and INVESTIGATE_PROMPT if separate)
+
+Find the RESEARCH_PROMPT string. Near the end of the rules section, add:
+
+```
+RULE — PROPOSE SUB-TASK:
+After completing your investigation with clear, actionable fix steps, call:
+  propose_subtask(
+    task="<concise description of what needs to be fixed>",
+    executable_steps=["<step1 — specific direct instruction>", "<step2>", ...],
+    manual_steps=["<any step requiring physical access or external credentials>"]
+  )
+Only call this when you have specific, tested remediation steps. Do NOT call for
+informational findings with no clear fix path. Do NOT call if swarm/kafka is healthy.
+After calling propose_subtask(), write your final investigation summary.
+
+RULE — CHECK RUNBOOKS FIRST:
+At the START of an investigation into a known problem type (kafka, swarm, disk, network),
+call runbook_search("<problem keyword>") to check if a proven procedure already exists.
+If found, reference it in your investigation.
+```
+
+---
+
+## Change 9 — gui/src/main.jsx: path-based popup routing
+
+Replace the contents of `gui/src/main.jsx`:
+
+```javascript
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+const path = window.location.pathname
+
+if (path.startsWith('/subtask/')) {
+  const sessionId = path.replace('/subtask/', '').split('/')[0]
+  import('./components/SubtaskPopup.jsx').then(({ default: SubtaskPopup }) => {
+    import('./context/AuthContext.jsx').then(({ AuthProvider, AuthGate }) => {
+      createRoot(document.getElementById('root')).render(
+        <StrictMode>
+          <AuthProvider>
+            <AuthGate>
+              <SubtaskPopup sessionId={sessionId} />
+            </AuthGate>
+          </AuthProvider>
+        </StrictMode>
+      )
+    })
+  })
+} else if (path.startsWith('/runbook/')) {
+  const proposalId = path.replace('/runbook/', '').split('/')[0]
+  import('./components/RunbookPopup.jsx').then(({ default: RunbookPopup }) => {
+    import('./context/AuthContext.jsx').then(({ AuthProvider, AuthGate }) => {
+      createRoot(document.getElementById('root')).render(
+        <StrictMode>
+          <AuthProvider>
+            <AuthGate>
+              <RunbookPopup proposalId={proposalId} />
+            </AuthGate>
+          </AuthProvider>
+        </StrictMode>
+      )
+    })
+  })
+} else {
+  createRoot(document.getElementById('root')).render(
+    <StrictMode>
+      <App />
+    </StrictMode>
+  )
+}
+```
+
+---
+
+## Change 10 — gui/src/components/SubtaskPopup.jsx (NEW FILE)
+
+A minimal self-contained popup page. Connects to WS, filters by session_id, shows
+the live agent feed with plan confirm and stop. No sidebar or nav.
+
+```javascript
+/**
+ * SubtaskPopup — minimal popup page for sub-agent execution.
+ * Opened via window.open('/subtask/:sessionId', '_blank', 'popup,...')
+ * Connects to WS, filters messages by sessionId.
+ */
+import { useState, useEffect, useRef } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+const TYPE_ICON = {
+  step:      { icon: '──', color: '#64748b' },
+  reasoning: { icon: '💭', color: '#cbd5e1' },
+  tool:      { icon: '⚙',  color: '#93c5fd' },
+  memory:    { icon: '◈',  color: '#475569' },
+  halt:      { icon: '⚠',  color: '#fb923c' },
+  done:      { icon: '✓',  color: '#4ade80' },
+  error:     { icon: '✗',  color: '#f87171' },
+}
+
+export default function SubtaskPopup({ sessionId }) {
+  const [lines, setLines]         = useState([])
+  const [status, setStatus]       = useState('connecting') // connecting|running|done|error
+  const [task, setTask]           = useState('')
+  const [pendingPlan, setPendingPlan] = useState(null)
+  const [wsState, setWsState]     = useState('connecting')
+  const bottomRef = useRef(null)
+  const wsRef     = useRef(null)
+
+  // Set page title
+  useEffect(() => { document.title = `Sub-agent · ${sessionId.substring(0, 8)}` }, [sessionId])
+
+  // Fetch replay on mount
+  useEffect(() => {
+    fetch(`${BASE}/api/logs/session/${sessionId}/output?limit=500`, {
+      headers: authHeaders()
+    }).then(r => r.ok ? r.json() : { lines: [] })
+      .then(d => setLines(d.lines || []))
+      .catch(() => {})
+    // Also get the task from operations
+    fetch(`${BASE}/api/logs/operations?session_id=${sessionId}&limit=1`, {
+      headers: authHeaders()
+    }).then(r => r.ok ? r.json() : { operations: [] })
+      .then(d => { if (d.operations?.[0]) setTask(d.operations[0].label || '') })
+      .catch(() => {})
+  }, [sessionId])
+
+  // WS connection
+  useEffect(() => {
+    const token = localStorage.getItem('hp1_auth_token')
+    const proto  = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${proto}://${location.host}/ws/output${token ? `?token=${token}` : ''}`)
+    wsRef.current = ws
+    setWsState('connecting')
+
+    ws.onopen = () => setWsState('connected')
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (!msg || msg.type === 'pong') return
+        // Only process messages for our session
+        if (msg.session_id && msg.session_id !== sessionId) return
+
+        if (msg.type === 'agent_start') {
+          setStatus('running')
+          if (msg.task) setTask(msg.task)
+        } else if (msg.type === 'plan_pending') {
+          setPendingPlan({ ...(msg.plan || {}), sessionId: msg.session_id })
+        } else if (msg.type === 'done') {
+          setStatus('done')
+          setPendingPlan(null)
+        } else if (msg.type === 'error') {
+          setStatus('error')
+        }
+
+        if (['step','tool','reasoning','memory','halt','done','error'].includes(msg.type)) {
+          setLines(prev => [...prev.slice(-800), {
+            id: Date.now() + Math.random(),
+            type: msg.type,
+            content: msg.content || msg.text || '',
+            tool: msg.tool || '',
+            status: msg.status || '',
+            timestamp: msg.timestamp || new Date().toISOString(),
+          }])
+        }
+      } catch { /* ignore */ }
+    }
+    ws.onclose = () => setWsState('disconnected')
+    ws.onerror = () => setWsState('error')
+    return () => ws.close()
+  }, [sessionId])
+
+  // Auto-scroll
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [lines.length])
+
+  const confirmPlan = async (approved) => {
+    if (!pendingPlan?.sessionId) return
+    await fetch(`${BASE}/api/agent/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ session_id: pendingPlan.sessionId, approved }),
+    })
+    setPendingPlan(null)
+  }
+
+  const stopAgent = async () => {
+    await fetch(`${BASE}/api/agent/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ session_id: sessionId }),
+    })
+    setStatus('done')
+  }
+
+  const statusColor = { running: '#3b82f6', done: '#4ade80', error: '#f87171',
+                         connecting: '#64748b' }[status] || '#64748b'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh',
+                  background: '#05060a', color: '#e2e8f0',
+                  fontFamily: "'Share Tech Mono', monospace" }}>
+      {/* Title bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 14px', background: '#09090f',
+                    borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%',
+                       background: statusColor, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, color: '#a01828', letterSpacing: 1,
+                       fontWeight: 600 }}>⬡ SUB-AGENT</span>
+        <span style={{ fontSize: 10, color: '#94a3b8', flex: 1, minWidth: 0,
+                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {task || sessionId.substring(0, 16) + '…'}
+        </span>
+        <span style={{ fontSize: 9, color: '#334155' }}>{sessionId.substring(0, 8)}</span>
+        {status === 'running' && (
+          <button onClick={stopAgent}
+            style={{ fontSize: 9, padding: '2px 8px', borderRadius: 2,
+                     background: '#7f1d1d', color: '#fca5a5',
+                     border: '1px solid #991b1b', cursor: 'pointer' }}>
+            STOP
+          </button>
+        )}
+      </div>
+
+      {/* Plan confirmation overlay */}
+      {pendingPlan && (
+        <div style={{ padding: '10px 14px', background: 'rgba(251,146,60,0.08)',
+                      borderBottom: '1px solid #f97316', flexShrink: 0 }}>
+          <div style={{ fontSize: 10, color: '#fb923c', marginBottom: 4,
+                        letterSpacing: 1 }}>⚡ PLAN PENDING APPROVAL</div>
+          <div style={{ fontSize: 11, color: '#e2e8f0', marginBottom: 6,
+                        whiteSpace: 'pre-wrap', maxHeight: 120, overflowY: 'auto' }}>
+            {pendingPlan.summary || JSON.stringify(pendingPlan, null, 2)}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => confirmPlan(true)}
+              style={{ fontSize: 10, padding: '3px 12px', borderRadius: 2,
+                       background: '#14532d', color: '#86efac',
+                       border: '1px solid #166534', cursor: 'pointer' }}>
+              APPROVE
+            </button>
+            <button onClick={() => confirmPlan(false)}
+              style={{ fontSize: 10, padding: '3px 12px', borderRadius: 2,
+                       background: '#7f1d1d', color: '#fca5a5',
+                       border: '1px solid #991b1b', cursor: 'pointer' }}>
+              CANCEL
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Output lines */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+        {lines.map((line, i) => {
+          const s = TYPE_ICON[line.type] ?? { icon: '·', color: '#475569' }
+          const ts = line.timestamp ? new Date(line.timestamp).toLocaleTimeString() : ''
+          return (
+            <div key={line.id || i} style={{ display: 'flex', gap: 6, padding: '1px 14px',
+                                             fontSize: 11, lineHeight: 1.5 }}>
+              <span style={{ color: '#1e293b', flexShrink: 0, width: 58, fontSize: 9 }}>{ts}</span>
+              <span style={{ color: s.color, flexShrink: 0, width: 16 }}>{s.icon}</span>
+              <span style={{ color: line.type === 'done' ? s.color : '#94a3b8',
+                             whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
+                {line.content}
+              </span>
+            </div>
+          )
+        })}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Footer */}
+      <div style={{ padding: '6px 14px', borderTop: '1px solid #1e293b',
+                    flexShrink: 0, fontSize: 9, color: '#334155',
+                    display: 'flex', justifyContent: 'space-between' }}>
+        <span>WS: {wsState}</span>
+        <span>{lines.length} lines</span>
+        {status === 'done' && (
+          <button onClick={() => window.close()}
+            style={{ fontSize: 9, color: '#475569', background: 'none',
+                     border: 'none', cursor: 'pointer' }}>close ×</button>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 11 — gui/src/components/RunbookPopup.jsx (NEW FILE)
+
+```javascript
+/**
+ * RunbookPopup — manual runbook checklist popup.
+ * Opened via window.open('/runbook/:proposalId', '_blank', 'popup,...')
+ * Shows executable + manual steps as checkboxes. When all checked, Save saves to DB.
+ */
+import { useState, useEffect } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+function extractCommand(text) {
+  // Extract backtick or `ssh`/`docker`/shell commands from step text
+  const bt = text.match(/`([^`]{5,})`/)
+  if (bt) return bt[1]
+  const ssh = text.match(/(?:ssh|docker|kubectl|systemctl|journalctl)\s+\S[^\n]{3,}/)
+  return ssh ? ssh[0] : null
+}
+
+function StepCard({ step, index, total, checked, onCheck }) {
+  const cmd = typeof step === 'string' ? extractCommand(step) : extractCommand(step.description || step.title || '')
+  const text = typeof step === 'string' ? step : (step.description || step.title || JSON.stringify(step))
+
+  return (
+    <div style={{
+      padding: '12px 14px', marginBottom: 8, borderRadius: 3,
+      background: checked ? 'rgba(0,170,68,0.06)' : '#09090f',
+      border: `1px solid ${checked ? '#166534' : '#1e293b'}`,
+      transition: 'all 0.15s',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        {/* Checkbox */}
+        <div onClick={onCheck} style={{
+          width: 18, height: 18, borderRadius: 2, flexShrink: 0, marginTop: 1,
+          border: `2px solid ${checked ? '#22c55e' : '#334155'}`,
+          background: checked ? '#22c55e' : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', transition: 'all 0.1s',
+        }}>
+          {checked && <span style={{ color: '#0f172a', fontSize: 11, fontWeight: 800 }}>✓</span>}
+        </div>
+        <div style={{ flex: 1 }}>
+          {/* Step number + text */}
+          <div style={{ fontSize: 11, color: checked ? '#4ade80' : '#cbd5e1',
+                        lineHeight: 1.5, textDecoration: checked ? 'line-through' : 'none',
+                        fontFamily: "'Rajdhani', sans-serif" }}>
+            <span style={{ color: '#475569', marginRight: 6 }}>
+              {String(index + 1).padStart(2, '0')}/{String(total).padStart(2, '0')}
+            </span>
+            {text}
+          </div>
+          {/* Command hint */}
+          {cmd && (
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <code style={{ fontSize: 10, color: '#38bdf8', background: '#0f172a',
+                             padding: '2px 8px', borderRadius: 2, flex: 1,
+                             fontFamily: "'Share Tech Mono', monospace",
+                             borderLeft: '2px solid #0369a1' }}>
+                {cmd}
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText(cmd)}
+                style={{ fontSize: 9, padding: '2px 6px', borderRadius: 2,
+                         background: '#1e293b', color: '#64748b',
+                         border: '1px solid #334155', cursor: 'pointer' }}>
+                copy
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function RunbookPopup({ proposalId }) {
+  const [proposal, setProposal] = useState(null)
+  const [checked, setChecked]   = useState({})
+  const [saving, setSaving]     = useState(false)
+  const [saved, setSaved]       = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [title, setTitle]       = useState('')
+  const [tags, setTags]         = useState('')
+
+  useEffect(() => {
+    fetch(`${BASE}/api/agent/proposals/${proposalId}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setProposal(d)
+          setTitle(d.task?.substring(0, 80) || 'Runbook')
+          document.title = `Runbook · ${d.task?.substring(0, 40) || proposalId.substring(0, 8)}`
+        }
+      })
+      .catch(() => {})
+  }, [proposalId])
+
+  if (!proposal) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  height: '100vh', background: '#05060a',
+                  color: '#475569', fontFamily: "'Share Tech Mono', monospace",
+                  fontSize: 12 }}>
+      Loading runbook…
+    </div>
+  )
+
+  const allSteps = [
+    ...(proposal.executable_steps || []).map(s => ({ text: s, type: 'auto' })),
+    ...(proposal.manual_steps || []).map(s => ({ text: s, type: 'manual' })),
+  ]
+  const totalSteps = allSteps.length
+  const checkedCount = Object.values(checked).filter(Boolean).length
+  const allDone = totalSteps > 0 && checkedCount === totalSteps
+
+  const toggleStep = (i) => setChecked(prev => ({ ...prev, [i]: !prev[i] }))
+
+  const save = async () => {
+    if (!allDone || saving || saved) return
+    setSaving(true); setSaveError('')
+    const steps = allSteps.map((s, i) => ({
+      order: i + 1,
+      title: (typeof s.text === 'string' ? s.text : s.text?.title || '').substring(0, 120),
+      description: typeof s.text === 'string' ? s.text : JSON.stringify(s.text),
+      command: typeof s.text === 'string' ? (extractCommand(s.text) || '') : '',
+      type: s.type,
+    }))
+    try {
+      const r = await fetch(`${BASE}/api/runbooks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          title,
+          description: proposal.task || '',
+          steps,
+          source: 'manual_completion',
+          proposal_id: proposalId,
+          tags: tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean),
+        }),
+      })
+      if (r.ok) {
+        setSaved(true)
+        // Dismiss the proposal
+        await fetch(`${BASE}/api/agent/proposals/${proposalId}/dismiss`, {
+          method: 'POST', headers: authHeaders()
+        })
+      } else {
+        const d = await r.json()
+        setSaveError(d.detail || 'Save failed')
+      }
+    } catch (e) { setSaveError(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh',
+                  background: '#05060a', color: '#e2e8f0',
+                  fontFamily: "'Share Tech Mono', monospace" }}>
+      {/* Header */}
+      <div style={{ padding: '10px 14px', background: '#09090f',
+                    borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 11, color: '#00c8ee', letterSpacing: 1 }}>◫ MANUAL RUNBOOK</span>
+          <span style={{ fontSize: 9, color: '#334155', marginLeft: 'auto' }}>
+            {checkedCount}/{totalSteps} steps complete
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
+          {proposal.task}
+        </div>
+        {proposal.parent_session_id && (
+          <div style={{ fontSize: 9, color: '#334155', marginTop: 3 }}>
+            from session {proposal.parent_session_id.substring(0, 8)}
+          </div>
+        )}
+        {/* Progress bar */}
+        <div style={{ marginTop: 8, height: 2, background: '#1e293b', borderRadius: 1 }}>
+          <div style={{ height: '100%', background: allDone ? '#22c55e' : '#00c8ee',
+                        width: `${totalSteps > 0 ? (checkedCount / totalSteps) * 100 : 0}%`,
+                        borderRadius: 1, transition: 'width 0.2s' }} />
+        </div>
+      </div>
+
+      {/* Steps */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
+        {allSteps.length === 0 && (
+          <p style={{ color: '#475569', fontSize: 11 }}>No steps in this proposal.</p>
+        )}
+        {allSteps.map((step, i) => (
+          <StepCard
+            key={i} step={step.text} index={i} total={totalSteps}
+            checked={!!checked[i]} onCheck={() => toggleStep(i)}
+          />
+        ))}
+      </div>
+
+      {/* Save section */}
+      <div style={{ padding: '10px 14px', borderTop: '1px solid #1e293b',
+                    flexShrink: 0, background: '#09090f' }}>
+        {!saved ? (
+          <>
+            {allDone && (
+              <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="Runbook title"
+                  style={{ flex: 1, fontSize: 10, padding: '4px 8px', borderRadius: 2,
+                           background: '#0d0f1a', border: '1px solid #334155',
+                           color: '#e2e8f0', outline: 'none' }}
+                />
+                <input
+                  value={tags}
+                  onChange={e => setTags(e.target.value)}
+                  placeholder="tags (comma-separated)"
+                  style={{ width: 160, fontSize: 10, padding: '4px 8px', borderRadius: 2,
+                           background: '#0d0f1a', border: '1px solid #334155',
+                           color: '#e2e8f0', outline: 'none' }}
+                />
+              </div>
+            )}
+            {saveError && (
+              <p style={{ fontSize: 10, color: '#f87171', marginBottom: 6 }}>{saveError}</p>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={save}
+                disabled={!allDone || saving}
+                style={{
+                  fontSize: 10, padding: '4px 16px', borderRadius: 2, cursor: allDone ? 'pointer' : 'not-allowed',
+                  background: allDone ? '#14532d' : '#1e293b',
+                  color: allDone ? '#86efac' : '#475569',
+                  border: `1px solid ${allDone ? '#166534' : '#334155'}`,
+                  opacity: saving ? 0.5 : 1, transition: 'all 0.15s',
+                }}>
+                {saving ? 'Saving…' : '💾 Save Runbook'}
+              </button>
+              {!allDone && (
+                <span style={{ fontSize: 10, color: '#475569' }}>
+                  Check all {totalSteps - checkedCount} remaining steps to save
+                </span>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 11, color: '#4ade80' }}>
+              ✓ Runbook saved — accessible in Logs → Runbooks
+            </span>
+            <button onClick={() => window.close()}
+              style={{ fontSize: 9, color: '#475569', background: 'none',
+                       border: 'none', cursor: 'pointer', marginLeft: 'auto' }}>
+              close ×
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 12 — gui/src/components/SubtaskOfferBanner.jsx (NEW FILE)
+
+```javascript
+/**
+ * SubtaskOfferBanner — cyan banner offering sub-agent or manual runbook.
+ * Appears when agent calls propose_subtask(). Polls for pending proposals.
+ * Different from EscalationBanner (amber): this is cyan and actionable.
+ */
+import { useState, useEffect, useCallback } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+const POPUP_FEATURES = 'popup,width=760,height=560,resizable=yes'
+
+export default function SubtaskOfferBanner() {
+  const [proposals, setProposals] = useState([])
+
+  const fetchProposals = useCallback(() => {
+    fetch(`${BASE}/api/agent/proposals?status=pending&limit=5`, {
+      headers: authHeaders()
+    }).then(r => r.ok ? r.json() : { proposals: [] })
+      .then(d => setProposals(d.proposals || []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchProposals()
+    const id = setInterval(fetchProposals, 15000)
+
+    // Listen for real-time WS event
+    const handler = (e) => {
+      if (e.detail?.type === 'subtask_proposed') fetchProposals()
+    }
+    window.addEventListener('ds:ws-message', handler)
+    return () => { clearInterval(id); window.removeEventListener('ds:ws-message', handler) }
+  }, [fetchProposals])
+
+  const dismiss = async (id) => {
+    await fetch(`${BASE}/api/agent/proposals/${id}/dismiss`, {
+      method: 'POST', headers: authHeaders()
+    })
+    setProposals(prev => prev.filter(p => p.id !== id))
+  }
+
+  const runSubAgent = async (proposal) => {
+    // Start subtask, get session_id, open popup
+    try {
+      const r = await fetch(`${BASE}/api/agent/subtask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          proposal_id: proposal.id,
+          task: proposal.task,
+          parent_session_id: proposal.parent_session_id,
+        }),
+      })
+      const d = await r.json()
+      if (d.session_id) {
+        window.open(`/subtask/${d.session_id}`, `subtask-${d.session_id}`, POPUP_FEATURES)
+        setProposals(prev => prev.filter(p => p.id !== proposal.id))
+      }
+    } catch (e) { console.error('run subtask failed', e) }
+  }
+
+  const openRunbook = (proposal) => {
+    window.open(`/runbook/${proposal.id}`, `runbook-${proposal.id}`, POPUP_FEATURES)
+    setProposals(prev => prev.filter(p => p.id !== proposal.id))
+  }
+
+  if (proposals.length === 0) return null
+
+  const latest = proposals[0]
+  const extra  = proposals.length - 1
+  const confColor = { high: '#22c55e', medium: '#00c8ee', low: '#f59e0b' }[latest.confidence] || '#94a3b8'
+
+  return (
+    <div style={{
+      background: 'rgba(0,200,238,0.07)',
+      borderBottom: '1px solid var(--cyan)',
+      padding: '7px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexShrink: 0,
+      flexWrap: 'wrap',
+    }}>
+      {/* Pulsing dot */}
+      <span style={{
+        width: 7, height: 7, borderRadius: '50%',
+        background: 'var(--cyan)', flexShrink: 0,
+        boxShadow: '0 0 5px var(--cyan)',
+        animation: 'pulse 1.8s ease-in-out infinite',
+      }} />
+
+      {/* Label */}
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9,
+                     color: 'var(--cyan)', letterSpacing: 1, flexShrink: 0 }}>
+        ⬡ SUB-TASK READY
+      </span>
+
+      {/* Confidence */}
+      <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, flexShrink: 0,
+                     background: `${confColor}22`, color: confColor,
+                     fontFamily: 'var(--font-mono)', border: `1px solid ${confColor}44` }}>
+        {latest.confidence}
+      </span>
+
+      {/* Task text */}
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
+                     color: 'var(--text-2)', flex: 1, minWidth: 0 }}>
+        {latest.task?.slice(0, 120)}
+        {extra > 0 && (
+          <span style={{ color: 'var(--cyan)', marginLeft: 6 }}>+{extra} more</span>
+        )}
+      </span>
+
+      {/* Step counts */}
+      <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)',
+                     flexShrink: 0 }}>
+        {latest.executable_steps?.length || 0} auto
+        {(latest.manual_steps?.length || 0) > 0 &&
+          ` · ${latest.manual_steps.length} manual`}
+      </span>
+
+      {/* Actions */}
+      <button onClick={() => runSubAgent(latest)}
+        style={{ padding: '2px 10px', fontSize: 9, fontFamily: 'var(--font-mono)',
+                 background: 'rgba(0,200,238,0.15)', color: 'var(--cyan)',
+                 border: '1px solid var(--cyan)', borderRadius: 2,
+                 cursor: 'pointer', flexShrink: 0 }}>
+        ▶ Run Sub-agent
+      </button>
+      <button onClick={() => openRunbook(latest)}
+        style={{ padding: '2px 10px', fontSize: 9, fontFamily: 'var(--font-mono)',
+                 background: 'transparent', color: 'var(--text-2)',
+                 border: '1px solid var(--border)', borderRadius: 2,
+                 cursor: 'pointer', flexShrink: 0 }}>
+        ◫ Manual Runbook
+      </button>
+      <button onClick={() => dismiss(latest.id)}
+        style={{ padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
+                 background: 'transparent', color: 'var(--text-3)',
+                 border: '1px solid var(--border)', borderRadius: 2,
+                 cursor: 'pointer', flexShrink: 0 }}>
+        ×
+      </button>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 13 — gui/src/components/RunbooksPanel.jsx (NEW FILE)
+
+```javascript
+/**
+ * RunbooksPanel — browse, search, and re-open saved runbooks.
+ * Shown as a sidebar tab under OPERATE → Runbooks.
+ */
+import { useState, useEffect, useCallback } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+const POPUP_FEATURES = 'popup,width=760,height=560,resizable=yes'
+
+const SOURCE_BADGE = {
+  manual_completion: { label: 'manual', color: '#22c55e' },
+  agent_proposed:    { label: 'agent',  color: '#00c8ee' },
+  user_created:      { label: 'user',   color: '#a855f7' },
+}
+
+export default function RunbooksPanel() {
+  const [runbooks, setRunbooks] = useState([])
+  const [query, setQuery]       = useState('')
+  const [loading, setLoading]   = useState(true)
+  const [expanded, setExpanded] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    fetch(`${BASE}/api/runbooks`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : { runbooks: [] })
+      .then(d => setRunbooks(d.runbooks || []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const del = async (id) => {
+    if (!confirm('Delete this runbook?')) return
+    await fetch(`${BASE}/api/runbooks/${id}`, { method: 'DELETE', headers: authHeaders() })
+    load()
+  }
+
+  const visible = query
+    ? runbooks.filter(r =>
+        r.title.toLowerCase().includes(query.toLowerCase()) ||
+        r.description.toLowerCase().includes(query.toLowerCase()) ||
+        (r.tags || []).some(t => t.includes(query.toLowerCase()))
+      )
+    : runbooks
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
+                  background: 'var(--bg-0)', color: 'var(--text-1)' }}>
+      {/* Header */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)',
+                    flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10,
+                       color: 'var(--text-3)', letterSpacing: 1 }}>
+          ◫ RUNBOOKS
+        </span>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search runbooks…"
+          style={{ fontSize: 10, padding: '3px 8px', borderRadius: 2, flex: 1,
+                   background: 'var(--bg-2)', border: '1px solid var(--border)',
+                   color: 'var(--text-1)', fontFamily: 'var(--font-mono)', outline: 'none' }}
+        />
+        <button onClick={load}
+          style={{ color: 'var(--text-3)', background: 'none', border: 'none',
+                   cursor: 'pointer', fontSize: 12 }}>↺</button>
+      </div>
+
+      {/* List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+        {loading && <p style={{ fontSize: 10, color: 'var(--text-3)' }}>Loading…</p>}
+        {!loading && visible.length === 0 && (
+          <p style={{ fontSize: 10, color: 'var(--text-3)' }}>
+            {query ? 'No runbooks match your search.' : 'No runbooks saved yet. Complete a manual runbook checklist to save one.'}
+          </p>
+        )}
+        {visible.map(rb => {
+          const badge = SOURCE_BADGE[rb.source] || { label: rb.source, color: '#64748b' }
+          const isOpen = expanded === rb.id
+          return (
+            <div key={rb.id} style={{ marginBottom: 8, borderRadius: 3,
+                                       border: '1px solid var(--border)',
+                                       background: 'var(--bg-1)' }}>
+              {/* Summary row */}
+              <div
+                onClick={() => setExpanded(isOpen ? null : rb.id)}
+                style={{ padding: '10px 12px', cursor: 'pointer',
+                         display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 10, color: badge.color,
+                               fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                  {badge.label}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
+                  {rb.title}
+                </span>
+                <span style={{ fontSize: 9, color: 'var(--text-3)',
+                               fontFamily: 'var(--font-mono)' }}>
+                  {rb.steps?.length || 0} steps
+                </span>
+                {(rb.tags || []).map(t => (
+                  <span key={t} style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2,
+                                          background: 'var(--bg-2)', color: 'var(--text-3)' }}>
+                    {t}
+                  </span>
+                ))}
+                <span style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                  {isOpen ? '▾' : '▸'}
+                </span>
+              </div>
+
+              {/* Expanded steps */}
+              {isOpen && (
+                <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
+                  <p style={{ fontSize: 10, color: 'var(--text-3)', margin: '8px 0 6px' }}>
+                    {rb.description}
+                  </p>
+                  {(rb.steps || []).map((step, i) => (
+                    <div key={i} style={{ padding: '5px 0', borderBottom: '1px solid var(--border)',
+                                          fontSize: 10, color: 'var(--text-2)' }}>
+                      <span style={{ color: 'var(--text-3)', marginRight: 8 }}>
+                        {String(i + 1).padStart(2, '0')}.
+                      </span>
+                      {step.title || step.description || String(step)}
+                      {step.command && (
+                        <div style={{ marginTop: 3, display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <code style={{ fontSize: 9, color: '#38bdf8',
+                                         fontFamily: 'var(--font-mono)',
+                                         background: 'var(--bg-2)',
+                                         padding: '1px 6px', borderRadius: 2 }}>
+                            {step.command}
+                          </code>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(step.command)}
+                            style={{ fontSize: 8, color: 'var(--text-3)', background: 'none',
+                                     border: '1px solid var(--border)', borderRadius: 2,
+                                     cursor: 'pointer', padding: '1px 4px' }}>
+                            copy
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {/* Actions */}
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => del(rb.id)}
+                      style={{ fontSize: 9, padding: '3px 8px', borderRadius: 2,
+                               background: 'transparent', color: 'var(--red)',
+                               border: '1px solid var(--border)', cursor: 'pointer',
+                               fontFamily: 'var(--font-mono)' }}>
+                      delete
+                    </button>
+                    <span style={{ fontSize: 9, color: 'var(--text-3)', alignSelf: 'center' }}>
+                      used {rb.run_count}× · by {rb.created_by}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 14 — gui/src/context/AgentOutputContext.jsx: handle subtask_proposed
+
+In the `onMsg` function, in the ws.onmessage handler, add dispatch for `subtask_proposed`:
+
+Find the block that handles `escalation_recorded`:
+```javascript
+      if (msg.type === 'escalation_recorded') {
+        window.dispatchEvent(new CustomEvent('ds:ws-message', { detail: msg }))
+      }
+```
+
+Add alongside it:
+```javascript
+      if (msg.type === 'subtask_proposed') {
+        window.dispatchEvent(new CustomEvent('ds:ws-message', { detail: msg }))
+      }
+```
+
+---
+
+## Change 15 — gui/src/App.jsx: mount banners + Runbooks tab + event handler
+
+### 15a. Import new components
+
+Add to imports at the top:
+```javascript
+import SubtaskOfferBanner from './components/SubtaskOfferBanner'
+import RunbooksPanel from './components/RunbooksPanel'
+```
+
+### 15b. Mount SubtaskOfferBanner
+
+Find where `<EscalationBanner />` is rendered. Add `<SubtaskOfferBanner />` directly after it:
+```javascript
+      <EscalationBanner />
+      <SubtaskOfferBanner />
+```
+
+### 15c. Add Runbooks tab content
+
+Find the tab content section where all `activeTab === 'X'` blocks are. Add:
+```javascript
+          {activeTab === 'Runbooks' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden">
+                <RunbooksPanel />
+              </div>
+            </div>
+          )}
+```
+
+### 15d. Handle navigate-to-logs event
+
+In `AppShell` (or wherever other event listeners are), add:
+```javascript
+  useEffect(() => {
+    const handler = () => setActiveTab('Logs')
+    window.addEventListener('navigate-to-logs', handler)
+    return () => window.removeEventListener('navigate-to-logs', handler)
+  }, [])
+```
+
+---
+
+## Change 16 — gui/src/components/Sidebar.jsx: add Runbooks to NAV
+
+Find the `NAV` array. In the `OPERATE` section, add `Runbooks`:
+
+```javascript
+  { section: 'OPERATE', items: [
+    { key: 'Commands',  icon: '▶' },
+    { key: 'Skills',    icon: '⚙' },
+    { key: 'Runbooks',  icon: '◫' },
+    { key: 'Output',    icon: '◫' },
+  ]},
+```
+
+Change the Output icon to something distinct from Runbooks — use `'□'` for Output:
+```javascript
+    { key: 'Output',    icon: '□' },
+```
+
+---
+
+## Change 17 — gui/src/components/LogTable.jsx: parent/child Tree view in OpsView
+
+### 17a. Add tree-building utility before OpsView
+
+```javascript
+function buildOpTree(ops) {
+  const bySession = {}
+  ops.forEach(op => { bySession[op.session_id] = op })
+
+  const roots = []
+  const childMap = {}
+
+  ops.forEach(op => {
+    if (op.parent_session_id && bySession[op.parent_session_id]) {
+      if (!childMap[op.parent_session_id]) childMap[op.parent_session_id] = []
+      childMap[op.parent_session_id].push(op)
+    } else {
+      roots.push(op)
+    }
+  })
+
+  // Flatten in depth-first order with depth info
+  const result = []
+  function visit(op, depth) {
+    result.push({ op, depth })
+    const children = childMap[op.session_id] || []
+    children.forEach(c => visit(c, depth + 1))
+  }
+  roots.forEach(r => visit(r, 0))
+  return result
+}
+```
+
+### 17b. Update OpsView to add Tree/Flat toggle
+
+Find the `OpsView` component. Add state for view mode and update the render:
+
+```javascript
+export function OpsView({ refreshTick }) {
+  const [ops, setOps]         = useState([])
+  const [loading, setLoading] = useState(false)
+  const [detail, setDetail]   = useState(null)
+  const [ratedOnly, setRatedOnly] = useState(false)
+  const [treeMode, setTreeMode]   = useState(true)   // default: Tree
+  // ... rest of existing state
+```
+
+In the header bar, add the toggle button after the "Rated only" button:
+```javascript
+        <button
+          onClick={() => setTreeMode(m => !m)}
+          className={`text-xs px-2 py-0.5 rounded transition-colors ${
+            treeMode ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+          }`}
+        >
+          {treeMode ? 'Tree' : 'Flat'}
+        </button>
+```
+
+In the table body, replace `{visible.map(op => (...))}` with:
+
+```javascript
+{(() => {
+  const rows = treeMode ? buildOpTree(visible) : visible.map(op => ({ op, depth: 0 }))
+  return rows.map(({ op, depth }) => (
+    <>
+      <tr key={op.id}
+          className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer"
+          style={{ paddingLeft: depth * 16 }}
+          onClick={() => openDetail(op)}>
+        <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
+          {/* Indent indicator */}
+          {depth > 0 && (
+            <span style={{ paddingLeft: depth * 12, color: '#334155', marginRight: 4 }}>└</span>
+          )}
+          {fmtTs(op.started_at)}
+        </td>
+        {/* ... rest of existing <td> cells unchanged ... */}
+      </tr>
+      {/* ... existing detail row unchanged ... */}
+    </>
+  ))
+})()}
+```
+
+The existing detail row render (with Task, Final Answer, Tool calls, RawOutputToggle,
+CorrelationView) remains unchanged — just ensure it still uses `detail?.operation?.id === op.id`.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.23.4` → `2.24.0`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(subtask): sub-agent proposals, manual runbook popups, runbook library"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 13:38:21
+========================================================================
+PROMPT COMPLETE: v2.24.0
+[STATUS] 10m40s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  10m42s
+========================================================================

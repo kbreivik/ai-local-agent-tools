@@ -634,6 +634,30 @@ with targeted options BEFORE concluding:
 NEVER ask at the start of an investigation for clear tasks. Ask only when evidence is gathered
 but the cause is still unclear. Ask at most once per run.
 
+RULE — CHECK RUNBOOKS FIRST:
+At the START of an investigation into a known problem type (kafka, swarm, disk, network),
+call runbook_search("<problem keyword>") to check if a proven procedure already exists.
+If a runbook is found, cite it in your evidence section and follow its steps.
+
+RULE — PROPOSE SUB-TASK:
+After completing your investigation with clear, specific, actionable fix steps, call:
+  propose_subtask(
+    task="<concise description of what needs to be fixed — max 80 chars>",
+    executable_steps=["<step1 — specific direct instruction with tool>", "<step2>", ...],
+    manual_steps=["<any step requiring physical access or credentials the agent lacks>"]
+  )
+Call this ONLY when:
+  - You have specific, confirmed evidence of the root cause
+  - Fix steps are concrete (not speculative)
+  - At least one step is executable by the execute agent
+
+Do NOT call if:
+  - Investigation found no clear fix path
+  - swarm/kafka is healthy
+  - Fix requires only manual human steps (use manual_steps list instead)
+
+After calling propose_subtask(), write your final investigation summary.
+
 Think step by step. Investigate thoroughly. Give actionable recommendations."""
 
 ACTION_PROMPT = """You are an infrastructure orchestration agent for a Docker Swarm + Kafka cluster.
@@ -986,7 +1010,9 @@ def rank_tools_for_task(
     """
     # Always include these structural tools regardless of ranking
     _ALWAYS_INCLUDE = {"plan_action", "escalate", "audit_log", "clarifying_question",
-                       "result_fetch", "result_query"}
+                       "result_fetch", "result_query",
+                       # Sub-task proposal — must always be visible to investigate agents
+                       "propose_subtask", "runbook_search"}
 
     if len(tools_spec) <= top_n:
         return tools_spec   # small enough — no filtering needed
