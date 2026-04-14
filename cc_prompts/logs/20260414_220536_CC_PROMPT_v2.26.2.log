@@ -1,0 +1,429 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.26.2.md (v2.26.2)
+Theme: Agent routing: proxmox allowlist, node_activate, ambiguous→observe
+
+Prompt content:
+
+# CC PROMPT — v2.26.2 — Agent routing fixes: proxmox allowlist, node_activate, ambiguous classification
+
+## What this does
+Fixes three correctness gaps in the agent routing layer:
+1. EXECUTE_PROXMOX_TOOLS was nearly empty — adds proxmox_vm_power and core diagnostic tools
+2. node_activate was missing from all execute allowlists — agents could drain but not un-drain
+3. Ambiguous tasks routed to Execute agent (wrong) — now routes to Observe + STATUS_PROMPT
+4. propose_subtask was missing from all execute allowlists — agents couldn't offer sub-tasks
+Version bump: v2.26.1 → v2.26.2
+
+---
+
+## Change 1 — api/agents/router.py
+
+### 1a — Fix EXECUTE_KAFKA_TOOLS: add missing tools
+
+FIND (exact):
+```
+EXECUTE_KAFKA_TOOLS = frozenset({
+    "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
+    "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
+    "swarm_node_status", "swarm_service_force_update",
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+REPLACE WITH:
+```
+EXECUTE_KAFKA_TOOLS = frozenset({
+    "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
+    "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
+    "swarm_node_status", "swarm_service_force_update",
+    "vm_exec", "infra_lookup",                   # SSH diagnostics on workers
+    "service_list", "service_health",             # Swarm service state
+    "entity_history", "entity_events",            # change tracking
+    "result_fetch", "result_query",               # large result retrieval
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+    "propose_subtask",                            # offer automated fix run to user
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+### 1b — Fix EXECUTE_SWARM_TOOLS: add node_activate + propose_subtask
+
+FIND (exact):
+```
+EXECUTE_SWARM_TOOLS = frozenset({
+    "swarm_status", "service_list", "service_health", "service_upgrade",
+    "service_rollback", "node_drain", "pre_upgrade_check", "post_upgrade_verify",
+    "service_current_version", "service_resolve_image",
+    "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
+    "result_fetch", "result_query",
+    "entity_history", "entity_events",
+    "swarm_node_status", "swarm_service_force_update",
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+REPLACE WITH:
+```
+EXECUTE_SWARM_TOOLS = frozenset({
+    "swarm_status", "service_list", "service_health", "service_upgrade",
+    "service_rollback", "node_drain", "node_activate",   # node_activate un-drains a node
+    "pre_upgrade_check", "post_upgrade_verify",
+    "service_current_version", "service_resolve_image",
+    "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
+    "result_fetch", "result_query",
+    "entity_history", "entity_events",
+    "swarm_node_status", "swarm_service_force_update",
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+    "propose_subtask",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+### 1c — Fix EXECUTE_PROXMOX_TOOLS: add all core tools (was nearly empty)
+
+FIND (exact):
+```
+EXECUTE_PROXMOX_TOOLS = frozenset({
+    # Populated at startup by _load_promoted_into_allowlists().
+    # Only plan_action / escalate / audit_log in base until proxmox skills are promoted.
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+REPLACE WITH:
+```
+EXECUTE_PROXMOX_TOOLS = frozenset({
+    # Core Proxmox operations
+    "proxmox_vm_power",                # start/stop/reboot VMs via Proxmox API
+    "swarm_node_status",               # check which Swarm worker nodes are Down
+    "swarm_service_force_update",      # force-update a Swarm service after node recovery
+    "vm_exec", "infra_lookup",         # SSH to VM hosts for diagnostics
+    "service_list", "service_health",  # check Swarm services after VM recovery
+    "service_placement",               # locate which node a service task is on
+    "entity_history", "entity_events", # change tracking
+    "result_fetch", "result_query",    # large result retrieval
+    "resolve_entity",                  # cross-reference entity names
+    # Allowlist management
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+    "propose_subtask",
+    # Note: promoted skills injected here at startup via _load_promoted_into_allowlists()
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+### 1d — Fix EXECUTE_GENERAL_TOOLS: add node_activate + propose_subtask
+
+FIND (exact):
+```
+EXECUTE_GENERAL_TOOLS = frozenset({
+    "service_upgrade", "service_rollback", "node_drain",
+    "docker_engine_update", "vm_exec", "infra_lookup",
+    "vm_disk_investigate", "vm_service_discover",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
+    "result_fetch", "result_query",
+    "entity_history", "entity_events",
+    "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+REPLACE WITH:
+```
+EXECUTE_GENERAL_TOOLS = frozenset({
+    "service_upgrade", "service_rollback", "node_drain", "node_activate",
+    "docker_engine_update", "vm_exec", "infra_lookup",
+    "vm_disk_investigate", "vm_service_discover",
+    "docker_df", "docker_images", "docker_prune", "ssh_capabilities", "kafka_exec",
+    "result_fetch", "result_query",
+    "entity_history", "entity_events",
+    "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
+    "resolve_entity",
+    "vm_exec_allowlist_list",
+    "vm_exec_allowlist_request",
+    "vm_exec_allowlist_add",
+    "runbook_search",
+    "propose_subtask",
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+```
+
+### 1e — Fix filter_tools: ambiguous → OBSERVE_AGENT_TOOLS (not all tools)
+
+FIND (exact):
+```
+    allowlist_map = {
+        'observe':     OBSERVE_AGENT_TOOLS,
+        'status':      OBSERVE_AGENT_TOOLS,      # alias
+        'investigate': INVESTIGATE_AGENT_TOOLS,
+        'research':    INVESTIGATE_AGENT_TOOLS,  # alias
+        'build':       BUILD_AGENT_TOOLS,
+    }
+    allowlist = allowlist_map.get(agent_type)
+    if allowlist is None:
+        return tools_spec  # unknown type — pass all through
+```
+
+REPLACE WITH:
+```
+    allowlist_map = {
+        'observe':     OBSERVE_AGENT_TOOLS,
+        'status':      OBSERVE_AGENT_TOOLS,      # alias
+        'investigate': INVESTIGATE_AGENT_TOOLS,
+        'research':    INVESTIGATE_AGENT_TOOLS,  # alias
+        'build':       BUILD_AGENT_TOOLS,
+        'ambiguous':   OBSERVE_AGENT_TOOLS,      # ambiguous: safe read-only default
+    }
+    allowlist = allowlist_map.get(agent_type)
+    if allowlist is None:
+        return tools_spec  # unknown type — pass all through
+```
+
+### 1f — Fix get_prompt: ambiguous → STATUS_PROMPT
+
+FIND (exact):
+```
+def get_prompt(agent_type: str) -> str:
+    """Return the system prompt for the given agent type."""
+    return {
+        'observe':     OBSERVE_PROMPT,
+        'status':      STATUS_PROMPT,
+        'investigate': INVESTIGATE_PROMPT,
+        'research':    RESEARCH_PROMPT,
+        'execute':     ACTION_PROMPT,
+        'action':      ACTION_PROMPT,
+        'build':       BUILD_PROMPT,
+    }.get(agent_type, ACTION_PROMPT)
+```
+
+REPLACE WITH:
+```
+def get_prompt(agent_type: str) -> str:
+    """Return the system prompt for the given agent type."""
+    return {
+        'observe':     OBSERVE_PROMPT,
+        'status':      STATUS_PROMPT,
+        'investigate': INVESTIGATE_PROMPT,
+        'research':    RESEARCH_PROMPT,
+        'execute':     ACTION_PROMPT,
+        'action':      ACTION_PROMPT,
+        'build':       BUILD_PROMPT,
+        'ambiguous':   STATUS_PROMPT,  # ambiguous: gather info first, ask clarifying_question
+    }.get(agent_type, STATUS_PROMPT)
+```
+
+---
+
+## Change 2 — api/routers/agent.py
+
+### 2a — Fix _AGENT_LABEL and _AGENT_BADGE_COLOR for ambiguous
+
+FIND (exact):
+```
+_AGENT_LABEL = {
+    'status':      'Observe',
+    'observe':     'Observe',
+    'action':      'Execute',
+    'execute':     'Execute',
+    'research':    'Investigate',
+    'investigate': 'Investigate',
+    'build':       'Build',
+    'ambiguous':   'Execute',
+}
+
+_AGENT_BADGE_COLOR = {
+    'status':      'blue',
+    'observe':     'blue',
+    'action':      'orange',
+    'execute':     'orange',
+    'research':    'purple',
+    'investigate': 'purple',
+    'build':       'yellow',
+    'ambiguous':   'orange',
+}
+```
+
+REPLACE WITH:
+```
+_AGENT_LABEL = {
+    'status':      'Observe',
+    'observe':     'Observe',
+    'action':      'Execute',
+    'execute':     'Execute',
+    'research':    'Investigate',
+    'investigate': 'Investigate',
+    'build':       'Build',
+    'ambiguous':   'Observe',   # gather info first, then user can re-run with intent
+}
+
+_AGENT_BADGE_COLOR = {
+    'status':      'blue',
+    'observe':     'blue',
+    'action':      'orange',
+    'execute':     'orange',
+    'research':    'purple',
+    'investigate': 'purple',
+    'build':       'yellow',
+    'ambiguous':   'blue',     # same as observe
+}
+```
+
+---
+
+## Version bump
+Update VERSION: 2.26.1 → 2.26.2
+
+## Commit
+```bash
+git add -A
+git commit -m "fix(agents): v2.26.2 proxmox/swarm allowlist gaps, node_activate, ambiguous→observe"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-14 22:05:36
+========================================================================
+PROMPT COMPLETE: v2.26.2
+[STATUS] 2m19s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m21s
+========================================================================
