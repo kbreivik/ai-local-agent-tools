@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-14T19:41:58",
+  "updated_at": "2026-04-14T20:12:17",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -501,10 +501,26 @@
       "filename": "CC_PROMPT_v2.25.0.md",
       "version": "v2.25.0",
       "theme": "Per-entity maintenance mode + Proxmox/dmesg allowlist",
+      "runner_status": "DONE",
+      "commit_sha": "6bdd8cc",
+      "error": "",
+      "started_at": "2026-04-14T19:41:58",
+      "finished_at": "2026-04-14T19:45:22",
+      "duration_s": 203.77926719997777,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260414_194158_CC_PROMPT_v2.25.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.25.1.md",
+      "version": "v2.25.1",
+      "theme": "Optimistic maintenance toggle + VM card ⌘ chat button",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-14T19:41:58",
+      "started_at": "2026-04-14T20:12:17",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -1155,6 +1155,12 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
   const [allSectionsExpanded, setAllSectionsExpanded] = useState(true)
   const { layout, dirty, saveLayout, updateRows, toggleCollapse } = layoutState
 
+  // VM card ⌘ button: pre-fill agent task and switch to Commands tab
+  const onChat = useCallback((label) => {
+    window.dispatchEvent(new CustomEvent('ds:prefill-agent', { detail: { text: `Investigate ${label}` } }))
+    onTab('Commands')
+  }, [onTab])
+
   const onExpandAllCards = () => {
     setAllCardsExpanded(true)
     window.dispatchEvent(new CustomEvent('ds:expand-all-cards'))
@@ -1192,7 +1198,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     COMPUTE: showSection('COMPUTE') ? (
       summaryLoading ? <SkeletonGrid count={4} /> :
       <ServiceCardsErrorBoundary>
-        <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
+        <ServiceCards activeFilters={['vms']} onTab={onTab} onEntityDetail={onEntityClick} onChat={onChat} compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd} showFilter={showFilter} search={search} />
       </ServiceCardsErrorBoundary>
     ) : null,
     CONTAINERS: showSection('COMPUTE') ? (

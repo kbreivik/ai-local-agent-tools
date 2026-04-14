@@ -241,6 +241,13 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
   const { markRunning, markDone } = useAgent()
   const { task, setTask }         = useTask()
   const { pendingChoices, clearChoices, runState, setRunState, stopAgent, isRunning, outputLines } = useAgentOutput()
+
+  // Pre-fill task input when a card's chat button fires ds:prefill-agent
+  useEffect(() => {
+    const handler = (e) => { if (e.detail?.text) setTask(e.detail.text) }
+    window.addEventListener('ds:prefill-agent', handler)
+    return () => window.removeEventListener('ds:prefill-agent', handler)
+  }, [setTask])
   const [items,    setItems]   = useState([])
   const [loading,  setLoading] = useState(true)
   const [selectedTags, setSelectedTags] = useState(new Set())

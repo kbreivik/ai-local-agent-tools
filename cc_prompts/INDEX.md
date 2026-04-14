@@ -84,6 +84,7 @@ per-file approval prompts. The prompts are reviewed — git is the safety net.
 | CC_PROMPT_v2.24.5.md | v2.24.5 | Fix exit-137 diagnosis: require dmesg before concluding OOM | DONE (5e8b61e) |
 | CC_PROMPT_v2.24.6.md | v2.24.6 | ES card in Platform Core + ES/Kafka health thresholds in settings | DONE (b23f5c1) |
 | CC_PROMPT_v2.25.0.md | v2.25.0 | Per-entity maintenance mode + Proxmox/dmesg allowlist | DONE (d28196a) |
+| CC_PROMPT_v2.25.1.md | v2.25.1 | Optimistic maintenance toggle + VM card ⌘ chat button | RUNNING |
 
 ---
 
@@ -135,6 +136,14 @@ to 10. Frontend: when running_version > tags[0] (severity='ahead') and update-st
 reports update_available=false, status badge shows '✓ latest' instead of '—'. Pull
 Latest button hidden when update_available=false (digests match, no pull needed).
 
+**v2.25.1** — Proxmox card UX: optimistic maintenance toggle + ⌘ chat button.
+Set/Clear Maintenance button now updates instantly on click via localMaint optimistic state
+(synced back from vm.maintenance on the next 30s poll). ProxmoxCardCollapsed gains an amber
+⌘ button (between MAINT badge and › entity arrow) that pre-fills the agent task input with
+"Investigate <vm.name>" and switches to the Commands tab via ds:prefill-agent custom event.
+CommandPanel listens for ds:prefill-agent → setTask(). DashboardView wires the onChat prop
+through to the COMPUTE ServiceCards instance.
+
 ---
 
 ## Key file paths
@@ -173,4 +182,7 @@ api/collectors/base.py                   — ES snapshot indexing (v2.21.1)
 api/db/vm_action_log.py                  — vm action audit table (v2.20.1)
 api/agents/router.py                     — prompts + allowlists (v2.18.1–v2.21.0)
 mcp_server/tools/vm.py                   — service_placement + docker logs (v2.19.0, v2.19.1)
+gui/src/components/ServiceCards.jsx      — optimistic maintenance + ⌘ chat button (v2.25.1)
+gui/src/components/CommandPanel.jsx      — ds:prefill-agent listener (v2.25.1)
+gui/src/App.jsx                          — onChat callback in DashboardView (v2.25.1)
 ```

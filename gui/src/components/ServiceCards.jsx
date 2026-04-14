@@ -954,8 +954,11 @@ function ContainerCardCollapsed({ c, onEntityDetail }) {
 
 function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, showToast }) {
   const [loading, setLoading] = useState({})
+  const [localMaint, setLocalMaint] = useState(!!vm.maintenance)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+  // Sync optimistic state when vm prop refreshes from poll
+  useEffect(() => { setLocalMaint(!!vm.maintenance) }, [vm.maintenance])
 
   const apiBase = vm.type === 'lxc' ? 'lxc' : 'vms'
 
@@ -1002,15 +1005,17 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
             <ActionBtn key="reboot" label="Reboot" variant="danger" loading={loading.reboot} onClick={() => act('reboot', 'reboot', `Reboot ${vm.name}? It will be temporarily unreachable.`)} />,
           ].filter(Boolean)
       } />
-      {/* Maintenance toggle */}
+      {/* Maintenance toggle — optimistic: updates UI instantly, then syncs on next poll */}
       {vm.entity_id && (
         <div style={{ marginTop: 6, borderTop: '1px solid var(--bg-3)', paddingTop: 6 }}>
           <button
             onClick={async (e) => {
               e.stopPropagation()
+              const next = !localMaint
+              setLocalMaint(next)  // optimistic update — immediate visual response
               const BASE = import.meta.env.VITE_API_BASE ?? ''
               const headers = { 'Content-Type': 'application/json', ...authHeaders() }
-              if (vm.maintenance) {
+              if (!next) {
                 await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, { method: 'DELETE', headers })
               } else {
                 await fetch(`${BASE}/api/maintenance/${encodeURIComponent(vm.entity_id)}`, {
@@ -1018,18 +1023,17 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
                   body: JSON.stringify({ reason: 'Set from dashboard' })
                 })
               }
-              // Trigger a data refresh
               window.dispatchEvent(new CustomEvent('ds:refresh-dashboard'))
             }}
             style={{
               padding: '2px 10px', fontSize: 9, fontFamily: 'var(--font-mono)',
-              background: vm.maintenance ? 'var(--amber-dim)' : 'transparent',
-              color: vm.maintenance ? 'var(--amber)' : 'var(--text-3)',
-              border: `1px solid ${vm.maintenance ? 'var(--amber)' : 'var(--border)'}`,
+              background: localMaint ? 'var(--amber-dim)' : 'transparent',
+              color: localMaint ? 'var(--amber)' : 'var(--text-3)',
+              border: `1px solid ${localMaint ? 'var(--amber)' : 'var(--border)'}`,
               borderRadius: 2, cursor: 'pointer',
             }}
           >
-            {vm.maintenance ? '\u2691 Clear Maintenance' : '\u2691 Set Maintenance'}
+            {localMaint ? '\u2691 Clear Maintenance' : '\u2691 Set Maintenance'}
           </button>
         </div>
       )}
@@ -1037,7 +1041,7 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
   )
 }
 
-function ProxmoxCardCollapsed({ vm, onEntityDetail }) {
+function ProxmoxCardCollapsed({ vm, onEntityDetail, onChat }) {
   const typeBadge = vm.type === 'lxc'
     ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
     : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
@@ -1055,9 +1059,18 @@ function ProxmoxCardCollapsed({ vm, onEntityDetail }) {
             borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
           }}>MAINT</span>
         )}
+        <span style={{ flex: 1 }} />
+        {onChat && (
+          <button
+            className="text-[10px] px-1 py-px"
+            style={{ color: 'var(--amber)', background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }}
+            onClick={e => { e.stopPropagation(); onChat(vm.name) }}
+            title="Ask agent about this VM"
+          >⌘</button>
+        )}
         {onEntityDetail && (
           <button
-            className="text-[10px] px-1 py-px ml-auto"
+            className="text-[10px] px-1 py-px"
             style={{ color: 'var(--cyan)', background: 'none', border: 'none', cursor: 'pointer' }}
             onClick={e => { e.stopPropagation(); onEntityDetail(`proxmox_vms:${vm.node_api}:${vm.type === 'lxc' ? 'lxc' : 'qemu'}:${vm.vmid}`) }}
             title="Entity detail"
@@ -1520,7 +1533,7 @@ function AutoUpdateToggle() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, compareMode, compareSet, onCompareAdd, showFilter, search = '' }) {
+export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, onChat, compareMode, compareSet, onCompareAdd, showFilter, search = '' }) {
   // If no filter passed, show everything
   const show = (key) => !activeFilters || activeFilters.includes(key)
   const isPinned = (entityId) => (compareSet || []).some(e => e.id === entityId)
@@ -1841,7 +1854,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                     name={vm.name}
                     sub={`${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid} · ${vm.node}${vm.pool ? ` · ${vm.pool}` : ''}`}
                     net={vm.ip || ''} uptime={vm.uptime || ''}
-                    collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} />}
+                    collapsed={<ProxmoxCardCollapsed vm={vm} onEntityDetail={onEntityDetail} onChat={onChat} />}
                     expanded={<ProxmoxCardExpanded vm={vm} proxmoxHost={cluster.connection_host} proxmoxPort={cluster.connection_port || 8006} onAction={load} confirm={confirm} showToast={showToast} />}
                     compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                     entityForCompare={{
