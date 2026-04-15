@@ -53,6 +53,13 @@ const DEFAULTS = {
   showVersionBadges:    true,
   showMemoryEngrams:    true,
   commandsPanelDefault: 'hidden',
+
+  // Appearance — visual tuning (localStorage only)
+  accentColor:    'crimson',   // 'crimson'|'blue'|'purple'|'teal'|'orange'|'green'
+  fontSize:       'medium',    // 'small'|'medium'|'large'
+  uiDensity:      'normal',    // 'compact'|'normal'|'comfortable'
+  borderRadius:   'sharp',     // 'sharp'|'soft'|'round'
+  fontStyle:      'mono',      // 'mono'|'mixed'|'sans'
 }
 
 // Keys managed by the server. Only these are sent to / fetched from the API.
@@ -121,6 +128,59 @@ export function OptionsProvider({ children }) {
       document.documentElement.setAttribute('data-theme', theme)
     }
   }, [options.theme])
+
+  // Apply tunable CSS vars from appearance settings
+  useEffect(() => {
+    const root = document.documentElement
+
+    // Accent color presets
+    const ACCENTS = {
+      crimson: { accent: '#a01828', accentDim: 'rgba(160,24,40,0.12)', accentHover: '#b81e2e' },
+      blue:    { accent: '#1a56e8', accentDim: 'rgba(26,86,232,0.12)',  accentHover: '#2563eb' },
+      purple:  { accent: '#7c3aed', accentDim: 'rgba(124,58,237,0.12)', accentHover: '#8b5cf6' },
+      teal:    { accent: '#0891b2', accentDim: 'rgba(8,145,178,0.12)',  accentHover: '#0ea5e9' },
+      orange:  { accent: '#c2410c', accentDim: 'rgba(194,65,12,0.12)',  accentHover: '#ea580c' },
+      green:   { accent: '#047857', accentDim: 'rgba(4,120,87,0.12)',   accentHover: '#059669' },
+    }
+    const a = ACCENTS[options.accentColor] || ACCENTS.crimson
+    root.style.setProperty('--accent', a.accent)
+    root.style.setProperty('--accent-dim', a.accentDim)
+    root.style.setProperty('--accent-hover', a.accentHover)
+
+    // Font size
+    const FONT_SIZES = { small: '11px', medium: '13px', large: '15px' }
+    root.style.setProperty('--font-size-base', FONT_SIZES[options.fontSize] || '13px')
+
+    // UI density
+    const DENSITY = {
+      compact:     { gap: '3px', pad: '4px',  padLg: '7px'  },
+      normal:      { gap: '5px', pad: '6px',  padLg: '10px' },
+      comfortable: { gap: '8px', pad: '9px',  padLg: '14px' },
+    }
+    const d = DENSITY[options.uiDensity] || DENSITY.normal
+    root.style.setProperty('--density-gap', d.gap)
+    root.style.setProperty('--density-pad', d.pad)
+    root.style.setProperty('--density-pad-lg', d.padLg)
+
+    // Border radius
+    const RADII = {
+      sharp: { card: '2px', btn: '2px', pill: '2px' },
+      soft:  { card: '4px', btn: '4px', pill: '8px' },
+      round: { card: '8px', btn: '6px', pill: '12px' },
+    }
+    const r = RADII[options.borderRadius] || RADII.sharp
+    root.style.setProperty('--radius-card', r.card)
+    root.style.setProperty('--radius-btn', r.btn)
+    root.style.setProperty('--radius-pill', r.pill)
+
+    // Font style
+    const FONTS = {
+      mono:  "'Share Tech Mono', monospace",
+      mixed: "'Rajdhani', sans-serif",
+      sans:  "'Inter', sans-serif",
+    }
+    root.style.setProperty('--font-ui', FONTS[options.fontStyle] || FONTS.mono)
+  }, [options.accentColor, options.fontSize, options.uiDensity, options.borderRadius, options.fontStyle])
 
   const setOption = (key, value) => {
     setOptions(prev => ({ ...prev, [key]: value }))

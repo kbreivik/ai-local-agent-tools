@@ -1,0 +1,309 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.28.6.md (v2.28.6)
+Theme: Collector rows link to config (same pattern as Platform Core)
+
+Prompt content:
+
+# CC PROMPT — v2.28.6 — Collector rows link to their config (same as Platform Core)
+
+## What this does
+Collector rows in the COLLECTORS card now navigate to their relevant config when clicked,
+using the same clickable `_row` pattern already in Platform Core.
+
+Two changes in `gui/src/App.jsx` only:
+
+1. AppShell: add `ds:navigate-settings` event listener so any component can navigate to
+   Settings + a specific sub-tab without prop drilling
+2. PlatformCoreCards: add `COLLECTOR_NAV` map + wire onClick to each collector row
+   Also updates the existing ES row (in Platform Core) to use the new cleaner event
+
+Collector → destination mapping:
+  docker_agent01    → Dashboard (containers visible there)
+  swarm             → Cluster tab
+  kafka             → Cluster tab
+  proxmox_vms       → Settings → Connections
+  external_services → Settings → Connections
+  vm_hosts          → Settings → Connections
+  elasticsearch     → Settings → Connections
+  pbs               → Settings → Connections
+  truenas           → Settings → Connections
+  unifi             → Settings → Connections
+  fortigate         → Settings → Connections
+  fortiswitch       → Settings → Connections
+  windows           → Settings → Connections
+  discovery_harvest → Discovered tab
+Version bump: 2.28.5 → 2.28.6
+
+---
+
+## Change 1 — gui/src/App.jsx: add ds:navigate-settings listener in AppShell
+
+Find the block of useEffect listeners in AppShell (near the "navigate-to-logs" handlers).
+Add a new useEffect for `ds:navigate-settings`:
+
+FIND (exact):
+```jsx
+  // "Full log →" link in AgentFeed navigates to Output tab
+  useEffect(() => {
+    const handler = () => setActiveTab('Output')
+    window.addEventListener('navigate-to-output', handler)
+    return () => window.removeEventListener('navigate-to-output', handler)
+  }, [])
+```
+
+REPLACE WITH:
+```jsx
+  // "Full log →" link in AgentFeed navigates to Output tab
+  useEffect(() => {
+    const handler = () => setActiveTab('Output')
+    window.addEventListener('navigate-to-output', handler)
+    return () => window.removeEventListener('navigate-to-output', handler)
+  }, [])
+
+  // Programmatic navigation to Settings + specific sub-tab
+  // Usage: window.dispatchEvent(new CustomEvent('ds:navigate-settings', { detail: { settingsTab: 'Connections' } }))
+  useEffect(() => {
+    const handler = (e) => {
+      const { settingsTab: subTab } = e.detail || {}
+      setActiveTab('Settings')
+      if (subTab) setSettingsTab(subTab)
+    }
+    window.addEventListener('ds:navigate-settings', handler)
+    return () => window.removeEventListener('ds:navigate-settings', handler)
+  }, [])
+```
+
+---
+
+## Change 2 — gui/src/App.jsx: add COLLECTOR_NAV map to PlatformCoreCards
+
+Find the `COLLECTOR_NAV` constant location — add it INSIDE the `PlatformCoreCards` function,
+just before `sortedCollectors` is used (near the top of the function, after the helper fns).
+
+FIND (exact):
+```jsx
+  const sortedCollectors = Object.entries(collectorsData || {}).sort(([a], [b]) => a.localeCompare(b))
+  const apiOk = health?.status === 'ok'
+```
+
+REPLACE WITH:
+```jsx
+  const sortedCollectors = Object.entries(collectorsData || {}).sort(([a], [b]) => a.localeCompare(b))
+  const apiOk = health?.status === 'ok'
+
+  // Collector name → navigation intent
+  // 'tab' navigates to a top-level tab; 'settings' navigates to Settings → Connections
+  const COLLECTOR_NAV = {
+    docker_agent01:    { type: 'tab',      tab: 'Dashboard'   },
+    swarm:             { type: 'tab',      tab: 'Cluster'     },
+    kafka:             { type: 'tab',      tab: 'Cluster'     },
+    proxmox_vms:       { type: 'settings', settingsTab: 'Connections' },
+    external_services: { type: 'settings', settingsTab: 'Connections' },
+    vm_hosts:          { type: 'settings', settingsTab: 'Connections' },
+    elasticsearch:     { type: 'settings', settingsTab: 'Connections' },
+    pbs:               { type: 'settings', settingsTab: 'Connections' },
+    truenas:           { type: 'settings', settingsTab: 'Connections' },
+    unifi:             { type: 'settings', settingsTab: 'Connections' },
+    fortigate:         { type: 'settings', settingsTab: 'Connections' },
+    fortiswitch:       { type: 'settings', settingsTab: 'Connections' },
+    windows:           { type: 'settings', settingsTab: 'Connections' },
+    discovery_harvest: { type: 'tab',      tab: 'Discovered'  },
+  }
+
+  const _collectorClick = (name) => {
+    const nav = COLLECTOR_NAV[name]
+    if (!nav) return undefined
+    if (nav.type === 'tab') {
+      return () => onTab?.(nav.tab)
+    }
+    return () => window.dispatchEvent(
+      new CustomEvent('ds:navigate-settings', { detail: { settingsTab: nav.settingsTab } })
+    )
+  }
+```
+
+---
+
+## Change 3 — gui/src/App.jsx: wire onClick to collector rows
+
+FIND (exact):
+```jsx
+        {sortedCollectors.map(([name, c]) => {
+          const h = c.last_health || 'unknown'
+          return _row(_healthDot(h), name, h.toUpperCase(), _healthTag(h), c.running ? '' : 'stopped')
+        })}
+```
+
+REPLACE WITH:
+```jsx
+        {sortedCollectors.map(([name, c]) => {
+          const h = c.last_health || 'unknown'
+          return _row(
+            _healthDot(h), name, h.toUpperCase(), _healthTag(h),
+            c.running ? '' : 'stopped',
+            _collectorClick(name)
+          )
+        })}
+```
+
+---
+
+## Change 4 — gui/src/App.jsx: clean up ES row in Platform Core to use ds:navigate-settings
+
+The ES row in Platform Core currently uses the old `onTab('Settings') + setTimeout(ds:settings-tab)`
+pattern. Update it to use the cleaner `ds:navigate-settings` event:
+
+FIND (exact):
+```jsx
+          onTab ? () => {
+            // Navigate to Settings → Connections, pre-selecting elasticsearch platform
+            onTab('Settings')
+            // Dispatch event to pre-filter connections to elasticsearch
+            setTimeout(() => window.dispatchEvent(new CustomEvent('ds:settings-tab', {
+              detail: { tab: 'Connections', filterPlatform: 'elasticsearch' }
+            })), 100)
+          } : undefined
+```
+
+REPLACE WITH:
+```jsx
+          () => window.dispatchEvent(
+            new CustomEvent('ds:navigate-settings', { detail: { settingsTab: 'Connections' } })
+          )
+```
+
+---
+
+## Version bump
+Update VERSION: 2.28.5 → 2.28.6
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(platform): v2.28.6 collector rows link to config — same pattern as Platform Core"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 15:09:13
+========================================================================
+PROMPT COMPLETE: v2.28.6
+[STATUS] 1m30s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m31s
+========================================================================

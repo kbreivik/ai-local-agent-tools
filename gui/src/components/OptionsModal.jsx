@@ -102,14 +102,6 @@ function Select({ value, onChange, options }) {
 function GeneralTab({ draft, update }) {
   return (
     <div>
-      <Field label="Theme">
-        <div className="flex flex-col gap-2">
-          {[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([v, l]) => (
-            <Radio key={v} name="theme" value={v} current={draft.theme} onChange={v => update('theme', v)} label={l} />
-          ))}
-        </div>
-      </Field>
-
       <Field label="Dashboard Refresh Interval">
         <Select
           value={draft.dashboardRefreshInterval}
@@ -772,6 +764,15 @@ function CardTemplatesSection() {
   )
 }
 
+const ACCENT_PRESETS = [
+  { key: 'crimson', label: 'Imperial Crimson', color: '#a01828' },
+  { key: 'blue',    label: 'Republic Blue',    color: '#1a56e8' },
+  { key: 'purple',  label: 'Sith Purple',      color: '#7c3aed' },
+  { key: 'teal',    label: 'Officer Teal',     color: '#0891b2' },
+  { key: 'orange',  label: 'Droid Orange',     color: '#c2410c' },
+  { key: 'green',   label: 'Jedi Green',       color: '#047857' },
+]
+
 function DisplayTab({ draft, update }) {
   const minH = draft.cardMinHeight ?? 70
   const maxH = draft.cardMaxHeight ?? 200
@@ -783,6 +784,97 @@ function DisplayTab({ draft, update }) {
 
   return (
     <div>
+
+      {/* ── Theme & Accent ─────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Theme
+        </h3>
+
+        <Field label="Color mode">
+          <div className="flex gap-4">
+            {[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([v, l]) => (
+              <Radio key={v} name="theme" value={v} current={draft.theme} onChange={v => update('theme', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Accent color">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {ACCENT_PRESETS.map(({ key, label, color }) => {
+              const active = (draft.accentColor || 'crimson') === key
+              return (
+                <button
+                  key={key}
+                  onClick={() => update('accentColor', key)}
+                  title={label}
+                  style={{
+                    width: 26, height: 26, borderRadius: 'var(--radius-btn)',
+                    background: color, border: `2px solid ${active ? 'var(--text-1)' : 'transparent'}`,
+                    cursor: 'pointer', outline: active ? `2px solid ${color}` : 'none',
+                    outlineOffset: 2, transition: 'all 0.1s',
+                    boxShadow: active ? `0 0 8px ${color}80` : 'none',
+                  }}
+                />
+              )
+            })}
+          </div>
+          <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 4 }}>
+            {ACCENT_PRESETS.find(p => p.key === (draft.accentColor || 'crimson'))?.label}
+          </div>
+        </Field>
+      </div>
+
+      {/* ── Typography ─────────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Typography
+        </h3>
+
+        <Field label="Font size">
+          <div className="flex gap-4">
+            {[['small', 'Small (11px)'], ['medium', 'Medium (13px)'], ['large', 'Large (15px)']].map(([v, l]) => (
+              <Radio key={v} name="fontSize" value={v} current={draft.fontSize || 'medium'} onChange={v => update('fontSize', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Font style" hint="Controls UI labels, values, and section text.">
+          <div className="flex gap-4">
+            {[
+              ['mono',  'Monospace (Share Tech Mono)'],
+              ['mixed', 'Mixed (Rajdhani sans-serif)'],
+              ['sans',  'Clean (Inter sans-serif)'],
+            ].map(([v, l]) => (
+              <Radio key={v} name="fontStyle" value={v} current={draft.fontStyle || 'mono'} onChange={v => update('fontStyle', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+      </div>
+
+      {/* ── Layout & Shape ─────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Layout &amp; Shape
+        </h3>
+
+        <Field label="UI density">
+          <div className="flex gap-4">
+            {[['compact', 'Compact'], ['normal', 'Normal'], ['comfortable', 'Comfortable']].map(([v, l]) => (
+              <Radio key={v} name="uiDensity" value={v} current={draft.uiDensity || 'normal'} onChange={v => update('uiDensity', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Border radius" hint="Applies to cards, buttons, and pills.">
+          <div className="flex gap-4">
+            {[['sharp', 'Sharp (2px)'], ['soft', 'Soft (4px)'], ['round', 'Round (8px)']].map(([v, l]) => (
+              <Radio key={v} name="borderRadius" value={v} current={draft.borderRadius || 'sharp'} onChange={v => update('borderRadius', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+      </div>
+
       {/* Dashboard Cards */}
       <div className="mb-5">
         <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
