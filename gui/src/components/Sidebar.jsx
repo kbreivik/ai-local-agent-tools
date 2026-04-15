@@ -162,7 +162,6 @@ export default function Sidebar({
                     padding: collapsed ? '6px 0' : '6px 12px',
                     justifyContent: collapsed ? 'center' : 'flex-start',
                     background: isActive ? 'var(--accent-dim)' : 'transparent',
-                    borderLeft: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
                     color: isActive ? 'var(--accent)' : 'var(--text-2)',
                     fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: 0.5,
                     cursor: 'pointer', border: 'none', borderLeft: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,

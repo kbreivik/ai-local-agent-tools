@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-15T14:17:35",
+  "updated_at": "2026-04-15T14:33:09",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -933,10 +933,26 @@
       "filename": "CC_PROMPT_v2.28.4.md",
       "version": "v2.28.4",
       "theme": "Platform Core names+version delta+nav, ⌘/› bottom-right",
+      "runner_status": "DONE",
+      "commit_sha": "a12d212",
+      "error": "",
+      "started_at": "2026-04-15T14:17:35",
+      "finished_at": "2026-04-15T14:23:07",
+      "duration_s": 332.59624480002094,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260415_141735_CC_PROMPT_v2.28.4.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.28.5.md",
+      "version": "v2.28.5",
+      "theme": "fix(build): cardSchemas JSX→createElement, Sidebar duplicate borderLeft",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-15T14:17:35",
+      "started_at": "2026-04-15T14:33:09",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
