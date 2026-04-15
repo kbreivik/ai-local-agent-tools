@@ -13,6 +13,9 @@ import {
 } from '../api'
 import { compareSemver, compareBuildTag } from '../utils/versionCheck'
 import { useOptions } from '../context/OptionsContext'
+import TemplateCardRenderer from './TemplateCardRenderer'
+import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, CONTAINER_FIELD_RENDERERS, SWARM_FIELD_RENDERERS, DEFAULT_TEMPLATES } from '../schemas/cardSchemas'
+import { useCardTemplate } from '../hooks/useCardTemplate'
 
 const POLL_MS = 30_000
 
@@ -235,7 +238,7 @@ function useConfirm() {
 
 const _SLOT_COLORS = ['#00aa44','#00c8ee','#cc8800','#7c6af7']
 
-function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare, entityId, onEntityDetail }) {
+function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, headerSub, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare, entityId, onEntityDetail }) {
   const isOpen = forceExpanded || (openKeys || new Set()).has(cardKey)
   const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
   const compareId = entityForCompare?.id
@@ -342,12 +345,17 @@ function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpene
               >›</button>
             </>
           )}
-          {subText && <span className="text-[10px] mono ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+          {/* sub moved to line 2 via TemplateCardRenderer header_sub field */}
         </div>
       </div>
 
-      {/* Row 2 — IP + uptime (collapsed only) */}
-      {!isOpen && (net || uptime) && (
+      {/* Row 2 — header_sub field (e.g. image name) or IP + uptime for non-template cards */}
+      {!isOpen && headerSub && (
+        <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
+          {headerSub}
+        </div>
+      )}
+      {!isOpen && !headerSub && (net || uptime) && (
         <div className="flex items-center justify-between mt-0.5">
           {net ? <span className="text-[10px] mono" style={{ color: 'var(--text-3)' }}>{net}</span> : <span />}
           {uptime && <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>↑ {uptime}</span>}
@@ -515,7 +523,7 @@ function Actions({ buttons }) {
 
 // ── Container card ─────────────────────────────────────────────────────────────
 
-function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab }) {
+function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, template }) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
   const [scaleVal, setScaleVal] = useState(1)
@@ -642,64 +650,33 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   const pullPath = isSwarm ? `services/${c.name}/pull` : `containers/${c.id}/pull`
   const pullColor = c.last_pull_at && (Date.now() - new Date(c.last_pull_at).getTime()) > 7 * 86400000 ? 'urgent' : 'primary'
 
+  const ActionsBlock = () => (
+    <Actions buttons={[
+      !c.image?.startsWith('ghcr.io/') && !isSwarm && (
+        <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
+      ),
+      <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
+      !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
+      !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
+      isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.desired_replicas ?? 1); setScaleOpen(true) }} />,
+    ].filter(Boolean)} />
+  )
+
   return (
     <>
+      {/* Pulled / replicas stat row */}
       <StatRow stats={[
-        { v: c.last_pull_at ? _pulledAgo(c.last_pull_at) : 'unknown', l: 'Pulled', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
+        { v: c.last_pull_at ? _pulledAgo(c.last_pull_at) : 'unknown', l: isSwarm ? 'Pulled' : 'Pulled', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
         { v: c.uptime || (c.running_replicas != null ? `${c.running_replicas}/${c.desired_replicas}` : '—'), l: isSwarm ? 'Replicas' : 'Uptime' },
       ]} />
-      {c.ports?.length > 0 && (
-        <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
-          <span className="text-[9px] text-gray-700">ports </span>{c.ports.join(' · ')}
-        </div>
-      )}
-      {/* Reachable endpoint — from ip_port (VM LAN IP + host port) */}
-      {(() => {
-        const ep = c.ip_port ? _displayIp(c.ip_port) : ''
-        if (!ep) return null
-        const href = `http://${ep}`
-        return (
-          <div className="text-[10px] font-mono mb-1.5">
-            <span className="text-[9px] text-gray-700">endpoint </span>
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[#00c8ee] hover:underline"
-              onClick={e => e.stopPropagation()}
-            >
-              {ep}
-            </a>
-          </div>
-        )
-      })()}
-      {/* Docker networks */}
-      {c.networks?.length > 0 && (
-        <div className="text-[10px] text-[#4a6a9a] font-mono mb-1.5">
-          <span className="text-[9px] text-gray-700">networks </span>
-          {c.networks.join(' · ')}
-        </div>
-      )}
-      {/* Internal Docker IPs — dimmed, secondary info */}
-      {c.ip_addresses?.length > 0 && (
-        <div className="text-[10px] text-gray-700 font-mono mb-1.5">
-          <span className="text-[9px] text-gray-800">int.ips </span>
-          {c.ip_addresses.join(' · ')}
-        </div>
-      )}
-      <Divider />
-      {(c.volumes || []).map(v => <VolBar key={v.name || v.mountpoint} vol={v} />)}
-      {c.volumes?.length > 0 && <Divider />}
-      {!isSwarm && c.image?.startsWith('ghcr.io/') && (() => {
-        const severity = (c.running_version && tags[0])
-          ? compareSemver(c.running_version, tags[0])
-          : null
-        const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
 
+      {/* Version block — ghcr only */}
+      {!isSwarm && c.image?.startsWith('ghcr.io/') && (() => {
+        const severity = (c.running_version && tags[0]) ? compareSemver(c.running_version, tags[0]) : null
+        const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
         return (
           <>
             <Divider />
-            {/* Running version info rows */}
             {c.running_version && (
               <div className="flex justify-between text-[9px] mb-0.5">
                 <span className="text-gray-700">Running</span>
@@ -712,50 +689,34 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                 <span className="text-gray-500 font-mono">{c.built_at.slice(0, 10)}</span>
               </div>
             )}
-            {/* Status badge */}
             {c.running_version && (
               <div className="flex justify-between text-[9px] mb-1.5">
                 <span className="text-gray-700">Status</span>
-                {tagsLoading
-                  ? <span className="text-gray-700">…</span>
-                  : tagsError
-                  ? <span className="text-gray-700">version check unavailable</span>
+                {tagsLoading ? <span className="text-gray-700">…</span>
+                  : tagsError ? <span className="text-gray-700">version check unavailable</span>
                   : !tags.length
-                  // No semver tags on GHCR — fall back to digest comparison
-                  ? updateStatus?.update_available === false
-                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
-                    : updateStatus?.update_available === true
-                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
-                    : <span className="text-gray-700">no versioned tags</span>
+                    ? updateStatus?.update_available === false
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                      : updateStatus?.update_available === true
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
+                      : <span className="text-gray-700">no versioned tags</span>
                   : severity === 'current'
-                  ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
-                  : severity === 'ahead'
-                  // Running version is NEWER than highest known tag (e.g. GHCR pagination was stale)
-                  // Trust the digest comparison from update-status as the authoritative signal
-                  ? updateStatus?.update_available === false
                     ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
-                    : updateStatus?.update_available === true
-                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
-                    : <span className="text-gray-700">✓ ahead of tagged</span>
+                  : severity === 'ahead'
+                    ? updateStatus?.update_available === false
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                      : <span className="text-gray-700">✓ ahead of tagged</span>
                   : hasUpdate
-                  ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
-                      ⬆ {tags[0]} {severity}
-                    </span>
-                  : <span className="text-gray-700">—</span>
-                }
+                    ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
+                        ⬆ {tags[0]} {severity}
+                      </span>
+                  : <span className="text-gray-700">—</span>}
               </div>
             )}
-
-            {/* Auto-update toggle — only for agent container */}
-            {c.name?.includes('hp1_agent') && c.image?.startsWith('ghcr.io/') && (
-              <AutoUpdateToggle />
-            )}
-
-            {/* Update drawer trigger — only when update available */}
+            {c.name?.includes('hp1_agent') && <AutoUpdateToggle />}
             {hasUpdate && !tagsError && (
               <>
                 <ActionBtn
-                  key="update"
                   label={drawerOpen ? '✕ Cancel Update' : `⬆ Update Available — Choose Version`}
                   variant={severity === 'major' ? 'urgent' : 'primary'}
                   onClick={() => setDrawerOpen(o => !o)}
@@ -763,86 +724,38 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                 {drawerOpen && (
                   <div className="mt-1 mb-2 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
                     <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
-                    <select
-                      className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
-                      value={selectedTag}
-                      onChange={e => setSelectedTag(e.target.value)}
-                    >
-                      {tags.map(t => (
-                        <option key={t} value={t}>
-                          {t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}
-                        </option>
-                      ))}
+                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
+                      {tags.map(t => <option key={t} value={t}>{t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}</option>)}
                     </select>
-                    <ActionBtn
-                      key="pull-versioned"
-                      label={`↓ Pull ${selectedTag}`}
-                      variant="primary"
-                      loading={loading['pull-versioned']}
-                      onClick={() => {
-                        act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null)
-                        setDrawerOpen(false)
-                      }}
-                    />
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
+                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setDrawerOpen(false) }} />
                   </div>
                 )}
               </>
             )}
-
-            {/* Re-pull when up to date */}
             {!hasUpdate && !tagsError && tags.length > 0 && severity === 'current' && (
-              <ActionBtn
-                key="repull"
-                label="↓ Re-pull Image"
-                loading={loading.pull}
-                onClick={() => act('pull', `containers/${c.id}/pull`, null, null)}
-              />
+              <ActionBtn label="↓ Re-pull Image" loading={loading.pull}
+                onClick={() => act('pull', `containers/${c.id}/pull`, null, null)} />
             )}
-
-            {/* Fallback pull when version check unavailable or no tags */}
             {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') &&
              updateStatus?.update_available !== false && (
-              <ActionBtn
-                key="pull"
-                label="↓ Pull Latest"
-                variant={pullColor}
-                loading={loading.pull}
-                onClick={() => act('pull', pullPath, null, null)}
-              />
+              <ActionBtn label="↓ Pull Latest" variant={pullColor} loading={loading.pull}
+                onClick={() => act('pull', pullPath, null, null)} />
             )}
-
-            {/* Choose version picker — always available when tags loaded */}
             {tags.length > 0 && (
               <>
-                <ActionBtn
-                  key="choose-version"
-                  label={versionPickerOpen ? '✕ Cancel' : '↓ Choose version ▾'}
-                  onClick={() => setVersionPickerOpen(o => !o)}
-                />
+                <ActionBtn label={versionPickerOpen ? '✕ Cancel' : '↓ Choose version ▾'}
+                  onClick={() => setVersionPickerOpen(o => !o)} />
                 {versionPickerOpen && (
                   <div className="mt-1 mb-1 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
                     <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
-                    <select
-                      className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
-                      value={selectedTag}
-                      onChange={e => setSelectedTag(e.target.value)}
-                    >
-                      {tags.map(t => (
-                        <option key={t} value={t}>
-                          {t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}
-                        </option>
-                      ))}
+                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
+                      {tags.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
-                    <ActionBtn
-                      key="pull-versioned-picker"
-                      label={`↓ Pull ${selectedTag}`}
-                      variant="primary"
-                      loading={loading['pull-versioned']}
-                      onClick={() => {
-                        act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null)
-                        setVersionPickerOpen(false)
-                      }}
-                    />
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
+                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setVersionPickerOpen(false) }} />
                   </div>
                 )}
               </>
@@ -850,32 +763,35 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
           </>
         )
       })()}
-      <Actions buttons={[
-        !c.image?.startsWith('ghcr.io/') && !isSwarm && (
-          <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
-        ),
-        <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
-        !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
-        !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
-        isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.desired_replicas ?? 1); setScaleOpen(true) }} />,
-      ].filter(Boolean)} />
+
+      {/* Schema-driven expanded fields (volumes, endpoint, etc.) */}
+      <TemplateCardRenderer
+        data={c}
+        schema={CONTAINER_SCHEMA}
+        renderers={CONTAINER_FIELD_RENDERERS}
+        template={template}
+        phase="expanded"
+        state={{ tags, tagsLoading, tagsError, updateStatus, loading, isSwarm, ActionsBlock, VolBar }}
+      />
+
+      {/* Action buttons (always last) */}
+      <ActionsBlock />
+
+      {/* Scale control */}
       {scaleOpen && (
         <div className="mt-3 flex items-center gap-2">
           <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => Math.max(0, v - 1))}>−</button>
-          <input
-            type="number" min="0"
-            value={scaleVal}
+          <input type="number" min="0" value={scaleVal}
             onChange={e => setScaleVal(parseInt(e.target.value) || 0)}
-            className="w-16 text-center bg-[#0d0d1a] border border-[#2a2a4a] text-white rounded text-sm py-1"
-          />
+            className="w-16 text-center bg-[#0d0d1a] border border-[#2a2a4a] text-white rounded text-sm py-1" />
           <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => v + 1)}>+</button>
-          <button
-            className="px-3 py-1 bg-[#7c6af7] text-white rounded text-sm"
-            onClick={() => { act('scale', `services/${c.name}/scale`, { replicas: scaleVal }, null); setScaleOpen(false) }}
-          >Confirm</button>
+          <button className="px-3 py-1 bg-[#7c6af7] text-white rounded text-sm"
+            onClick={() => { act('scale', `services/${c.name}/scale`, { replicas: scaleVal }, null); setScaleOpen(false) }}>Confirm</button>
           <button className="px-2 py-1 text-[#888] text-sm" onClick={() => setScaleOpen(false)}>✕</button>
         </div>
       )}
+
+      {/* Log viewer */}
       {logsOpen && (
         <div className="mt-2 rounded border border-[#2a2a4a] bg-[#060610] overflow-hidden">
           <div className="flex justify-between items-center px-2 py-1 border-b border-[#1a1a3a]">
@@ -953,10 +869,18 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   )
 }
 
-function ContainerCardCollapsed({ c }) {
+function ContainerCardCollapsed({ c, template, state }) {
+  if (!template) return null
   return (
-    <div className="flex items-center gap-1">
-      {c.problem && <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>}
+    <div style={{ marginTop: 1 }}>
+      <TemplateCardRenderer
+        data={c}
+        schema={CONTAINER_SCHEMA}
+        renderers={CONTAINER_FIELD_RENDERERS}
+        template={template}
+        phase="collapsed"
+        state={state}
+      />
     </div>
   )
 }
@@ -1724,12 +1648,13 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             {[...(containers?.containers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
               <InfraCard
                 key={c.id} cardKey={`c-${c.id}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
-                dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
+                dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'}
+                headerSub={(() => { const parts = (c.image || '').split('/'); return parts[parts.length - 1] || '' })()}
                 entityId={c.entity_id} onEntityDetail={onEntityDetail}
-                collapsed={<ContainerCardCollapsed c={c} />}
+                collapsed={<ContainerCardCollapsed c={c} template={DEFAULT_TEMPLATES.container} state={{ tags: knownLatest[c.id] ? [knownLatest[c.id]] : [] }} />}
                 expanded={<ContainerCardExpanded
                   c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
-                  onTagsLoaded={onTagsLoaded} onTab={onTab}
+                  onTagsLoaded={onTagsLoaded} onTab={onTab} template={DEFAULT_TEMPLATES.container}
                 />}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{ id: `docker:${c.name || c.id}`, label: c.name, platform: 'docker', section: 'COMPUTE', metadata: { status: c.status, dot: c.dot, image: c.image, uptime: c.uptime } }}
@@ -1753,11 +1678,11 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             {[...(swarm?.services || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(s => (matchesShowFilter(s.dot || 'green') || isPinned(`swarm:${s.name}`)) && matchesSearch(s.name, s.image)).map(s => (
               <InfraCard
                 key={s.id || s.name} cardKey={`s-${s.id || s.name}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
-                dot={s.dot || 'green'} name={s.name} sub={s.image} net={s.ports?.[0] ? _compactPort(s.ports[0]) : ''}
+                dot={s.dot || 'green'} name={s.name}
+                headerSub={(() => { const parts = (s.image || '').split('/'); return parts[parts.length - 1] || '' })()}
                 entityId={s.entity_id} onEntityDetail={onEntityDetail}
-                uptime={s.running_replicas != null ? `${s.running_replicas}/${s.desired_replicas} replicas` : ''}
-                collapsed={<ContainerCardCollapsed c={s} />}
-                expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} />}
+                collapsed={<ContainerCardCollapsed c={s} template={DEFAULT_TEMPLATES.swarm_service} state={{}} />}
+                expanded={<ContainerCardExpanded c={{ ...s }} isSwarm={true} onAction={load} confirm={confirm} showToast={showToast} onTab={onTab} template={DEFAULT_TEMPLATES.swarm_service} />}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{ id: `swarm:${s.name}`, label: s.name, platform: 'docker', section: 'COMPUTE', metadata: { replicas: `${s.running_replicas}/${s.desired_replicas}`, dot: s.dot, image: s.image } }}
               />
