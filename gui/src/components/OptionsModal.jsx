@@ -617,18 +617,36 @@ const PLATFORM_AUTH = {
   vm_host:         {
     auth_type: 'ssh', defaultPort: 22,
     fields: [
-      { key: 'username', label: 'SSH User', placeholder: 'ubuntu' },
-      { key: 'password', label: 'Password', type: 'password' },
-      { key: 'private_key', label: 'Private Key', type: 'textarea', hint: 'PEM format — paste full key including -----BEGIN/END----- lines. Encrypted at rest. Leave blank to use password.' },
+      { key: 'username',    label: 'SSH User',    placeholder: 'ubuntu' },
+      { key: 'private_key', label: 'Private Key', type: 'textarea',
+        hint: 'PEM format — paste full key including -----BEGIN/END----- lines. Encrypted at rest. Use passphrase-protected keys for security.' },
+      { key: 'passphrase',  label: 'Key Passphrase', type: 'password',
+        hint: 'Passphrase for the private key. Strongly recommended.' },
+      { key: 'password',    label: 'Password', type: 'password',
+        hint: 'Fallback if key auth fails. Prefer key-only authentication.' },
     ],
     configFields: [
-      { key: 'role', label: 'VM Role', type: 'select', options: [{ value: 'swarm_manager', label: 'Swarm Manager' }, { value: 'swarm_worker', label: 'Swarm Worker' }, { value: 'storage', label: 'Storage' }, { value: 'monitoring', label: 'Monitoring' }, { value: 'general', label: 'General' }] },
-      { key: 'os_type', label: 'OS', type: 'select', hint: 'Auto-detected on first poll if left as Unknown', options: [{ value: '', label: 'Unknown (auto-detect)' }, { value: 'debian', label: 'Ubuntu / Debian' }, { value: 'rhel', label: 'RHEL / CentOS / Fedora' }, { value: 'alpine', label: 'Alpine' }, { value: 'windows', label: 'Windows Server' }, { value: 'coreos', label: 'CoreOS / Flatcar' }] },
+      { key: 'role', label: 'VM Role', type: 'select', options: [
+        { value: 'swarm_manager', label: 'Swarm Manager' },
+        { value: 'swarm_worker',  label: 'Swarm Worker' },
+        { value: 'storage',       label: 'Storage' },
+        { value: 'monitoring',    label: 'Monitoring' },
+        { value: 'general',       label: 'General' },
+      ]},
+      { key: 'os_type', label: 'OS', type: 'select', hint: 'Auto-detected on first poll if left as Unknown', options: [
+        { value: '',        label: 'Unknown (auto-detect)' },
+        { value: 'debian',  label: 'Ubuntu / Debian' },
+        { value: 'rhel',    label: 'RHEL / CentOS / Fedora' },
+        { value: 'alpine',  label: 'Alpine' },
+        { value: 'windows', label: 'Windows Server' },
+        { value: 'coreos',  label: 'CoreOS / Flatcar' },
+      ]},
     ],
     advancedConfigFields: [
-      { key: 'shared_credentials', label: 'Shared credentials', type: 'toggle', hint: 'Try these credentials on VMs with no key or password of their own. Tried last, never overwrites machine-specific credentials.' },
-      { key: 'is_jump_host', label: 'This is a jump host / bastion', type: 'toggle', hint: 'Marks this machine as a relay. Not polled as a compute node.' },
-      { key: 'jump_via', label: 'Connect via jump host', type: 'jump_select', hint: 'Route SSH through a bastion. Cannot be set if this connection is itself a jump host.' },
+      { key: 'is_jump_host', label: 'This is a jump host / bastion', type: 'toggle',
+        hint: 'Marks this machine as a relay. Not polled as a compute node.' },
+      { key: 'jump_via', label: 'Connect via jump host', type: 'jump_select',
+        hint: 'Route SSH through a bastion. Cannot be set if this connection is itself a jump host.' },
     ],
   },
   elasticsearch:   { auth_type: 'basic', defaultPort: 9200, fields: [{ key: 'username', label: 'Username', placeholder: 'elastic' }, { key: 'password', label: 'Password', type: 'password' }] },
@@ -936,6 +954,9 @@ function ConnectionsTab() {
   const [testing, setTesting] = useState({})
   const [pausing, setPausing] = useState({})
   const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ds_conn_advanced_open') === 'true')
+  const [usernameOverride, setUsernameOverride] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [importing, setImporting] = useState(false)
   const [jumpHosts, setJumpHosts] = useState([])
   const [vmHostConns, setVmHostConns] = useState([])
   const [profiles, setProfiles] = useState([])
@@ -1005,6 +1026,7 @@ function ConnectionsTab() {
       auth_type: c.auth_type || pa.auth_type || 'token',
       credentials: {},
       config: c.config || {},
+      _credState: c.credential_state || null,   // non-secret display state from API
     })
     setEditingId(c.id)
     setShowForm(true)
@@ -1295,9 +1317,53 @@ function ConnectionsTab() {
       </div>
       {/* ── end Credential Profiles ─────────────────────────────────────── */}
 
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <span className="text-xs" style={{ color: 'var(--text-3)' }}>{conns.length} connection(s)</span>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {/* Export */}
+          <button className="btn text-[10px] px-2 py-1"
+            style={{ background: 'var(--bg-3)', color: 'var(--text-2)' }}
+            onClick={async e => {
+              e.stopPropagation()
+              const r = await fetch(`${BASE}/api/connections/export`, { headers: { ...authHeaders() } })
+              const blob = await r.blob()
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a'); a.href = url
+              a.download = 'connections_export.csv'; a.click()
+              URL.revokeObjectURL(url)
+            }}>
+            ↓ Export CSV
+          </button>
+          {/* Import */}
+          <button className="btn text-[10px] px-2 py-1"
+            style={{ background: 'var(--bg-3)', color: 'var(--text-2)' }}
+            onClick={e => {
+              e.stopPropagation()
+              const input = document.createElement('input')
+              input.type = 'file'; input.accept = '.csv,text/csv'
+              input.onchange = async ev => {
+                const file = ev.target.files[0]
+                if (!file) return
+                setImporting(true); setImportResult(null)
+                const text = await file.text()
+                const b64 = btoa(unescape(encodeURIComponent(text)))
+                try {
+                  const r = await fetch(`${BASE}/api/connections/import`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({ csv_data: b64 }),
+                  })
+                  const d = await r.json()
+                  setImportResult(d)
+                  if (d.status === 'ok') fetchConns()
+                } catch (e) {
+                  setImportResult({ status: 'error', message: e.message })
+                } finally { setImporting(false) }
+              }
+              input.click()
+            }}>
+            {importing ? '…' : '↑ Import CSV'}
+          </button>
           <button className="btn btn-primary text-[10px] px-2 py-1"
                   onClick={e => { e.stopPropagation(); setShowBulk(false); showForm ? resetForm() : startAdd() }}>
             {showForm ? '✕ Cancel' : '+ Add Connection'}
@@ -1309,6 +1375,33 @@ function ConnectionsTab() {
           </button>
         </div>
       </div>
+
+      {/* Import result display */}
+      {importResult && (
+        <div style={{ padding: '8px 10px', borderRadius: 2, border: `1px solid ${importResult.status === 'ok' ? 'var(--border)' : 'var(--red)'}`,
+          background: 'var(--bg-2)', fontSize: 10, marginTop: 4 }}>
+          {importResult.status === 'ok' ? (
+            <>
+              <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>
+                Import complete — created: {importResult.summary?.created ?? 0}, skipped: {importResult.summary?.skipped ?? 0}, errors: {importResult.summary?.errors ?? 0}
+              </div>
+              {(importResult.results || []).filter(r => r.status !== 'exists').map((r, i) => (
+                <div key={i} style={{ color: r.status === 'created' ? 'var(--green)' : r.status === 'created_no_profile' ? 'var(--amber)' : 'var(--red)', marginBottom: 1 }}>
+                  {r.status === 'created' ? '✓' : r.status === 'created_no_profile' ? '⚠' : '✕'} {r.label}
+                  {r.profile_not_found && ' (profile not found — link manually)'}
+                  {r.status === 'error' && ` — ${r.message}`}
+                </div>
+              ))}
+            </>
+          ) : (
+            <span style={{ color: 'var(--red)' }}>{importResult.message || 'Import failed'}</span>
+          )}
+          <button onClick={() => setImportResult(null)}
+            style={{ fontSize: 9, color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', marginTop: 4, display: 'block' }}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {showBulk && (
         <BulkForm bulk={bulk} setBulk={setBulk} profiles={profiles} jumpHosts={jumpHosts}
@@ -1412,28 +1505,130 @@ function ConnectionsTab() {
               ))}
             </>)
           })()}
-          {/* Credential profile picker for vm_host */}
-          {form.platform === 'vm_host' && (
-            <div>
-              {_FL('Credential profile')}
-              <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>Pick a saved profile or enter credentials below</div>
-              <select
-                value={form.config?.credential_profile_id || ''}
-                onChange={e => updateConfig('credential_profile_id', e.target.value || null)}
-                className="input text-[10px] w-full"
-              >
-                <option value="">— none (use credentials below) —</option>
-                {profiles.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.auth_type})</option>
-                ))}
-              </select>
-              {form.config?.credential_profile_id && (
-                <div style={{ fontSize: 9, color: 'var(--accent)', marginTop: 3 }}>Credentials from profile — leave blank below to inherit</div>
-              )}
-            </div>
-          )}
-          {/* Standard platform fields */}
-          {form.platform !== 'docker_host' && platAuth.fields.map(f => (
+          {/* Credential profile picker for SSH-capable platforms */}
+          {['vm_host', 'windows', 'fortiswitch', 'cisco', 'juniper', 'aruba'].includes(form.platform) && (() => {
+            const credState = form._credState || {}
+            const activeProfileId = form.config?.credential_profile_id || ''
+            const activeProfile = profiles.find(p => p.id === activeProfileId)
+
+            const _ProfileField = ({ label, valueDisplay, fieldKey, disabled, overrideActive, onToggleOverride, children }) => (
+              <div style={{ marginBottom: 6 }}>
+                {_FL(label)}
+                {disabled && !overrideActive ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{
+                      flex: 1, padding: '4px 8px', borderRadius: 2, fontSize: 9,
+                      background: 'var(--bg-3)', border: '1px solid var(--border)',
+                      color: 'var(--cyan)', fontFamily: 'var(--font-mono)', opacity: 0.8,
+                    }}>
+                      {valueDisplay}
+                    </div>
+                    {fieldKey === 'username' && onToggleOverride && (
+                      <button onClick={onToggleOverride} title="Override username for this connection only"
+                        style={{ fontSize: 8, color: 'var(--amber)', background: 'none',
+                          border: '1px solid var(--amber)', borderRadius: 2, padding: '2px 5px', cursor: 'pointer' }}>
+                        Override
+                      </button>
+                    )}
+                  </div>
+                ) : children}
+                {overrideActive && fieldKey === 'username' && (
+                  <div style={{ fontSize: 9, marginTop: 3, color: 'var(--amber)', padding: '3px 6px',
+                    background: 'rgba(204,136,0,0.08)', border: '1px solid var(--amber)', borderRadius: 2 }}>
+                    ⚠ Overriding username for this connection only — not recommended. Consider creating a separate profile.
+                  </div>
+                )}
+              </div>
+            )
+
+            return (
+              <div>
+                {_FL('Credential Profile')}
+                <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>
+                  Select a profile — credentials are stored once and reused across connections
+                </div>
+                <select
+                  value={activeProfileId}
+                  onChange={e => {
+                    updateConfig('credential_profile_id', e.target.value || null)
+                    setUsernameOverride(false)
+                  }}
+                  className="input text-[10px] w-full"
+                >
+                  <option value="">— no profile (enter credentials below) —</option>
+                  {profiles.filter(p => p.name !== '__no_credential__').map(p => (
+                    <option key={p.id} value={p.id}>
+                      #{p.seq_id ?? '?'} — {p.name} ({p.auth_type})
+                    </option>
+                  ))}
+                </select>
+
+                {/* When a profile is active — show derived safe fields greyed out */}
+                {activeProfile && (
+                  <div style={{ marginTop: 8, padding: '8px', borderRadius: 2,
+                    background: 'var(--bg-3)', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 8, color: 'var(--text-3)', marginBottom: 6,
+                      fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>
+                      FROM PROFILE: {activeProfile.name.toUpperCase()} (#{activeProfile.seq_id})
+                    </div>
+
+                    {/* Username — overrideable */}
+                    <_ProfileField
+                      label="SSH User"
+                      fieldKey="username"
+                      disabled={!usernameOverride}
+                      overrideActive={usernameOverride}
+                      valueDisplay={activeProfile.username ? `${activeProfile.username} (from profile)` : '(from profile)'}
+                      onToggleOverride={() => setUsernameOverride(o => !o)}
+                    >
+                      <input className="input text-[10px] w-full"
+                        placeholder={activeProfile.username || 'override username'}
+                        value={form.credentials.username ?? ''}
+                        onChange={e => updateCred('username', e.target.value)} />
+                    </_ProfileField>
+
+                    {/* Private key — not overrideable, just display */}
+                    <_ProfileField
+                      label="Private Key"
+                      fieldKey="private_key"
+                      disabled={true}
+                      valueDisplay={activeProfile.has_private_key ? '⚿ Private key set in profile' : 'No private key in profile'}
+                    />
+
+                    {/* Passphrase — display only */}
+                    {activeProfile.has_private_key && (
+                      <_ProfileField
+                        label="Passphrase"
+                        fieldKey="passphrase"
+                        disabled={true}
+                        valueDisplay={activeProfile.has_passphrase ? '🔒 Passphrase set in profile' : '⚠ No passphrase — key unprotected'}
+                      />
+                    )}
+
+                    {/* Password — display only */}
+                    <_ProfileField
+                      label="Password (fallback)"
+                      fieldKey="password"
+                      disabled={true}
+                      valueDisplay={activeProfile.has_password ? '●●●● (from profile)' : 'No password in profile'}
+                    />
+                  </div>
+                )}
+
+                {/* Inline creds warning when no profile */}
+                {!activeProfile && editingId && (
+                  <div style={{ marginTop: 6, fontSize: 9, padding: '4px 8px', borderRadius: 2,
+                    border: '1px solid var(--amber)', color: 'var(--amber)', background: 'rgba(204,136,0,0.08)' }}>
+                    ⚠ Using inline credentials — consider linking a credential profile for better security and easier rotation.
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+          {/* Standard platform fields — hidden for profile-linked SSH platforms when profile active */}
+          {form.platform !== 'docker_host' &&
+           !(form.config?.credential_profile_id && ['vm_host','windows','fortiswitch','cisco','juniper','aruba'].includes(form.platform)) &&
+           platAuth.fields.map(f => (
             <div key={f.key}>
               {_FL(f.label + (f.hint ? ' ↓' : ''))}
               {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
@@ -1547,7 +1742,21 @@ function ConnectionsTab() {
                 {c.verified && <span style={{ color: 'var(--green)' }}>✓</span>}
                 {c.verified === false && c.last_seen && <span style={{ color: 'var(--red)' }}>✕</span>}
                 {c.config?.is_jump_host && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--amber-dim)', color: 'var(--amber)' }}>⇢ BASTION</span>}
-                {c.config?.shared_credentials && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--cyan-dim)', color: 'var(--cyan)' }}>⊕ SHARED</span>}
+                {c.credential_state?.source === 'profile' && (
+                  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'rgba(0,200,238,0.1)', color: 'var(--cyan)' }}>
+                    ⊕ {c.credential_state.profile_name || 'PROFILE'}
+                  </span>
+                )}
+                {c.credential_state?.source === 'profile_not_found' && (
+                  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'rgba(204,40,40,0.15)', color: 'var(--red)' }}>
+                    ⚠ PROFILE MISSING
+                  </span>
+                )}
+                {c.credential_state?.source === 'inline' && ['vm_host','windows'].includes(c.platform) && (
+                  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'rgba(204,136,0,0.12)', color: 'var(--amber)' }}>
+                    ⚠ INLINE CREDS
+                  </span>
+                )}
                 {c.config?.os_type && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}
                 {isPaused && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(100,100,120,0.2)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>⏸ PAUSED{c.config.paused_by ? ` · ${c.config.paused_by}` : ''}</span>}
               </div>
