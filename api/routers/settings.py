@@ -60,6 +60,14 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Notifications
     "notificationWebhookUrl": {"env": None, "sens": False, "default": ""},
     "notifyOnRecovery":       {"env": None, "sens": False, "default": False},
+    # Discovery
+    "discoveryEnabled":       {"env": None, "sens": False, "default": "false"},
+    "discoveryScopes":        {"env": None, "sens": False, "default": "[]"},
+    # Rotation test
+    "rotationTestMode":       {"env": None, "sens": False, "default": "adaptive"},
+    "rotationTestDelayMs":    {"env": None, "sens": False, "default": "500"},
+    "rotationMaxParallel":    {"env": None, "sens": False, "default": "10"},
+    "rotationWindowsDelayMs": {"env": None, "sens": False, "default": "2000"},
 }
 
 
