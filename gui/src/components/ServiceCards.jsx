@@ -481,7 +481,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
                       background: 'var(--bg-0)', borderBottom: '1px solid var(--border)' }}>
           <div style={{ width: NAME_W, flexShrink: 0,
                         borderRight: '2px solid rgba(255,255,255,0.07)' }} />
-          <div style={{ flex: 1, overflow: 'hidden', padding: '6px 10px' }}>{filterBar}</div>
+          <div style={{ flex: 1, overflow: 'visible', padding: '6px 10px', position: 'relative' }}>{filterBar}</div>
         </div>
       )}
 
@@ -983,24 +983,33 @@ function ProxmoxCardExpanded({ vm, proxmoxHost, proxmoxPort, onAction, confirm, 
 
 function ProxmoxCardCollapsed({ vm }) {
   const typeBadge = vm.type === 'lxc'
-    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
-    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030]">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040]">VM</span>
   return (
-    <>
-      <div className="text-[10px] text-[#383850] mb-1">{vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM</div>
-      <div className="flex items-center">
+    <div style={{ marginTop: 3 }}>
+      <div style={{
+        textAlign: 'center', fontSize: 10,
+        color: 'var(--text-3)', marginBottom: 4,
+        fontFamily: 'var(--font-mono)',
+      }}>
+        {vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM
+      </div>
+      <div className="flex items-center justify-center gap-1.5">
         {vm.problem
           ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
-          : <>{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></>}
+          : <>
+              {typeBadge}
+              <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span>
+            </>}
         {vm.maintenance && (
           <span style={{
             fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
             background: 'var(--amber-dim)', color: 'var(--amber)',
-            borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
+            borderRadius: 2, letterSpacing: 0.5,
           }}>MAINT</span>
         )}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -1168,7 +1177,7 @@ function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
           setDropOpen(false)
         }
         return (
-          <div className="relative flex items-center gap-0.5">
+          <div className="relative flex items-center gap-0.5" style={{ zIndex: 100 }}>
             <button
               className="text-[9px] px-1.5 py-px rounded-l border bg-violet-600/30 text-violet-300 border-violet-500/40 cursor-pointer select-none"
               onClick={() => setDropOpen(o => !o)}
@@ -1182,7 +1191,7 @@ function ProxmoxFilterBar({ items, filters, setFilters, sort, onSort }) {
               {sort.sortDir === 'asc' ? '↑' : '↓'}
             </button>
             {dropOpen && (
-              <div className="absolute top-full right-0 mt-0.5 z-10 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]">
+              <div className="absolute top-full right-0 mt-0.5 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]" style={{ zIndex: 200 }}>
                 {SORT_FIELDS.map(f => (
                   <button
                     key={f.key}

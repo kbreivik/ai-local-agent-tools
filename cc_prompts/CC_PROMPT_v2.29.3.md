@@ -1,10 +1,140 @@
-/**
- * TaskTemplates — collapsible one-click task shortcuts for the agent.
- * Grouped by domain. Clicking fills the task textarea via setTask().
- */
-import { useState } from 'react'
-import { useTask } from '../context/TaskContext'
+# CC PROMPT — v2.29.3 — fix(ui): Proxmox sort dropdown z-index + card alignment + task templates
 
+## What this does
+Three UI fixes in ServiceCards.jsx and TaskTemplates.jsx:
+
+1. **Sort dropdown hidden behind cards** — `Section` filterBar wrapper has `overflow: 'hidden'`
+   which clips the absolutely-positioned sort dropdown. Fix: `overflow: 'visible'` + increase
+   dropdown z-index to 200.
+
+2. **ProxmoxCardCollapsed type/status centering** — type badge (LXC/VM) and status are
+   left-aligned in a row with no centering. Fix: center the row and add a small gap.
+
+3. **Task templates expansion** — add UniFi, PBS, TrueNAS, FortiGate groups; improve existing
+   Kafka template wording.
+Version bump: 2.29.2 → 2.29.3
+
+---
+
+## Change 1 — gui/src/components/ServiceCards.jsx: fix sort dropdown overflow + z-index
+
+### 1a — Remove overflow: hidden from filterBar wrapper in Section
+
+FIND (exact):
+```jsx
+          <div style={{ flex: 1, overflow: 'hidden', padding: '6px 10px' }}>{filterBar}</div>
+```
+
+REPLACE WITH:
+```jsx
+          <div style={{ flex: 1, overflow: 'visible', padding: '6px 10px', position: 'relative' }}>{filterBar}</div>
+```
+
+### 1b — Increase sort dropdown z-index from z-10 to z-[200] in ProxmoxFilterBar
+
+FIND (exact):
+```jsx
+              <div className="absolute top-full right-0 mt-0.5 z-10 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]">
+```
+
+REPLACE WITH:
+```jsx
+              <div className="absolute top-full right-0 mt-0.5 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]" style={{ zIndex: 200 }}>
+```
+
+### 1c — Add position relative to sort button container in ProxmoxFilterBar
+
+FIND (exact):
+```jsx
+          <div className="relative flex items-center gap-0.5">
+```
+
+REPLACE WITH:
+```jsx
+          <div className="relative flex items-center gap-0.5" style={{ zIndex: 100 }}>
+```
+
+---
+
+## Change 2 — gui/src/components/ServiceCards.jsx: center ProxmoxCardCollapsed content
+
+FIND (exact):
+```jsx
+function ProxmoxCardCollapsed({ vm }) {
+  const typeBadge = vm.type === 'lxc'
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
+  return (
+    <>
+      <div className="text-[10px] text-[#383850] mb-1">{vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM</div>
+      <div className="flex items-center">
+        {vm.problem
+          ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
+          : <>{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></>}
+        {vm.maintenance && (
+          <span style={{
+            fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
+          }}>MAINT</span>
+        )}
+      </div>
+    </>
+  )
+}
+```
+
+REPLACE WITH:
+```jsx
+function ProxmoxCardCollapsed({ vm }) {
+  const typeBadge = vm.type === 'lxc'
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030]">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040]">VM</span>
+  return (
+    <div style={{ marginTop: 3 }}>
+      <div style={{
+        textAlign: 'center', fontSize: 10,
+        color: 'var(--text-3)', marginBottom: 4,
+        fontFamily: 'var(--font-mono)',
+      }}>
+        {vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM
+      </div>
+      <div className="flex items-center justify-center gap-1.5">
+        {vm.problem
+          ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
+          : <>
+              {typeBadge}
+              <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span>
+            </>}
+        {vm.maintenance && (
+          <span style={{
+            fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            borderRadius: 2, letterSpacing: 0.5,
+          }}>MAINT</span>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 3 — gui/src/components/TaskTemplates.jsx: expand templates
+
+Replace the entire `TEMPLATES` constant with an expanded version covering all services:
+
+FIND (exact — start of TEMPLATES):
+```jsx
+const TEMPLATES = [
+  {
+    group: 'KAFKA',
+```
+
+REPLACE the entire TEMPLATES array (from `const TEMPLATES = [` to the closing `]`) with:
+
+```jsx
 const TEMPLATES = [
   {
     group: 'KAFKA',
@@ -93,93 +223,16 @@ const TEMPLATES = [
     ],
   },
 ]
+```
 
-export default function TaskTemplates() {
-  const { setTask } = useTask()
-  const [open, setOpen] = useState(false)
-  const [activeGroup, setActiveGroup] = useState(null)
+---
 
-  const pick = (task) => {
-    setTask(task)
-    setOpen(false)
-    setActiveGroup(null)
-  }
+## Version bump
+Update VERSION: 2.29.2 → 2.29.3
 
-  return (
-    <div style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-      {/* Header row */}
-      <button
-        onClick={() => { setOpen(o => !o); setActiveGroup(null) }}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '5px 12px', background: 'none', border: 'none', cursor: 'pointer',
-          fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.08em',
-          color: open ? 'var(--text-2)' : 'var(--text-3)',
-        }}
-      >
-        <span>TEMPLATES</span>
-        <span style={{ fontSize: 8, color: 'var(--text-3)' }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {open && (
-        <div style={{ padding: '0 8px 8px' }}>
-          {/* Group tabs */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-            {TEMPLATES.map(g => (
-              <button
-                key={g.group}
-                onClick={() => setActiveGroup(activeGroup === g.group ? null : g.group)}
-                style={{
-                  padding: '2px 7px', fontSize: 8, fontFamily: 'var(--font-mono)',
-                  letterSpacing: '0.06em', border: '1px solid',
-                  borderColor: activeGroup === g.group ? g.color : 'var(--border)',
-                  background: activeGroup === g.group ? `${g.color}18` : 'transparent',
-                  color: activeGroup === g.group ? g.color : 'var(--text-3)',
-                  borderRadius: 2, cursor: 'pointer',
-                }}
-              >
-                {g.group}
-              </button>
-            ))}
-          </div>
-
-          {/* Template items for active group */}
-          {activeGroup && (() => {
-            const group = TEMPLATES.find(g => g.group === activeGroup)
-            if (!group) return null
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {group.items.map(item => (
-                  <button
-                    key={item.label}
-                    onClick={() => pick(item.task)}
-                    title={item.task}
-                    style={{
-                      textAlign: 'left', padding: '4px 8px', fontSize: 9,
-                      fontFamily: 'var(--font-mono)', letterSpacing: '0.03em',
-                      background: 'var(--bg-2)', border: `1px solid var(--border)`,
-                      borderLeft: `2px solid ${group.color}`,
-                      borderRadius: 2, cursor: 'pointer', color: 'var(--text-2)',
-                      transition: 'background 0.12s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-2)'}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            )
-          })()}
-
-          {/* Show all groups if none selected */}
-          {!activeGroup && (
-            <div style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', padding: '2px 0' }}>
-              Select a group above to see templates
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
+## Commit
+```bash
+git add -A
+git commit -m "fix(ui): v2.29.3 Proxmox sort dropdown z-index, card alignment, expanded task templates"
+git push origin main
+```
