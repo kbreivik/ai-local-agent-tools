@@ -271,6 +271,12 @@ async def lifespan(app: FastAPI):
         start_auto_update()
     except Exception as e:
         _log.warning("Auto-update start skipped: %s", e)
+    # start Bookstack sync scheduler
+    try:
+        from api.rag.bookstack_sync import start_bookstack_scheduler
+        start_bookstack_scheduler()
+    except Exception as _bs_err:
+        _log.warning("Bookstack scheduler start failed: %s", _bs_err)
     # Result store cleanup every 30 minutes
     import asyncio as _aio
     async def _result_store_cleanup_loop():
@@ -337,6 +343,11 @@ async def lifespan(app: FastAPI):
     yield
     try:
         stop_auto_update()
+    except Exception:
+        pass
+    try:
+        from api.rag.bookstack_sync import stop_bookstack_scheduler
+        stop_bookstack_scheduler()
     except Exception:
         pass
     collector_manager.stop_all()

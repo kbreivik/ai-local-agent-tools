@@ -246,3 +246,26 @@ def ask_docs(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/bookstack/sync")
+def trigger_bookstack_sync(
+    incremental: bool = True,
+    _: str = Depends(get_current_user),
+):
+    """Trigger a Bookstack → doc_chunks sync. incremental=true skips unchanged pages."""
+    import threading
+    from api.rag.bookstack_sync import run_sync
+    # Run in background thread so the HTTP response returns immediately
+    def _bg():
+        run_sync(incremental=incremental)
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"status": "started", "incremental": incremental,
+            "message": "Sync started in background. Check /api/docs/bookstack/status for progress."}
+
+
+@router.get("/bookstack/status")
+def bookstack_sync_status(_: str = Depends(get_current_user)):
+    """Return the last Bookstack sync result and scheduler state."""
+    from api.rag.bookstack_sync import get_sync_status
+    return get_sync_status()

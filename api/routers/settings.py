@@ -68,6 +68,9 @@ SETTINGS_KEYS: dict[str, dict] = {
     "rotationTestDelayMs":    {"env": None, "sens": False, "default": "500"},
     "rotationMaxParallel":    {"env": None, "sens": False, "default": "10"},
     "rotationWindowsDelayMs": {"env": None, "sens": False, "default": "2000"},
+    # Bookstack sync
+    "bookstackSyncEnabled":       {"env": None, "sens": False, "default": False},
+    "bookstackSyncIntervalHours": {"env": None, "sens": False, "default": 6},
 }
 
 

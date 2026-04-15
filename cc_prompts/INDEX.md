@@ -120,6 +120,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.29.5.md  | v2.29.5  | fix(ui): filter bar vertical centering + revert wrong ProxmoxCard centering | DONE (457397e) |
 | CC_PROMPT_v2.30.0.md  | v2.30.0  | fix(proxmox): multi-connection support in Proxmox action paths | DONE (00e7d36) |
 | CC_PROMPT_v2.30.1.md  | v2.30.1  | fix(auth): remove token from localStorage, cookie-first auth | DONE (733745b) |
+| CC_PROMPT_v2.31.0.md  | v2.31.0  | feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks | RUNNING |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 
 ---
@@ -274,6 +275,16 @@ calls POST /api/auth/logout to clear server-side cookie. api.js: authHeaders() r
 api/routers/dashboard.py: three SSE stream endpoints (containers, unified, vm-hosts) gain
 `request: Request` param and fall back to httpOnly cookie when no ?token= supplied —
 EventSource sends same-origin cookies automatically.
+
+**v2.31.0** — feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks.
+New api/rag/bookstack_sync.py: fetches all pages from Bookstack API with pagination,
+strips HTML to plain text (stdlib HTMLParser, no deps), chunks via chunk_document(),
+upserts via ingest_chunks() with platform=bookstack. Incremental mode skips pages not
+updated since last sync (state stored in status_snapshots). Connection resolved from
+connections DB (platform=bookstack) then env vars. Background threading.Timer scheduler.
+api/routers/docs.py: POST /api/docs/bookstack/sync (manual trigger, runs in background
+thread) + GET /api/docs/bookstack/status. api/main.py: scheduler wired to lifespan.
+api/routers/settings.py: seeds bookstackSyncEnabled (false) + bookstackSyncIntervalHours (6).
 
 ---
 
