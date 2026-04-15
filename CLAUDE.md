@@ -71,9 +71,9 @@ git push origin main
 
 ### Running the queue
 ```bash
-bash cc_prompts/run_queue.sh          # all pending, streams output live
-bash cc_prompts/run_queue.sh --one    # one at a time
-bash cc_prompts/run_queue.sh --dry-run
+bash cc_prompts/run_queue.py          # all pending, streams output live
+bash cc_prompts/run_queue.py --one    # one at a time
+bash cc_prompts/run_queue.py --dry-run
 ```
 CC implements the prompt, commits, pushes, then updates `INDEX.md`
 changing `PENDING` → `DONE (SHA)` and commits that too.
@@ -88,12 +88,12 @@ Runner verifies git hash changed before moving to next prompt.
 ### After CC pushes a commit
 ```bash
 # Pull and restart on agent-01
-docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
-  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+#docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+#  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
 
 # Verify
-curl -s http://192.168.199.10:8000/api/health
-docker logs hp1_agent --tail 50
+#curl -s http://192.168.199.10:8000/api/health
+#docker logs hp1_agent --tail 50
 ```
 
 ---

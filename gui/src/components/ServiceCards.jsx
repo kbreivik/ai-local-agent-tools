@@ -328,23 +328,6 @@ function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpene
           <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{isOpen ? '▾' : '▸'}</span>
         </div>
         <div className="flex items-center gap-0 shrink-0 ml-1" onClick={e => e.stopPropagation()}>
-          {entityId && onEntityDetail && (
-            <>
-              <button
-                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
-                title="Ask agent about this entity"
-                style={{ color: 'var(--amber)', background: 'none', border: 'none',
-                         cursor: 'pointer', fontSize: 10, padding: '1px 3px',
-                         opacity: 0.65, lineHeight: 1 }}
-              >⌘</button>
-              <button
-                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
-                title="Entity detail"
-                style={{ color: 'var(--cyan)', background: 'none', border: 'none',
-                         cursor: 'pointer', fontSize: 10, padding: '1px 3px', lineHeight: 1 }}
-              >›</button>
-            </>
-          )}
           {/* sub moved to line 2 via TemplateCardRenderer header_sub field */}
         </div>
       </div>
@@ -362,8 +345,31 @@ function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpene
         </div>
       )}
 
-      {/* Collapsed problem badge */}
-      {!isOpen && collapsed}
+      {/* Collapsed content + ⌘/› strip */}
+      {!isOpen && (
+        <>
+          {collapsed}
+          {entityId && onEntityDetail && (
+            <div style={{
+              display: 'flex', justifyContent: 'flex-end', gap: 4, marginTop: 3,
+              paddingTop: 2,
+            }} onClick={e => e.stopPropagation()}>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Ask agent about this entity"
+                style={{ color: 'var(--amber)', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 10, padding: '1px 3px', opacity: 0.65, lineHeight: 1 }}
+              >⌘</button>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Entity detail"
+                style={{ color: 'var(--cyan)', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 10, padding: '1px 3px', lineHeight: 1 }}
+              >›</button>
+            </div>
+          )}
+        </>
+      )}
 
       {/* Expanded content */}
       {isOpen && (
@@ -1634,6 +1640,33 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
       window.removeEventListener('ds:expand-all-cards', expandAll)
       window.removeEventListener('ds:collapse-all-cards', collapseAll)
     }
+  }, [])
+
+  // Listen for Platform Core row clicks → expand specific card + scroll to it
+  useEffect(() => {
+    const handler = (e) => {
+      const { cardKey } = e.detail || {}
+      if (!cardKey) return
+      setOpenKeys(prev => {
+        const next = new Set(prev)
+        next.add(cardKey)
+        return next
+      })
+      setExpandAllFlag(false)
+      // Scroll to the card after it expands
+      setTimeout(() => {
+        const el = document.querySelector(`[data-card-key="${cardKey}"]`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          // Brief highlight
+          el.style.outline = '2px solid var(--accent)'
+          el.style.outlineOffset = '2px'
+          setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = '' }, 1500)
+        }
+      }, 80)
+    }
+    window.addEventListener('ds:open-card', handler)
+    return () => window.removeEventListener('ds:open-card', handler)
   }, [])
 
   // Don't count intentionally stopped resources as issues — only real problems

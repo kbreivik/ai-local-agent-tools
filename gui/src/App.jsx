@@ -808,14 +808,13 @@ function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter
 }
 
 
-function PlatformCoreCards() {
+function PlatformCoreCards({ onTab }) {
   const [memHealth, setMemHealth] = useState(null)
   const { health, collectorsData, containersData } = useDashboardData()
   const containers = containersData?.containers || []
 
   // Keep fetching status (kafka/es health) + memHealth separately — not in summary
   const [fullStatus, setFullStatus] = useState(null)
-  const [esExpanded, setEsExpanded] = useState(false)
   useEffect(() => {
     const load = () => {
       fetchStatus().then(setFullStatus).catch(() => {})
@@ -844,12 +843,24 @@ function PlatformCoreCards() {
   const _tagBg = (c) => c === 'green' ? 'var(--green-dim)' : c === 'amber' ? 'var(--amber-dim)' : c === 'red' ? 'var(--red-dim)' : 'var(--bg-3)'
   const _tagFg = (c) => c === 'green' ? 'var(--green)' : c === 'amber' ? 'var(--amber)' : c === 'red' ? 'var(--red)' : 'var(--text-3)'
 
-  const _row = (dot, label, tag, tagColor, value) => (
-    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6 }}>
+  const _row = (dot, label, tag, tagColor, value, onClick) => (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', padding: '4px 0',
+        borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6,
+        cursor: onClick ? 'pointer' : 'default',
+        borderRadius: onClick ? 2 : 0,
+        transition: 'background 0.1s',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'var(--bg-3)' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'transparent' }}
+    >
       <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
       <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
       {value && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>}
       {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2, letterSpacing: 0.5 }}>{tag}</span>}
+      {onClick && <span style={{ fontSize: 9, color: 'var(--text-3)', flexShrink: 0 }}>›</span>}
     </div>
   )
 
@@ -887,85 +898,82 @@ function PlatformCoreCards() {
       {/* PLATFORM CORE */}
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${apiOk ? 'var(--green)' : 'var(--red)'}`, borderRadius: 2, padding: '8px 10px' }}>
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>PLATFORM CORE</div>
-        {_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
-        {_row(_healthDot(pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'), pgLabel, pgHealth, pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey', pgVersion)}
-        {_row(_healthDot(muninnHealth), 'DS-muninndb', muninnHealth.toUpperCase(), _healthTag(muninnHealth), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
-        {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
-        {/* Elasticsearch — expandable */}
-        <div style={{ borderTop: '1px solid var(--bg-3)' }}>
-          <div
-            onClick={() => setEsExpanded(e => !e)}
-            style={{
-              display: 'flex', alignItems: 'center', padding: '4px 0',
-              fontSize: 10, gap: 6, cursor: 'pointer',
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: _healthDot(esHealth), flexShrink: 0 }} />
-            <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>Elasticsearch</span>
-            {esClusterName && (
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{esClusterName}</span>
-            )}
-            {esNodes !== '' && (
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>
-                {esNodes}n
-              </span>
-            )}
-            <span style={{
-              fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
-              background: esHealth === 'healthy' ? 'var(--green-dim)' : esHealth === 'degraded' ? 'var(--amber-dim)' : esHealth === 'critical' ? 'var(--red-dim)' : 'var(--bg-3)',
-              color: esHealth === 'healthy' ? 'var(--green)' : esHealth === 'degraded' ? 'var(--amber)' : esHealth === 'critical' ? 'var(--red)' : 'var(--text-3)',
-              borderRadius: 2, letterSpacing: 0.5,
-            }}>
-              {esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase()}
-            </span>
-            <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 2 }}>
-              {esExpanded ? '−' : '+'}
-            </span>
-          </div>
+        {(() => {
+  // Find the actual agent container by name
+  const agentContainer = containers.find(c =>
+    c.name?.includes('hp1_agent') || c.name?.includes('hp1-agent') || c.image?.startsWith('ghcr.io/kbreivik/hp1')
+  )
+  const agentName = agentContainer?.name || health?.hostname || 'hp1_agent'
+  const cardKey   = agentContainer ? `c-${agentContainer.id}` : null
 
-          {esExpanded && (
-            <div style={{
-              padding: '6px 0 6px 12px',
-              fontSize: 9, fontFamily: 'var(--font-mono)',
-              color: 'var(--text-3)', lineHeight: 1.8,
-            }}>
-              {/* Shard breakdown */}
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
-                <span>active <span style={{ color: 'var(--text-2)' }}>{esShards.active ?? '—'}</span></span>
-                <span>primary <span style={{ color: 'var(--text-2)' }}>{esShards.primary ?? '—'}</span></span>
-                <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-3)' }}>
-                  unassigned <span style={{ color: (esShards.unassigned || 0) > 0 ? 'var(--amber)' : 'var(--text-2)' }}>{esShards.unassigned ?? 0}</span>
-                </span>
-                {(esShards.initializing || 0) > 0 && (
-                  <span>init <span style={{ color: 'var(--cyan)' }}>{esShards.initializing}</span></span>
-                )}
-                {(esShards.relocating || 0) > 0 && (
-                  <span>reloc <span style={{ color: 'var(--cyan)' }}>{esShards.relocating}</span></span>
-                )}
-              </div>
-              {/* Nodes */}
-              <div style={{ marginBottom: 4 }}>
-                <span>nodes <span style={{ color: 'var(--text-2)' }}>{esNodes ?? '—'}</span></span>
-                {esDataNodes !== esNodes && (
-                  <span style={{ marginLeft: 12 }}>data <span style={{ color: 'var(--text-2)' }}>{esDataNodes}</span></span>
-                )}
-              </div>
-              {/* Unassigned explanation for single-node */}
-              {(esShards.unassigned || 0) > 0 && esDataNodes === 1 && (
-                <div style={{ color: 'var(--amber)', fontSize: 8, marginBottom: 4 }}>
-                  ⚠ single-node: replica shards cannot be placed — set replicas=0 or enable single-node mode
-                </div>
-              )}
-              {/* Filebeat */}
-              <div>
-                filebeat{' '}
-                <span style={{ color: esFilebeat === 'active' ? 'var(--green)' : 'var(--amber)' }}>
-                  {esFilebeat}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+  // Version delta display
+  const runningVer = agentContainer?.running_version || health?.version
+  const latestVer  = agentContainer ? fullStatus?.latest_version : null
+  const hasUpdate  = latestVer && runningVer && latestVer !== runningVer
+  const versionStr = hasUpdate
+    ? `${runningVer} → ${latestVer}`
+    : runningVer ? `v${runningVer}` : '—'
+
+  const onClick = cardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey } }))
+    : undefined
+
+  return _row(
+    apiOk ? 'var(--green)' : 'var(--red)',
+    agentName,
+    apiOk ? 'ONLINE' : 'ERROR',
+    apiOk ? 'green' : 'red',
+    <span style={{ color: hasUpdate ? 'var(--amber)' : 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>
+      {versionStr}
+    </span>,
+    onClick
+  )
+})()}
+        {(() => {
+  const pgCardKey = pgContainer ? `c-${pgContainer.id}` : null
+  const pgClick = pgCardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey: pgCardKey } }))
+    : undefined
+  const pgHealthStr = pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'
+  return _row(
+    _healthDot(pgHealthStr), pgLabel, pgHealth,
+    pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey',
+    pgVersion, pgClick
+  )
+})()}
+        {(() => {
+  const muninnContainer = containers.find(c => c.name?.toLowerCase().includes('muninn'))
+  const muninnCardKey = muninnContainer ? `c-${muninnContainer.id}` : null
+  const muninnClick = muninnCardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey: muninnCardKey } }))
+    : undefined
+  const muninnLabel = muninnContainer?.name || 'muninndb'
+  return _row(
+    _healthDot(muninnHealth), muninnLabel, muninnHealth.toUpperCase(), _healthTag(muninnHealth),
+    muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '',
+    muninnClick
+  )
+})()}
+        {_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth),
+  kafkaBrokers ? `${kafkaBrokers} brokers` : '',
+  onTab ? () => onTab('Cluster') : undefined
+)}
+        {/* Elasticsearch — click to open Settings → Connections */}
+        {_row(
+          _healthDot(esHealth),
+          'Elasticsearch',
+          esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase(),
+          _healthTag(esHealth),
+          esNodes !== '' ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '',
+          onTab ? () => {
+            // Navigate to Settings → Connections, pre-selecting elasticsearch platform
+            onTab('Settings')
+            // Dispatch event to pre-filter connections to elasticsearch
+            setTimeout(() => window.dispatchEvent(new CustomEvent('ds:settings-tab', {
+              detail: { tab: 'Connections', filterPlatform: 'elasticsearch' }
+            })), 100)
+          } : undefined
+        )}
       </div>
 
       {/* COLLECTORS */}
@@ -1195,7 +1203,7 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
   // Section content map — each key matches a tile name in layout.rows
   const sectionContent = {
-    PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards /> : null,
+    PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards onTab={onTab} /> : null,
     COMPUTE: showSection('COMPUTE') ? (
       summaryLoading ? <SkeletonGrid count={4} /> :
       <ServiceCardsErrorBoundary>
