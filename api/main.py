@@ -38,6 +38,8 @@ from api.routers.vm_exec_allowlist import router as vm_exec_allowlist_router
 from api.routers.runbooks import router as runbooks_router
 from api.routers.maintenance import router as maintenance_router
 from api.routers.discovery import router as discovery_router
+from api.routers.card_templates import router as card_templates_router
+from api.routers.display_aliases import router as display_aliases_router
 from api.db.entity_maintenance import init_maintenance
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
@@ -188,6 +190,18 @@ async def lifespan(app: FastAPI):
         init_runbooks()
     except Exception as e:
         _log.debug("runbooks init skipped: %s", e)
+    # Initialize card_templates table
+    try:
+        from api.db.card_templates import init_card_templates
+        init_card_templates()
+    except Exception as e:
+        _log.debug("card_templates init skipped: %s", e)
+    # Initialize display_aliases table
+    try:
+        from api.db.display_aliases import init_display_aliases
+        init_display_aliases()
+    except Exception as e:
+        _log.debug("display_aliases init skipped: %s", e)
     # Migrate operations table: add parent_session_id if not present
     try:
         from api.db.base import get_engine as _ge
@@ -373,6 +387,8 @@ app.include_router(vm_exec_allowlist_router)
 app.include_router(runbooks_router)
 app.include_router(maintenance_router)
 app.include_router(discovery_router)
+app.include_router(card_templates_router)
+app.include_router(display_aliases_router)
 
 
 def _get_host_ips() -> dict:

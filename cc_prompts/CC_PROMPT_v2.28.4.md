@@ -1,0 +1,400 @@
+# CC PROMPT — v2.28.4 — Platform Core fixes + ⌘/› bottom-right strip
+
+## What this does
+Two groups of fixes:
+
+**Group A — Platform Core (PlatformCoreCards in App.jsx):**
+- Container rows: use `c.name` (not hardcoded 'DS-agent-01')
+- Version rows: show `{running_version} → {latest}` in amber when update available
+- Click any row → dispatch `ds:open-card` event → ServiceCards expands + scrolls to card
+- Kafka row: click → navigate to Cluster tab
+- ES row: remove +/- expand, click → navigate to Settings → Connections (elasticsearch filter)
+- ServiceCards.jsx: listen for `ds:open-card`, expand matching card + scroll to it
+
+**Group B — InfraCard ⌘/› button repositioning:**
+- Move ⌘ (ask) and › (entity detail) buttons from InfraCard header to bottom-right strip
+  of the collapsed state — always visible, not hover-only
+Version bump: 2.28.3 → 2.28.4
+
+---
+
+## Change 1 — gui/src/App.jsx: PlatformCoreCards improvements
+
+NOTE for CC: Read the full PlatformCoreCards function in App.jsx before editing.
+The function is ~150 lines and renders two cards: PLATFORM CORE and COLLECTORS.
+
+### 1a — Make _row clickable + add navigation intent
+
+The `_row` helper currently returns static JSX. Update it to accept an optional `onClick` handler:
+
+FIND (exact):
+```jsx
+  const _row = (dot, label, tag, tagColor, value) => (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6 }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+      <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
+      {value && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>}
+      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2, letterSpacing: 0.5 }}>{tag}</span>}
+    </div>
+  )
+```
+
+REPLACE WITH:
+```jsx
+  const _row = (dot, label, tag, tagColor, value, onClick) => (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', padding: '4px 0',
+        borderTop: '1px solid var(--bg-3)', fontSize: 10, gap: 6,
+        cursor: onClick ? 'pointer' : 'default',
+        borderRadius: onClick ? 2 : 0,
+        transition: 'background 0.1s',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'var(--bg-3)' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'transparent' }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+      <span style={{ flex: 1, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{label}</span>
+      {value && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', fontSize: 9 }}>{value}</span>}
+      {tag && <span style={{ fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px', background: _tagBg(tagColor), color: _tagFg(tagColor), borderRadius: 2, letterSpacing: 0.5 }}>{tag}</span>}
+      {onClick && <span style={{ fontSize: 9, color: 'var(--text-3)', flexShrink: 0 }}>›</span>}
+    </div>
+  )
+```
+
+### 1b — Update the agent container row to use c.name + version delta
+
+Find the Platform Core card JSX. The current agent row is:
+```jsx
+{_row(apiOk ? 'var(--green)' : 'var(--red)', 'DS-agent-01', apiOk ? 'ONLINE' : 'ERROR', apiOk ? 'green' : 'red', `v${health?.version || '—'}`)}
+```
+
+REPLACE WITH:
+```jsx
+{(() => {
+  // Find the actual agent container by name
+  const agentContainer = containers.find(c =>
+    c.name?.includes('hp1_agent') || c.name?.includes('hp1-agent') || c.image?.startsWith('ghcr.io/kbreivik/hp1')
+  )
+  const agentName = agentContainer?.name || health?.hostname || 'hp1_agent'
+  const cardKey   = agentContainer ? `c-${agentContainer.id}` : null
+
+  // Version delta display
+  const runningVer = agentContainer?.running_version || health?.version
+  const latestVer  = agentContainer ? fullStatus?.latest_version : null
+  const hasUpdate  = latestVer && runningVer && latestVer !== runningVer
+  const versionStr = hasUpdate
+    ? `${runningVer} → ${latestVer}`
+    : runningVer ? `v${runningVer}` : '—'
+
+  const onClick = cardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey } }))
+    : undefined
+
+  return _row(
+    apiOk ? 'var(--green)' : 'var(--red)',
+    agentName,
+    apiOk ? 'ONLINE' : 'ERROR',
+    apiOk ? 'green' : 'red',
+    <span style={{ color: hasUpdate ? 'var(--amber)' : 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>
+      {versionStr}
+    </span>,
+    onClick
+  )
+})()}
+```
+
+### 1c — Update postgres row to use c.name + card navigation
+
+FIND the postgres row:
+```jsx
+{_row(_healthDot(pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'), pgLabel, pgHealth, pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey', pgVersion)}
+```
+
+REPLACE WITH:
+```jsx
+{(() => {
+  const pgCardKey = pgContainer ? `c-${pgContainer.id}` : null
+  const pgClick = pgCardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey: pgCardKey } }))
+    : undefined
+  const pgHealthStr = pgDot === 'green' ? 'healthy' : pgDot === 'amber' ? 'degraded' : pgDot === 'red' ? 'error' : 'unknown'
+  return _row(
+    _healthDot(pgHealthStr), pgLabel, pgHealth,
+    pgDot === 'green' ? 'green' : pgDot === 'amber' ? 'amber' : pgDot === 'red' ? 'red' : 'grey',
+    pgVersion, pgClick
+  )
+})()}
+```
+
+### 1d — Update MuninnDB row with card navigation
+
+Find the muninndb row similarly and add click navigation if a container named 'muninndb' exists:
+
+FIND (exact):
+```jsx
+{_row(_healthDot(muninnHealth), 'DS-muninndb', muninnHealth.toUpperCase(), _healthTag(muninnHealth), muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '')}
+```
+
+REPLACE WITH:
+```jsx
+{(() => {
+  const muninnContainer = containers.find(c => c.name?.toLowerCase().includes('muninn'))
+  const muninnCardKey = muninnContainer ? `c-${muninnContainer.id}` : null
+  const muninnClick = muninnCardKey
+    ? () => window.dispatchEvent(new CustomEvent('ds:open-card', { detail: { cardKey: muninnCardKey } }))
+    : undefined
+  const muninnLabel = muninnContainer?.name || 'muninndb'
+  return _row(
+    _healthDot(muninnHealth), muninnLabel, muninnHealth.toUpperCase(), _healthTag(muninnHealth),
+    muninnEngrams ? `${Number(muninnEngrams).toLocaleString()} engrams` : '',
+    muninnClick
+  )
+})()}
+```
+
+### 1e — Kafka row: click → navigate to Cluster tab
+
+FIND the Kafka row:
+```jsx
+{_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth), kafkaBrokers ? `${kafkaBrokers} brokers` : '')}
+```
+
+NOTE for CC: PlatformCoreCards doesn't have access to `onTab` directly. It's rendered inside
+DashboardView. Add an `onTab` prop to PlatformCoreCards and thread it through. Find where
+PlatformCoreCards is rendered in DashboardView:
+
+```jsx
+PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards /> : null,
+```
+
+Change to:
+```jsx
+PLATFORM: showSection('PLATFORM') ? <PlatformCoreCards onTab={onTab} /> : null,
+```
+
+Then update PlatformCoreCards signature:
+```jsx
+function PlatformCoreCards({ onTab }) {
+```
+
+And the Kafka row:
+```jsx
+{_row(_healthDot(kafkaHealth), 'Kafka', kafkaHealth.toUpperCase(), _healthTag(kafkaHealth),
+  kafkaBrokers ? `${kafkaBrokers} brokers` : '',
+  onTab ? () => onTab('Cluster') : undefined
+)}
+```
+
+### 1f — Elasticsearch row: remove +/- expand, click → Settings → Connections
+
+Find the Elasticsearch expandable row block. It currently has:
+```jsx
+const [esExpanded, setEsExpanded] = useState(false)
+```
+and a complex clickable row with a `+`/`−` toggle.
+
+REMOVE the `esExpanded` state and the full expandable ES section. Replace the entire ES block
+with a simple non-expandable row that navigates to Settings → Connections on click:
+
+FIND (exact — the ES section with expand toggle):
+```jsx
+        {/* Elasticsearch — expandable */}
+        <div style={{ borderTop: '1px solid var(--bg-3)' }}>
+          <div
+            onClick={() => setEsExpanded(e => !e)}
+            style={{
+              display: 'flex', alignItems: 'center', padding: '4px 0',
+              fontSize: 10, gap: 6, cursor: 'pointer',
+            }}
+          >
+```
+
+REPLACE THE ENTIRE ES SECTION (from `{/* Elasticsearch — expandable */}` through the
+closing `</div>`) with:
+
+```jsx
+{/* Elasticsearch — click to open Settings → Connections */}
+{_row(
+  _healthDot(esHealth),
+  'Elasticsearch',
+  esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase(),
+  _healthTag(esHealth),
+  esNodes !== '' ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '',
+  onTab ? () => {
+    // Navigate to Settings → Connections, pre-selecting elasticsearch platform
+    onTab('Settings')
+    // Dispatch event to pre-filter connections to elasticsearch
+    setTimeout(() => window.dispatchEvent(new CustomEvent('ds:settings-tab', {
+      detail: { tab: 'Connections', filterPlatform: 'elasticsearch' }
+    })), 100)
+  } : undefined
+)}
+```
+
+Also remove the `esExpanded` state declaration from PlatformCoreCards since the expand is gone.
+
+---
+
+## Change 2 — gui/src/components/ServiceCards.jsx: listen for ds:open-card event
+
+### 2a — Add event listener in the main ServiceCards component
+
+Find the useEffect block that listens for `ds:expand-all-cards` and `ds:collapse-all-cards`.
+Add another useEffect for `ds:open-card`:
+
+FIND (exact — end of the expand/collapse listener useEffect):
+```jsx
+  // Listen for expand/collapse all cards events from DrillDownBar
+  useEffect(() => {
+    const expandAll = () => setExpandAllFlag(true)
+    const collapseAll = () => {
+      setOpenKeys(new Set())
+      setExpandAllFlag(false)
+    }
+    window.addEventListener('ds:expand-all-cards', expandAll)
+    window.addEventListener('ds:collapse-all-cards', collapseAll)
+    return () => {
+      window.removeEventListener('ds:expand-all-cards', expandAll)
+      window.removeEventListener('ds:collapse-all-cards', collapseAll)
+    }
+  }, [])
+```
+
+REPLACE WITH:
+```jsx
+  // Listen for expand/collapse all cards events from DrillDownBar
+  useEffect(() => {
+    const expandAll = () => setExpandAllFlag(true)
+    const collapseAll = () => {
+      setOpenKeys(new Set())
+      setExpandAllFlag(false)
+    }
+    window.addEventListener('ds:expand-all-cards', expandAll)
+    window.addEventListener('ds:collapse-all-cards', collapseAll)
+    return () => {
+      window.removeEventListener('ds:expand-all-cards', expandAll)
+      window.removeEventListener('ds:collapse-all-cards', collapseAll)
+    }
+  }, [])
+
+  // Listen for Platform Core row clicks → expand specific card + scroll to it
+  useEffect(() => {
+    const handler = (e) => {
+      const { cardKey } = e.detail || {}
+      if (!cardKey) return
+      setOpenKeys(prev => {
+        const next = new Set(prev)
+        next.add(cardKey)
+        return next
+      })
+      setExpandAllFlag(false)
+      // Scroll to the card after it expands
+      setTimeout(() => {
+        const el = document.querySelector(`[data-card-key="${cardKey}"]`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          // Brief highlight
+          el.style.outline = '2px solid var(--accent)'
+          el.style.outlineOffset = '2px'
+          setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = '' }, 1500)
+        }
+      }, 80)
+    }
+    window.addEventListener('ds:open-card', handler)
+    return () => window.removeEventListener('ds:open-card', handler)
+  }, [])
+```
+
+---
+
+## Change 3 — gui/src/components/ServiceCards.jsx: InfraCard ⌘/› to bottom-right strip
+
+### 3a — Remove ⌘/› buttons from InfraCard header
+
+FIND (exact — the ⌘/› button block in InfraCard header):
+```jsx
+        <div className="flex items-center gap-0 shrink-0 ml-1" onClick={e => e.stopPropagation()}>
+          {entityId && onEntityDetail && (
+            <>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Ask agent about this entity"
+                style={{ color: 'var(--amber)', background: 'none', border: 'none',
+                         cursor: 'pointer', fontSize: 10, padding: '1px 3px',
+                         opacity: 0.65, lineHeight: 1 }}
+              >⌘</button>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Entity detail"
+                style={{ color: 'var(--cyan)', background: 'none', border: 'none',
+                         cursor: 'pointer', fontSize: 10, padding: '1px 3px', lineHeight: 1 }}
+              >›</button>
+            </>
+          )}
+          {subText && <span className="text-[10px] mono ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+        </div>
+```
+
+REPLACE WITH:
+```jsx
+        <div className="flex items-center gap-0 shrink-0 ml-1" onClick={e => e.stopPropagation()}>
+          {subText && <span className="text-[10px] mono ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+        </div>
+```
+
+### 3b — Add ⌘/› strip below collapsed content in InfraCard
+
+FIND (exact — after the collapsed content, before the expanded content):
+```jsx
+      {/* Collapsed problem badge */}
+      {!isOpen && collapsed}
+
+      {/* Expanded content */}
+      {isOpen && (
+```
+
+REPLACE WITH:
+```jsx
+      {/* Collapsed content + ⌘/› strip */}
+      {!isOpen && (
+        <>
+          {collapsed}
+          {entityId && onEntityDetail && (
+            <div style={{
+              display: 'flex', justifyContent: 'flex-end', gap: 4, marginTop: 3,
+              paddingTop: 2,
+            }} onClick={e => e.stopPropagation()}>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Ask agent about this entity"
+                style={{ color: 'var(--amber)', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 10, padding: '1px 3px', opacity: 0.65, lineHeight: 1 }}
+              >⌘</button>
+              <button
+                onClick={e => { e.stopPropagation(); onEntityDetail(entityId) }}
+                title="Entity detail"
+                style={{ color: 'var(--cyan)', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 10, padding: '1px 3px', lineHeight: 1 }}
+              >›</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Expanded content */}
+      {isOpen && (
+```
+
+---
+
+## Version bump
+Update VERSION: 2.28.3 → 2.28.4
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(platform): v2.28.4 Platform Core container names+version delta+nav, ⌘/› bottom-right strip"
+git push origin main
+```
