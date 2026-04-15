@@ -1441,6 +1441,32 @@ function AutoUpdateToggle() {
   )
 }
 
+// ── Per-connection template wrapper ──────────────────────────────────────────
+
+function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag, entityId, onEntityDetail, compareMode, compareSet, onCompareAdd, entityForCompare }) {
+  const template = useCardTemplate('container', c.connection_id || null)
+  return (
+    <InfraCard
+      cardKey={`c-${c.id}`}
+      openKeys={openKeys} setOpenKeys={setOpenKeys}
+      lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey}
+      forceExpanded={expandAllFlag}
+      dot={c.dot}
+      name={c.name || c.id?.slice(0, 12) || '(unknown)'}
+      headerSub={(() => { const parts = (c.image || '').split('/'); return parts[parts.length - 1] || '' })()}
+      entityId={entityId}
+      onEntityDetail={onEntityDetail}
+      collapsed={<ContainerCardCollapsed c={c} template={template} state={{ tags: [] }} />}
+      expanded={<ContainerCardExpanded
+        c={c} isSwarm={isSwarm} onAction={onAction} confirm={confirm} showToast={showToast}
+        onTagsLoaded={onTagsLoaded} onTab={onTab} template={template}
+      />}
+      compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+      entityForCompare={entityForCompare}
+    />
+  )
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export default function ServiceCards({ activeFilters = null, onTab, onEntityDetail, onChat, compareMode, compareSet, onCompareAdd, showFilter, search = '' }) {
@@ -1646,16 +1672,11 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
             issueCount={errorCount(containers?.containers)}
           >
             {[...(containers?.containers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).filter(c => (matchesShowFilter(c.dot) || isPinned(`docker:${c.name || c.id}`)) && matchesSearch(c.name, c.image, c.id)).map(c => (
-              <InfraCard
-                key={c.id} cardKey={`c-${c.id}`} openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey} forceExpanded={expandAllFlag}
-                dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'}
-                headerSub={(() => { const parts = (c.image || '').split('/'); return parts[parts.length - 1] || '' })()}
-                entityId={c.entity_id} onEntityDetail={onEntityDetail}
-                collapsed={<ContainerCardCollapsed c={c} template={DEFAULT_TEMPLATES.container} state={{ tags: knownLatest[c.id] ? [knownLatest[c.id]] : [] }} />}
-                expanded={<ContainerCardExpanded
-                  c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
-                  onTagsLoaded={onTagsLoaded} onTab={onTab} template={DEFAULT_TEMPLATES.container}
-                />}
+              <ConnectedContainerCard
+                key={c.id} c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
+                onTagsLoaded={onTagsLoaded} onTab={onTab}
+                openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey}
+                expandAllFlag={expandAllFlag} entityId={c.entity_id} onEntityDetail={onEntityDetail}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 entityForCompare={{ id: `docker:${c.name || c.id}`, label: c.name, platform: 'docker', section: 'COMPUTE', metadata: { status: c.status, dot: c.dot, image: c.image, uptime: c.uptime } }}
               />

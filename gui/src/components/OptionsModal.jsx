@@ -8,7 +8,7 @@ import { useOptions } from '../context/OptionsContext'
 import { authHeaders } from '../api'
 import RotationTestModal from './RotationTestModal'
 import CardTemplateEditor from './CardTemplateEditor'
-import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA } from '../schemas/cardSchemas'
+import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, DEFAULT_TEMPLATES } from '../schemas/cardSchemas'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -1277,6 +1277,8 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
   const [importResult, setImportResult] = useState(null)
   const [importing, setImporting] = useState(false)
   const [rotationModal, setRotationModal] = useState(null)  // {profileId, profileName, newCreds}
+  const [templateEditId, setTemplateEditId] = useState(null)       // connection id being edited
+  const [connectionTemplates, setConnectionTemplates] = useState({}) // {conn_id: {has_override, template}}
   const [jumpHosts, setJumpHosts] = useState([])
   const [vmHostConns, setVmHostConns] = useState([])
   const [profiles, setProfiles] = useState([])
@@ -1358,7 +1360,7 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
   }
 
   const fetchConns = () => {
-    fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
+    return fetch(`${BASE}/api/connections`, { headers: { ...authHeaders() } })
       .then(r => r.ok ? r.json() : { data: [] })
       .then(d => {
         const all = (d.data || []).sort((a, b) =>
@@ -1368,6 +1370,7 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
         setJumpHosts(all.filter(c => c.platform === 'vm_host' && c.config?.is_jump_host).map(c => ({ id: c.id, label: c.label, host: c.host })))
         setVmHostConns(all.filter(c => c.platform === 'vm_host'))
         setLoading(false)
+        return all
       })
       .catch(() => setLoading(false))
   }
@@ -1379,7 +1382,28 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
       .catch(() => {})
   }
 
-  useEffect(() => { fetchConns(); fetchProfiles() }, [])
+  const fetchConnectionTemplates = async (connIds) => {
+    const results = {}
+    await Promise.allSettled(
+      connIds.map(async id => {
+        try {
+          const r = await fetch(`${BASE}/api/card-templates/connection/${id}`, { headers: authHeaders() })
+          if (r.ok) results[id] = await r.json()
+        } catch { /* silent */ }
+      })
+    )
+    setConnectionTemplates(results)
+  }
+
+  useEffect(() => {
+    fetchConns().then?.(all => {
+      if (all) {
+        const templateTargets = all.filter(c => ['vm_host', 'docker_host', 'windows'].includes(c.platform)).map(c => c.id)
+        fetchConnectionTemplates(templateTargets)
+      }
+    })
+    fetchProfiles()
+  }, [])
 
   const saveConn = async (e) => {
     e.stopPropagation()
@@ -2082,8 +2106,8 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
               setPausing(p => ({ ...p, [id]: false }))
               fetchConns()
             }
-            return (
-            <div key={c.id} className="card flex items-center justify-between px-2 py-1.5 text-[10px]" style={{ opacity: isPaused ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+            return (<div key={c.id}>
+            <div className="card flex items-center justify-between px-2 py-1.5 text-[10px]" style={{ opacity: isPaused ? 0.6 : 1, transition: 'opacity 0.2s' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
                 <span className="font-medium" style={{ color: 'var(--text-1)' }}>{c.label || c.host}</span>
                 <span className="mono" style={{ color: 'var(--text-3)' }}>{c.host}:{c.port} · {c.platform === 'docker_host' ? ({ tcp: '⊘ plain TCP', tls: '⚿ TLS', ssh: '⇢ SSH' }[c.auth_type] || c.auth_type) : c.auth_type}</span>
@@ -2106,11 +2130,24 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
                   </span>
                 )}
                 {c.config?.os_type && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}
+                {connectionTemplates[c.id]?.has_override && (
+                  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                    background: 'rgba(0,200,238,0.1)', color: 'var(--cyan)' }}>◈ CUSTOM CARD</span>
+                )}
                 {isPaused && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(100,100,120,0.2)', color: 'var(--text-3)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>⏸ PAUSED{c.config.paused_by ? ` · ${c.config.paused_by}` : ''}</span>}
               </div>
               <div className="flex gap-1" style={{ flexShrink: 0 }}>
                 <button className="btn text-[9px] px-1.5 py-0.5" onClick={() => startEdit(c)}>Edit</button>
                 <button onClick={() => duplicateConn(c)} title="Duplicate connection" className="btn text-[9px] px-1.5 py-0.5" style={{ color: 'var(--text-3)' }}>Copy</button>
+                {['vm_host', 'docker_host', 'windows'].includes(c.platform) && (
+                  <button
+                    onClick={() => setTemplateEditId(templateEditId === c.id ? null : c.id)}
+                    title="Customize card template for this connection"
+                    className="btn text-[9px] px-1.5 py-0.5"
+                    style={{ color: connectionTemplates[c.id]?.has_override ? 'var(--cyan)' : 'var(--text-3)' }}>
+                    ◈
+                  </button>
+                )}
                 <button className={`btn text-[9px] px-1.5 py-0.5 ${testing[c.id] === 'ok' ? 'pill-green' : testing[c.id] === 'fail' ? 'pill-red' : testing[c.id] === 'testing' ? 'pill-amber' : ''}`}
                   onClick={() => testConn(c.id)} disabled={testing[c.id] === 'testing' || isPaused}
                   title={isPaused ? 'Resume before testing' : 'Test connection'}>
@@ -2124,6 +2161,59 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
                 <button className="btn text-[9px] px-1.5 py-0.5 text-red-400" onClick={() => deleteConn(c.id)}>✕</button>
               </div>
             </div>
+            {/* Inline card template editor for this connection */}
+            {templateEditId === c.id && (() => {
+              const cardType = c.platform === 'docker_host' ? 'container' : 'vm_host'
+              const schema = CONTAINER_SCHEMA
+              const connTemplate = connectionTemplates[c.id]
+              const initialTemplate = connTemplate?.template || DEFAULT_TEMPLATES['container'] || {}
+
+              return (
+                <div style={{ margin: '4px 0 8px 0', padding: '10px', background: 'var(--bg-2)',
+                  border: '1px solid var(--cyan)', borderRadius: 2 }}>
+                  <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--cyan)',
+                    marginBottom: 8, letterSpacing: 0.5 }}>
+                    CUSTOM CARD TEMPLATE — {c.label || c.host}
+                  </div>
+                  <CardTemplateEditor
+                    cardType="container"
+                    schema={schema}
+                    initialTemplate={initialTemplate}
+                    onSave={async (template) => {
+                      const r = await fetch(`${BASE}/api/card-templates/connection/${c.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                        body: JSON.stringify({ template }),
+                      })
+                      if (r.ok) {
+                        setTemplateEditId(null)
+                        fetchConnectionTemplates([c.id])
+                        const { invalidateCardTemplateCache } = await import('../hooks/useCardTemplate')
+                        invalidateCardTemplateCache(c.id)
+                      }
+                    }}
+                    onCancel={() => setTemplateEditId(null)}
+                  />
+                  {connTemplate?.has_override && (
+                    <button
+                      onClick={async () => {
+                        await fetch(`${BASE}/api/card-templates/connection/${c.id}`, {
+                          method: 'DELETE', headers: authHeaders(),
+                        })
+                        setTemplateEditId(null)
+                        fetchConnectionTemplates([c.id])
+                        const { invalidateCardTemplateCache } = await import('../hooks/useCardTemplate')
+                        invalidateCardTemplateCache(c.id)
+                      }}
+                      style={{ marginTop: 8, fontSize: 9, color: 'var(--red)', background: 'none',
+                        border: '1px solid var(--red)', borderRadius: 2, padding: '3px 10px', cursor: 'pointer' }}>
+                      ↺ Reset to type default
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
+          </div>
           )})}
         </div>
       ))}

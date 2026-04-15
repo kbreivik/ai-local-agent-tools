@@ -105,7 +105,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.28.0.md  | v2.28.0  | Schema-driven ContainerCard: image line 2, version in collapsed | DONE (c26eef1) |
 | CC_PROMPT_v2.28.1.md  | v2.28.1  | Settings: Display→Appearance, entity alias editor in Naming | DONE (aa62dea) |
 | CC_PROMPT_v2.28.2.md  | v2.28.2  | DnD card template editor in Appearance tab (@dnd-kit) | DONE (6b3d527) |
-| CC_PROMPT_v2.28.3.md  | v2.28.3  | Per-connection card template override in Connections tab | PENDING |
+| CC_PROMPT_v2.28.3.md  | v2.28.3  | Per-connection card template override in Connections tab | RUNNING |
 | CC_PROMPT_v2.28.4.md  | v2.28.4  | Platform Core names+version delta+nav, ⌘/› bottom-right | PENDING |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 
