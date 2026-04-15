@@ -1,0 +1,642 @@
+# CC PROMPT — v2.28.7 — Theme system: light mode, contrast fix, appearance controls
+
+## What this does
+Three coordinated changes:
+
+1. **`gui/src/styles/theme.css`** — add proper `[data-theme="light"]` block + system media query;
+   fix dark-mode contrast (`--text-3` was #3c4258 = 1.6:1 contrast, illegible);
+   add tunable CSS vars (font-size-base, accent, density, border-radius levels)
+
+2. **`gui/src/context/OptionsContext.jsx`** — add new appearance defaults;
+   apply tunable CSS vars to document root via useEffect when options change
+
+3. **`gui/src/components/OptionsModal.jsx`** — add Appearance controls to DisplayTab:
+   theme selector (move from GeneralTab), accent color picker, font size, UI density,
+   border radius; remove theme radio from GeneralTab
+Version bump: 2.28.6 → 2.28.7
+
+---
+
+## Change 1 — gui/src/styles/theme.css: complete theme system rewrite
+
+Replace the entire file content with:
+
+```css
+/* HP1 Agent Theme — V3b: Imperial Ops with light-mode + tunable vars
+   Supports dark (default), light, and system preference.
+   Tunable via CSS vars set by OptionsContext from user settings.
+*/
+
+/* ── Fonts ───────────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+/* ── Tunable vars (defaults — overridden by OptionsContext via JS) ─────── */
+:root {
+  --font-size-base:   13px;
+  --font-sans:        'Rajdhani', sans-serif;
+  --font-mono:        'Share Tech Mono', monospace;
+  --font-ui:          var(--font-mono);   /* can be swapped to --font-sans */
+
+  --radius-card:      2px;
+  --radius-btn:       2px;
+  --radius-pill:      2px;
+
+  --density-gap:      5px;
+  --density-pad:      6px;
+  --density-pad-lg:   10px;
+
+  --transition:       0.1s ease;
+
+  /* Accent — default Imperial Crimson, overridden per accent preset */
+  --accent:           #a01828;
+  --accent-dim:       rgba(160, 24, 40, 0.12);
+  --accent-hover:     #b81e2e;
+
+  /* Status colours — stable across themes */
+  --green:            #00aa44;
+  --green-dim:        rgba(0, 170, 68, 0.15);
+  --amber:            #cc8800;
+  --amber-dim:        rgba(204, 136, 0, 0.15);
+  --red:              #cc2828;
+  --red-dim:          rgba(204, 40, 40, 0.15);
+  --cyan:             #00c8ee;
+  --cyan-dim:         rgba(0, 200, 238, 0.10);
+  --maint:            #cc6600;
+  --maint-dim:        rgba(204, 102, 0, 0.12);
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  --bg-0:             #05060a;
+  --bg-1:             #09090f;
+  --bg-2:             #0d0f1a;
+  --bg-3:             #131524;
+  --bg-4:             #191c2e;
+
+  --border:           #22263d;     /* FIX: was #1a1e35 (barely visible) */
+  --border-hi:        #2d3252;
+  --border-hover:     #363b60;
+
+  --text-1:           #d8dcea;
+  --text-2:           #8890a8;
+  --text-3:           #58607a;     /* FIX: was #3c4258 (1.6:1 contrast — illegible) */
+  --text-inv:         #05060a;     /* text on light backgrounds */
+}
+
+/* ── Light theme ─────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-0:             #eaeaf2;
+  --bg-1:             #f2f2f8;
+  --bg-2:             #ffffff;
+  --bg-3:             #e4e4ee;
+  --bg-4:             #d8d8e8;
+
+  --border:           #cccce0;
+  --border-hi:        #b0b0cc;
+  --border-hover:     #9898be;
+
+  --text-1:           #1a1a2e;
+  --text-2:           #48486a;
+  --text-3:           #7878a0;
+  --text-inv:         #ffffff;     /* text on dark/accent backgrounds */
+}
+
+/* ── System preference (only when no explicit data-theme) ────────────────── */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --bg-0:             #eaeaf2;
+    --bg-1:             #f2f2f8;
+    --bg-2:             #ffffff;
+    --bg-3:             #e4e4ee;
+    --bg-4:             #d8d8e8;
+    --border:           #cccce0;
+    --border-hi:        #b0b0cc;
+    --border-hover:     #9898be;
+    --text-1:           #1a1a2e;
+    --text-2:           #48486a;
+    --text-3:           #7878a0;
+    --text-inv:         #ffffff;
+  }
+}
+
+/* ── Base styles ─────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+html {
+  font-size: var(--font-size-base);
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Font utility classes */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
+.mono { font-family: var(--font-mono); }
+
+/* ── Card base ───────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  transition: transform var(--transition), border-color var(--transition);
+}
+.card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+.card-accent-green  { border-top: 2px solid var(--green); }
+.card-accent-amber  { border-top: 2px solid var(--amber); }
+.card-accent-red    { border-top: 2px solid var(--red); }
+.card-accent-blue   { border-top: 2px solid var(--accent); }
+
+/* ── Pill / badge ────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.pill-green  { background: var(--green-dim);  color: var(--green); }
+.pill-amber  { background: var(--amber-dim);  color: var(--amber); }
+.pill-red    { background: var(--red-dim);    color: var(--red); }
+.pill-blue   { background: var(--accent-dim); color: var(--accent); }
+.pill-gray   { background: rgba(128,128,160,0.08); color: var(--text-3); }
+
+/* ── Status dot ──────────────────────────────────────────────────────────── */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.dot-green { background: var(--green); }
+.dot-amber { background: var(--amber); }
+.dot-red   { background: var(--red); }
+.dot-gray  { background: var(--text-3); }
+.dot-pulse { animation: pulse 2s ease-in-out infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Button base ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--density-pad) 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.btn:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+  border-color: var(--border-hover);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--text-inv, white);
+  border-color: var(--accent);
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* ── Input base ──────────────────────────────────────────────────────────── */
+.input {
+  width: 100%;
+  padding: var(--density-pad) 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  transition: border-color var(--transition);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.input-mono { font-family: var(--font-mono); }
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.sidebar {
+  width: 220px;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all var(--transition);
+  border-radius: var(--radius-btn);
+  margin: 1px 8px;
+}
+.sidebar-link:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+.sidebar-link-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 500;
+}
+.sidebar-section {
+  padding: 16px 16px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── Dashboard layout (drag/split tiles) ────────────────────────────────── */
+.ds-layout { display: flex; flex-direction: column; gap: var(--density-gap); padding: var(--density-gap); }
+.ds-row { display: flex; gap: var(--density-gap); align-items: flex-start; }
+.ds-row--stretch { align-items: stretch; }
+.ds-row--constrained .ds-tile-body { max-height: 60vh; overflow-y: auto; overflow-x: hidden; }
+.ds-tile { background: var(--bg-1); border: 1px solid rgba(128,40,60,0.12);
+           flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ds-tile.collapsed .ds-tile-body { display: none; }
+.ds-tile-hdr { background: var(--bg-2); border-bottom: 1px solid var(--border);
+               padding: 5px 8px; display: flex; align-items: center; gap: 7px;
+               cursor: grab; user-select: none; font-size: 10px; }
+.ds-tile-body { overflow-y: auto; padding: var(--density-gap); display: flex;
+                flex-direction: column; gap: 4px; }
+.ds-tile-body::-webkit-scrollbar { width: 2px; }
+.ds-tile-body::-webkit-scrollbar-thumb { background: var(--accent); }
+.ds-resize-handle { width: 4px; background: var(--border); cursor: col-resize;
+                    flex-shrink: 0; transition: background 0.15s; }
+.ds-resize-handle:hover { background: var(--accent); }
+.ds-tile.dragging { opacity: 0.55; border-color: var(--accent); }
+.ds-layout-dirty-dot { width: 6px; height: 6px; border-radius: 50%;
+                        background: var(--amber); display: inline-block; }
+.ds-col-group { min-height: 0; }
+.ds-col-group > span > .ds-tile { min-height: 0; }
+.ds-col-resize-handle { height: 4px; background: var(--border); cursor: row-resize;
+                         flex-shrink: 0; transition: background 0.15s; width: 100%; }
+.ds-col-resize-handle:hover { background: var(--accent); }
+
+/* ── Light-mode utility overrides ────────────────────────────────────────── */
+/* Tailwind bg-white classes need to match theme in light mode */
+[data-theme="light"] .bg-white { background-color: var(--bg-2) !important; }
+[data-theme="light"] .border-gray-200,
+[data-theme="light"] .border-gray-300 { border-color: var(--border) !important; }
+[data-theme="light"] .text-gray-500,
+[data-theme="light"] .text-gray-600 { color: var(--text-2) !important; }
+[data-theme="light"] .text-gray-800,
+[data-theme="light"] .text-gray-900 { color: var(--text-1) !important; }
+[data-theme="light"] .text-gray-400 { color: var(--text-3) !important; }
+[data-theme="light"] .bg-gray-50 { background-color: var(--bg-3) !important; }
+[data-theme="light"] .bg-gray-950,
+[data-theme="light"] .bg-slate-800,
+[data-theme="light"] .bg-\[#1e293b\] { background-color: var(--bg-3) !important; }
+[data-theme="light"] .bg-orange-50\/60 { background-color: rgba(251, 191, 36, 0.08) !important; }
+[data-theme="light"] .border-b { border-color: var(--border); }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar { width: 56px; }
+  .sidebar-link span { display: none; }
+  .sidebar-section { display: none; }
+}
+```
+
+---
+
+## Change 2 — gui/src/context/OptionsContext.jsx: add appearance defaults + CSS var application
+
+### 2a — Add new appearance defaults
+
+FIND (exact):
+```js
+  // Display (localStorage only)
+  cardMinHeight:        70,
+  cardMaxHeight:        200,
+  cardMinWidth:         300,
+  cardMaxWidth:         null,
+  nodeCardSize:         'medium',
+  showVersionBadges:    true,
+  showMemoryEngrams:    true,
+  commandsPanelDefault: 'hidden',
+}
+```
+
+REPLACE WITH:
+```js
+  // Display (localStorage only)
+  cardMinHeight:        70,
+  cardMaxHeight:        200,
+  cardMinWidth:         300,
+  cardMaxWidth:         null,
+  nodeCardSize:         'medium',
+  showVersionBadges:    true,
+  showMemoryEngrams:    true,
+  commandsPanelDefault: 'hidden',
+
+  // Appearance — visual tuning (localStorage only)
+  accentColor:    'crimson',   // 'crimson'|'blue'|'purple'|'teal'|'orange'|'green'
+  fontSize:       'medium',    // 'small'|'medium'|'large'
+  uiDensity:      'normal',    // 'compact'|'normal'|'comfortable'
+  borderRadius:   'sharp',     // 'sharp'|'soft'|'round'
+  fontStyle:      'mono',      // 'mono'|'mixed'|'sans'
+}
+```
+
+### 2b — Apply appearance CSS vars whenever options change
+
+Find the useEffect that syncs `data-theme`. Add a SECOND useEffect right after it:
+
+FIND (exact):
+```js
+  // Sync data-theme attribute on <html> for CSS custom properties
+  useEffect(() => {
+    const theme = options.theme || 'dark'
+    if (theme === 'system') {
+      document.documentElement.removeAttribute('data-theme')
+    } else {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+  }, [options.theme])
+```
+
+REPLACE WITH:
+```js
+  // Sync data-theme attribute on <html> for CSS custom properties
+  useEffect(() => {
+    const theme = options.theme || 'dark'
+    if (theme === 'system') {
+      document.documentElement.removeAttribute('data-theme')
+    } else {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+  }, [options.theme])
+
+  // Apply tunable CSS vars from appearance settings
+  useEffect(() => {
+    const root = document.documentElement
+
+    // Accent color presets
+    const ACCENTS = {
+      crimson: { accent: '#a01828', accentDim: 'rgba(160,24,40,0.12)', accentHover: '#b81e2e' },
+      blue:    { accent: '#1a56e8', accentDim: 'rgba(26,86,232,0.12)',  accentHover: '#2563eb' },
+      purple:  { accent: '#7c3aed', accentDim: 'rgba(124,58,237,0.12)', accentHover: '#8b5cf6' },
+      teal:    { accent: '#0891b2', accentDim: 'rgba(8,145,178,0.12)',  accentHover: '#0ea5e9' },
+      orange:  { accent: '#c2410c', accentDim: 'rgba(194,65,12,0.12)',  accentHover: '#ea580c' },
+      green:   { accent: '#047857', accentDim: 'rgba(4,120,87,0.12)',   accentHover: '#059669' },
+    }
+    const a = ACCENTS[options.accentColor] || ACCENTS.crimson
+    root.style.setProperty('--accent', a.accent)
+    root.style.setProperty('--accent-dim', a.accentDim)
+    root.style.setProperty('--accent-hover', a.accentHover)
+
+    // Font size
+    const FONT_SIZES = { small: '11px', medium: '13px', large: '15px' }
+    root.style.setProperty('--font-size-base', FONT_SIZES[options.fontSize] || '13px')
+
+    // UI density
+    const DENSITY = {
+      compact:     { gap: '3px', pad: '4px',  padLg: '7px'  },
+      normal:      { gap: '5px', pad: '6px',  padLg: '10px' },
+      comfortable: { gap: '8px', pad: '9px',  padLg: '14px' },
+    }
+    const d = DENSITY[options.uiDensity] || DENSITY.normal
+    root.style.setProperty('--density-gap', d.gap)
+    root.style.setProperty('--density-pad', d.pad)
+    root.style.setProperty('--density-pad-lg', d.padLg)
+
+    // Border radius
+    const RADII = {
+      sharp: { card: '2px', btn: '2px', pill: '2px' },
+      soft:  { card: '4px', btn: '4px', pill: '8px' },
+      round: { card: '8px', btn: '6px', pill: '12px' },
+    }
+    const r = RADII[options.borderRadius] || RADII.sharp
+    root.style.setProperty('--radius-card', r.card)
+    root.style.setProperty('--radius-btn', r.btn)
+    root.style.setProperty('--radius-pill', r.pill)
+
+    // Font style
+    const FONTS = {
+      mono:  "'Share Tech Mono', monospace",
+      mixed: "'Rajdhani', sans-serif",
+      sans:  "'Inter', sans-serif",
+    }
+    root.style.setProperty('--font-ui', FONTS[options.fontStyle] || FONTS.mono)
+  }, [options.accentColor, options.fontSize, options.uiDensity, options.borderRadius, options.fontStyle])
+```
+
+---
+
+## Change 3 — gui/src/components/OptionsModal.jsx: appearance controls in DisplayTab
+
+### 3a — Move Theme selector out of GeneralTab into DisplayTab, add new appearance controls
+
+FIND the Theme field at the start of GeneralTab:
+```jsx
+function GeneralTab({ draft, update }) {
+  return (
+    <div>
+      <Field label="Theme">
+        <div className="flex flex-col gap-2">
+          {[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([v, l]) => (
+            <Radio key={v} name="theme" value={v} current={draft.theme} onChange={v => update('theme', v)} label={l} />
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Dashboard Refresh Interval">
+```
+
+REPLACE WITH (remove theme from GeneralTab — it lives in Appearance now):
+```jsx
+function GeneralTab({ draft, update }) {
+  return (
+    <div>
+      <Field label="Dashboard Refresh Interval">
+```
+
+### 3b — Add appearance controls section at TOP of DisplayTab (before Dashboard Cards section)
+
+FIND (exact — the opening of DisplayTab):
+```jsx
+function DisplayTab({ draft, update }) {
+  const minH = draft.cardMinHeight ?? 70
+  const maxH = draft.cardMaxHeight ?? 200
+  const minW = draft.cardMinWidth  ?? 300
+  const maxW = draft.cardMaxWidth
+
+  const heightInvalid = minH != null && maxH != null && Number(minH) >= Number(maxH)
+  const widthInvalid  = minW != null && maxW != null && Number(minW) >= Number(maxW)
+
+  return (
+    <div>
+      {/* Dashboard Cards */}
+```
+
+REPLACE WITH:
+```jsx
+const ACCENT_PRESETS = [
+  { key: 'crimson', label: 'Imperial Crimson', color: '#a01828' },
+  { key: 'blue',    label: 'Republic Blue',    color: '#1a56e8' },
+  { key: 'purple',  label: 'Sith Purple',      color: '#7c3aed' },
+  { key: 'teal',    label: 'Officer Teal',     color: '#0891b2' },
+  { key: 'orange',  label: 'Droid Orange',     color: '#c2410c' },
+  { key: 'green',   label: 'Jedi Green',       color: '#047857' },
+]
+
+function DisplayTab({ draft, update }) {
+  const minH = draft.cardMinHeight ?? 70
+  const maxH = draft.cardMaxHeight ?? 200
+  const minW = draft.cardMinWidth  ?? 300
+  const maxW = draft.cardMaxWidth
+
+  const heightInvalid = minH != null && maxH != null && Number(minH) >= Number(maxH)
+  const widthInvalid  = minW != null && maxW != null && Number(minW) >= Number(maxW)
+
+  return (
+    <div>
+
+      {/* ── Theme & Accent ─────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Theme
+        </h3>
+
+        <Field label="Color mode">
+          <div className="flex gap-4">
+            {[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']].map(([v, l]) => (
+              <Radio key={v} name="theme" value={v} current={draft.theme} onChange={v => update('theme', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Accent color">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {ACCENT_PRESETS.map(({ key, label, color }) => {
+              const active = (draft.accentColor || 'crimson') === key
+              return (
+                <button
+                  key={key}
+                  onClick={() => update('accentColor', key)}
+                  title={label}
+                  style={{
+                    width: 26, height: 26, borderRadius: 'var(--radius-btn)',
+                    background: color, border: `2px solid ${active ? 'var(--text-1)' : 'transparent'}`,
+                    cursor: 'pointer', outline: active ? `2px solid ${color}` : 'none',
+                    outlineOffset: 2, transition: 'all 0.1s',
+                    boxShadow: active ? `0 0 8px ${color}80` : 'none',
+                  }}
+                />
+              )
+            })}
+          </div>
+          <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 4 }}>
+            {ACCENT_PRESETS.find(p => p.key === (draft.accentColor || 'crimson'))?.label}
+          </div>
+        </Field>
+      </div>
+
+      {/* ── Typography ─────────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Typography
+        </h3>
+
+        <Field label="Font size">
+          <div className="flex gap-4">
+            {[['small', 'Small (11px)'], ['medium', 'Medium (13px)'], ['large', 'Large (15px)']].map(([v, l]) => (
+              <Radio key={v} name="fontSize" value={v} current={draft.fontSize || 'medium'} onChange={v => update('fontSize', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Font style" hint="Controls UI labels, values, and section text.">
+          <div className="flex gap-4">
+            {[
+              ['mono',  'Monospace (Share Tech Mono)'],
+              ['mixed', 'Mixed (Rajdhani sans-serif)'],
+              ['sans',  'Clean (Inter sans-serif)'],
+            ].map(([v, l]) => (
+              <Radio key={v} name="fontStyle" value={v} current={draft.fontStyle || 'mono'} onChange={v => update('fontStyle', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+      </div>
+
+      {/* ── Layout & Shape ─────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Layout &amp; Shape
+        </h3>
+
+        <Field label="UI density">
+          <div className="flex gap-4">
+            {[['compact', 'Compact'], ['normal', 'Normal'], ['comfortable', 'Comfortable']].map(([v, l]) => (
+              <Radio key={v} name="uiDensity" value={v} current={draft.uiDensity || 'normal'} onChange={v => update('uiDensity', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Border radius" hint="Applies to cards, buttons, and pills.">
+          <div className="flex gap-4">
+            {[['sharp', 'Sharp (2px)'], ['soft', 'Soft (4px)'], ['round', 'Round (8px)']].map(([v, l]) => (
+              <Radio key={v} name="borderRadius" value={v} current={draft.borderRadius || 'sharp'} onChange={v => update('borderRadius', v)} label={l} />
+            ))}
+          </div>
+        </Field>
+      </div>
+
+      {/* Dashboard Cards */}
+```
+
+---
+
+## Version bump
+Update VERSION: 2.28.6 → 2.28.7
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(theme): v2.28.7 light mode, contrast fix, accent/font/density controls in Appearance"
+git push origin main
+```

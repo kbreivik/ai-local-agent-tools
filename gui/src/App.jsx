@@ -828,6 +828,36 @@ function PlatformCoreCards({ onTab }) {
   const sortedCollectors = Object.entries(collectorsData || {}).sort(([a], [b]) => a.localeCompare(b))
   const apiOk = health?.status === 'ok'
 
+  // Collector name → navigation intent
+  // 'tab' navigates to a top-level tab; 'settings' navigates to Settings → Connections
+  const COLLECTOR_NAV = {
+    docker_agent01:    { type: 'tab',      tab: 'Dashboard'   },
+    swarm:             { type: 'tab',      tab: 'Cluster'     },
+    kafka:             { type: 'tab',      tab: 'Cluster'     },
+    proxmox_vms:       { type: 'settings', settingsTab: 'Connections' },
+    external_services: { type: 'settings', settingsTab: 'Connections' },
+    vm_hosts:          { type: 'settings', settingsTab: 'Connections' },
+    elasticsearch:     { type: 'settings', settingsTab: 'Connections' },
+    pbs:               { type: 'settings', settingsTab: 'Connections' },
+    truenas:           { type: 'settings', settingsTab: 'Connections' },
+    unifi:             { type: 'settings', settingsTab: 'Connections' },
+    fortigate:         { type: 'settings', settingsTab: 'Connections' },
+    fortiswitch:       { type: 'settings', settingsTab: 'Connections' },
+    windows:           { type: 'settings', settingsTab: 'Connections' },
+    discovery_harvest: { type: 'tab',      tab: 'Discovered'  },
+  }
+
+  const _collectorClick = (name) => {
+    const nav = COLLECTOR_NAV[name]
+    if (!nav) return undefined
+    if (nav.type === 'tab') {
+      return () => onTab?.(nav.tab)
+    }
+    return () => window.dispatchEvent(
+      new CustomEvent('ds:navigate-settings', { detail: { settingsTab: nav.settingsTab } })
+    )
+  }
+
   const _healthDot = (h) => {
     if (h === 'healthy' || h === 'ok' || h === 'green') return 'var(--green)'
     if (h === 'degraded' || h === 'yellow') return 'var(--amber)'
@@ -965,14 +995,9 @@ function PlatformCoreCards({ onTab }) {
           esClusterStatus === 'yellow_single_node' ? 'YELLOW/1NODE' : esHealth.toUpperCase(),
           _healthTag(esHealth),
           esNodes !== '' ? `${esNodes} node${esNodes !== 1 ? 's' : ''}` : '',
-          onTab ? () => {
-            // Navigate to Settings → Connections, pre-selecting elasticsearch platform
-            onTab('Settings')
-            // Dispatch event to pre-filter connections to elasticsearch
-            setTimeout(() => window.dispatchEvent(new CustomEvent('ds:settings-tab', {
-              detail: { tab: 'Connections', filterPlatform: 'elasticsearch' }
-            })), 100)
-          } : undefined
+          () => window.dispatchEvent(
+            new CustomEvent('ds:navigate-settings', { detail: { settingsTab: 'Connections' } })
+          )
         )}
       </div>
 
@@ -981,7 +1006,11 @@ function PlatformCoreCards({ onTab }) {
         <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', marginBottom: 4, letterSpacing: 0.5 }}>COLLECTORS</div>
         {sortedCollectors.map(([name, c]) => {
           const h = c.last_health || 'unknown'
-          return _row(_healthDot(h), name, h.toUpperCase(), _healthTag(h), c.running ? '' : 'stopped')
+          return _row(
+            _healthDot(h), name, h.toUpperCase(), _healthTag(h),
+            c.running ? '' : 'stopped',
+            _collectorClick(name)
+          )
         })}
         {sortedCollectors.length === 0 && (
           <div style={{ fontSize: 9, color: 'var(--text-3)', padding: '4px 0' }}>Loading collectors...</div>
@@ -1423,6 +1452,18 @@ function AppShell() {
     const handler = () => setActiveTab('Output')
     window.addEventListener('navigate-to-output', handler)
     return () => window.removeEventListener('navigate-to-output', handler)
+  }, [])
+
+  // Programmatic navigation to Settings + specific sub-tab
+  // Usage: window.dispatchEvent(new CustomEvent('ds:navigate-settings', { detail: { settingsTab: 'Connections' } }))
+  useEffect(() => {
+    const handler = (e) => {
+      const { settingsTab: subTab } = e.detail || {}
+      setActiveTab('Settings')
+      if (subTab) setSettingsTab(subTab)
+    }
+    window.addEventListener('ds:navigate-settings', handler)
+    return () => window.removeEventListener('ds:navigate-settings', handler)
   }, [])
 
   // "Full log →" with session_id navigates to Logs tab (session output view)
