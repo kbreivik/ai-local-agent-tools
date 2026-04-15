@@ -1,0 +1,331 @@
+/**
+ * cardSchemas.js — field schema definitions for template-driven card rendering.
+ *
+ * FIELD_SCHEMA: array of field descriptors (key, label, defaultSection, locked)
+ * FIELD_RENDERERS: map of fieldKey → render function (data, state) → JSX | null
+ *
+ * locked fields (problem, actions) are always rendered in their section regardless
+ * of template — they appear in the editor as non-draggable items.
+ *
+ * Template sections:
+ *   header_sub   — second line of card header (max 1 field)
+ *   collapsed    — shown when card is collapsed (max 10 fields)
+ *   expanded     — shown when card is expanded (no limit)
+ *   entity_only  — entity drawer only, not on card
+ *   hidden       — not shown anywhere
+ */
+import { compareSemver } from '../utils/versionCheck'
+
+// ─── Default templates (must mirror api/db/card_templates.py:DEFAULT_TEMPLATES) ────────
+export const DEFAULT_TEMPLATES = {
+  container: {
+    header_sub:  ['image'],
+    collapsed:   ['running_version', 'built_at', 'version_status', 'uptime'],
+    expanded:    ['endpoint', 'volumes', 'pull_date', 'actions'],
+    entity_only: ['ports', 'networks', 'ip_addresses'],
+    hidden:      [],
+  },
+  swarm_service: {
+    header_sub:  ['image'],
+    collapsed:   ['replicas', 'uptime'],
+    expanded:    ['ports', 'volumes', 'actions'],
+    entity_only: ['networks', 'ip_addresses'],
+    hidden:      [],
+  },
+  proxmox_vm: {
+    header_sub:  ['node_type'],
+    collapsed:   ['cpu', 'ram', 'status'],
+    expanded:    ['disks', 'actions'],
+    entity_only: [],
+    hidden:      [],
+  },
+}
+
+// ─── Container schema ─────────────────────────────────────────────────────────────────
+
+export const CONTAINER_SCHEMA = [
+  { key: 'image',           label: 'Image',           defaultSection: 'header_sub',  locked: false },
+  { key: 'running_version', label: 'Running',         defaultSection: 'collapsed',   locked: false },
+  { key: 'built_at',        label: 'Built',           defaultSection: 'collapsed',   locked: false },
+  { key: 'version_status',  label: 'Status',          defaultSection: 'collapsed',   locked: false },
+  { key: 'uptime',          label: 'Uptime',          defaultSection: 'collapsed',   locked: false },
+  { key: 'problem',         label: 'Problem',         defaultSection: 'collapsed',   locked: true  },  // shown when non-null
+  { key: 'endpoint',        label: 'Endpoint',        defaultSection: 'expanded',    locked: false },
+  { key: 'pull_date',       label: 'Pulled',          defaultSection: 'expanded',    locked: false },
+  { key: 'volumes',         label: 'Volumes',         defaultSection: 'expanded',    locked: false },
+  { key: 'auto_update',     label: 'Auto-update',     defaultSection: 'expanded',    locked: false },  // agent container only
+  { key: 'ports',           label: 'Ports',           defaultSection: 'entity_only', locked: false },
+  { key: 'networks',        label: 'Networks',        defaultSection: 'entity_only', locked: false },
+  { key: 'ip_addresses',    label: 'Internal IPs',    defaultSection: 'entity_only', locked: false },
+  { key: 'actions',         label: 'Actions',         defaultSection: 'expanded',    locked: true  },  // always last
+]
+
+// ─── Container field renderers ─────────────────────────────────────────────────────────
+// Each renderer: (data, state) → JSX | null
+// data = the container card object from the API
+// state = {tags, tagsLoading, tagsError, updateStatus, loading, isSwarm, onAction,
+//          confirm, showToast, onTagsLoaded, onTab, logsOpen, openLogs, logLines,
+//          logsPaused, pauseLogs, scaleOpen, scaleVal, setScaleOpen, setScaleVal,
+//          drawerOpen, setDrawerOpen, selectedTag, setSelectedTag,
+//          versionPickerOpen, setVersionPickerOpen, act}
+//
+// Collapsed renderers show compact single-line info.
+// Expanded renderers show full detail blocks.
+
+const S = {
+  row:   { display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 2 },
+  label: { color: 'var(--text-3)' },
+  value: { fontFamily: 'var(--font-mono)', color: 'var(--text-2)' },
+  pill:  (bg, fg) => ({ fontSize: 8, padding: '1px 6px', borderRadius: 2, background: bg, color: fg }),
+}
+
+export const CONTAINER_FIELD_RENDERERS = {
+
+  // ── header_sub / collapsed ─────────────────────────────────────────────────
+
+  image: {
+    renderHeaderSub: ({ data }) => {
+      const parts = (data.image || '').split('/')
+      return parts[parts.length - 1] || ''
+    },
+    renderCollapsed: ({ data }) => {
+      const parts = (data.image || '').split('/')
+      const short = parts[parts.length - 1] || ''
+      if (!short) return null
+      return <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>{short}</div>
+    },
+  },
+
+  running_version: {
+    renderCollapsed: ({ data }) => data.running_version
+      ? <div style={S.row}><span style={S.label}>Running</span><span style={S.value}>{data.running_version}</span></div>
+      : null,
+    renderExpanded: ({ data }) => data.running_version
+      ? <div style={S.row}><span style={S.label}>Running</span><span style={S.value}>{data.running_version}</span></div>
+      : null,
+  },
+
+  built_at: {
+    renderCollapsed: ({ data }) => data.built_at
+      ? <div style={S.row}><span style={S.label}>Built</span><span style={S.value}>{data.built_at.slice(0, 10)}</span></div>
+      : null,
+    renderExpanded: ({ data }) => data.built_at
+      ? <div style={S.row}><span style={S.label}>Built</span><span style={S.value}>{data.built_at.slice(0, 10)}</span></div>
+      : null,
+  },
+
+  version_status: {
+    renderCollapsed: ({ data, state }) => {
+      const { tags = [], tagsLoading = false, tagsError = null, updateStatus = null } = state
+      if (!data.running_version) return null
+      const severity = (data.running_version && tags[0]) ? compareSemver(data.running_version, tags[0]) : null
+      const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
+
+      let badge = null
+      if (tagsLoading) {
+        badge = <span style={S.pill('var(--bg-3)', 'var(--text-3)')}>…</span>
+      } else if (tagsError || (!tags.length && updateStatus?.update_available == null)) {
+        badge = null
+      } else if (!tags.length) {
+        badge = updateStatus?.update_available === false
+          ? <span style={S.pill('rgba(0,170,68,0.1)', 'var(--green)')}>✓ latest</span>
+          : updateStatus?.update_available === true
+          ? <span style={S.pill('rgba(204,136,0,0.12)', 'var(--amber)')}>⬆ update</span>
+          : null
+      } else if (severity === 'current') {
+        badge = <span style={S.pill('rgba(0,170,68,0.1)', 'var(--green)')}>✓ latest</span>
+      } else if (severity === 'ahead') {
+        badge = updateStatus?.update_available === false
+          ? <span style={S.pill('rgba(0,170,68,0.1)', 'var(--green)')}>✓ latest</span>
+          : updateStatus?.update_available === true
+          ? <span style={S.pill('rgba(204,136,0,0.12)', 'var(--amber)')}>⬆ update</span>
+          : null
+      } else if (hasUpdate) {
+        const bg = severity === 'major' ? 'rgba(204,40,40,0.12)' : 'rgba(204,136,0,0.12)'
+        const fg = severity === 'major' ? 'var(--red)' : 'var(--amber)'
+        badge = <span style={S.pill(bg, fg)}>⬆ {tags[0]} {severity}</span>
+      }
+
+      if (!badge) return null
+      return <div style={S.row}><span style={S.label}>Status</span>{badge}</div>
+    },
+  },
+
+  uptime: {
+    renderCollapsed: ({ data }) => (data.uptime || (data.running_replicas != null ? `${data.running_replicas}/${data.desired_replicas}` : null))
+      ? <div style={S.row}>
+          <span style={S.label}>Uptime</span>
+          <span style={S.value}>{data.uptime || `${data.running_replicas}/${data.desired_replicas} replicas`}</span>
+        </div>
+      : null,
+  },
+
+  problem: {
+    renderCollapsed: ({ data }) => data.problem
+      ? <div style={{ fontSize: 9, padding: '1px 6px', borderRadius: 2,
+          background: 'var(--red-dim)', color: 'var(--red)', marginTop: 2 }}>⚠ {data.problem}</div>
+      : null,
+  },
+
+  // ── expanded ─────────────────────────────────────────────────────────────
+
+  endpoint: {
+    renderExpanded: ({ data }) => {
+      const browserHost = typeof window !== 'undefined' ? window.location.hostname : ''
+      const isLoopback = !browserHost || browserHost === 'localhost' || browserHost === '127.0.0.1'
+      const hostIp = isLoopback ? (window.__agentHostIp || browserHost) : browserHost
+
+      // Find a real (non-loopback) host-bound port
+      const ports = data.ports || []
+      let externalPort = null
+      for (const p of ports) {
+        const hostPart = p.split('→')[0]?.trim()
+        if (!hostPart || hostPart.startsWith('127.') || hostPart.startsWith('0.0.0')) continue
+        externalPort = hostPart.includes(':') ? hostPart.split(':').pop() : hostPart
+        break
+      }
+
+      if (!externalPort && !data.ip_port) return null
+      const ip = data.ip_port ? data.ip_port.split(':')[0] : null
+      const port = externalPort || data.ip_port?.split(':')[1]
+      if (!port) return null
+
+      const href = `http://${hostIp}:${port}`
+      return (
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+          <span style={{ fontSize: 9, color: 'var(--text-3)' }}>endpoint </span>
+          <a href={href} target="_blank" rel="noopener noreferrer"
+            style={{ color: 'var(--cyan)' }}
+            onClick={e => e.stopPropagation()}>
+            {hostIp}:{port}
+          </a>
+        </div>
+      )
+    },
+  },
+
+  pull_date: {
+    renderExpanded: ({ data }) => {
+      if (!data.last_pull_at) return null
+      const age = Date.now() - new Date(data.last_pull_at).getTime()
+      const mins = Math.round(age / 60000)
+      const label = mins < 60 ? `${Math.max(1, mins)}m ago`
+        : mins < 1440 ? `${Math.floor(mins / 60)}h ago`
+        : `${Math.floor(mins / 1440)}d ago`
+      return <div style={S.row}><span style={S.label}>Pulled</span><span style={S.value}>{label}</span></div>
+    },
+  },
+
+  volumes: {
+    renderExpanded: ({ data, state }) => {
+      const vols = data.volumes || []
+      if (vols.length === 0) return null
+      const { VolBar } = state
+      return VolBar
+        ? <>{vols.map(v => <VolBar key={v.name || v.mountpoint} vol={v} />)}</>
+        : null
+    },
+  },
+
+  auto_update: {
+    renderExpanded: ({ data, state }) => {
+      if (!data.name?.includes('hp1_agent') || !data.image?.startsWith('ghcr.io/')) return null
+      const { AutoUpdateToggle } = state
+      return AutoUpdateToggle ? <AutoUpdateToggle /> : null
+    },
+  },
+
+  ports: {
+    // entity_only by default — if user moves to expanded, shows here
+    renderExpanded: ({ data }) => {
+      const ports = data.ports || []
+      if (ports.length === 0) return null
+      return (
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+          <span style={{ fontSize: 9, color: 'var(--text-3)' }}>ports </span>
+          <span style={{ color: 'var(--text-3)' }}>{ports.join(' · ')}</span>
+        </div>
+      )
+    },
+  },
+
+  networks: {
+    renderExpanded: ({ data }) => {
+      const nets = data.networks || []
+      if (nets.length === 0) return null
+      return (
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+          <span style={{ fontSize: 9, color: 'var(--text-3)' }}>networks </span>
+          <span style={{ color: 'var(--text-3)' }}>{nets.join(' · ')}</span>
+        </div>
+      )
+    },
+  },
+
+  ip_addresses: {
+    renderExpanded: ({ data }) => {
+      const ips = data.ip_addresses || []
+      if (ips.length === 0) return null
+      return (
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 4, color: 'var(--text-3)' }}>
+          <span style={{ fontSize: 9, color: 'var(--bg-3)' }}>int.ips </span>
+          {ips.join(' · ')}
+        </div>
+      )
+    },
+  },
+
+  actions: {
+    // Always rendered last in expanded — locked field
+    renderExpanded: ({ data, state }) => {
+      const { ActionsBlock } = state
+      return ActionsBlock ? <ActionsBlock /> : null
+    },
+  },
+}
+
+// ─── Swarm service schema ─────────────────────────────────────────────────────
+
+export const SWARM_SERVICE_SCHEMA = [
+  { key: 'image',       label: 'Image',      defaultSection: 'header_sub',  locked: false },
+  { key: 'replicas',    label: 'Replicas',   defaultSection: 'collapsed',   locked: false },
+  { key: 'uptime',      label: 'Uptime',     defaultSection: 'collapsed',   locked: false },
+  { key: 'problem',     label: 'Problem',    defaultSection: 'collapsed',   locked: true  },
+  { key: 'ports',       label: 'Ports',      defaultSection: 'expanded',    locked: false },
+  { key: 'volumes',     label: 'Volumes',    defaultSection: 'expanded',    locked: false },
+  { key: 'networks',    label: 'Networks',   defaultSection: 'entity_only', locked: false },
+  { key: 'ip_addresses',label: 'Int. IPs',   defaultSection: 'entity_only', locked: false },
+  { key: 'actions',     label: 'Actions',    defaultSection: 'expanded',    locked: true  },
+]
+
+export const SWARM_FIELD_RENDERERS = {
+  image:       CONTAINER_FIELD_RENDERERS.image,
+  problem:     CONTAINER_FIELD_RENDERERS.problem,
+  ports:       CONTAINER_FIELD_RENDERERS.ports,
+  networks:    CONTAINER_FIELD_RENDERERS.networks,
+  ip_addresses: CONTAINER_FIELD_RENDERERS.ip_addresses,
+  actions:     CONTAINER_FIELD_RENDERERS.actions,
+
+  replicas: {
+    renderCollapsed: ({ data }) => {
+      const r = data.running_replicas
+      const d = data.desired_replicas
+      if (r == null) return null
+      const ok = r === d
+      return (
+        <div style={S.row}>
+          <span style={S.label}>Replicas</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: ok ? 'var(--green)' : 'var(--amber)' }}>
+            {r}/{d}
+          </span>
+        </div>
+      )
+    },
+  },
+
+  uptime: {
+    renderCollapsed: ({ data }) => data.uptime
+      ? <div style={S.row}><span style={S.label}>Uptime</span><span style={S.value}>{data.uptime}</span></div>
+      : null,
+  },
+}
