@@ -1,0 +1,485 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.28.0.md (v2.28.0)
+Theme: Schema-driven ContainerCard: image line 2, version in collapsed
+
+Prompt content:
+
+# CC PROMPT — v2.28.0 — Schema-driven ContainerCard rendering
+
+## What this does
+Replaces the hard-coded ContainerCardCollapsed/Expanded JSX in ServiceCards.jsx with
+schema-driven rendering using TemplateCardRenderer + CONTAINER_SCHEMA + useCardTemplate.
+This is the largest single change in the template series — read ServiceCards.jsx first.
+
+Key changes:
+- `ContainerCardCollapsed` becomes a thin wrapper around TemplateCardRenderer (collapsed phase)
+- `ContainerCardExpanded` becomes a thin wrapper around TemplateCardRenderer (expanded phase)
+- Tags/version state that was inside ContainerCardExpanded is lifted up to a new
+  `ContainerCard` parent that manages async state and passes it to both phases
+- `useCardTemplate(cardType, connectionId)` provides the effective template
+- `knownLatest` and version badges now show in collapsed view
+- Image name shows as `header_sub` on line 2 of collapsed card instead of in the right header
+Version bump: 2.27.9 → 2.28.0
+
+---
+
+## Change 1 — gui/src/components/ServiceCards.jsx
+
+NOTE for CC: This is a significant refactor of ServiceCards.jsx. Read the full file first.
+The changes are scoped to the container card area — everything else (ProxmoxCard, ExternalCard,
+etc.) stays the same.
+
+### 1a — Add imports at top of ServiceCards.jsx
+
+Find the existing import block. Add after the existing imports:
+
+```jsx
+import TemplateCardRenderer from './TemplateCardRenderer'
+import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, CONTAINER_FIELD_RENDERERS, SWARM_FIELD_RENDERERS } from '../schemas/cardSchemas'
+import { useCardTemplate } from '../hooks/useCardTemplate'
+```
+
+### 1b — Replace ContainerCardCollapsed entirely
+
+FIND the entire ContainerCardCollapsed function (it's short — just shows problem badge):
+
+```jsx
+function ContainerCardCollapsed({ c }) {
+  return (
+    <div className="flex items-center gap-1">
+      {c.problem && <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1" style={{ background: 'var(--red-dim)', color: 'var(--red)' }}>⚠ {c.problem}</div>}
+    </div>
+  )
+}
+```
+
+REPLACE WITH:
+
+```jsx
+function ContainerCardCollapsed({ c, template, state }) {
+  if (!template) return null
+  return (
+    <div style={{ marginTop: 1 }}>
+      <TemplateCardRenderer
+        data={c}
+        schema={CONTAINER_SCHEMA}
+        renderers={CONTAINER_FIELD_RENDERERS}
+        template={template}
+        phase="collapsed"
+        state={state}
+      />
+    </div>
+  )
+}
+```
+
+### 1c — Replace ContainerCardExpanded with a schema-driven version
+
+NOTE for CC: ContainerCardExpanded is a large function (~200 lines) with lots of async state
+(tags, logs, scaleOpen, etc.). The refactor needs to preserve all that logic while delegating
+field rendering to TemplateCardRenderer for the configurable fields. Actions (logs, restart,
+stop, scale, pull, choose-version) are locked fields — they stay hard-coded as a component
+passed via state.
+
+FIND the ContainerCardExpanded function signature:
+
+```jsx
+function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab }) {
+```
+
+The refactor approach: keep ALL the current async state hooks (tags, tagsLoading, logsOpen, etc.)
+but at the END, instead of the current hard-coded JSX blocks for StatRow+ports+networks+volumes
+etc., call TemplateCardRenderer for the expanded phase.
+
+FIND the expanded rendered JSX in ContainerCardExpanded — specifically the StatRow and all the
+port/network/volume rows — and replace them with TemplateCardRenderer expanded phase.
+
+The hard-coded action buttons (pull, logs, restart, stop, scale, choose-version) become an
+`ActionsBlock` component defined inside ContainerCardExpanded and passed via state:
+
+After all the existing hooks and callbacks are set up (tags fetch useEffect, act(), openLogs(),
+etc.), add this before the return statement:
+
+```jsx
+  const ActionsBlock = () => (
+    <Actions buttons={[
+      !c.image?.startsWith('ghcr.io/') && !isSwarm && (
+        <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
+      ),
+      <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
+      !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
+      !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
+      isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.desired_replicas ?? 1); setScaleOpen(true) }} />,
+    ].filter(Boolean)} />
+  )
+```
+
+Then FIND the existing return() in ContainerCardExpanded. Replace everything from the `<>` open
+tag to `</>` close tag (the rendered JSX) with:
+
+```jsx
+  return (
+    <>
+      {/* Pulled / replicas stat row */}
+      <StatRow stats={[
+        { v: c.last_pull_at ? _pulledAgo(c.last_pull_at) : 'unknown', l: isSwarm ? 'Pulled' : 'Pulled', color: !c.last_pull_at ? 'text-red-400' : 'text-gray-300' },
+        { v: c.uptime || (c.running_replicas != null ? `${c.running_replicas}/${c.desired_replicas}` : '—'), l: isSwarm ? 'Replicas' : 'Uptime' },
+      ]} />
+
+      {/* Version block — ghcr only */}
+      {!isSwarm && c.image?.startsWith('ghcr.io/') && (() => {
+        const severity = (c.running_version && tags[0]) ? compareSemver(c.running_version, tags[0]) : null
+        const hasUpdate = severity === 'major' || severity === 'minor' || severity === 'patch'
+        return (
+          <>
+            <Divider />
+            {c.running_version && (
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className="text-gray-700">Running</span>
+                <span className="text-gray-500 font-mono">{c.running_version}</span>
+              </div>
+            )}
+            {c.built_at && (
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className="text-gray-700">Built</span>
+                <span className="text-gray-500 font-mono">{c.built_at.slice(0, 10)}</span>
+              </div>
+            )}
+            {c.running_version && (
+              <div className="flex justify-between text-[9px] mb-1.5">
+                <span className="text-gray-700">Status</span>
+                {tagsLoading ? <span className="text-gray-700">…</span>
+                  : tagsError ? <span className="text-gray-700">version check unavailable</span>
+                  : !tags.length
+                    ? updateStatus?.update_available === false
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                      : updateStatus?.update_available === true
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#2a1e05] text-amber-400 border border-[#3d2d0a]">⬆ update available</span>
+                      : <span className="text-gray-700">no versioned tags</span>
+                  : severity === 'current'
+                    ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                  : severity === 'ahead'
+                    ? updateStatus?.update_available === false
+                      ? <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1f0d] text-green-400 border border-[#1a3a1a]">✓ latest</span>
+                      : <span className="text-gray-700">✓ ahead of tagged</span>
+                  : hasUpdate
+                    ? <span className={`text-[9px] px-1.5 py-px rounded border ${severity === 'major' ? 'bg-[#1a0808] text-red-400 border-[#3a1010]' : 'bg-[#2a1e05] text-amber-400 border-[#3d2d0a]'}`}>
+                        ⬆ {tags[0]} {severity}
+                      </span>
+                  : <span className="text-gray-700">—</span>}
+              </div>
+            )}
+            {c.name?.includes('hp1_agent') && <AutoUpdateToggle />}
+            {hasUpdate && !tagsError && (
+              <>
+                <ActionBtn
+                  label={drawerOpen ? '✕ Cancel Update' : `⬆ Update Available — Choose Version`}
+                  variant={severity === 'major' ? 'urgent' : 'primary'}
+                  onClick={() => setDrawerOpen(o => !o)}
+                />
+                {drawerOpen && (
+                  <div className="mt-1 mb-2 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
+                    <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
+                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
+                      {tags.map(t => <option key={t} value={t}>{t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}</option>)}
+                    </select>
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
+                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setDrawerOpen(false) }} />
+                  </div>
+                )}
+              </>
+            )}
+            {!hasUpdate && !tagsError && tags.length > 0 && severity === 'current' && (
+              <ActionBtn label="↓ Re-pull Image" loading={loading.pull}
+                onClick={() => act('pull', `containers/${c.id}/pull`, null, null)} />
+            )}
+            {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') &&
+             updateStatus?.update_available !== false && (
+              <ActionBtn label="↓ Pull Latest" variant={pullColor} loading={loading.pull}
+                onClick={() => act('pull', pullPath, null, null)} />
+            )}
+            {tags.length > 0 && (
+              <>
+                <ActionBtn label={versionPickerOpen ? '✕ Cancel' : '↓ Choose version ▾'}
+                  onClick={() => setVersionPickerOpen(o => !o)} />
+                {versionPickerOpen && (
+                  <div className="mt-1 mb-1 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
+                    <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
+                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
+                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
+                      {tags.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
+                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setVersionPickerOpen(false) }} />
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )
+      })()}
+
+      {/* Schema-driven expanded fields (volumes, endpoint, etc.) */}
+      <TemplateCardRenderer
+        data={c}
+        schema={CONTAINER_SCHEMA}
+        renderers={CONTAINER_FIELD_RENDERERS}
+        template={template}
+        phase="expanded"
+        state={{ tags, tagsLoading, tagsError, updateStatus, loading, isSwarm, ActionsBlock, VolBar }}
+      />
+
+      {/* Action buttons (always last) */}
+      <ActionsBlock />
+
+      {/* Scale control */}
+      {scaleOpen && (
+        <div className="mt-3 flex items-center gap-2">
+          <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => Math.max(0, v - 1))}>−</button>
+          <input type="number" min="0" value={scaleVal}
+            onChange={e => setScaleVal(parseInt(e.target.value) || 0)}
+            className="w-16 text-center bg-[#0d0d1a] border border-[#2a2a4a] text-white rounded text-sm py-1" />
+          <button className="px-2 py-1 bg-[#1e1e3a] text-white rounded text-sm" onClick={() => setScaleVal(v => v + 1)}>+</button>
+          <button className="px-3 py-1 bg-[#7c6af7] text-white rounded text-sm"
+            onClick={() => { act('scale', `services/${c.name}/scale`, { replicas: scaleVal }, null); setScaleOpen(false) }}>Confirm</button>
+          <button className="px-2 py-1 text-[#888] text-sm" onClick={() => setScaleOpen(false)}>✕</button>
+        </div>
+      )}
+
+      {/* Log viewer */}
+      {logsOpen && (
+        /* KEEP existing log viewer JSX exactly as-is — do not change */
+        null /* CC: paste the existing logsOpen JSX block here unchanged */
+      )}
+      {popoutOpen && (
+        /* KEEP existing popout JSX exactly as-is — do not change */
+        null /* CC: paste the existing popoutOpen JSX block here unchanged */
+      )}
+    </>
+  )
+```
+
+IMPORTANT for CC: In the return block above, the log viewer and popout sections are marked
+as "keep as-is" with null placeholders. CC must replace those null placeholders with the
+actual existing JSX from the original ContainerCardExpanded. Do NOT remove the log viewer.
+
+### 1d — Add `template` prop thread through InfraCard to collapsed/expanded
+
+The template needs to flow from ServiceCards down to ContainerCardCollapsed/Expanded.
+The cleanest way: add a `template` prop to the collapsed/expanded components when they're
+instantiated in the ServiceCards container card map.
+
+FIND the containers_local section where InfraCard is rendered for containers:
+
+```jsx
+collapsed={<ContainerCardCollapsed c={c} />}
+expanded={<ContainerCardExpanded
+  c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
+  onTagsLoaded={onTagsLoaded} onTab={onTab}
+/>}
+```
+
+REPLACE WITH (ContainerCard will manage template resolution internally):
+
+```jsx
+collapsed={<ContainerCardCollapsed c={c} template={DEFAULT_TEMPLATES.container} state={{ tags: knownLatest[c.id] ? [knownLatest[c.id]] : [] }} />}
+expanded={<ContainerCardExpanded
+  c={c} isSwarm={false} onAction={load} confirm={confirm} showToast={showToast}
+  onTagsLoaded={onTagsLoaded} onTab={onTab} template={DEFAULT_TEMPLATES.container}
+/>}
+```
+
+NOTE for CC: For now use DEFAULT_TEMPLATES.container directly from the import. The per-connection
+template override (useCardTemplate hook) is wired in v2.28.3 when the override feature is added.
+
+### 1e — Image on line 2 of collapsed card: update InfraCard sub prop
+
+Currently image is passed as `sub` which shows to the RIGHT of the name in the header.
+Move it to line 2 by changing how `sub` is rendered in InfraCard.
+
+FIND in InfraCard (the header row section):
+```jsx
+{subText && <span className="text-[10px] mono ml-2" style={{ color: 'var(--text-3)' }}>{subText}</span>}
+```
+
+REPLACE WITH: (remove the sub text from the right side of the header — it moves to line 2 via TemplateCardRenderer)
+```jsx
+{/* sub moved to line 2 via TemplateCardRenderer header_sub field */}
+```
+
+And FIND the "Row 2 — IP + uptime" section in InfraCard:
+```jsx
+{/* Row 2 — IP + uptime (collapsed only) */}
+{!isOpen && (net || uptime) && (
+  <div className="flex items-center justify-between mt-0.5">
+    {net ? <span className="text-[10px] mono" style={{ color: 'var(--text-3)' }}>{net}</span> : <span />}
+    {uptime && <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>↑ {uptime}</span>}
+  </div>
+)}
+```
+
+REPLACE WITH: (add `headerSub` rendering, remove port from row 2 since ports go to entity detail)
+```jsx
+{/* Row 2 — header_sub field (e.g. image name) */}
+{!isOpen && headerSub && (
+  <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
+    {headerSub}
+  </div>
+)}
+```
+
+And update InfraCard function signature to accept `headerSub`:
+```jsx
+function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, headerSub, collapsed, expanded, ...rest }) {
+```
+
+For the containers, pass `headerSub` as the short image name:
+
+FIND in the containers_local map:
+```jsx
+dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'} sub={_computeContainerSub(c, knownLatest)} net={_containerNet(c)} uptime={c.uptime}
+```
+
+REPLACE WITH: (remove net/sub; add headerSub with short image; collapsed card will show version info via TemplateCardRenderer)
+```jsx
+dot={c.dot} name={c.name || c.id?.slice(0, 12) || '(unknown)'}
+headerSub={(() => { const parts = (c.image || '').split('/'); return parts[parts.length - 1] || '' })()}
+```
+
+---
+
+## Version bump
+Update VERSION: 2.27.9 → 2.28.0
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(cards): v2.28.0 schema-driven ContainerCard rendering, image on line 2, version in collapsed"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 14:01:55
+========================================================================
+PROMPT COMPLETE: v2.28.0
+[STATUS] 5m46s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  5m48s
+========================================================================

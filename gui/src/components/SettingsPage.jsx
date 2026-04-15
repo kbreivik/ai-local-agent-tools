@@ -94,7 +94,7 @@ export default function SettingsPage({ initialTab, layoutState }) {
             {tab === 'Permissions'    && <PermissionsTab />}
             {tab === 'Access'        && <AccessTab />}
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
-            {tab === 'Display'        && <DisplayTab        draft={draft} update={update} />}
+            {(tab === 'Appearance' || tab === 'Display') && <DisplayTab draft={draft} update={update} />}
             {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
             {tab === 'Layouts'       && <LayoutsTab layout={layoutState?.layout} dirty={layoutState?.dirty} saveLayout={layoutState?.saveLayout} applyTemplate={layoutState?.applyTemplate} setLayout={layoutState?.setLayout} />}
           </>
