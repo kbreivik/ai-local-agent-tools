@@ -930,19 +930,6 @@ function DisplayTab({ draft, update }) {
         </div>
       </Field>
 
-      {/* ── Card Templates ─────────────────────────────────────────────────── */}
-      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
-          color: 'var(--text-2)', letterSpacing: 1, marginBottom: 6 }}>
-          CARD TEMPLATES
-        </div>
-        <p style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 12 }}>
-          Choose which fields show in each section of a card and drag to reorder.
-          These are the type-level defaults. Per-connection overrides can be set in Settings → Connections.
-        </p>
-        <CardTemplatesSection />
-      </div>
-      {/* ── end Card Templates ─────────────────────────────────────────────── */}
     </div>
   )
 }

@@ -661,7 +661,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
       !c.image?.startsWith('ghcr.io/') && !isSwarm && (
         <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
       ),
-      <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
+      !isSwarm && <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
       !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
       !isSwarm && <ActionBtn key="stop" label="Stop" variant="danger" loading={loading.stop} onClick={() => act('stop', `containers/${c.id}/stop`, null, `Stop ${c.name}? This will terminate the container.`)} />,
       isSwarm && !scaleOpen && <ActionBtn key="scale" label="Scale" loading={loading.scale} onClick={() => { setScaleVal(c.desired_replicas ?? 1); setScaleOpen(true) }} />,
@@ -780,8 +780,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         state={{ tags, tagsLoading, tagsError, updateStatus, loading, isSwarm, ActionsBlock, VolBar }}
       />
 
-      {/* Action buttons (always last) */}
-      <ActionsBlock />
+      {/* ActionsBlock is rendered by TemplateCardRenderer via locked 'actions' field */}
 
       {/* Scale control */}
       {scaleOpen && (

@@ -1,0 +1,455 @@
+# CC PROMPT — v2.28.9 — Fix 6 issues: actions dupe, allowlist, layouts, card templates, logs, nav
+
+## What this does
+Six targeted fixes across OptionsModal, SettingsPage, ServiceCards, and Sidebar:
+
+1. **Duplicate action buttons** — `ActionsBlock` rendered twice in `ContainerCardExpanded`
+   (once via TemplateCardRenderer locked `actions` field, once explicitly after)
+2. **Allowlist tab empty** — `AllowlistTab` not imported or rendered in `SettingsPage.jsx`
+3. **Layouts crash** — missing `Allowlist` render + `layoutState` may be undefined
+4. **Card Templates moved to Layouts tab** — not Appearance; also add expanded card preview
+5. **View Logs disabled for Swarm services** — Kafka/Logstash are Swarm-managed, log stream
+   endpoint only works for local Docker containers
+6. **Settings nav grouping** — rename sidebar group: Allowlist + Permissions + Access → "Security"
+   under SETTINGS section; add `AllowlistTab` to group; rename label "Security"
+Version bump: 2.28.8 → 2.28.9
+
+---
+
+## Change 1 — gui/src/components/ServiceCards.jsx: fix duplicate ActionsBlock
+
+### 1a — Remove the explicit `<ActionsBlock />` after TemplateCardRenderer
+
+The `actions` key is in CONTAINER_SCHEMA with `locked: true` and `defaultSection: 'expanded'`.
+TemplateCardRenderer already renders it. The explicit call below it is the duplicate.
+
+FIND (exact):
+```jsx
+      {/* Action buttons (always last) */}
+      <ActionsBlock />
+```
+
+REPLACE WITH:
+```jsx
+      {/* ActionsBlock is rendered by TemplateCardRenderer via locked 'actions' field */}
+```
+
+### 1b — Disable View Logs button for Swarm services
+
+The `openLogs` function calls `createLogStream(c.id, ...)` which hits
+`/api/containers/{id}/logs` — only works for local Docker containers, not Swarm services.
+
+FIND (exact):
+```jsx
+      <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
+```
+
+REPLACE WITH:
+```jsx
+      !isSwarm && <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
+```
+
+---
+
+## Change 2 — gui/src/components/SettingsPage.jsx: fix Allowlist tab + Layouts stability
+
+### 2a — Add AllowlistTab to imports
+
+FIND (exact):
+```js
+import {
+  GeneralTab, InfrastructureTab, AIServicesTab,
+  ConnectionsTab, PermissionsTab, AccessTab, NamingTab,
+  DisplayTab, NotificationsTab, UpdateStatus, TABS,
+} from './OptionsModal'
+```
+
+REPLACE WITH:
+```js
+import {
+  GeneralTab, InfrastructureTab, AIServicesTab,
+  ConnectionsTab, AllowlistTab, PermissionsTab, AccessTab, NamingTab,
+  DisplayTab, NotificationsTab, UpdateStatus, TABS,
+} from './OptionsModal'
+```
+
+### 2b — Add Allowlist + Layouts to the tab render switch
+
+FIND (exact):
+```jsx
+            {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
+            {tab === 'Layouts'       && <LayoutsTab layout={layoutState?.layout} dirty={layoutState?.dirty} saveLayout={layoutState?.saveLayout} applyTemplate={layoutState?.applyTemplate} setLayout={layoutState?.setLayout} />}
+```
+
+REPLACE WITH:
+```jsx
+            {tab === 'Allowlist'     && <AllowlistTab />}
+            {tab === 'Notifications' && <NotificationsTab  draft={draft} update={update} />}
+            {tab === 'Layouts'       && layoutState && (
+              <LayoutsTab
+                layout={layoutState.layout}
+                dirty={layoutState.dirty}
+                saveLayout={layoutState.saveLayout}
+                applyTemplate={layoutState.applyTemplate}
+                setLayout={layoutState.setLayout}
+              />
+            )}
+            {tab === 'Layouts' && !layoutState && (
+              <div style={{ fontSize: 10, color: 'var(--text-3)', padding: 16 }}>
+                Layout settings are only available from the Dashboard.
+              </div>
+            )}
+```
+
+### 2c — Add Allowlist to the tabs that skip the Save footer
+
+FIND (exact):
+```jsx
+      {!['Connections', 'Permissions', 'Access', 'Layouts'].includes(tab) && (
+```
+
+REPLACE WITH:
+```jsx
+      {!['Connections', 'Allowlist', 'Permissions', 'Access', 'Layouts'].includes(tab) && (
+```
+
+---
+
+## Change 3 — gui/src/components/OptionsModal.jsx: move Card Templates from DisplayTab to LayoutsTab; add expanded preview
+
+### 3a — Remove Card Templates section from DisplayTab
+
+Find and REMOVE the following block from DisplayTab (the one added in v2.28.2):
+
+```jsx
+      {/* ── Card Templates ─────────────────────────────────────────────────── */}
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+          color: 'var(--text-2)', letterSpacing: 1, marginBottom: 6 }}>
+          CARD TEMPLATES
+        </div>
+        <p style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 12 }}>
+          Choose which fields show in each section of a card and drag to reorder.
+          These are the type-level defaults. Per-connection overrides can be set in Settings → Connections.
+        </p>
+        <CardTemplatesSection />
+      </div>
+      {/* ── end Card Templates ─────────────────────────────────────────────── */}
+```
+
+DELETE the entire block above (from `{/* ── Card Templates` to the closing `─── */}` comment).
+
+---
+
+## Change 4 — gui/src/components/LayoutsTab.jsx: add Card Templates section + expanded preview
+
+### 4a — Add imports at top of LayoutsTab.jsx
+
+Find the existing import block and add:
+```js
+import CardTemplateEditor from './CardTemplateEditor'
+import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, DEFAULT_TEMPLATES, CONTAINER_FIELD_RENDERERS, SWARM_FIELD_RENDERERS } from '../schemas/cardSchemas'
+import { authHeaders } from '../api'
+import { useState, useEffect } from 'react'
+```
+
+NOTE for CC: `useState` and `useEffect` are already imported. Only add the new ones.
+
+### 4b — Add CardTemplatesSection component before the LayoutsTab export
+
+Add this entire component before `export default function LayoutsTab`:
+
+```jsx
+// ── Card template preview ─────────────────────────────────────────────────────
+
+function CardTemplatePreviewFull({ schema, renderers, template, cardType }) {
+  // Mini fake data for preview rendering
+  const FAKE = {
+    container: {
+      name: 'hp1_agent', image: 'ghcr.io/kbreivik/hp1-ai-agent:2.28.9',
+      running_version: '2.28.9', built_at: '2026-04-15T12:00:00Z',
+      uptime: '3d 14h', dot: 'green', ports: ['8000→8000/tcp'],
+      networks: ['hp1_net'], ip_addresses: ['172.20.0.5'],
+    },
+    swarm_service: {
+      name: 'kafka_broker-1', image: 'apache/kafka:3.7.0',
+      running_replicas: 1, desired_replicas: 1, uptime: '5d 2h', dot: 'green',
+    },
+  }
+  const fake = FAKE[cardType] || FAKE.container
+
+  const S = {
+    label: { color: 'var(--text-3)', fontSize: 9 },
+    value: { fontFamily: 'var(--font-mono)', color: 'var(--text-2)', fontSize: 9 },
+    row: { display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 2 },
+  }
+
+  const renderSection = (phase) => {
+    const fields = template[phase] || []
+    const schemaMap = Object.fromEntries(schema.map(f => [f.key, f]))
+    // Also include locked fields
+    const locked = schema.filter(f => f.locked && !fields.includes(f.key)).map(f => f.key)
+    const all = phase === 'expanded' ? [...fields, ...locked]
+      : [...fields, ...locked.filter(k => k !== 'actions')]
+
+    return all.map(key => {
+      const renderer = renderers[key]
+      if (!renderer) return null
+      const fn = phase === 'header_sub' ? renderer.renderHeaderSub
+               : phase === 'collapsed' ? renderer.renderCollapsed
+               : renderer.renderExpanded
+      if (!fn) return null
+      try {
+        const result = fn({ data: fake, state: {} })
+        if (!result) return null
+        return <React.Fragment key={key}>{result}</React.Fragment>
+      } catch { return null }
+    })
+  }
+
+  const headerSub = (() => {
+    const renderer = renderers[(template.header_sub || [])[0]]
+    if (!renderer?.renderHeaderSub) return null
+    try { return renderer.renderHeaderSub({ data: fake, state: {} }) } catch { return null }
+  })()
+
+  return (
+    <div style={{ display: 'flex', gap: 12 }}>
+      {/* Collapsed preview */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+          letterSpacing: 0.5, marginBottom: 4 }}>COLLAPSED</div>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 2, padding: '8px 10px',
+          background: 'var(--bg-2)' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--text-1)', fontWeight: 600 }}>{fake.name}</span>
+            <span style={{ fontSize: 9, color: 'var(--text-3)' }}>▸</span>
+          </div>
+          {headerSub && (
+            <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 3 }}>
+              {headerSub}
+            </div>
+          )}
+          {renderSection('collapsed')}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginTop: 3 }}>
+            <span style={{ fontSize: 9, color: 'var(--amber)', opacity: 0.65 }}>⌘</span>
+            <span style={{ fontSize: 9, color: 'var(--cyan)' }}>›</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded preview */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+          letterSpacing: 0.5, marginBottom: 4 }}>EXPANDED</div>
+        <div style={{ border: '1px solid var(--accent)', borderRadius: 2, padding: '10px',
+          background: 'var(--bg-2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--text-1)', fontWeight: 600 }}>{fake.name}</span>
+            <span style={{ fontSize: 9, color: 'var(--text-3)' }}>▾</span>
+          </div>
+          {renderSection('expanded')}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CardTemplatesSection() {
+  const [activeCardType, setActiveCardType] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [savedMsg, setSavedMsg] = useState('')
+  const [templates, setTemplates] = useState({})
+
+  const CARD_TYPES = [
+    { key: 'container',     label: 'Container',       schema: CONTAINER_SCHEMA,     renderers: CONTAINER_FIELD_RENDERERS },
+    { key: 'swarm_service', label: 'Swarm Service',   schema: SWARM_SERVICE_SCHEMA,  renderers: SWARM_FIELD_RENDERERS    },
+  ]
+
+  const fetchTemplates = () => {
+    const BASE = import.meta.env.VITE_API_BASE ?? ''
+    fetch(`${BASE}/api/card-templates/defaults`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : {})
+      .then(d => setTemplates(d))
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchTemplates() }, [])
+
+  const saveTemplate = async (cardType, template) => {
+    const BASE = import.meta.env.VITE_API_BASE ?? ''
+    setSaving(true); setSavedMsg('')
+    try {
+      const r = await fetch(`${BASE}/api/card-templates/type/${cardType}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ template }),
+      })
+      if (r.ok) {
+        setSavedMsg(`${cardType} saved`)
+        setActiveCardType(null)
+        fetchTemplates()
+        const { invalidateCardTypeCache } = await import('../hooks/useCardTemplate')
+        invalidateCardTypeCache(cardType)
+      } else setSavedMsg('Save failed')
+    } catch (e) { setSavedMsg('Save failed: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+        color: 'var(--text-2)', letterSpacing: 1, marginBottom: 6 }}>
+        CARD TEMPLATES
+      </div>
+      <p style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 10 }}>
+        Drag fields between sections to change which information shows on collapsed vs expanded cards.
+        Per-connection overrides can be set via the ◈ button in Settings → Connections.
+      </p>
+
+      {/* Card type pills */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        {CARD_TYPES.map(({ key, label }) => (
+          <button key={key}
+            onClick={() => setActiveCardType(activeCardType === key ? null : key)}
+            style={{ fontSize: 9, padding: '4px 12px', borderRadius: 2, cursor: 'pointer',
+              fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
+              background: activeCardType === key ? 'var(--accent-dim)' : 'var(--bg-3)',
+              color: activeCardType === key ? 'var(--accent)' : 'var(--text-3)',
+              border: `1px solid ${activeCardType === key ? 'var(--accent)' : 'var(--border)'}` }}>
+            {label.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      {savedMsg && (
+        <div style={{ fontSize: 9, color: savedMsg.includes('failed') ? 'var(--red)' : 'var(--green)',
+          marginBottom: 8 }}>
+          {savedMsg.includes('failed') ? '✕' : '✓'} {savedMsg}
+        </div>
+      )}
+
+      {/* Live preview — always visible for the active type */}
+      {activeCardType && (() => {
+        const ct = CARD_TYPES.find(c => c.key === activeCardType)
+        const tmpl = templates[activeCardType] || DEFAULT_TEMPLATES[activeCardType] || {}
+        return (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+              letterSpacing: 0.5, marginBottom: 6 }}>LIVE PREVIEW</div>
+            <CardTemplatePreviewFull
+              schema={ct.schema} renderers={ct.renderers}
+              template={tmpl} cardType={activeCardType}
+            />
+          </div>
+        )
+      })()}
+
+      {/* DnD editor */}
+      {activeCardType && (() => {
+        const ct = CARD_TYPES.find(c => c.key === activeCardType)
+        return (
+          <CardTemplateEditor
+            key={activeCardType}
+            cardType={activeCardType}
+            schema={ct.schema}
+            initialTemplate={templates[activeCardType] || DEFAULT_TEMPLATES[activeCardType] || {}}
+            title={`${ct.label} — drag fields between sections`}
+            onSave={(tmpl) => saveTemplate(activeCardType, tmpl)}
+            onCancel={() => setActiveCardType(null)}
+          />
+        )
+      })()}
+    </div>
+  )
+}
+```
+
+### 4c — Add CardTemplatesSection + import React at bottom of LayoutsTab
+
+Find the last line of LayoutsTab.jsx (the closing bracket of the export). Add the `CardTemplatesSection` call inside the LayoutsTab return, after the PREFERENCES section and before the final `</div>`:
+
+FIND (exact — the last section in LayoutsTab return before closing div):
+```jsx
+      {/* Per-user prefs */}
+      <div>
+        <h3 style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 12, color: 'var(--text-1)', marginBottom: 8 }}>
+          PREFERENCES
+        </h3>
+```
+
+NOTE for CC: Do NOT replace — just find the closing `</div>` of the LayoutsTab return and add `<CardTemplatesSection />` before it, inside the outermost `<div>`.
+
+The final structure of LayoutsTab return should be:
+```jsx
+  return (
+    <div>
+      {msg && ...}
+      {/* Template gallery */}
+      ...
+      {/* Current layout info */}
+      ...
+      {/* Actions row */}
+      ...
+      {/* Per-user prefs */}
+      ...
+      {/* Card Templates */}
+      <CardTemplatesSection />
+    </div>
+  )
+```
+
+Also add `import React from 'react'` to the imports of LayoutsTab.jsx (needed for CardTemplatePreviewFull to call React.Fragment).
+
+---
+
+## Change 5 — gui/src/components/Sidebar.jsx: rename Security group, add Allowlist
+
+FIND (exact — the SETTINGS section in NAV):
+```js
+  { section: 'SETTINGS', items: [
+    { key: 'Settings',  icon: '⊕', label: 'Connections', settingsTab: 'Connections' },
+    { key: 'Settings',  icon: '◈', label: 'AI Services', settingsTab: 'AI Services' },
+    { key: 'Settings',  icon: '⚙', label: 'Infrastructure', settingsTab: 'Infrastructure' },
+    { key: 'Settings',  icon: '⊞', label: 'Permissions', settingsTab: 'Permissions' },
+    { key: 'Settings',  icon: '◎', label: 'Access', settingsTab: 'Access' },
+    { key: 'Settings',  icon: '◉', label: 'Naming', settingsTab: 'Naming' },
+    { key: 'Settings',  icon: '⊞', label: 'Appearance', settingsTab: 'Appearance' },
+    { key: 'Settings',  icon: '◈', label: 'Notifications', settingsTab: 'Notifications' },
+    { key: 'Settings',  icon: '◎', label: 'General', settingsTab: 'General' },
+  ]},
+```
+
+REPLACE WITH:
+```js
+  { section: 'SETTINGS', items: [
+    { key: 'Settings',  icon: '⊕', label: 'Connections',   settingsTab: 'Connections'   },
+    { key: 'Settings',  icon: '◈', label: 'AI Services',   settingsTab: 'AI Services'   },
+    { key: 'Settings',  icon: '⚙', label: 'Infrastructure',settingsTab: 'Infrastructure' },
+    { key: 'Settings',  icon: '◉', label: 'Naming',        settingsTab: 'Naming'        },
+    { key: 'Settings',  icon: '⊞', label: 'Appearance',    settingsTab: 'Appearance'    },
+    { key: 'Settings',  icon: '◈', label: 'Notifications', settingsTab: 'Notifications' },
+    { key: 'Settings',  icon: '◎', label: 'General',       settingsTab: 'General'       },
+    { key: 'Settings',  icon: '◫', label: 'Layouts',       settingsTab: 'Layouts'       },
+  ]},
+  { section: 'SECURITY', items: [
+    { key: 'Settings',  icon: '⊞', label: 'Allowlist',  settingsTab: 'Allowlist'  },
+    { key: 'Settings',  icon: '⊞', label: 'Permissions',settingsTab: 'Permissions'},
+    { key: 'Settings',  icon: '◎', label: 'Access',     settingsTab: 'Access'     },
+  ]},
+```
+
+---
+
+## Version bump
+Update VERSION: 2.28.8 → 2.28.9
+
+## Commit
+```bash
+git add -A
+git commit -m "fix(ui): v2.28.9 duplicate actions, allowlist tab, layouts stable, card templates in Layouts, swarm logs disabled, Security nav group"
+git push origin main
+```

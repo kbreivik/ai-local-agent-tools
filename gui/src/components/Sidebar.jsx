@@ -27,15 +27,19 @@ const NAV = [
     { key: 'Docs',      icon: '⊞' },
   ]},
   { section: 'SETTINGS', items: [
-    { key: 'Settings',  icon: '⊕', label: 'Connections', settingsTab: 'Connections' },
-    { key: 'Settings',  icon: '◈', label: 'AI Services', settingsTab: 'AI Services' },
-    { key: 'Settings',  icon: '⚙', label: 'Infrastructure', settingsTab: 'Infrastructure' },
-    { key: 'Settings',  icon: '⊞', label: 'Permissions', settingsTab: 'Permissions' },
-    { key: 'Settings',  icon: '◎', label: 'Access', settingsTab: 'Access' },
-    { key: 'Settings',  icon: '◉', label: 'Naming', settingsTab: 'Naming' },
-    { key: 'Settings',  icon: '⊞', label: 'Appearance', settingsTab: 'Appearance' },
+    { key: 'Settings',  icon: '⊕', label: 'Connections',   settingsTab: 'Connections'   },
+    { key: 'Settings',  icon: '◈', label: 'AI Services',   settingsTab: 'AI Services'   },
+    { key: 'Settings',  icon: '⚙', label: 'Infrastructure',settingsTab: 'Infrastructure' },
+    { key: 'Settings',  icon: '◉', label: 'Naming',        settingsTab: 'Naming'        },
+    { key: 'Settings',  icon: '⊞', label: 'Appearance',    settingsTab: 'Appearance'    },
     { key: 'Settings',  icon: '◈', label: 'Notifications', settingsTab: 'Notifications' },
-    { key: 'Settings',  icon: '◎', label: 'General', settingsTab: 'General' },
+    { key: 'Settings',  icon: '◎', label: 'General',       settingsTab: 'General'       },
+    { key: 'Settings',  icon: '◫', label: 'Layouts',       settingsTab: 'Layouts'       },
+  ]},
+  { section: 'SECURITY', items: [
+    { key: 'Settings',  icon: '⊞', label: 'Allowlist',  settingsTab: 'Allowlist'  },
+    { key: 'Settings',  icon: '⊞', label: 'Permissions',settingsTab: 'Permissions'},
+    { key: 'Settings',  icon: '◎', label: 'Access',     settingsTab: 'Access'     },
   ]},
 ]
 
