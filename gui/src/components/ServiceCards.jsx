@@ -481,7 +481,7 @@ function Section({ label, meta, errorCount, dot, auth, host, runningCount, total
                       background: 'var(--bg-0)', borderBottom: '1px solid var(--border)' }}>
           <div style={{ width: NAME_W, flexShrink: 0,
                         borderRight: '2px solid rgba(255,255,255,0.07)' }} />
-          <div style={{ flex: 1, overflow: 'visible', padding: '6px 10px', position: 'relative' }}>{filterBar}</div>
+          <div style={{ flex: 1, overflow: 'visible', padding: '6px 10px', position: 'relative', display: 'flex', alignItems: 'center' }}>{filterBar}</div>
         </div>
       )}
 
@@ -988,13 +988,13 @@ function ProxmoxCardCollapsed({ vm }) {
   return (
     <div style={{ marginTop: 3 }}>
       <div style={{
-        textAlign: 'center', fontSize: 10,
+        fontSize: 10,
         color: 'var(--text-3)', marginBottom: 4,
         fontFamily: 'var(--font-mono)',
       }}>
         {vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM
       </div>
-      <div className="flex items-center justify-center gap-1.5">
+      <div className="flex items-center justify-start gap-1.5">
         {vm.problem
           ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
           : <>

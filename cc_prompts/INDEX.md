@@ -117,6 +117,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.29.2.md  | v2.29.2  | fix(agent): Kafka triage-first — consumer lag path, broker path, replication path | DONE (d688cb3) |
 | CC_PROMPT_v2.29.3.md  | v2.29.3  | fix(ui): Proxmox sort dropdown z-index, card alignment, expanded task templates | DONE (8c6c458) |
 | CC_PROMPT_v2.29.4.md  | v2.29.4  | fix(agent): kafka_consumer_lag mandatory in triage, Swarm Shutdown events are normal | DONE (0242724) |
+| CC_PROMPT_v2.29.5.md  | v2.29.5  | fix(ui): filter bar vertical centering + revert wrong ProxmoxCard centering | RUNNING |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 
 ---
@@ -248,6 +249,12 @@ vm_hosts.py: stamps entity_id=label on every VM card; adds to_entities() to VMHo
 VMHostsSection.jsx: adds onEntityDetail prop to VMCard; adds ⌘ and › buttons in header.
 App.jsx: passes onEntityDetail to VMHostsSection. DashboardLayout.jsx: adds
 TILE_DISPLAY_NAMES — "VM_HOSTS" tile renders as "VM Hosts", all others cleaned up too.
+
+**v2.29.5** — fix(ui): filter bar vertical centering + revert wrong ProxmoxCard centering.
+ServiceCards.jsx Section Row 2: adds `display:flex; alignItems:center` to filterBar wrapper
+so chips sit vertically centred in the row (was top-aligned). ProxmoxCardCollapsed: removes
+`textAlign:center` from vCPU/RAM line and reverts `justify-center` to `justify-start` on
+badges row — restores left-aligned card content consistent with all other card types.
 
 ---
 
