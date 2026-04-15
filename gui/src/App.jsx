@@ -815,10 +815,16 @@ function PlatformCoreCards({ onTab }) {
 
   // Keep fetching status (kafka/es health) + memHealth separately — not in summary
   const [fullStatus, setFullStatus] = useState(null)
+  const [agentUpdateStatus, setAgentUpdateStatus] = useState(null)
   useEffect(() => {
+    const BASE = import.meta.env.VITE_API_BASE ?? ''
     const load = () => {
       fetchStatus().then(setFullStatus).catch(() => {})
       fetchMemoryHealth().then(setMemHealth).catch(() => {})
+      fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setAgentUpdateStatus(d) })
+        .catch(() => {})
     }
     load()
     const id = setInterval(load, 90_000)  // 90s — these change slowly
@@ -936,12 +942,15 @@ function PlatformCoreCards({ onTab }) {
   const agentName = agentContainer?.name || health?.hostname || 'hp1_agent'
   const cardKey   = agentContainer ? `c-${agentContainer.id}` : null
 
-  // Version delta display
+  // Version delta display — use update-status endpoint, not /api/status (which has no version info)
   const runningVer = agentContainer?.running_version || health?.version
-  const latestVer  = agentContainer ? fullStatus?.latest_version : null
-  const hasUpdate  = latestVer && runningVer && latestVer !== runningVer
-  const versionStr = hasUpdate
+  const latestVer  = agentUpdateStatus?.latest_version || null
+  const hasUpdate  = agentUpdateStatus?.update_available === true
+                  || (latestVer && runningVer && latestVer !== runningVer)
+  const versionStr = hasUpdate && latestVer && runningVer
     ? `${runningVer} → ${latestVer}`
+    : hasUpdate
+    ? 'update available'
     : runningVer ? `v${runningVer}` : '—'
 
   const onClick = cardKey

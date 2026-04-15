@@ -1449,7 +1449,7 @@ function AutoUpdateToggle() {
 
 // ── Per-connection template wrapper ──────────────────────────────────────────
 
-function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag, entityId, onEntityDetail, compareMode, compareSet, onCompareAdd, entityForCompare }) {
+function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag, entityId, onEntityDetail, compareMode, compareSet, onCompareAdd, entityForCompare, knownLatest, containerUpdateStatus }) {
   const template = useCardTemplate('container', c.connection_id || null)
   return (
     <InfraCard
@@ -1462,7 +1462,10 @@ function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTa
       headerSub={(() => { const parts = (c.image || '').split('/'); return parts[parts.length - 1] || '' })()}
       entityId={entityId}
       onEntityDetail={onEntityDetail}
-      collapsed={<ContainerCardCollapsed c={c} template={template} state={{ tags: [] }} />}
+      collapsed={<ContainerCardCollapsed c={c} template={template} state={{
+        tags: knownLatest?.[c.id] ? [knownLatest[c.id]] : [],
+        updateStatus: containerUpdateStatus,
+      }} />}
       expanded={<ContainerCardExpanded
         c={c} isSwarm={isSwarm} onAction={onAction} confirm={confirm} showToast={showToast}
         onTagsLoaded={onTagsLoaded} onTab={onTab} template={template}
@@ -1495,6 +1498,7 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
   const [swarm, setSwarm]           = useState(null)
   const [vms, setVMs]               = useState(null)
   const [external, setExternal]     = useState(null)
+  const [containerUpdateStatus, setContainerUpdateStatus] = useState(null)
   const [openKeys, setOpenKeys]     = useState(new Set())
   const [lastOpenedKey, setLastOpenedKey] = useState(null)
   const [expandAllFlag, setExpandAllFlag] = useState(false)
@@ -1627,6 +1631,22 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
     return () => clearInterval(id)
   }, [load])
 
+  // Fetch update-status once on mount — used for collapsed version badge
+  useEffect(() => {
+    fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setContainerUpdateStatus(d) })
+      .catch(() => {})
+    // Refresh every 5 min
+    const id = setInterval(() => {
+      fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setContainerUpdateStatus(d) })
+        .catch(() => {})
+    }, 300_000)
+    return () => clearInterval(id)
+  }, [])
+
   // Listen for expand/collapse all cards events from DrillDownBar
   useEffect(() => {
     const expandAll = () => setExpandAllFlag(true)
@@ -1711,6 +1731,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 openKeys={openKeys} setOpenKeys={setOpenKeys} lastOpenedKey={lastOpenedKey} setLastOpenedKey={setLastOpenedKey}
                 expandAllFlag={expandAllFlag} entityId={c.entity_id} onEntityDetail={onEntityDetail}
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
+                knownLatest={knownLatest}
+                containerUpdateStatus={containerUpdateStatus}
                 entityForCompare={{ id: `docker:${c.name || c.id}`, label: c.name, platform: 'docker', section: 'COMPUTE', metadata: { status: c.status, dot: c.dot, image: c.image, uptime: c.uptime } }}
               />
             ))}
