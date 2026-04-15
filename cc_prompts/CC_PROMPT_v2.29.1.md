@@ -1,0 +1,485 @@
+# CC PROMPT — v2.29.1 — Doc Q&A: grounded streaming ask via LM Studio
+
+## What this does
+Adds an Ask mode to DocsTab — user types a natural language question, backend retrieves
+relevant chunks via the existing hybrid search, sends them as context to LM Studio
+(Qwen3-Coder-30B), streams back a cited answer via SSE.
+
+1. Backend: `POST /api/docs/ask` — retrieve → prompt → stream from LM Studio
+2. Frontend: DocsTab gets a mode toggle (Browse | Ask); Ask panel shows streaming answer
+   with inline [source] citations and expandable source references below
+
+Degrades gracefully: if LM Studio is unreachable, shows error with "Use Browse mode instead".
+Version bump: 2.29.0 → 2.29.1
+
+---
+
+## Change 1 — api/routers/docs.py: add /ask streaming endpoint
+
+NOTE for CC: Read api/routers/docs.py (from v2.29.0) first. Add the following to the existing file.
+
+Add this import at the top of docs.py:
+```python
+from fastapi.responses import StreamingResponse
+import json
+```
+
+Add this endpoint after the existing routes:
+
+```python
+@router.post("/ask")
+def ask_docs(
+    body: dict,
+    _: str = Depends(get_current_user),
+):
+    """Grounded doc Q&A — retrieve chunks, call LM Studio, stream SSE response.
+
+    Request body: {"question": str, "platform": str (optional)}
+    Streams SSE: data: {"type": "chunk"|"source"|"done"|"error", ...}
+    """
+    question = (body.get("question") or "").strip()
+    platform  = (body.get("platform") or "").strip()
+    if not question:
+        raise HTTPException(400, "question is required")
+    if len(question) > 1000:
+        raise HTTPException(400, "question too long (max 1000 chars)")
+
+    def generate():
+        # 1. Retrieve relevant chunks
+        try:
+            from api.rag.doc_search import search_docs
+            results = search_docs(
+                query=question,
+                platform=platform,
+                limit=8,
+                token_budget=6000,
+            )
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Search failed: {e}'})}\n\n"
+            return
+
+        if not results:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No relevant documentation found. Try ingesting docs first or use Browse mode.'})}\n\n"
+            return
+
+        # 2. Emit source references so frontend can display them immediately
+        sources = []
+        seen = set()
+        for r in results:
+            key = (r.get("platform", ""), r.get("source_label", ""), r.get("source_url", ""))
+            if key not in seen:
+                seen.add(key)
+                sources.append({
+                    "platform":     r.get("platform", ""),
+                    "source_label": r.get("source_label", ""),
+                    "source_url":   r.get("source_url", ""),
+                    "doc_type":     r.get("doc_type", ""),
+                    "version":      r.get("version", ""),
+                })
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+
+        # 3. Build system prompt with retrieved context
+        doc_context = []
+        for i, r in enumerate(results):
+            label = r.get("source_label") or r.get("platform") or "doc"
+            doc_context.append(f"[{i+1}] {label}\n{r['content']}")
+
+        system_prompt = (
+            "You are a technical documentation assistant for an infrastructure platform. "
+            "Answer the question using ONLY the provided documentation excerpts. "
+            "Cite sources using [1], [2], etc. matching the excerpt numbers. "
+            "If the documentation does not contain enough information to answer, say so clearly. "
+            "Be concise and specific. Do not invent details not present in the documentation.\n\n"
+            "DOCUMENTATION EXCERPTS:\n\n" + "\n\n".join(doc_context)
+        )
+
+        # 4. Call LM Studio and stream
+        lm_url = os.environ.get("LM_STUDIO_URL", "http://192.168.199.51:1234/v1")
+        lm_key  = os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
+        model   = os.environ.get("MODEL_NAME", "")
+
+        import urllib.request
+        req_body = json.dumps({
+            "model": model or "local-model",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": question},
+            ],
+            "stream": True,
+            "temperature": 0.1,
+            "max_tokens": 1024,
+        }).encode()
+
+        try:
+            req = urllib.request.Request(
+                f"{lm_url}/chat/completions",
+                data=req_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {lm_key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(payload)
+                        text = delta.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if text:
+                            yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
+                    except Exception:
+                        pass
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'LM Studio unreachable: {e}. Use Browse mode to search docs directly.'})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+```
+
+---
+
+## Change 2 — gui/src/components/DocsTab.jsx: add Ask mode panel
+
+NOTE for CC: Read the current DocsTab.jsx (from v2.29.0). The component exports a default
+`DocsTab` with Browse mode. Add Ask mode as described below.
+
+### 2a — Add mode toggle state + AskPanel component
+
+Add `AskPanel` component before the `export default function DocsTab()`:
+
+```jsx
+// ── Ask panel ─────────────────────────────────────────────────────────────────
+
+function AskPanel({ platform }) {
+  const [question, setQuestion]   = useState('')
+  const [answer, setAnswer]       = useState('')
+  const [sources, setSources]     = useState([])
+  const [streaming, setStreaming] = useState(false)
+  const [error, setError]         = useState(null)
+  const [done, setDone]           = useState(false)
+  const answerRef = useRef(null)
+
+  // Auto-scroll as answer streams
+  useEffect(() => {
+    if (answerRef.current) {
+      answerRef.current.scrollTop = answerRef.current.scrollHeight
+    }
+  }, [answer])
+
+  const ask = async () => {
+    if (!question.trim() || streaming) return
+    setAnswer('')
+    setSources([])
+    setError(null)
+    setDone(false)
+    setStreaming(true)
+
+    try {
+      const token = localStorage.getItem('hp1_auth_token')
+      const resp = await fetch(`${BASE}/api/docs/ask`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ question: question.trim(), platform }),
+      })
+
+      if (!resp.ok) {
+        setError(`Request failed: ${resp.status}`)
+        setStreaming(false)
+        return
+      }
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done: rDone, value } = await reader.read()
+        if (rDone) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const msg = JSON.parse(line.slice(6))
+            if (msg.type === 'chunk')   setAnswer(a => a + msg.text)
+            if (msg.type === 'sources') setSources(msg.sources || [])
+            if (msg.type === 'done')    setDone(true)
+            if (msg.type === 'error') {
+              setError(msg.message)
+              setStreaming(false)
+            }
+          } catch { /* skip malformed SSE */ }
+        }
+      }
+    } catch (e) {
+      setError(`Connection error: ${e.message}`)
+    }
+    setStreaming(false)
+  }
+
+  const handleAskAgent = () => {
+    if (!answer) return
+    const text = `I found this in the documentation:\n\n${answer}\n\nApply this to our infrastructure and investigate if needed.`
+    window.dispatchEvent(new CustomEvent('ds:prefill-agent', { detail: { text } }))
+    window.dispatchEvent(new CustomEvent('navigate-to-commands'))
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Question input */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={question}
+            onChange={e => setQuestion(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && ask()}
+            placeholder="Ask a question about the ingested documentation…"
+            style={{
+              flex: 1, padding: '6px 10px', background: 'var(--bg-2)',
+              border: '1px solid var(--border)', borderRadius: 2, color: 'var(--text-1)',
+              fontSize: 11, fontFamily: 'var(--font-mono)', outline: 'none',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+            onBlur={e => e.target.style.borderColor = 'var(--border)'}
+          />
+          <button
+            onClick={ask}
+            disabled={streaming || !question.trim()}
+            style={{
+              padding: '6px 16px', background: streaming ? 'var(--bg-3)' : 'var(--accent)',
+              color: streaming ? 'var(--text-3)' : '#fff',
+              border: 'none', borderRadius: 2, fontSize: 10, fontFamily: 'var(--font-mono)',
+              cursor: streaming ? 'default' : 'pointer', letterSpacing: 0.5,
+              opacity: (!question.trim() && !streaming) ? 0.5 : 1,
+            }}
+          >
+            {streaming ? '⏳ thinking…' : 'ASK'}
+          </button>
+        </div>
+        {platform && (
+          <div style={{ marginTop: 4, fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            Scoped to: <span style={{ color: 'var(--accent)' }}>{platform}</span>
+            {' — '}searching all platforms will give broader results
+          </div>
+        )}
+        <div style={{ marginTop: 4, fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          Answers are grounded in ingested docs only · sources shown below answer · LM Studio required
+        </div>
+      </div>
+
+      {/* Answer area */}
+      <div ref={answerRef} style={{ flex: 1, overflow: 'auto', padding: 14 }}>
+        {error && (
+          <div style={{ padding: '8px 10px', borderRadius: 2, background: 'var(--red-dim)',
+            color: 'var(--red)', fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+            ✕ {error}
+          </div>
+        )}
+
+        {!answer && !error && !streaming && (
+          <div style={{ color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)',
+            paddingTop: 20, textAlign: 'center' }}>
+            Ask a question to get a grounded answer from your ingested documentation.
+            <br />
+            <span style={{ fontSize: 9, marginTop: 4, display: 'block' }}>
+              Example: "How do I configure Proxmox HA?" or "What are the Kafka min.insync.replicas settings?"
+            </span>
+          </div>
+        )}
+
+        {answer && (
+          <>
+            <div style={{
+              background: 'var(--bg-2)', border: '1px solid var(--border)',
+              borderRadius: 2, padding: '12px 14px', marginBottom: 12,
+              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-1)',
+              lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {answer}
+              {streaming && (
+                <span style={{ display: 'inline-block', width: 8, height: 13,
+                  background: 'var(--accent)', marginLeft: 2, animation: 'pulse 1s infinite' }} />
+              )}
+            </div>
+
+            {done && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button onClick={handleAskAgent} style={{
+                  fontSize: 9, color: 'var(--accent)', background: 'var(--accent-dim)',
+                  border: '1px solid var(--accent)', borderRadius: 2, padding: '3px 10px',
+                  cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                }}>
+                  Ask agent to investigate →
+                </button>
+                <button onClick={() => { setAnswer(''); setSources([]); setDone(false) }} style={{
+                  fontSize: 9, color: 'var(--text-3)', background: 'none',
+                  border: '1px solid var(--border)', borderRadius: 2, padding: '3px 10px',
+                  cursor: 'pointer',
+                }}>
+                  Clear
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Sources */}
+        {sources.length > 0 && (
+          <div>
+            <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+              letterSpacing: 1, marginBottom: 6 }}>SOURCES USED</div>
+            {sources.map((s, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                background: 'var(--bg-2)', border: '1px solid var(--border)',
+                borderRadius: 2, marginBottom: 4, fontSize: 9, fontFamily: 'var(--font-mono)',
+              }}>
+                <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>[{i + 1}]</span>
+                <span style={{ color: 'var(--accent)', flexShrink: 0 }}>{s.platform}</span>
+                <span style={{ color: 'var(--text-2)', flex: 1 }}>{s.source_label || s.source_url || s.doc_type}</span>
+                {s.version && <span style={{ color: 'var(--text-3)' }}>v{s.version}</span>}
+                {s.source_url && (
+                  <a href={s.source_url} target="_blank" rel="noopener noreferrer"
+                    style={{ color: 'var(--cyan)', textDecoration: 'none' }}>↗</a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+### 2b — Add mode toggle to DocsTab
+
+Inside `export default function DocsTab()`, add mode state and toggle bar.
+
+FIND (exact — the mode state declarations near the top of DocsTab):
+```jsx
+  const [query, setQuery]               = useState('')
+  const [platform, setPlatform]         = useState('')
+```
+
+REPLACE WITH:
+```jsx
+  const [mode, setMode]                 = useState('browse')  // 'browse' | 'ask'
+  const [query, setQuery]               = useState('')
+  const [platform, setPlatform]         = useState('')
+```
+
+FIND (exact — the header div in DocsTab):
+```jsx
+      {/* Header */}
+      <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)', flexShrink: 0 }}>
+        <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13,
+          color: 'var(--text-1)', letterSpacing: 0.5, marginBottom: 2 }}>
+          DOCUMENTATION
+        </div>
+        <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          Search ingested docs · click a source to filter · Ask agent → injects chunk as context
+        </div>
+      </div>
+```
+
+REPLACE WITH:
+```jsx
+      {/* Header + mode toggle */}
+      <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13,
+            color: 'var(--text-1)', letterSpacing: 0.5 }}>
+            DOCUMENTATION
+          </span>
+          {/* Mode toggle */}
+          <div style={{ display: 'flex', gap: 0, marginLeft: 'auto' }}>
+            {[['browse', 'Browse'], ['ask', 'Ask (AI)']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)} style={{
+                fontSize: 9, padding: '3px 12px', fontFamily: 'var(--font-mono)',
+                letterSpacing: 0.5, cursor: 'pointer',
+                background: mode === m ? 'var(--accent-dim)' : 'var(--bg-3)',
+                color: mode === m ? 'var(--accent)' : 'var(--text-3)',
+                border: `1px solid ${mode === m ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: m === 'browse' ? '2px 0 0 2px' : '0 2px 2px 0',
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          {mode === 'browse'
+            ? 'Search ingested docs · click a source to filter · Ask agent → injects chunk as context'
+            : 'Grounded Q&A from your ingested docs via LM Studio · sources cited inline'}
+        </div>
+      </div>
+```
+
+FIND (exact — the main area div that contains the source browser + search):
+```jsx
+      {/* Main area: source browser + search */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+```
+
+REPLACE WITH:
+```jsx
+      {/* Main area: mode-dependent content */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+        {mode === 'ask' && (
+          <AskPanel platform={platform} />
+        )}
+        {mode === 'browse' && <>
+```
+
+And find the closing `</div>` of the main area (after the right-side search results div) and add:
+```jsx
+        </>}
+```
+
+before the closing `</div>` of the main area.
+
+NOTE for CC: Be careful with the nested divs here. The structure after the change should be:
+```jsx
+<div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+  {mode === 'ask' && <AskPanel platform={platform} />}
+  {mode === 'browse' && <>
+    {/* Left: Source browser */}
+    <div ...>...</div>
+    {/* Right: Search + results */}
+    <div ...>...</div>
+  </>}
+</div>
+```
+
+---
+
+## Version bump
+Update VERSION: 2.29.0 → 2.29.1
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(docs): v2.29.1 grounded doc Q&A via LM Studio — Ask mode in DocsTab with streaming SSE"
+git push origin main
+```

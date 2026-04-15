@@ -40,6 +40,7 @@ from api.routers.maintenance import router as maintenance_router
 from api.routers.discovery import router as discovery_router
 from api.routers.card_templates import router as card_templates_router
 from api.routers.display_aliases import router as display_aliases_router
+from api.routers.docs import router as docs_router
 from api.db.entity_maintenance import init_maintenance
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
@@ -389,6 +390,7 @@ app.include_router(maintenance_router)
 app.include_router(discovery_router)
 app.include_router(card_templates_router)
 app.include_router(display_aliases_router)
+app.include_router(docs_router)
 
 
 def _get_host_ips() -> dict:

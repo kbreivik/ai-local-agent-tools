@@ -1482,6 +1482,13 @@ function AppShell() {
     return () => window.removeEventListener('navigate-to-logs', handler)
   }, [])
 
+  // Doc search "Ask agent →" navigates to Commands tab
+  useEffect(() => {
+    const handler = () => setActiveTab('Commands')
+    window.addEventListener('navigate-to-commands', handler)
+    return () => window.removeEventListener('navigate-to-commands', handler)
+  }, [])
+
   // CSS grid column widths:
   //   Commands tab active → full width (0px panel col + 1fr main)
   //   Panel open          → 360px panel col + 1fr main
