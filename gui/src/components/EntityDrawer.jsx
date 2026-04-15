@@ -114,6 +114,14 @@ export default function EntityDrawer({ entityId, onClose }) {
   const meta = entity?.metadata || {}
   const metaEntries = Object.entries(meta).filter(([, v]) => v != null && v !== '')
 
+  const renderValue = (val) => {
+    if (Array.isArray(val)) {
+      return val.length > 0 ? val.join(' \u00b7 ') : '\u2014'
+    }
+    if (val === null || val === undefined || val === '') return '\u2014'
+    return String(val)
+  }
+
   return createPortal(
     <>
       {/* Overlay */}
@@ -221,11 +229,63 @@ export default function EntityDrawer({ entityId, onClose }) {
                     borderRadius: 2, padding: '4px 0',
                   }}>
                     {metaEntries.map(([k, v]) => (
-                      <Row key={k} label={k} value={String(v)} mono />
+                      <Row key={k} label={k} value={renderValue(v)} mono />
                     ))}
                   </div>
                 </div>
               )}
+
+              {/* Container accessibility — for docker entities only */}
+              {(entity?.platform === 'docker' || entity?.component === 'docker_agent01') && (() => {
+                const meta = entity?.metadata || {}
+                const ports = meta.ports || []
+                const ipPort = meta.ip_port || ''
+
+                const browserHost = typeof window !== 'undefined' ? window.location.hostname : ''
+                const isLoopback = !browserHost || browserHost === 'localhost' || browserHost === '127.0.0.1'
+                const hostIp = isLoopback ? (window.__agentHostIp || browserHost) : browserHost
+
+                const externalPorts = ports.map(p => {
+                  const hostPart = p.split('\u2192')[0]?.trim()
+                  if (!hostPart) return null
+                  if (hostPart.startsWith('127.') || hostPart.startsWith('0.0.0')) {
+                    const portNum = hostPart.split(':').pop()
+                    return portNum ? { port: portNum, loopback: true } : null
+                  }
+                  const portNum = hostPart.includes(':') ? hostPart.split(':').pop() : hostPart
+                  return portNum ? { port: portNum, loopback: false } : null
+                }).filter(Boolean)
+
+                if (externalPorts.length === 0 && !ipPort) return null
+
+                return (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--bg-3)' }}>
+                    <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+                      letterSpacing: 1, marginBottom: 6 }}>ACCESSIBILITY</div>
+                    {externalPorts.map(({ port, loopback }, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '3px 0', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ color: 'var(--text-3)' }}>
+                          {loopback ? 'loopback only' : 'exposed on LAN'}
+                        </span>
+                        {loopback ? (
+                          <span style={{ color: 'var(--text-3)' }}>localhost:{port}</span>
+                        ) : (
+                          <a
+                            href={`http://${hostIp}:${port}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--cyan)', textDecoration: 'none' }}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            {hostIp}:{port} ↗
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
 
               {/* ── Ask panel ── */}
               <div style={{

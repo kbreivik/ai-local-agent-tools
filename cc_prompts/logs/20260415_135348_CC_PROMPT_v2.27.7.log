@@ -1,0 +1,831 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.27.7.md (v2.27.7)
+Theme: DB: card_templates + display_aliases tables + API routes
+
+Prompt content:
+
+# CC PROMPT — v2.27.7 — DB: card_templates + display_aliases tables + API
+
+## What this does
+Two new DB tables + API routes for the card template and entity alias systems:
+1. `card_templates`: stores ordered field arrays per section (header_sub, collapsed, expanded,
+   entity_only, hidden) scoped by card type ('container', 'swarm_service') or per connection UUID
+2. `display_aliases`: stores editable display name overrides for entities (container name →
+   user-set alias; falls back to `origin` when alias cleared)
+
+Both tables get full CRUD API routes and are seeded with hardcoded defaults on init.
+Version bump: 2.27.6 → 2.27.7
+
+---
+
+## Change 1 — api/db/card_templates.py (NEW FILE)
+
+```python
+"""card_templates — stores card layout templates per card type or per connection.
+
+A template is a dict of ordered field-key arrays per section:
+  {
+    "header_sub": ["image"],          # max 1 field — shown below card name when collapsed
+    "collapsed": ["running_version", "built_at", "version_status", "uptime"],  # max 10
+    "expanded": ["endpoint", "volumes", "pull_date", "actions"],               # no limit
+    "entity_only": ["ports", "networks", "ip_addresses"],                      # entity drawer only
+    "hidden": []                                                                # not shown
+  }
+
+scope_type:
+  'type'        — default template for all cards of a given card_type
+  'connection'  — per-connection override (scope_id = connection UUID)
+"""
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL_PG = """
+CREATE TABLE IF NOT EXISTS card_templates (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope_type  TEXT NOT NULL DEFAULT 'type',
+    scope_id    TEXT NOT NULL,
+    template    JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(scope_type, scope_id)
+);
+"""
+
+_DDL_SQLITE = """
+CREATE TABLE IF NOT EXISTS card_templates (
+    id          TEXT PRIMARY KEY,
+    scope_type  TEXT NOT NULL DEFAULT 'type',
+    scope_id    TEXT NOT NULL,
+    template    TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(scope_type, scope_id)
+);
+"""
+
+# Default templates — canonical field order for each card type.
+# These ship as the initial DB state; user edits override per scope.
+DEFAULT_TEMPLATES = {
+    "container": {
+        "header_sub":  ["image"],
+        "collapsed":   ["running_version", "built_at", "version_status", "uptime"],
+        "expanded":    ["endpoint", "volumes", "pull_date", "actions"],
+        "entity_only": ["ports", "networks", "ip_addresses"],
+        "hidden":      [],
+    },
+    "swarm_service": {
+        "header_sub":  ["image"],
+        "collapsed":   ["replicas", "uptime"],
+        "expanded":    ["ports", "volumes", "actions"],
+        "entity_only": ["networks", "ip_addresses"],
+        "hidden":      [],
+    },
+    "proxmox_vm": {
+        "header_sub":  ["node_type"],
+        "collapsed":   ["cpu", "ram", "status"],
+        "expanded":    ["disks", "actions"],
+        "entity_only": [],
+        "hidden":      [],
+    },
+}
+
+_initialized = False
+
+
+def _ts(): return datetime.now(timezone.utc).isoformat()
+def _is_pg(): return bool(os.environ.get("DATABASE_URL", ""))
+
+
+def _get_conn():
+    if not _is_pg(): return None
+    import psycopg2
+    dsn = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+    return psycopg2.connect(dsn)
+
+
+def init_card_templates() -> bool:
+    global _initialized
+    if _initialized: return True
+
+    conn = _get_conn()
+    if conn:
+        try:
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute(_DDL_PG)
+            cur.close()
+            conn.autocommit = False
+            _seed_defaults_pg(conn)
+            conn.close()
+            _initialized = True
+            log.info("card_templates table ready (PG)")
+            return True
+        except Exception as e:
+            log.warning("card_templates init (PG) failed: %s", e)
+            try: conn.close()
+            except Exception: pass
+
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sa.execute(_t(_DDL_SQLITE))
+        sa.commit()
+        _seed_defaults_sqlite(sa)
+        sa.close()
+        _initialized = True
+        log.info("card_templates table ready (SQLite)")
+        return True
+    except Exception as e:
+        log.warning("card_templates init (SQLite) failed: %s", e)
+        return False
+
+
+def _seed_defaults_pg(conn) -> None:
+    try:
+        cur = conn.cursor()
+        for card_type, template in DEFAULT_TEMPLATES.items():
+            cur.execute(
+                "INSERT INTO card_templates (scope_type, scope_id, template) "
+                "VALUES ('type', %s, %s) ON CONFLICT (scope_type, scope_id) DO NOTHING",
+                (card_type, json.dumps(template))
+            )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        log.warning("_seed_defaults_pg failed: %s", e)
+        try: conn.rollback()
+        except Exception: pass
+
+
+def _seed_defaults_sqlite(sa) -> None:
+    try:
+        from sqlalchemy import text as _t
+        for card_type, template in DEFAULT_TEMPLATES.items():
+            sa.execute(_t(
+                "INSERT OR IGNORE INTO card_templates (id, scope_type, scope_id, template) "
+                "VALUES (:id, 'type', :sid, :tmpl)"
+            ), {"id": str(uuid.uuid4()), "sid": card_type, "tmpl": json.dumps(template)})
+        sa.commit()
+    except Exception as e:
+        log.warning("_seed_defaults_sqlite failed: %s", e)
+
+
+def _parse_template(raw) -> dict:
+    """Parse template from DB (JSONB or JSON string) to dict."""
+    if isinstance(raw, dict): return raw
+    try: return json.loads(raw)
+    except Exception: return {}
+
+
+def get_template(scope_type: str, scope_id: str) -> dict | None:
+    """Get template for given scope. Returns None if not found."""
+    if not _initialized: init_card_templates()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT template FROM card_templates WHERE scope_type = %s AND scope_id = %s",
+                (scope_type, scope_id)
+            )
+            row = cur.fetchone()
+            cur.close(); conn.close()
+            return _parse_template(row[0]) if row else None
+        except Exception: return None
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        row = sa.execute(_t(
+            "SELECT template FROM card_templates WHERE scope_type = :st AND scope_id = :sid"
+        ), {"st": scope_type, "sid": scope_id}).fetchone()
+        sa.close()
+        return _parse_template(row[0]) if row else None
+    except Exception: return None
+
+
+def upsert_template(scope_type: str, scope_id: str, template: dict) -> bool:
+    """Create or update a template. Returns True on success."""
+    if not _initialized: init_card_templates()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO card_templates (scope_type, scope_id, template) "
+                "VALUES (%s, %s, %s) ON CONFLICT (scope_type, scope_id) "
+                "DO UPDATE SET template = EXCLUDED.template, updated_at = NOW()",
+                (scope_type, scope_id, json.dumps(template))
+            )
+            conn.commit(); cur.close(); conn.close()
+            return True
+        except Exception as e:
+            log.warning("upsert_template (PG) failed: %s", e)
+            return False
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        existing = sa.execute(_t(
+            "SELECT id FROM card_templates WHERE scope_type = :st AND scope_id = :sid"
+        ), {"st": scope_type, "sid": scope_id}).fetchone()
+        if existing:
+            sa.execute(_t(
+                "UPDATE card_templates SET template = :tmpl WHERE scope_type = :st AND scope_id = :sid"
+            ), {"tmpl": json.dumps(template), "st": scope_type, "sid": scope_id})
+        else:
+            sa.execute(_t(
+                "INSERT INTO card_templates (id, scope_type, scope_id, template) "
+                "VALUES (:id, :st, :sid, :tmpl)"
+            ), {"id": str(uuid.uuid4()), "st": scope_type, "sid": scope_id, "tmpl": json.dumps(template)})
+        sa.commit(); sa.close()
+        return True
+    except Exception as e:
+        log.warning("upsert_template (SQLite) failed: %s", e)
+        return False
+
+
+def delete_template(scope_type: str, scope_id: str) -> bool:
+    """Delete a connection-scoped template override (reset to type default)."""
+    if scope_type == 'type':
+        log.warning("Refusing to delete type-level template for %s", scope_id)
+        return False
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM card_templates WHERE scope_type = %s AND scope_id = %s",
+                (scope_type, scope_id)
+            )
+            conn.commit(); cur.close(); conn.close()
+            return True
+        except Exception: return False
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sa.execute(_t(
+            "DELETE FROM card_templates WHERE scope_type = :st AND scope_id = :sid"
+        ), {"st": scope_type, "sid": scope_id})
+        sa.commit(); sa.close()
+        return True
+    except Exception: return False
+
+
+def resolve_template(card_type: str, connection_id: str | None = None) -> dict:
+    """Resolve effective template: per-connection override → type default → hardcoded default."""
+    if connection_id:
+        override = get_template('connection', connection_id)
+        if override:
+            return override
+    type_tmpl = get_template('type', card_type)
+    if type_tmpl:
+        return type_tmpl
+    return DEFAULT_TEMPLATES.get(card_type, {})
+```
+
+---
+
+## Change 2 — api/db/display_aliases.py (NEW FILE)
+
+```python
+"""display_aliases — user-editable display name overrides for entities.
+
+Each entry maps an entity_id to a user-set alias. The `origin` field stores
+the original auto-derived name so it can be restored when alias is cleared.
+
+entity_id format: 'docker:<container_name>' | 'swarm:<service_name>' | 'connection:<uuid>'
+"""
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+_DDL_PG = """
+CREATE TABLE IF NOT EXISTS display_aliases (
+    entity_id   TEXT PRIMARY KEY,
+    alias       TEXT NOT NULL,
+    origin      TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_display_aliases_origin ON display_aliases(origin);
+"""
+
+_DDL_SQLITE = """
+CREATE TABLE IF NOT EXISTS display_aliases (
+    entity_id   TEXT PRIMARY KEY,
+    alias       TEXT NOT NULL,
+    origin      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_initialized = False
+
+def _ts(): return datetime.now(timezone.utc).isoformat()
+def _is_pg(): return bool(os.environ.get("DATABASE_URL", ""))
+
+
+def _get_conn():
+    if not _is_pg(): return None
+    import psycopg2
+    dsn = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+    return psycopg2.connect(dsn)
+
+
+def init_display_aliases() -> bool:
+    global _initialized
+    if _initialized: return True
+    conn = _get_conn()
+    if conn:
+        try:
+            conn.autocommit = True
+            cur = conn.cursor()
+            for stmt in _DDL_PG.strip().split(';'):
+                stmt = stmt.strip()
+                if stmt: cur.execute(stmt)
+            cur.close(); conn.close()
+            _initialized = True
+            log.info("display_aliases table ready (PG)")
+            return True
+        except Exception as e:
+            log.warning("display_aliases init (PG) failed: %s", e)
+            try: conn.close()
+            except Exception: pass
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sa.execute(_t(_DDL_SQLITE)); sa.commit(); sa.close()
+        _initialized = True
+        log.info("display_aliases table ready (SQLite)")
+        return True
+    except Exception as e:
+        log.warning("display_aliases init (SQLite) failed: %s", e)
+        return False
+
+
+def list_aliases() -> list[dict]:
+    if not _initialized: init_display_aliases()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT entity_id, alias, origin, updated_at FROM display_aliases ORDER BY entity_id")
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close(); conn.close()
+            for r in rows:
+                try: r['updated_at'] = r['updated_at'].isoformat()
+                except Exception: pass
+            return rows
+        except Exception: return []
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        rows = [dict(r) for r in sa.execute(_t(
+            "SELECT entity_id, alias, origin, updated_at FROM display_aliases ORDER BY entity_id"
+        )).mappings().fetchall()]
+        sa.close()
+        return rows
+    except Exception: return []
+
+
+def get_alias(entity_id: str) -> str | None:
+    """Return alias for entity_id, or None if not set."""
+    if not _initialized: init_display_aliases()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT alias FROM display_aliases WHERE entity_id = %s", (entity_id,))
+            row = cur.fetchone(); cur.close(); conn.close()
+            return row[0] if row else None
+        except Exception: return None
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        row = sa.execute(_t("SELECT alias FROM display_aliases WHERE entity_id = :id"), {"id": entity_id}).fetchone()
+        sa.close()
+        return row[0] if row else None
+    except Exception: return None
+
+
+def get_all_aliases() -> dict[str, str]:
+    """Return {entity_id: alias} map — efficient for bulk lookups."""
+    rows = list_aliases()
+    return {r['entity_id']: r['alias'] for r in rows}
+
+
+def set_alias(entity_id: str, alias: str, origin: str = "") -> bool:
+    """Create or update an alias. origin is stored on first create, not overwritten on update."""
+    if not _initialized: init_display_aliases()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO display_aliases (entity_id, alias, origin) VALUES (%s, %s, %s) "
+                "ON CONFLICT (entity_id) DO UPDATE SET alias = EXCLUDED.alias, updated_at = NOW()",
+                (entity_id, alias, origin)
+            )
+            conn.commit(); cur.close(); conn.close()
+            return True
+        except Exception as e:
+            log.warning("set_alias (PG) failed: %s", e)
+            return False
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        existing = sa.execute(_t(
+            "SELECT entity_id FROM display_aliases WHERE entity_id = :id"
+        ), {"id": entity_id}).fetchone()
+        if existing:
+            sa.execute(_t(
+                "UPDATE display_aliases SET alias = :alias, updated_at = datetime('now') WHERE entity_id = :id"
+            ), {"alias": alias, "id": entity_id})
+        else:
+            sa.execute(_t(
+                "INSERT INTO display_aliases (entity_id, alias, origin) VALUES (:id, :alias, :origin)"
+            ), {"id": entity_id, "alias": alias, "origin": origin})
+        sa.commit(); sa.close()
+        return True
+    except Exception as e:
+        log.warning("set_alias (SQLite) failed: %s", e)
+        return False
+
+
+def delete_alias(entity_id: str) -> bool:
+    """Remove alias — display falls back to origin."""
+    if not _initialized: init_display_aliases()
+    conn = _get_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM display_aliases WHERE entity_id = %s", (entity_id,))
+            conn.commit(); cur.close(); conn.close()
+            return True
+        except Exception: return False
+    try:
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sa.execute(_t("DELETE FROM display_aliases WHERE entity_id = :id"), {"id": entity_id})
+        sa.commit(); sa.close()
+        return True
+    except Exception: return False
+```
+
+---
+
+## Change 3 — api/routers/card_templates.py (NEW FILE)
+
+```python
+"""Card templates API — get/put type defaults and per-connection overrides."""
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import get_current_user, get_current_user_and_role, role_meets
+
+router = APIRouter(prefix="/api/card-templates", tags=["card_templates"])
+
+VALID_CARD_TYPES = {"container", "swarm_service", "proxmox_vm"}
+VALID_SECTIONS   = {"header_sub", "collapsed", "expanded", "entity_only", "hidden"}
+MAX_COLLAPSED    = 10
+MAX_HEADER_SUB   = 1
+
+
+def _validate_template(t: dict) -> str | None:
+    """Validate template structure. Returns error string or None if valid."""
+    if not isinstance(t, dict): return "Template must be a JSON object"
+    for sec, fields in t.items():
+        if sec not in VALID_SECTIONS: return f"Invalid section: {sec!r}"
+        if not isinstance(fields, list): return f"Section {sec!r} must be an array"
+        if not all(isinstance(f, str) for f in fields): return "All field keys must be strings"
+    if len(t.get("collapsed", [])) > MAX_COLLAPSED:
+        return f"Collapsed section max {MAX_COLLAPSED} fields"
+    if len(t.get("header_sub", [])) > MAX_HEADER_SUB:
+        return f"header_sub section max {MAX_HEADER_SUB} field"
+    return None
+
+
+@router.get("/defaults")
+async def get_all_defaults(_: str = Depends(get_current_user)):
+    """Return all type-level default templates."""
+    from api.db.card_templates import DEFAULT_TEMPLATES, get_template
+    result = {}
+    for ct in VALID_CARD_TYPES:
+        override = get_template('type', ct)
+        result[ct] = override if override else DEFAULT_TEMPLATES.get(ct, {})
+    return result
+
+
+@router.get("/type/{card_type}")
+async def get_type_template(card_type: str, _: str = Depends(get_current_user)):
+    """Get the type-level default template for a card type."""
+    if card_type not in VALID_CARD_TYPES:
+        raise HTTPException(400, f"Invalid card_type. Valid: {sorted(VALID_CARD_TYPES)}")
+    from api.db.card_templates import resolve_template
+    return {"card_type": card_type, "template": resolve_template(card_type)}
+
+
+@router.put("/type/{card_type}")
+async def put_type_template(
+    card_type: str, req: dict, user_role: tuple = Depends(get_current_user_and_role)
+):
+    """Update the type-level default template."""
+    _, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "imperial_officer or above required")
+    if card_type not in VALID_CARD_TYPES:
+        raise HTTPException(400, f"Invalid card_type")
+    template = req.get("template", {})
+    err = _validate_template(template)
+    if err:
+        raise HTTPException(400, err)
+    from api.db.card_templates import upsert_template
+    ok = upsert_template('type', card_type, template)
+    if not ok:
+        raise HTTPException(500, "Failed to save template")
+    return {"status": "ok", "card_type": card_type}
+
+
+@router.get("/connection/{connection_id}")
+async def get_connection_template(connection_id: str, _: str = Depends(get_current_user)):
+    """Get effective template for a specific connection (override or type default)."""
+    # card_type hint from query param
+    from fastapi import Query
+    from api.db.card_templates import resolve_template, get_template
+    override = get_template('connection', connection_id)
+    return {
+        "connection_id":  connection_id,
+        "has_override":   override is not None,
+        "template":       override,
+    }
+
+
+@router.put("/connection/{connection_id}")
+async def put_connection_template(
+    connection_id: str, req: dict, user_role: tuple = Depends(get_current_user_and_role)
+):
+    """Save a per-connection template override."""
+    _, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "imperial_officer or above required")
+    template = req.get("template", {})
+    err = _validate_template(template)
+    if err:
+        raise HTTPException(400, err)
+    from api.db.card_templates import upsert_template
+    ok = upsert_template('connection', connection_id, template)
+    if not ok:
+        raise HTTPException(500, "Failed to save template")
+    return {"status": "ok", "connection_id": connection_id}
+
+
+@router.delete("/connection/{connection_id}")
+async def delete_connection_template(
+    connection_id: str, user_role: tuple = Depends(get_current_user_and_role)
+):
+    """Remove per-connection override — resets to type default."""
+    _, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "imperial_officer or above required")
+    from api.db.card_templates import delete_template
+    delete_template('connection', connection_id)
+    return {"status": "ok", "message": "Override cleared — using type default"}
+```
+
+---
+
+## Change 4 — api/routers/display_aliases.py (NEW FILE)
+
+```python
+"""Display aliases API — get/set/delete entity display name overrides."""
+import re
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import get_current_user
+
+router = APIRouter(prefix="/api/display-aliases", tags=["display_aliases"])
+
+# Allowed entity_id prefix patterns — guards against injection
+_ENTITY_ID_RE = re.compile(r'^[\w\-:\.]+$')
+
+
+def _validate_entity_id(entity_id: str) -> None:
+    if not entity_id or len(entity_id) > 200 or not _ENTITY_ID_RE.match(entity_id):
+        raise HTTPException(400, "Invalid entity_id format")
+
+
+@router.get("")
+async def list_display_aliases(_: str = Depends(get_current_user)):
+    from api.db.display_aliases import list_aliases
+    return {"aliases": list_aliases()}
+
+
+@router.get("/{entity_id:path}")
+async def get_display_alias(entity_id: str, _: str = Depends(get_current_user)):
+    _validate_entity_id(entity_id)
+    from api.db.display_aliases import get_alias
+    alias = get_alias(entity_id)
+    return {"entity_id": entity_id, "alias": alias}
+
+
+@router.put("/{entity_id:path}")
+async def set_display_alias(entity_id: str, req: dict, _: str = Depends(get_current_user)):
+    _validate_entity_id(entity_id)
+    alias = str(req.get("alias", "")).strip()
+    origin = str(req.get("origin", "")).strip()
+    if not alias:
+        raise HTTPException(400, "alias must be non-empty")
+    if len(alias) > 100:
+        raise HTTPException(400, "alias max 100 characters")
+    from api.db.display_aliases import set_alias
+    ok = set_alias(entity_id, alias, origin)
+    if not ok:
+        raise HTTPException(500, "Failed to save alias")
+    return {"status": "ok", "entity_id": entity_id, "alias": alias}
+
+
+@router.delete("/{entity_id:path}")
+async def delete_display_alias(entity_id: str, _: str = Depends(get_current_user)):
+    _validate_entity_id(entity_id)
+    from api.db.display_aliases import delete_alias, get_alias
+    # Return the alias before deleting so caller knows what was cleared
+    old = get_alias(entity_id)
+    delete_alias(entity_id)
+    return {"status": "ok", "entity_id": entity_id, "cleared_alias": old}
+```
+
+---
+
+## Change 5 — api/main.py: mount new routers + init new tables
+
+NOTE for CC: Read api/main.py first to find the exact router mounting pattern and the startup
+init section (where init_connections(), init_credential_profiles(), etc. are called).
+Then add the following:
+
+**Import and mount both new routers** in the same location as other routers:
+```python
+from api.routers.card_templates import router as card_templates_router
+from api.routers.display_aliases import router as display_aliases_router
+app.include_router(card_templates_router)
+app.include_router(display_aliases_router)
+```
+
+**Init both new tables** in the startup section:
+```python
+from api.db.card_templates import init_card_templates
+from api.db.display_aliases import init_display_aliases
+init_card_templates()
+init_display_aliases()
+```
+
+---
+
+## Version bump
+Update VERSION: 2.27.6 → 2.27.7
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(db): v2.27.7 card_templates + display_aliases tables and API routes"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 13:53:48
+========================================================================
+PROMPT COMPLETE: v2.27.7
+[STATUS] 2m58s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m00s
+========================================================================

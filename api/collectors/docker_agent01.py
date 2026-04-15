@@ -103,6 +103,9 @@ class DockerAgent01Collector(BaseCollector):
                     "ip_port": c.get("ip_port", ""),
                     "started_at": c.get("started_at"),
                     "restart_count": c.get("restart_count"),
+                    "ports": c.get("ports", []),
+                    "networks": c.get("networks", []),
+                    "ip_addresses": c.get("ip_addresses", []),
                 },
             ))
         return entities if entities else super().to_entities(state)

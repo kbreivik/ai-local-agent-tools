@@ -98,6 +98,10 @@ export function OptionsProvider({ children }) {
           }
           return merged
         })
+        // Write agentHostIp to window for EntityDrawer accessibility display
+        if (serverData.agentHostIp) {
+          window.__agentHostIp = serverData.agentHostIp
+        }
         setServerLoaded(true)
       })
       .catch(() => {
