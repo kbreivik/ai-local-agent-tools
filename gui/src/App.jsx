@@ -31,6 +31,7 @@ import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
 import RunbooksPanel from './components/RunbooksPanel'
+import DiscoveredView from './components/DiscoveredView'
 import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
@@ -1497,6 +1498,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <MemoryPanel />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Discovered' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
+                <DiscoveredView />
               </div>
             </div>
           )}

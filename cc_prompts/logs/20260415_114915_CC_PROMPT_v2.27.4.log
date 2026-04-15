@@ -1,0 +1,625 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.27.4.md (v2.27.4)
+Theme: Frontend: RotationTestModal — per-connection test, role-gated override, audit logged
+
+Prompt content:
+
+# CC PROMPT — v2.27.4 — Frontend: Rotation test modal (RotationTestModal component)
+
+## What this does
+New `gui/src/components/RotationTestModal.jsx` — triggered when saving credential changes to a profile.
+
+Flow:
+1. User edits profile credentials in ProfileForm → clicks "Update Profile"
+2. Instead of immediate save: opens RotationTestModal
+3. Modal calls POST /api/credential-profiles/{id}/test-rotation with new_credentials
+4. Shows animated list of connections being tested, result per connection
+5. All pass → calls /confirm-rotation, modal closes, profiles refresh
+6. Some fail → shows list with fail/pass, "Save anyway" button (role-gated)
+   - sith_lord: always visible, one click, logged
+   - imperial_officer: visible, requires override_reason textarea, logged
+   - stormtrooper: not available — sees "Contact administrator" message
+
+Modal is connected from ProfileForm in ConnectionsTab (OptionsModal.jsx).
+Version bump: 2.27.3 → 2.27.4
+
+---
+
+## Change 1 — gui/src/components/RotationTestModal.jsx (NEW FILE)
+
+```jsx
+/**
+ * RotationTestModal — tests new profile credentials against all linked connections
+ * before saving. Shows per-connection pass/fail, supports role-gated override.
+ */
+import { useState, useEffect } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+const RESULT_COLORS = {
+  pending:  { color: 'var(--text-3)', icon: '○' },
+  running:  { color: 'var(--amber)',   icon: '◌' },
+  ok:       { color: 'var(--green)',   icon: '✓' },
+  fail:     { color: 'var(--red)',     icon: '✕' },
+}
+
+export default function RotationTestModal({
+  profileId,
+  profileName,
+  newCredentials,
+  userRole,          // 'sith_lord' | 'imperial_officer' | 'stormtrooper' | 'droid'
+  onConfirmed,       // called on successful save (profiles should refresh)
+  onCancel,
+}) {
+  const [phase, setPhase] = useState('testing')   // testing | results | saving | done | error
+  const [results, setResults] = useState([])
+  const [allOk, setAllOk] = useState(false)
+  const [overrideReason, setOverrideReason] = useState('')
+  const [overrideError, setOverrideError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
+
+  const canOverride = userRole === 'sith_lord' || userRole === 'imperial_officer'
+  const needsReason = userRole === 'imperial_officer'
+
+  useEffect(() => {
+    _runTest()
+  }, [])
+
+  const _runTest = async () => {
+    setPhase('testing')
+    setResults([])
+    setErrorMsg('')
+    try {
+      const r = await fetch(`${BASE}/api/credential-profiles/${profileId}/test-rotation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ new_credentials: newCredentials }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        setPhase('error')
+        setErrorMsg(d.detail || d.message || 'Test failed')
+        return
+      }
+      if (d.results?.length === 0) {
+        // No linked connections — save immediately
+        await _confirm(false, '', [])
+        return
+      }
+      setResults(d.results || [])
+      setAllOk(d.all_ok || false)
+      setPhase('results')
+    } catch (e) {
+      setPhase('error')
+      setErrorMsg(e.message)
+    }
+  }
+
+  const _confirm = async (override, reason, testResults) => {
+    setSaving(true)
+    try {
+      const r = await fetch(`${BASE}/api/credential-profiles/${profileId}/confirm-rotation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          new_credentials:  newCredentials,
+          override:         override,
+          override_reason:  reason,
+          test_results:     testResults,
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        setOverrideError(d.detail || d.message || 'Save failed')
+        setSaving(false)
+        return
+      }
+      setPhase('done')
+      setTimeout(() => onConfirmed?.(), 800)
+    } catch (e) {
+      setOverrideError(e.message)
+      setSaving(false)
+    }
+  }
+
+  const handleSaveAnyway = async () => {
+    if (needsReason && !overrideReason.trim()) {
+      setOverrideError('Please provide a reason for this override')
+      return
+    }
+    setOverrideError('')
+    await _confirm(true, overrideReason, results)
+  }
+
+  const passCount = results.filter(r => r.ok).length
+  const failCount = results.filter(r => !r.ok).length
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <div style={{
+          background: 'var(--bg-1)', border: '1px solid var(--border)',
+          borderRadius: 4, width: 520, maxHeight: '80vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+        }}>
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '12px 16px', borderBottom: '1px solid var(--border)',
+          }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'var(--font-mono)', letterSpacing: 0.5 }}>
+                CREDENTIAL ROTATION TEST
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}>
+                {profileName} — testing new credentials against linked connections
+              </div>
+            </div>
+            {phase !== 'testing' && phase !== 'saving' && (
+              <button onClick={onCancel}
+                style={{ background: 'none', border: 'none', color: 'var(--text-3)', fontSize: 14, cursor: 'pointer' }}>
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Body */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+
+            {/* Testing phase */}
+            {phase === 'testing' && (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite',
+                  display: 'inline-block' }}>◌</div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)' }}>Testing credentials against all linked connections…</div>
+                <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+              </div>
+            )}
+
+            {/* Results phase */}
+            {(phase === 'results' || phase === 'saving') && (<>
+              {/* Summary bar */}
+              <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontSize: 10,
+                fontFamily: 'var(--font-mono)', padding: '6px 10px', borderRadius: 2,
+                background: allOk ? 'rgba(0,170,68,0.08)' : 'rgba(204,40,40,0.08)',
+                border: `1px solid ${allOk ? 'var(--green)' : 'var(--red)'}` }}>
+                <span style={{ color: 'var(--green)' }}>✓ {passCount} passed</span>
+                {failCount > 0 && <span style={{ color: 'var(--red)' }}>✕ {failCount} failed</span>}
+                <span style={{ color: 'var(--text-3)', marginLeft: 'auto' }}>
+                  {results.length} connection{results.length !== 1 ? 's' : ''} tested
+                </span>
+              </div>
+
+              {/* Per-connection results */}
+              <div style={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', marginBottom: 12 }}>
+                {results.map((r, i) => {
+                  const s = r.ok ? RESULT_COLORS.ok : RESULT_COLORS.fail
+                  return (
+                    <div key={r.conn_id || i} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '5px 10px', fontSize: 10,
+                      borderBottom: i < results.length - 1 ? '1px solid var(--bg-3)' : 'none',
+                      background: i % 2 ? 'var(--bg-2)' : 'var(--bg-1)',
+                    }}>
+                      <span style={{ color: s.color, fontSize: 11, flexShrink: 0 }}>{s.icon}</span>
+                      <span style={{ color: 'var(--text-1)', fontWeight: 500, minWidth: 140 }}>{r.label}</span>
+                      <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>{r.host}</span>
+                      <span style={{ color: r.ok ? 'var(--green)' : 'var(--red)', marginLeft: 'auto', fontSize: 9 }}>
+                        {r.message || (r.ok ? 'OK' : 'Failed')}
+                      </span>
+                      {r.duration_ms != null && (
+                        <span style={{ color: 'var(--text-3)', fontSize: 9, flexShrink: 0 }}>{r.duration_ms}ms</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Override section — only shown on failures */}
+              {!allOk && (<>
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 4 }}>
+                  {canOverride ? (<>
+                    <div style={{ fontSize: 9, color: 'var(--amber)', marginBottom: 8, padding: '4px 8px',
+                      border: '1px solid var(--amber)', borderRadius: 2, background: 'rgba(204,136,0,0.08)' }}>
+                      ⚠ {failCount} connection{failCount !== 1 ? 's' : ''} failed. Saving anyway will be logged
+                      {userRole === 'sith_lord' ? ' — admin override.' : ' — provide a reason.'}
+                    </div>
+
+                    {needsReason && (
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 9, color: 'var(--text-2)', display: 'block', marginBottom: 3 }}>
+                          Override reason (required)
+                        </label>
+                        <textarea
+                          value={overrideReason}
+                          onChange={e => setOverrideReason(e.target.value)}
+                          rows={2}
+                          placeholder="e.g. Device temporarily offline — credentials verified manually"
+                          style={{
+                            width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border)',
+                            borderRadius: 2, padding: '4px 8px', fontSize: 9, color: 'var(--text-1)',
+                            resize: 'none', outline: 'none', fontFamily: 'var(--font-sans)',
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {overrideError && (
+                      <div style={{ fontSize: 9, color: 'var(--red)', marginBottom: 6 }}>{overrideError}</div>
+                    )}
+                  </>) : (
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', padding: '8px',
+                      border: '1px solid var(--border)', borderRadius: 2 }}>
+                      Credential save requires all tests to pass, or an imperial_officer / sith_lord override.
+                      Contact your administrator to proceed.
+                    </div>
+                  )}
+                </div>
+              </>)}
+            </>)}
+
+            {/* Error phase */}
+            {phase === 'error' && (
+              <div style={{ color: 'var(--red)', fontSize: 10, padding: '12px 0' }}>
+                Test failed: {errorMsg}
+              </div>
+            )}
+
+            {/* Done phase */}
+            {phase === 'done' && (
+              <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--green)', fontSize: 12 }}>
+                ✓ Credentials saved successfully
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          {phase !== 'testing' && phase !== 'done' && (
+            <div style={{
+              display: 'flex', gap: 8, padding: '10px 16px',
+              borderTop: '1px solid var(--border)', justifyContent: 'flex-end',
+            }}>
+              {phase !== 'saving' && (
+                <button onClick={onCancel} disabled={saving}
+                  style={{ fontSize: 10, padding: '4px 14px', borderRadius: 2, cursor: 'pointer',
+                    background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                  Cancel
+                </button>
+              )}
+              {allOk && phase === 'results' && (
+                <button onClick={() => _confirm(false, '', results)} disabled={saving}
+                  style={{ fontSize: 10, padding: '4px 14px', borderRadius: 2, cursor: 'pointer',
+                    background: 'var(--green)', border: 'none', color: '#fff', fontWeight: 600, opacity: saving ? 0.6 : 1 }}>
+                  {saving ? 'Saving…' : '✓ Save credentials'}
+                </button>
+              )}
+              {!allOk && canOverride && phase === 'results' && (
+                <button onClick={handleSaveAnyway} disabled={saving}
+                  style={{ fontSize: 10, padding: '4px 14px', borderRadius: 2, cursor: 'pointer',
+                    background: 'var(--amber)', border: 'none', color: '#fff', fontWeight: 600, opacity: saving ? 0.6 : 1 }}>
+                  {saving ? 'Saving…' : '⚠ Save anyway (override)'}
+                </button>
+              )}
+              {phase === 'error' && (
+                <button onClick={_runTest}
+                  style={{ fontSize: 10, padding: '4px 14px', borderRadius: 2, cursor: 'pointer',
+                    background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                  Retry test
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+```
+
+---
+
+## Change 2 — gui/src/components/OptionsModal.jsx: wire RotationTestModal into ProfileForm save
+
+### 2a — Import RotationTestModal at top of OptionsModal.jsx
+
+FIND (exact):
+```
+import { useOptions } from '../context/OptionsContext'
+import { authHeaders } from '../api'
+```
+
+REPLACE WITH:
+```
+import { useOptions } from '../context/OptionsContext'
+import { authHeaders } from '../api'
+import RotationTestModal from './RotationTestModal'
+```
+
+### 2b — Add rotationModal state to ConnectionsTab
+
+FIND (exact):
+```
+  const [usernameOverride, setUsernameOverride] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [importing, setImporting] = useState(false)
+```
+
+REPLACE WITH:
+```
+  const [usernameOverride, setUsernameOverride] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [rotationModal, setRotationModal] = useState(null)  // {profileId, profileName, newCreds}
+```
+
+### 2c — Add userRole prop to ConnectionsTab (it currently takes no props — add it)
+
+FIND (exact):
+```
+function ConnectionsTab() {
+```
+
+REPLACE WITH:
+```
+function ConnectionsTab({ userRole = 'stormtrooper' }) {
+```
+
+### 2d — Replace the onSave in ProfileForm inside ConnectionsTab to trigger rotation modal for edits
+
+FIND (exact):
+```
+            onSave={async () => {
+              const url = editingProfileId
+                ? `${BASE}/api/credential-profiles/${editingProfileId}`
+                : `${BASE}/api/credential-profiles`
+              const method = editingProfileId ? 'PUT' : 'POST'
+              await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify(profileForm),
+              })
+              setShowProfileForm(false)
+              setEditingProfileId(null)
+              setProfileForm({ name: '', auth_type: 'ssh', credentials: {}, discoverable: false })
+              fetchProfiles()
+            }}
+```
+
+REPLACE WITH:
+```
+            onSave={async () => {
+              const hasCreds = profileForm.credentials && Object.keys(profileForm.credentials).length > 0
+              if (editingProfileId && hasCreds) {
+                // Has credential changes — trigger rotation test modal
+                setRotationModal({
+                  profileId:   editingProfileId,
+                  profileName: profileForm.name,
+                  newCreds:    profileForm.credentials,
+                })
+                setShowProfileForm(false)
+                return
+              }
+              // New profile or metadata-only change — save directly
+              const url = editingProfileId
+                ? `${BASE}/api/credential-profiles/${editingProfileId}`
+                : `${BASE}/api/credential-profiles`
+              const method = editingProfileId ? 'PUT' : 'POST'
+              await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify(profileForm),
+              })
+              setShowProfileForm(false)
+              setEditingProfileId(null)
+              setProfileForm({ name: '', auth_type: 'ssh', credentials: {}, discoverable: false })
+              fetchProfiles()
+            }}
+```
+
+### 2e — Render RotationTestModal when rotationModal state is set
+
+FIND (exact — top of the ConnectionsTab return, the space-y-3 div):
+```
+    <div className="space-y-3" onClick={e => e.stopPropagation()}>
+```
+
+REPLACE WITH:
+```
+    <>
+    {rotationModal && (
+      <RotationTestModal
+        profileId={rotationModal.profileId}
+        profileName={rotationModal.profileName}
+        newCredentials={rotationModal.newCreds}
+        userRole={userRole}
+        onConfirmed={() => {
+          setRotationModal(null)
+          setEditingProfileId(null)
+          setProfileForm({ name: '', auth_type: 'ssh', credentials: {}, discoverable: false })
+          fetchProfiles()
+        }}
+        onCancel={() => setRotationModal(null)}
+      />
+    )}
+    <div className="space-y-3" onClick={e => e.stopPropagation()}>
+```
+
+Also close the wrapping fragment at the very end of ConnectionsTab's return, replacing the final:
+```
+    </div>
+  )
+```
+with:
+```
+    </div>
+    </>
+  )
+```
+
+### 2f — Pass userRole to ConnectionsTab from the root modal
+
+FIND (exact — in the tab content rendering block):
+```
+                {tab === 'Connections'    && <ConnectionsTab />}
+```
+
+REPLACE WITH:
+```
+                {tab === 'Connections'    && <ConnectionsTab userRole={userRole} />}
+```
+
+And ensure `userRole` is available in the root OptionsModal. Find where `username` and `userRole` would come from — the modal renders a Settings button in the sidebar. Add a userRole prop to OptionsModal or read it from a context.
+
+FIND (exact — OptionsModal function signature):
+```
+export default function OptionsModal() {
+```
+
+REPLACE WITH:
+```
+export default function OptionsModal({ userRole = 'stormtrooper' }) {
+```
+
+---
+
+## Version bump
+Update VERSION: 2.27.3 → 2.27.4
+
+## Commit
+```bash
+git add -A
+git commit -m "feat(ui): v2.27.4 RotationTestModal — per-connection test, role-gated override, audit logged"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 11:49:15
+========================================================================
+PROMPT COMPLETE: v2.27.4
+[STATUS] 3m01s
+SessionEnd hook [_R="${CLAUDE_PLUGIN_ROOT}"; [ -z "$_R" ] && _R="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete] failed: Hook cancelled
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m03s
+========================================================================

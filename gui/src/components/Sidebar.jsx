@@ -9,10 +9,11 @@ import LockBadge from './LockBadge'
 
 const NAV = [
   { section: 'MONITOR', items: [
-    { key: 'Dashboard', icon: '⬡' },
-    { key: 'Cluster',   icon: '◈' },
-    { key: 'Logs',      icon: '≡' },
-    { key: 'Memory',    icon: '◎' },
+    { key: 'Dashboard',   icon: '⬡' },
+    { key: 'Cluster',     icon: '◈' },
+    { key: 'Logs',        icon: '≡' },
+    { key: 'Memory',      icon: '◎' },
+    { key: 'Discovered',  icon: '⊕' },
   ]},
   { section: 'OPERATE', items: [
     { key: 'Commands',  icon: '▶' },
