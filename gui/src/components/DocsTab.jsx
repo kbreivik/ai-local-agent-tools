@@ -225,9 +225,218 @@ function SourceBrowser({ selectedPlatform, onSelectPlatform }) {
   )
 }
 
+// ── Ask panel ─────────────────────────────────────────────────────────────────
+
+function AskPanel({ platform }) {
+  const [question, setQuestion]   = useState('')
+  const [answer, setAnswer]       = useState('')
+  const [sources, setSources]     = useState([])
+  const [streaming, setStreaming] = useState(false)
+  const [error, setError]         = useState(null)
+  const [done, setDone]           = useState(false)
+  const answerRef = useRef(null)
+
+  // Auto-scroll as answer streams
+  useEffect(() => {
+    if (answerRef.current) {
+      answerRef.current.scrollTop = answerRef.current.scrollHeight
+    }
+  }, [answer])
+
+  const ask = async () => {
+    if (!question.trim() || streaming) return
+    setAnswer('')
+    setSources([])
+    setError(null)
+    setDone(false)
+    setStreaming(true)
+
+    try {
+      const token = localStorage.getItem('hp1_auth_token')
+      const resp = await fetch(`${BASE}/api/docs/ask`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ question: question.trim(), platform }),
+      })
+
+      if (!resp.ok) {
+        setError(`Request failed: ${resp.status}`)
+        setStreaming(false)
+        return
+      }
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done: rDone, value } = await reader.read()
+        if (rDone) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const msg = JSON.parse(line.slice(6))
+            if (msg.type === 'chunk')   setAnswer(a => a + msg.text)
+            if (msg.type === 'sources') setSources(msg.sources || [])
+            if (msg.type === 'done')    setDone(true)
+            if (msg.type === 'error') {
+              setError(msg.message)
+              setStreaming(false)
+            }
+          } catch { /* skip malformed SSE */ }
+        }
+      }
+    } catch (e) {
+      setError(`Connection error: ${e.message}`)
+    }
+    setStreaming(false)
+  }
+
+  const handleAskAgent = () => {
+    if (!answer) return
+    const text = `I found this in the documentation:\n\n${answer}\n\nApply this to our infrastructure and investigate if needed.`
+    window.dispatchEvent(new CustomEvent('ds:prefill-agent', { detail: { text } }))
+    window.dispatchEvent(new CustomEvent('navigate-to-commands'))
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Question input */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-1)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={question}
+            onChange={e => setQuestion(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && ask()}
+            placeholder="Ask a question about the ingested documentation…"
+            style={{
+              flex: 1, padding: '6px 10px', background: 'var(--bg-2)',
+              border: '1px solid var(--border)', borderRadius: 2, color: 'var(--text-1)',
+              fontSize: 11, fontFamily: 'var(--font-mono)', outline: 'none',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+            onBlur={e => e.target.style.borderColor = 'var(--border)'}
+          />
+          <button
+            onClick={ask}
+            disabled={streaming || !question.trim()}
+            style={{
+              padding: '6px 16px', background: streaming ? 'var(--bg-3)' : 'var(--accent)',
+              color: streaming ? 'var(--text-3)' : '#fff',
+              border: 'none', borderRadius: 2, fontSize: 10, fontFamily: 'var(--font-mono)',
+              cursor: streaming ? 'default' : 'pointer', letterSpacing: 0.5,
+              opacity: (!question.trim() && !streaming) ? 0.5 : 1,
+            }}
+          >
+            {streaming ? '\u23F3 thinking\u2026' : 'ASK'}
+          </button>
+        </div>
+        {platform && (
+          <div style={{ marginTop: 4, fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            Scoped to: <span style={{ color: 'var(--accent)' }}>{platform}</span>
+            {' \u2014 '}searching all platforms will give broader results
+          </div>
+        )}
+        <div style={{ marginTop: 4, fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+          Answers are grounded in ingested docs only \u00B7 sources shown below answer \u00B7 LM Studio required
+        </div>
+      </div>
+
+      {/* Answer area */}
+      <div ref={answerRef} style={{ flex: 1, overflow: 'auto', padding: 14 }}>
+        {error && (
+          <div style={{ padding: '8px 10px', borderRadius: 2, background: 'var(--red-dim)',
+            color: 'var(--red)', fontSize: 10, fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+            \u2715 {error}
+          </div>
+        )}
+
+        {!answer && !error && !streaming && (
+          <div style={{ color: 'var(--text-3)', fontSize: 10, fontFamily: 'var(--font-mono)',
+            paddingTop: 20, textAlign: 'center' }}>
+            Ask a question to get a grounded answer from your ingested documentation.
+            <br />
+            <span style={{ fontSize: 9, marginTop: 4, display: 'block' }}>
+              Example: "How do I configure Proxmox HA?" or "What are the Kafka min.insync.replicas settings?"
+            </span>
+          </div>
+        )}
+
+        {answer && (
+          <>
+            <div style={{
+              background: 'var(--bg-2)', border: '1px solid var(--border)',
+              borderRadius: 2, padding: '12px 14px', marginBottom: 12,
+              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-1)',
+              lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {answer}
+              {streaming && (
+                <span style={{ display: 'inline-block', width: 8, height: 13,
+                  background: 'var(--accent)', marginLeft: 2, animation: 'pulse 1s infinite' }} />
+              )}
+            </div>
+
+            {done && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <button onClick={handleAskAgent} style={{
+                  fontSize: 9, color: 'var(--accent)', background: 'var(--accent-dim)',
+                  border: '1px solid var(--accent)', borderRadius: 2, padding: '3px 10px',
+                  cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                }}>
+                  Ask agent to investigate \u2192
+                </button>
+                <button onClick={() => { setAnswer(''); setSources([]); setDone(false) }} style={{
+                  fontSize: 9, color: 'var(--text-3)', background: 'none',
+                  border: '1px solid var(--border)', borderRadius: 2, padding: '3px 10px',
+                  cursor: 'pointer',
+                }}>
+                  Clear
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Sources */}
+        {sources.length > 0 && (
+          <div>
+            <div style={{ fontSize: 8, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+              letterSpacing: 1, marginBottom: 6 }}>SOURCES USED</div>
+            {sources.map((s, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                background: 'var(--bg-2)', border: '1px solid var(--border)',
+                borderRadius: 2, marginBottom: 4, fontSize: 9, fontFamily: 'var(--font-mono)',
+              }}>
+                <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>[{i + 1}]</span>
+                <span style={{ color: 'var(--accent)', flexShrink: 0 }}>{s.platform}</span>
+                <span style={{ color: 'var(--text-2)', flex: 1 }}>{s.source_label || s.source_url || s.doc_type}</span>
+                {s.version && <span style={{ color: 'var(--text-3)' }}>v{s.version}</span>}
+                {s.source_url && (
+                  <a href={s.source_url} target="_blank" rel="noopener noreferrer"
+                    style={{ color: 'var(--cyan)', textDecoration: 'none' }}>\u2197</a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main DocsTab ──────────────────────────────────────────────────────────────
 
 export default function DocsTab() {
+  const [mode, setMode]                 = useState('browse')  // 'browse' | 'ask'
   const [query, setQuery]               = useState('')
   const [platform, setPlatform]         = useState('')
   const [results, setResults]           = useState(null)   // null = not searched yet
@@ -287,20 +496,41 @@ export default function DocsTab() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',
       background: 'var(--bg-0)', color: 'var(--text-1)' }}>
 
-      {/* Header */}
+      {/* Header + mode toggle */}
       <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid var(--border)',
         background: 'var(--bg-1)', flexShrink: 0 }}>
-        <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13,
-          color: 'var(--text-1)', letterSpacing: 0.5, marginBottom: 2 }}>
-          DOCUMENTATION
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 13,
+            color: 'var(--text-1)', letterSpacing: 0.5 }}>
+            DOCUMENTATION
+          </span>
+          {/* Mode toggle */}
+          <div style={{ display: 'flex', gap: 0, marginLeft: 'auto' }}>
+            {[['browse', 'Browse'], ['ask', 'Ask (AI)']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)} style={{
+                fontSize: 9, padding: '3px 12px', fontFamily: 'var(--font-mono)',
+                letterSpacing: 0.5, cursor: 'pointer',
+                background: mode === m ? 'var(--accent-dim)' : 'var(--bg-3)',
+                color: mode === m ? 'var(--accent)' : 'var(--text-3)',
+                border: `1px solid ${mode === m ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: m === 'browse' ? '2px 0 0 2px' : '0 2px 2px 0',
+              }}>{label}</button>
+            ))}
+          </div>
         </div>
         <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-          Search ingested docs · click a source to filter · Ask agent → injects chunk as context
+          {mode === 'browse'
+            ? 'Search ingested docs \u00B7 click a source to filter \u00B7 Ask agent \u2192 injects chunk as context'
+            : 'Grounded Q&A from your ingested docs via LM Studio \u00B7 sources cited inline'}
         </div>
       </div>
 
-      {/* Main area: source browser + search */}
+      {/* Main area: mode-dependent content */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+        {mode === 'ask' && (
+          <AskPanel platform={platform} />
+        )}
+        {mode === 'browse' && <>
 
         {/* Left: Source browser */}
         <div style={{
@@ -428,6 +658,7 @@ export default function DocsTab() {
             )}
           </div>
         </div>
+        </>}
       </div>
 
       {/* Generation Log (collapsed by default, expand on demand) */}
