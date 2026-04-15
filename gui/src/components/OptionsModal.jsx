@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react'
 import { Settings, X } from 'lucide-react'
 import { useOptions } from '../context/OptionsContext'
 import { authHeaders } from '../api'
+import RotationTestModal from './RotationTestModal'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -943,7 +944,7 @@ function ProfileForm({ form, setForm, onSave, onCancel, isEdit }) {
   )
 }
 
-function ConnectionsTab() {
+function ConnectionsTab({ userRole = 'stormtrooper' }) {
   const [conns, setConns] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -957,6 +958,7 @@ function ConnectionsTab() {
   const [usernameOverride, setUsernameOverride] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importing, setImporting] = useState(false)
+  const [rotationModal, setRotationModal] = useState(null)  // {profileId, profileName, newCreds}
   const [jumpHosts, setJumpHosts] = useState([])
   const [vmHostConns, setVmHostConns] = useState([])
   const [profiles, setProfiles] = useState([])
@@ -1196,6 +1198,22 @@ function ConnectionsTab() {
   const platAuth = PLATFORM_AUTH[form.platform] || { auth_type: 'apikey', fields: [{ key: 'api_key', label: 'API Key', type: 'password' }] }
 
   return (
+    <>
+    {rotationModal && (
+      <RotationTestModal
+        profileId={rotationModal.profileId}
+        profileName={rotationModal.profileName}
+        newCredentials={rotationModal.newCreds}
+        userRole={userRole}
+        onConfirmed={() => {
+          setRotationModal(null)
+          setEditingProfileId(null)
+          setProfileForm({ name: '', auth_type: 'ssh', credentials: {}, discoverable: false })
+          fetchProfiles()
+        }}
+        onCancel={() => setRotationModal(null)}
+      />
+    )}
     <div className="space-y-3" onClick={e => e.stopPropagation()}>
       {/* ── Credential Profiles — prominent section ───────────────────────── */}
       <div className="mb-5">
@@ -1222,6 +1240,18 @@ function ConnectionsTab() {
             setForm={setProfileForm}
             isEdit={!!editingProfileId}
             onSave={async () => {
+              const hasCreds = profileForm.credentials && Object.keys(profileForm.credentials).length > 0
+              if (editingProfileId && hasCreds) {
+                // Has credential changes — trigger rotation test modal
+                setRotationModal({
+                  profileId:   editingProfileId,
+                  profileName: profileForm.name,
+                  newCreds:    profileForm.credentials,
+                })
+                setShowProfileForm(false)
+                return
+              }
+              // New profile or metadata-only change — save directly
               const url = editingProfileId
                 ? `${BASE}/api/credential-profiles/${editingProfileId}`
                 : `${BASE}/api/credential-profiles`
@@ -1786,6 +1816,7 @@ function ConnectionsTab() {
         </div>
       )}
     </div>
+    </>
   )
 }
 
@@ -2439,7 +2470,7 @@ function AllowlistTab() {
 
 // ── Root modal ─────────────────────────────────────────────────────────────────
 
-export default function OptionsModal() {
+export default function OptionsModal({ userRole = 'stormtrooper' }) {
   const options  = useOptions()
   const { serverLoaded } = options
   const [open,     setOpen]    = useState(false)
@@ -2556,7 +2587,7 @@ export default function OptionsModal() {
                 {tab === 'General'        && <GeneralTab        draft={draft} update={update} />}
                 {tab === 'Infrastructure' && <InfrastructureTab draft={draft} update={update} />}
                 {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
-                {tab === 'Connections'    && <ConnectionsTab />}
+                {tab === 'Connections'    && <ConnectionsTab userRole={userRole} />}
                 {tab === 'Allowlist'      && <AllowlistTab />}
                 {tab === 'Permissions'    && <PermissionsTab />}
                 {tab === 'Access'        && <AccessTab />}
