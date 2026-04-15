@@ -7,6 +7,8 @@ import { Settings, X } from 'lucide-react'
 import { useOptions } from '../context/OptionsContext'
 import { authHeaders } from '../api'
 import RotationTestModal from './RotationTestModal'
+import CardTemplateEditor from './CardTemplateEditor'
+import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA } from '../schemas/cardSchemas'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -677,6 +679,99 @@ function DimRow({ label, fieldKey, value, defaultVal, min, max, invalid, update 
   )
 }
 
+function CardTemplatesSection() {
+  const [activeCardType, setActiveCardType] = useState(null)  // which editor is open
+  const [saving, setSaving] = useState(false)
+  const [savedMsg, setSavedMsg] = useState('')
+  const [templates, setTemplates] = useState({})
+
+  const CARD_TYPES = [
+    { key: 'container',     label: 'Container (agent-01)',    schema: CONTAINER_SCHEMA },
+    { key: 'swarm_service', label: 'Swarm Service',           schema: SWARM_SERVICE_SCHEMA },
+  ]
+
+  const fetchTemplates = async () => {
+    try {
+      const r = await fetch(`${BASE}/api/card-templates/defaults`, { headers: authHeaders() })
+      if (r.ok) {
+        const d = await r.json()
+        setTemplates(d)
+      }
+    } catch { /* silent */ }
+  }
+
+  useEffect(() => { fetchTemplates() }, [])
+
+  const saveTemplate = async (cardType, template) => {
+    setSaving(true)
+    setSavedMsg('')
+    try {
+      const r = await fetch(`${BASE}/api/card-templates/type/${cardType}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ template }),
+      })
+      if (r.ok) {
+        setSavedMsg(`${cardType} template saved`)
+        setActiveCardType(null)
+        fetchTemplates()
+        // Invalidate frontend cache
+        const { invalidateCardTypeCache } = await import('../hooks/useCardTemplate')
+        invalidateCardTypeCache(cardType)
+      } else {
+        const d = await r.json()
+        setSavedMsg(d.detail || 'Save failed')
+      }
+    } catch (e) {
+      setSavedMsg('Save failed: ' + e.message)
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div>
+      {/* Card type selector */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        {CARD_TYPES.map(({ key, label }) => (
+          <button key={key}
+            onClick={() => setActiveCardType(activeCardType === key ? null : key)}
+            style={{ fontSize: 9, padding: '4px 12px', borderRadius: 2, cursor: 'pointer',
+              fontFamily: 'var(--font-mono)', letterSpacing: 0.5,
+              background: activeCardType === key ? 'var(--accent-dim)' : 'var(--bg-3)',
+              color: activeCardType === key ? 'var(--accent)' : 'var(--text-3)',
+              border: `1px solid ${activeCardType === key ? 'var(--accent)' : 'var(--border)'}` }}>
+            {label.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      {savedMsg && (
+        <div style={{ fontSize: 9, color: savedMsg.includes('failed') ? 'var(--red)' : 'var(--green)',
+          marginBottom: 8 }}>
+          {savedMsg.includes('failed') ? '✕' : '✓'} {savedMsg}
+        </div>
+      )}
+
+      {/* Editor panel */}
+      {activeCardType && (() => {
+        const ct = CARD_TYPES.find(c => c.key === activeCardType)
+        if (!ct) return null
+        return (
+          <CardTemplateEditor
+            key={activeCardType}
+            cardType={activeCardType}
+            schema={ct.schema}
+            initialTemplate={templates[activeCardType] || {}}
+            title={`${ct.label} — drag fields between sections`}
+            onSave={(template) => saveTemplate(activeCardType, template)}
+            onCancel={() => setActiveCardType(null)}
+          />
+        )
+      })()}
+    </div>
+  )
+}
+
 function DisplayTab({ draft, update }) {
   const minH = draft.cardMinHeight ?? 70
   const maxH = draft.cardMaxHeight ?? 200
@@ -742,6 +837,20 @@ function DisplayTab({ draft, update }) {
           ))}
         </div>
       </Field>
+
+      {/* ── Card Templates ─────────────────────────────────────────────────── */}
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+          color: 'var(--text-2)', letterSpacing: 1, marginBottom: 6 }}>
+          CARD TEMPLATES
+        </div>
+        <p style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 12 }}>
+          Choose which fields show in each section of a card and drag to reorder.
+          These are the type-level defaults. Per-connection overrides can be set in Settings → Connections.
+        </p>
+        <CardTemplatesSection />
+      </div>
+      {/* ── end Card Templates ─────────────────────────────────────────────── */}
     </div>
   )
 }
