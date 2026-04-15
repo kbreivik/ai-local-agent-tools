@@ -118,6 +118,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.29.3.md  | v2.29.3  | fix(ui): Proxmox sort dropdown z-index, card alignment, expanded task templates | DONE (8c6c458) |
 | CC_PROMPT_v2.29.4.md  | v2.29.4  | fix(agent): kafka_consumer_lag mandatory in triage, Swarm Shutdown events are normal | DONE (0242724) |
 | CC_PROMPT_v2.29.5.md  | v2.29.5  | fix(ui): filter bar vertical centering + revert wrong ProxmoxCard centering | DONE (457397e) |
+| CC_PROMPT_v2.30.0.md  | v2.30.0  | fix(proxmox): multi-connection support in Proxmox action paths | RUNNING |
+| CC_PROMPT_v2.30.1.md  | v2.30.1  | fix(auth): remove token from localStorage, cookie-first auth | PENDING |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 
 ---
@@ -255,6 +257,23 @@ ServiceCards.jsx Section Row 2: adds `display:flex; alignItems:center` to filter
 so chips sit vertically centred in the row (was top-aligned). ProxmoxCardCollapsed: removes
 `textAlign:center` from vCPU/RAM line and reverts `justify-center` to `justify-start` on
 badges row — restores left-aligned card content consistent with all other card types.
+
+**v2.30.0** — fix(proxmox): multi-connection support in Proxmox action paths.
+`_do_proxmox_action` in api/routers/dashboard.py: loads proxmox_vms snapshot, matches the
+target `node` to the cluster that contains it, uses that cluster's connection_id for
+credentials — eliminates always-first-connection bug in multi-cluster setups. Falls back
+to first connection when snapshot match fails. `proxmox_vm_power` in mcp_server/tools/vm.py:
+iterates all Proxmox connections via get_all_connections_for_platform, tries each until the
+VM matching vm_label is found — same fix for agent-driven power actions.
+
+**v2.30.1** — fix(auth): remove token from localStorage, cookie-first auth.
+AuthContext.jsx: token held in React state (memory) only — no longer written to
+localStorage. Mount validates session via httpOnly cookie (credentials: include). Logout
+calls POST /api/auth/logout to clear server-side cookie. api.js: authHeaders() returns {}
+(cookie handles same-origin auth automatically); SSE URL builders drop ?token= param.
+api/routers/dashboard.py: three SSE stream endpoints (containers, unified, vm-hosts) gain
+`request: Request` param and fall back to httpOnly cookie when no ?token= supplied —
+EventSource sends same-origin cookies automatically.
 
 ---
 

@@ -1123,19 +1123,48 @@ def _do_proxmox_action(pve_type: str, node: str, vmid: int, action: str) -> dict
     """Execute a Proxmox VM/LXC action (start/stop/reboot/shutdown) via proxmoxer.
 
     pve_type: 'qemu' for VMs, 'lxc' for containers.
-    Reads Proxmox credentials from the connections DB (first proxmox connection).
-    Falls back to env vars if no DB connection configured.
+    Reads Proxmox credentials from the connections DB — matches the cluster that owns
+    the target node. Falls back to first proxmox connection or env vars if needed.
     """
     try:
         from proxmoxer import ProxmoxAPI
-        from api.connections import get_connection_for_platform
+        from api.connections import get_connection, get_all_connections_for_platform
     except ImportError as e:
         return {"ok": False, "error": f"proxmoxer not available: {e}"}
 
-    # Resolve credentials — DB first, env var fallback
+    # Resolve credentials — find the connection whose cluster contains the target node.
     conn = None
     try:
-        conn = get_connection_for_platform("proxmox")
+        all_conns = get_all_connections_for_platform("proxmox")
+        if len(all_conns) == 1:
+            conn = all_conns[0]
+        elif len(all_conns) > 1:
+            # Use the proxmox_vms snapshot to match node → connection_id
+            try:
+                import asyncio as _asyncio
+                import json as _json
+                from api.db.base import get_sync_engine
+                from sqlalchemy import text as _text
+                with get_sync_engine().connect() as _sc:
+                    row = _sc.execute(
+                        _text("SELECT state FROM status_snapshots WHERE component = 'proxmox_vms' ORDER BY timestamp DESC LIMIT 1")
+                    ).fetchone()
+                if row:
+                    state = row[0]
+                    if isinstance(state, str):
+                        state = _json.loads(state)
+                    for cluster in state.get("clusters", []):
+                        all_vms = cluster.get("vms", []) + cluster.get("lxc", [])
+                        if any(v.get("node_api") == node or v.get("node") == node for v in all_vms):
+                            cid = cluster.get("connection_id")
+                            if cid:
+                                conn = get_connection(str(cid))
+                            break
+            except Exception as _e:
+                log.debug("_do_proxmox_action: snapshot node-match failed: %s", _e)
+            # Fall back to first connection if snapshot match failed
+            if not conn:
+                conn = all_conns[0]
     except Exception:
         pass
 

@@ -534,36 +534,43 @@ def proxmox_vm_power(vm_label: str, action: str) -> dict:
                 "data": None, "timestamp": _ts()}
 
     try:
-        from api.connections import get_connection_for_platform
+        from api.connections import get_all_connections_for_platform
         from proxmoxer import ProxmoxAPI
 
-        conn = get_connection_for_platform("proxmox")
-        if not conn:
+        all_conns = get_all_connections_for_platform("proxmox")
+        if not all_conns:
             return {"status": "error",
                     "message": "No Proxmox connection configured.",
                     "data": None, "timestamp": _ts()}
 
-        creds = conn.get("credentials", {})
-        pve = ProxmoxAPI(
-            conn["host"],
-            port=conn.get("port", 8006),
-            user=creds.get("user"),
-            token_name=creds.get("token_name"),
-            token_value=creds.get("secret"),
-            verify_ssl=False,
-        )
-
-        # Find VM across all nodes by name
+        # Search all Proxmox connections until VM is found
         found = None
-        for node_info in pve.nodes.get():
-            node = node_info["node"]
-            for vm in pve.nodes(node).qemu.get():
-                name = vm.get("name", "")
-                if (vm_label.lower() in name.lower() or
-                        name.lower() in vm_label.lower()):
-                    found = {"node": node, "vmid": vm["vmid"], "name": name,
-                             "status": vm.get("status")}
-                    break
+        conn = None
+        for candidate in all_conns:
+            creds = candidate.get("credentials", {})
+            try:
+                pve = ProxmoxAPI(
+                    candidate["host"],
+                    port=candidate.get("port", 8006),
+                    user=creds.get("user"),
+                    token_name=creds.get("token_name"),
+                    token_value=creds.get("secret"),
+                    verify_ssl=False,
+                )
+                for node_info in pve.nodes.get():
+                    node = node_info["node"]
+                    for vm in pve.nodes(node).qemu.get():
+                        name = vm.get("name", "")
+                        if (vm_label.lower() in name.lower() or
+                                name.lower() in vm_label.lower()):
+                            found = {"node": node, "vmid": vm["vmid"], "name": name,
+                                     "status": vm.get("status")}
+                            conn = candidate
+                            break
+                    if found:
+                        break
+            except Exception:
+                continue
             if found:
                 break
 
