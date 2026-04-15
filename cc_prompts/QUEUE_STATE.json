@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-15T19:28:53",
+  "updated_at": "2026-04-15T20:12:19",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1045,10 +1045,26 @@
       "filename": "CC_PROMPT_v2.29.1.md",
       "version": "v2.29.1",
       "theme": "feat(docs): grounded doc Q&A via LM Studio — Ask mode with streaming SSE",
+      "runner_status": "DONE",
+      "commit_sha": "338132d",
+      "error": "",
+      "started_at": "2026-04-15T19:28:53",
+      "finished_at": "2026-04-15T19:32:23",
+      "duration_s": 209.3485442000674,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260415_192853_CC_PROMPT_v2.29.1.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.29.2.md",
+      "version": "v2.29.2",
+      "theme": "fix(agent): Kafka triage-first — consumer lag path, broker path, replication path",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-15T19:28:53",
+      "started_at": "2026-04-15T20:12:19",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
