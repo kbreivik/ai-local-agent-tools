@@ -17,39 +17,49 @@ log = logging.getLogger(__name__)
 
 _CONNECTIONS_DDL_PG = """
 CREATE TABLE IF NOT EXISTS connections (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    platform    TEXT NOT NULL,
-    label       TEXT NOT NULL,
-    host        TEXT NOT NULL,
-    port        INTEGER DEFAULT 443,
-    auth_type   TEXT DEFAULT 'token',
-    credentials TEXT DEFAULT '',
-    enabled     BOOLEAN DEFAULT true,
-    verified    BOOLEAN DEFAULT false,
-    last_seen   TIMESTAMPTZ,
-    config      JSONB DEFAULT '{}',
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform       TEXT NOT NULL,
+    label          TEXT NOT NULL,
+    host           TEXT NOT NULL,
+    port           INTEGER DEFAULT 443,
+    auth_type      TEXT DEFAULT 'token',
+    credentials    TEXT DEFAULT '',
+    enabled        BOOLEAN DEFAULT true,
+    verified       BOOLEAN DEFAULT false,
+    last_seen      TIMESTAMPTZ,
+    config         JSONB DEFAULT '{}',
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    username_cache TEXT NOT NULL DEFAULT '',
     UNIQUE(platform, label)
 );
 """
 
+_CONNECTIONS_MIGRATIONS_PG = [
+    "ALTER TABLE connections ADD COLUMN IF NOT EXISTS username_cache TEXT NOT NULL DEFAULT ''",
+]
+
 _CONNECTIONS_DDL_SQLITE = """
 CREATE TABLE IF NOT EXISTS connections (
-    id          TEXT PRIMARY KEY,
-    platform    TEXT NOT NULL,
-    label       TEXT NOT NULL,
-    host        TEXT NOT NULL,
-    port        INTEGER DEFAULT 443,
-    auth_type   TEXT DEFAULT 'token',
-    credentials TEXT DEFAULT '',
-    enabled     INTEGER DEFAULT 1,
-    verified    INTEGER DEFAULT 0,
-    last_seen   TEXT,
-    config      TEXT DEFAULT '{}',
-    created_at  TEXT DEFAULT (datetime('now')),
+    id             TEXT PRIMARY KEY,
+    platform       TEXT NOT NULL,
+    label          TEXT NOT NULL,
+    host           TEXT NOT NULL,
+    port           INTEGER DEFAULT 443,
+    auth_type      TEXT DEFAULT 'token',
+    credentials    TEXT DEFAULT '',
+    enabled        INTEGER DEFAULT 1,
+    verified       INTEGER DEFAULT 0,
+    last_seen      TEXT,
+    config         TEXT DEFAULT '{}',
+    created_at     TEXT DEFAULT (datetime('now')),
+    username_cache TEXT NOT NULL DEFAULT '',
     UNIQUE(platform, label)
 );
 """
+
+_CONNECTIONS_MIGRATIONS_SQLITE = [
+    "ALTER TABLE connections ADD COLUMN username_cache TEXT NOT NULL DEFAULT ''",
+]
 
 _initialized = False
 
@@ -98,6 +108,16 @@ def init_connections() -> bool:
             cur = conn.cursor()
             cur.execute(_CONNECTIONS_DDL_PG)
             cur.close()
+            # Migrations
+            conn.autocommit = False
+            for stmt in _CONNECTIONS_MIGRATIONS_PG:
+                try:
+                    cur2 = conn.cursor()
+                    cur2.execute(stmt)
+                    conn.commit()
+                    cur2.close()
+                except Exception:
+                    conn.rollback()
             conn.close()
             _initialized = True
             log.info("Connections table ready (PostgreSQL)")
@@ -117,9 +137,20 @@ def init_connections() -> bool:
         from sqlalchemy import text as _text
         sa_conn.execute(_text(_CONNECTIONS_DDL_SQLITE))
         sa_conn.commit()
+        for stmt in _CONNECTIONS_MIGRATIONS_SQLITE:
+            try:
+                sa_conn.execute(_text(stmt)); sa_conn.commit()
+            except Exception:
+                pass
         sa_conn.close()
         _initialized = True
         log.info("Connections table ready (SQLite)")
+        # Also ensure audit log table exists
+        try:
+            from api.db.audit_log import init_audit_log
+            init_audit_log()
+        except Exception as e:
+            log.warning("audit_log init (via connections init) failed: %s", e)
         return True
     except Exception as e:
         log.warning("Connections table init failed (SQLite): %s", e)
@@ -227,15 +258,17 @@ def create_connection(
     if not conn:
         return {"status": "error", "message": "No database connection"}
     try:
-        creds_str = json.dumps(credentials or {})
+        creds_dict = credentials or {}
+        creds_str = json.dumps(creds_dict)
         encrypted_creds = encrypt_value(creds_str) if creds_str else ""
         config_json = json.dumps(config or {})
         cid = str(uuid.uuid4())
+        username_cache = str(creds_dict.get('username', ''))
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO connections (id, platform, label, host, port, auth_type, credentials, enabled, config)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (cid, platform, label, host, port, auth_type, encrypted_creds, enabled, config_json))
+            INSERT INTO connections (id, platform, label, host, port, auth_type, credentials, enabled, config, username_cache)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (cid, platform, label, host, port, auth_type, encrypted_creds, enabled, config_json, username_cache))
         conn.commit()
         cur.close()
         conn.close()
@@ -270,9 +303,16 @@ def update_connection(connection_id: str, **kwargs) -> dict:
                     merged = new_creds
                 creds_str = json.dumps(merged)
             else:
-                creds_str = json.dumps(new_creds if isinstance(new_creds, dict) else {})
+                merged = new_creds if isinstance(new_creds, dict) else {}
+                creds_str = json.dumps(merged)
             sets.append("credentials = %s")
             params.append(encrypt_value(creds_str) if creds_str else "")
+            # Update username_cache whenever credentials change
+            if isinstance(merged if 'merged' in dir() else (new_creds or {}), dict):
+                cache_user = (merged if isinstance(merged, dict) else (new_creds or {})).get('username', '')
+                if cache_user:
+                    sets.append("username_cache = %s")
+                    params.append(str(cache_user))
         if "config" in kwargs:
             sets.append("config = %s")
             params.append(json.dumps(kwargs["config"]))
