@@ -316,40 +316,78 @@ def get_profile(profile_id: str) -> dict | None:
     return None
 
 
-def create_profile(name: str, auth_type: str, credentials: dict) -> dict:
+def create_profile(name: str, auth_type: str, credentials: dict, discoverable: bool = False) -> dict:
     conn = _get_conn()
-    if not conn:
-        return {"status": "error", "message": "No database connection"}
+    if conn:
+        try:
+            pid = str(uuid.uuid4())
+            enc = encrypt_value(json.dumps(credentials))
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO credential_profiles (id, name, auth_type, credentials, discoverable) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (pid, name, auth_type, enc, discoverable)
+            )
+            conn.commit(); cur.close(); conn.close()
+            return {"status": "ok", "id": pid, "message": f"Profile '{name}' created"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    # SQLite fallback
     try:
         pid = str(uuid.uuid4())
         enc = encrypt_value(json.dumps(credentials))
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO credential_profiles (id, name, auth_type, credentials) VALUES (%s, %s, %s, %s)",
-            (pid, name, auth_type, enc)
-        )
-        conn.commit(); cur.close(); conn.close()
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sa.execute(_t(
+            "INSERT INTO credential_profiles (id, name, auth_type, credentials, discoverable) "
+            "VALUES (:id, :name, :at, :creds, :disc)"
+        ), {"id": pid, "name": name, "at": auth_type, "creds": enc, "disc": 1 if discoverable else 0})
+        sa.commit(); sa.close()
         return {"status": "ok", "id": pid, "message": f"Profile '{name}' created"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-def update_profile(profile_id: str, name: str = None, credentials: dict = None) -> dict:
+def update_profile(
+    profile_id: str,
+    name: str = None,
+    credentials: dict = None,
+    discoverable: bool | None = None,
+) -> dict:
     conn = _get_conn()
-    if not conn:
-        return {"status": "error", "message": "No database connection"}
+    if conn:
+        try:
+            sets, params = ["updated_at = NOW()"], []
+            if name is not None:
+                sets.append("name = %s"); params.append(name)
+            if credentials is not None:
+                # For rotation: replace credentials entirely (not merge) so old keys are removed
+                sets.append("credentials = %s"); params.append(encrypt_value(json.dumps(credentials)))
+            if discoverable is not None:
+                sets.append("discoverable = %s"); params.append(bool(discoverable))
+            params.append(profile_id)
+            cur = conn.cursor()
+            cur.execute(f"UPDATE credential_profiles SET {', '.join(sets)} WHERE id = %s", params)
+            conn.commit(); cur.close(); conn.close()
+            return {"status": "ok", "message": "Profile updated"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    # SQLite fallback
     try:
-        sets, params = ["updated_at = NOW()"], []
-        if name:
-            sets.append("name = %s"); params.append(name)
-        if credentials:
-            existing = get_profile(profile_id)
-            merged = {**(existing.get('credentials') or {}), **credentials}
-            sets.append("credentials = %s"); params.append(encrypt_value(json.dumps(merged)))
-        params.append(profile_id)
-        cur = conn.cursor()
-        cur.execute(f"UPDATE credential_profiles SET {', '.join(sets)} WHERE id = %s", params)
-        conn.commit(); cur.close(); conn.close()
+        from api.db.base import get_sync_engine
+        from sqlalchemy import text as _t
+        sa = get_sync_engine().connect()
+        sets, params = ["updated_at = datetime('now')"], {}
+        if name is not None:
+            sets.append("name = :name"); params["name"] = name
+        if credentials is not None:
+            sets.append("credentials = :creds"); params["creds"] = encrypt_value(json.dumps(credentials))
+        if discoverable is not None:
+            sets.append("discoverable = :disc"); params["disc"] = 1 if discoverable else 0
+        params["id"] = profile_id
+        sa.execute(_t(f"UPDATE credential_profiles SET {', '.join(sets)} WHERE id = :id"), params)
+        sa.commit(); sa.close()
         return {"status": "ok", "message": "Profile updated"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -398,19 +436,5 @@ def resolve_credentials_for_connection(connection: dict, all_connections: list[d
         if profile:
             return profile.get('credentials') or {}
 
-    # Shared credential fallback (existing behaviour)
-    for c in all_connections:
-        if c['id'] == connection['id']: continue
-        c_cfg = c.get('config') or {}
-        if isinstance(c_cfg, str):
-            try: c_cfg = json.loads(c_cfg)
-            except Exception: c_cfg = {}
-        if c_cfg.get('shared_credentials'):
-            c_creds = c.get('credentials') or {}
-            if isinstance(c_creds, str):
-                try: c_creds = json.loads(c_creds)
-                except Exception: c_creds = {}
-            if c_creds.get('username') or c_creds.get('private_key'):
-                return c_creds
-
+    # shared_credentials connection flag removed in v2.26.10 — credential profiles replace this
     return creds
