@@ -101,6 +101,8 @@ class DockerAgent01Collector(BaseCollector):
                     "state": c.get("state", ""),
                     "uptime": c.get("uptime", ""),
                     "ip_port": c.get("ip_port", ""),
+                    "started_at": c.get("started_at"),
+                    "restart_count": c.get("restart_count"),
                 },
             ))
         return entities if entities else super().to_entities(state)
@@ -177,6 +179,13 @@ class DockerAgent01Collector(BaseCollector):
                     if net_data.get("IPAddress")
                 ]
 
+                state_obj = attrs.get("State") or {}
+                started_at = state_obj.get("StartedAt") or None
+                # Normalise Docker's zero value ("0001-01-01T00:00:00Z") → None
+                if started_at and started_at.startswith("0001-"):
+                    started_at = None
+                restart_count = state_obj.get("RestartCount")  # int, may be 0
+
                 cards.append({
                     "id": c.short_id,
                     "name": name,
@@ -195,6 +204,8 @@ class DockerAgent01Collector(BaseCollector):
                     "networks": network_names,
                     "ip_addresses": ip_addresses,
                     "entity_id": f"docker:{name}",
+                    "started_at": started_at,
+                    "restart_count": restart_count,
                 })
 
             if not cards or all(c["dot"] == "green" for c in cards):

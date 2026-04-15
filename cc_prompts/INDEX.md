@@ -82,13 +82,23 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.24.6.md | v2.24.6 | ES card in Platform Core + ES/Kafka health thresholds in settings | DONE (b23f5c1) |
 | CC_PROMPT_v2.25.0.md | v2.25.0 | Per-entity maintenance mode + Proxmox/dmesg allowlist | DONE (d28196a) |
 | CC_PROMPT_v2.25.1.md | v2.25.1 | SUPERSEDED by v2.26.0+v2.26.1 — DO NOT RUN | SUPERSEDED |
-| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | PENDING |
-| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | PENDING |
-| CC_PROMPT_v2.26.2.md | v2.26.2 | Agent routing: proxmox allowlist, node_activate, ambiguous→observe | PENDING |
-| CC_PROMPT_v2.26.3.md | v2.26.3 | Prompt quality: propose_subtask priority, non-Kafka paths, observe format | PENDING |
-| CC_PROMPT_v2.26.4.md | v2.26.4 | Seed 4 base runbooks (kafka recovery, disk cleanup, swarm, reintegration) | PENDING |
-| CC_PROMPT_v2.26.5.md | v2.26.5 | EntityDrawer Ask: 300→600 tokens + platform-aware suggestions | PENDING |
+| CC_PROMPT_v2.26.0.md | v2.26.0 | Universal entity_id on all card types + docker/swarm to_entities() | DONE (276ddfb) |
+| CC_PROMPT_v2.26.1.md | v2.26.1 | InfraCard universal ⌘/› buttons + VM entity ID fix (qemu→vm) | DONE (c879f1c) |
+| CC_PROMPT_v2.26.2.md | v2.26.2 | Agent routing: proxmox allowlist, node_activate, ambiguous→observe | DONE (d245508) |
+| CC_PROMPT_v2.26.3.md | v2.26.3 | Prompt quality: propose_subtask priority, non-Kafka paths, observe format | DONE (288f5ca) |
+| CC_PROMPT_v2.26.4.md | v2.26.4 | Seed 4 base runbooks (kafka recovery, disk cleanup, swarm, reintegration) | DONE (b5221ba) |
+| CC_PROMPT_v2.26.5.md | v2.26.5 | EntityDrawer Ask: 300→600 tokens + platform-aware suggestions | DONE (4960081) |
 | CC_PROMPT_v2.26.6.md | v2.26.6 | Entity detail performance: /find/{id} endpoint + 30s cache | DONE (6869ba7) |
+| CC_PROMPT_v2.26.8.md  | v2.26.8  | Docker started_at + restart_count in entity metadata | RUNNING |
+| CC_PROMPT_v2.26.9.md  | v2.26.9  | DB: credential_profiles seq_id+discoverable, connection_audit_log, username_cache | PENDING |
+| CC_PROMPT_v2.26.10.md | v2.26.10 | Backend: credential profiles API overhaul — rotation test, confirm, audit, auth types | PENDING |
+| CC_PROMPT_v2.27.0.md  | v2.27.0  | Backend: connections credential_state, CSV import/export, Windows platform stub | PENDING |
+| CC_PROMPT_v2.27.1.md  | v2.27.1  | Backend: discovery harvest (Proxmox/UniFi/Swarm), test, link endpoints | PENDING |
+| CC_PROMPT_v2.27.2.md  | v2.27.2  | Frontend: credential profiles tab overhaul — seq_id, all auth types, prominent section | PENDING |
+| CC_PROMPT_v2.27.3.md  | v2.27.3  | Frontend: connections form — profile display, greyed fields, badges, import/export | PENDING |
+| CC_PROMPT_v2.27.4.md  | v2.27.4  | Frontend: RotationTestModal — per-connection test, role-gated override, audit logged | PENDING |
+| CC_PROMPT_v2.27.5.md  | v2.27.5  | Frontend: Discovered view — nav item, harvest table, test-with-profile, one-click link | PENDING |
+| CC_PROMPT_v2.27.6.md  | v2.27.6  | Settings: discovery scope CIDR list + rotation concurrency settings | PENDING |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 
 ---
@@ -142,6 +152,74 @@ Increases max_tokens from 300 to 600 in /api/agent/ask. Rewrites /api/agent/ask/
 to be platform-aware: accepts platform + entity_id query params, returns suggestions per
 platform (proxmox/docker/kafka/unifi/truenas/pbs/fortigate) and per status.
 
+**v2.26.9** — DB foundations for credential profiles overhaul.
+Adds seq_id BIGSERIAL + discoverable to credential_profiles (migration-safe ALTER + fresh DDL). Seeds
+sec_id=0 dummy profile '__no_credential__' on init. Adds username_cache TEXT to connections table.
+New api/db/audit_log.py: connection_audit_log table + write_audit_event() + list_audit_events().
+Updates list_profiles() to return seq_id, has_private_key, has_passphrase, has_password, discoverable,
+linked_connections_count. Adds get_profile_safe(), get_profile_by_seq_id().
+
+**v2.26.10** — Backend credential profiles API overhaul.
+Full rewrite of api/routers/credential_profiles.py: adds GET /{id}/safe, POST /{id}/test-rotation
+(tests new credentials without saving), POST /{id}/confirm-rotation (saves + audit log), GET /{id}/audit.
+Renames auth types ssh_key→ssh, api_key→api; adds windows, token_pair, basic. Removes shared_credentials
+fallback from resolve_credentials_for_connection(). update_profile() replaces credentials entirely on
+rotation (no merge) + accepts discoverable param. create_profile() accepts discoverable.
+
+**v2.27.0** — Connections API + Windows platform.
+list_connections() returns credential_state per connection (source, profile_name, profile_seq_id,
+username, has_private_key, has_passphrase, has_password). New GET /api/connections/export (CSV, no
+secrets, profile by seq_id). New POST /api/connections/import (CSV, matches profile by seq_id, creates
+connections with profile_not_found flag if seq_id missing, all input sanitised). Windows platform entry
+added to PLATFORM_AUTH in OptionsModal.jsx (username/password/winrm_auth_method/account_type/use_ssl).
+New api/collectors/windows.py stub collector registered in manager.
+
+**v2.27.1** — Discovery harvest backend.
+New api/routers/discovery.py: POST /harvest (Proxmox VMs + UniFi clients + Swarm nodes, passive only,
+cross-referenced vs existing connections, stored in status_snapshots component=discovery_harvest).
+GET /devices (last harvest, unlinked_only filter). POST /test (test IP with profile, auth-type-aware).
+POST /link (create connection from discovered device). All IP/CIDR validated with ipaddress module —
+no raw user strings in SQL. Discovery scopes applied from settings key discoveryScopes.
+
+**v2.27.2** — Frontend: Credential Profiles tab overhaul.
+ProfileForm rewritten: all auth types (ssh, windows, api, token_pair, basic) with appropriate fields.
+SSH: private_key + passphrase + password + username; passphrase security hint. Windows: username format
+detector, winrm_auth_method, account_type with lockout warning for domain/service. API: api_key +
+header_name + prefix. Token pair: token_id + secret. discoverable toggle in form. Profiles section
+replaces collapsible accordion with always-visible prominent block: seq_id badge, linked_connections_count,
+has_private_key/has_passphrase indicators, delete warning if linked.
+
+**v2.27.3** — Frontend: Connections form overhaul + import/export.
+Profile picker added for SSH-capable platforms (vm_host, windows, fortiswitch, cisco, juniper, aruba).
+When profile active: credential fields show "from profile" in cyan/greyed; username override allowed
+with amber warning; private key field disabled (no override). Badge per connection list item:
+⊕ CRED PROFILE, ⚠ INLINE CREDS, ⚠ PROFILE MISSING. Import CSV button (file picker, base64 encoded,
+result display). Export CSV button (downloads file). vm_host fields reordered: SSH User → Private Key →
+Passphrase → Password. shared_credentials removed from advancedConfigFields.
+
+**v2.27.4** — Frontend: RotationTestModal component.
+New gui/src/components/RotationTestModal.jsx: triggered when saving profile credential changes.
+Calls POST /api/credential-profiles/{id}/test-rotation, shows animated per-connection results.
+All pass → auto-confirms save. Failures → shows list + Save anyway button (sith_lord: one-click;
+imperial_officer: requires override_reason textarea; stormtrooper: not available). Override logged
+via POST /confirm-rotation. Connected to ProfileForm onSave in ConnectionsTab via rotationModal state.
+OptionsModal gets userRole prop, passed down to ConnectionsTab and RotationTestModal.
+
+**v2.27.5** — Frontend: Discovered view.
+Adds 'Discovered' nav item under MONITOR in Sidebar.jsx. New gui/src/components/DiscoveredView.jsx:
+harvest button + manual IP entry (add/remove list). Table: source badge (PROXMOX/UNIFI/SWARM/MANUAL),
+host, platform_guess, linked indicator. Per-row: profile dropdown (discoverable profiles only) + Test
+button → inline result. Create connection button appears on successful test → pre-filled modal (label,
+platform, role). Filter by source + linked/unlinked. App.jsx routes 'Discovered' to DiscoveredView.
+
+**v2.27.6** — Settings: discovery scope + rotation concurrency.
+New DiscoveryScopeList component: CIDR/subnet list with add/remove, client-side validation accepting
+both CIDR (192.168.0.0/24) and subnet mask notation (192.168.0.0 255.255.255.0), injection-safe.
+Added to InfrastructureTab as Discovery section with discoveryEnabled toggle + discoveryScopes list.
+Added to GeneralTab as Rotation Test section: rotationTestMode select, rotationTestDelayMs,
+rotationWindowsDelayMs, rotationMaxParallel inputs with AD lockout warning. Six new settings keys
+seeded with defaults in api/routers/settings.py.
+
 **v2.26.6** — Entity detail performance.
 Adds GET /api/entities/find/{entity_id:path} endpoint. Loads only the relevant collector's
 snapshot (1 DB query, prefix-mapped). 30s in-memory cache. Falls back to full scan for
@@ -172,6 +250,17 @@ api/routers/vm_exec_allowlist.py          — REST API for allowlist management 
 mcp_server/tools/vm.py                    — _validate_command DB-backed + 3 new tools (v2.23.3)
 gui/src/components/OptionsModal.jsx       — Allowlist tab (v2.23.3)
 api/routers/settings.py                   — agentHostIp setting key (v2.22.6)
+api/collectors/docker_agent01.py          — started_at + restart_count in card + metadata (v2.26.8)
+api/db/credential_profiles.py             — seq_id, discoverable, get_profile_safe, get_profile_by_seq_id (v2.26.9)
+api/db/audit_log.py                       — connection_audit_log table + write/list events (v2.26.9)
+api/connections.py                        — username_cache column + credential_state in list (v2.26.9, v2.27.0)
+api/routers/credential_profiles.py        — rotation test/confirm, safe fields, audit (v2.26.10)
+api/routers/connections.py                — CSV export/import endpoints (v2.27.0)
+api/collectors/windows.py                 — Windows/WinRM stub collector (v2.27.0)
+api/routers/discovery.py                  — harvest, devices, test, link endpoints (v2.27.1)
+gui/src/components/RotationTestModal.jsx  — rotation test modal with role-gated override (v2.27.4)
+gui/src/components/DiscoveredView.jsx     — discovered devices view (v2.27.5)
+gui/src/components/Sidebar.jsx            — Discovered nav item under MONITOR (v2.27.5)
 api/collectors/docker_agent01.py          — entity_id + to_entities() per container (v2.26.0)
 api/collectors/swarm.py                   — entity_id + to_entities() per service (v2.26.0)
 api/collectors/external_services.py      — entity_id on all probe returns (v2.26.0)
