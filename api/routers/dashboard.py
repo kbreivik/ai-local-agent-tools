@@ -15,6 +15,7 @@ import threading
 import time as _time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from api.auth import get_current_user
@@ -601,11 +602,13 @@ async def stream_container_logs(
     container_id: str,
     tail: int = 200,
     token: str = "",
+    request: Request = None,
 ):
-    """Stream container stdout/stderr as SSE. Auth via ?token= (EventSource can't send headers)."""
+    """Stream container stdout/stderr as SSE. Auth via cookie (preferred) or ?token= fallback."""
     from api.auth import decode_token
+    _token = token or (request.cookies.get("hp1_auth") if request else "")
     try:
-        decode_token(token)
+        decode_token(_token)
     except HTTPException:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
@@ -866,15 +869,17 @@ async def _unified_log_generator(tail: int):
 async def stream_all_logs(
     tail: int = 200,
     token: str = "",
+    request: Request = None,
 ):
     """Stream all local Docker containers + Elasticsearch as a unified SSE JSON feed.
 
-    Auth via ?token= (EventSource cannot send custom headers).
+    Auth via cookie (preferred) or ?token= fallback.
     Each event: data: {"ts","source","container","level","msg"}
     """
     from api.auth import decode_token
+    _token = token or (request.cookies.get("hp1_auth") if request else "")
     try:
-        decode_token(token)
+        decode_token(_token)
     except HTTPException:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
@@ -1932,16 +1937,18 @@ async def stream_vm_logs(
     host_id: str,
     service: str = "",
     token: str = "",
+    request: Request = None,
 ):
     """Stream journalctl from a VM host via SSH as SSE.
 
     service: optional systemd service name to filter (must be in _VM_ALLOWED_SERVICES).
-    Auth via ?token= (EventSource cannot send custom headers).
+    Auth via cookie (preferred) or ?token= fallback.
     Each event: data: {"ts","source","container","level","msg"}
     """
     from api.auth import decode_token
+    _token = token or (request.cookies.get("hp1_auth") if request else "")
     try:
-        decode_token(token)
+        decode_token(_token)
     except HTTPException:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 

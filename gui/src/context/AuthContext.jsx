@@ -1,24 +1,21 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
-const TOKEN_KEY = 'hp1_auth_token'
-const USER_KEY  = 'hp1_auth_user'
+const USER_KEY = 'hp1_auth_user'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [token, setToken]   = useState(() => localStorage.getItem(TOKEN_KEY) || null)
-  const [user,  setUser]    = useState(() => localStorage.getItem(USER_KEY)  || null)
+  // Token lives in memory only — never localStorage (XSS risk)
+  const [token, setToken] = useState(null)
+  const [user,  setUser]  = useState(() => localStorage.getItem(USER_KEY) || null)
   const [loading, setLoading] = useState(true)
 
-  // Validate token on mount
+  // Validate session on mount via httpOnly cookie
   useEffect(() => {
-    if (!token) { setLoading(false); return }
-    fetch(`${API_BASE}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
       .then(r => {
-        if (!r.ok) throw new Error('Token invalid')
+        if (!r.ok) throw new Error('not authed')
         return r.json()
       })
       .then(data => {
@@ -27,18 +24,17 @@ export function AuthProvider({ children }) {
         setLoading(false)
       })
       .catch(() => {
-        // Token expired or invalid — clear
-        localStorage.removeItem(TOKEN_KEY)
         localStorage.removeItem(USER_KEY)
         setToken(null)
         setUser(null)
         setLoading(false)
       })
-  }, []) // run once on mount
+  }, [])
 
   const login = useCallback(async (username, password) => {
     const r = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     })
@@ -47,22 +43,26 @@ export function AuthProvider({ children }) {
       throw new Error(err.detail || 'Login failed')
     }
     const data = await r.json()
-    localStorage.setItem(TOKEN_KEY, data.access_token)
-    localStorage.setItem(USER_KEY, data.username)
+    // Store token in memory for same-session SSE fallback; never in localStorage
     setToken(data.access_token)
     setUser(data.username)
+    localStorage.setItem(USER_KEY, data.username)
     return data
   }, [])
 
-  const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY)
+  const logout = useCallback(async () => {
+    // Clear the httpOnly cookie server-side
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {})
     localStorage.removeItem(USER_KEY)
     setToken(null)
     setUser(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ token, user, loading, login, logout, isAuthed: !!token }}>
+    <AuthContext.Provider value={{ token, user, loading, login, logout, isAuthed: !!user }}>
       {children}
     </AuthContext.Provider>
   )

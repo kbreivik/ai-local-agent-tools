@@ -5,12 +5,15 @@ const BASE = import.meta.env.VITE_API_BASE ?? ''  // empty = use Vite proxy
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
 export function getAuthToken() {
-  return localStorage.getItem('hp1_auth_token') || ''
+  // Token no longer stored in localStorage — auth via httpOnly cookie.
+  // Kept for API script callers that still pass Bearer headers explicitly.
+  return ''
 }
 
 export function authHeaders() {
-  const token = getAuthToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  // Same-origin requests carry the httpOnly cookie automatically.
+  // External API scripts should pass Authorization: Bearer <token> explicitly.
+  return {}
 }
 
 // ── REST ─────────────────────────────────────────────────────────────────────
@@ -441,9 +444,8 @@ export function createOutputStream(onMessage, onOpen, onClose) {
 // ── Container log stream (SSE) ────────────────────────────────────────────────
 
 export function createLogStream(containerId, tail = 200, onLine, onError) {
-  const token = getAuthToken()
-  const url = `${BASE}/api/dashboard/containers/${encodeURIComponent(containerId)}/logs/stream?tail=${tail}&token=${encodeURIComponent(token)}`
-  const es = new EventSource(url)
+  const url = `${BASE}/api/dashboard/containers/${encodeURIComponent(containerId)}/logs/stream?tail=${tail}`
+  const es = new EventSource(url, { withCredentials: true })
   es.onmessage = (e) => onLine(e.data)
   es.onerror = onError || (() => es.close())
   return es
@@ -452,9 +454,8 @@ export function createLogStream(containerId, tail = 200, onLine, onError) {
 // ── Unified log stream (SSE) ──────────────────────────────────────────────────
 
 export function createUnifiedLogStream(tail = 200, onEvent, onError) {
-  const token = getAuthToken()
-  const url = `${BASE}/api/dashboard/logs/stream?tail=${tail}&token=${encodeURIComponent(token)}`
-  const es = new EventSource(url)
+  const url = `${BASE}/api/dashboard/logs/stream?tail=${tail}`
+  const es = new EventSource(url, { withCredentials: true })
   es.onmessage = (e) => {
     try { onEvent(JSON.parse(e.data)) } catch { /* skip malformed */ }
   }

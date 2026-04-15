@@ -1,0 +1,356 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.30.0.md (v2.30.0)
+Theme: fix(proxmox): multi-connection support in Proxmox action paths
+
+Prompt content:
+
+# CC PROMPT — v2.30.0 — fix(proxmox): multi-connection support in Proxmox action paths
+
+## What this does
+Two files. `_do_proxmox_action()` in `api/routers/dashboard.py` currently calls
+`get_connection_for_platform("proxmox")` — always the first connection — when executing
+VM start/stop/reboot actions from the dashboard. In a multi-cluster setup this silently
+uses the wrong Proxmox host. Fix: load the `proxmox_vms` snapshot, find which cluster's
+VM list contains the target `node`, and use that cluster's `connection_id` to look up the
+correct connection. Fall back to first connection if the node isn't found in the snapshot.
+
+`proxmox_vm_power()` in `mcp_server/tools/vm.py` has the same issue. Fix: iterate all
+Proxmox connections via `get_all_connections_for_platform("proxmox")`, try each one until
+the VM matching `vm_label` is found.
+Version bump: v2.29.5 → v2.30.0
+
+---
+
+## Change 1 — api/routers/dashboard.py — `_do_proxmox_action`
+
+Replace the existing `_do_proxmox_action` function with the version below. The logic
+change is in the credential resolution block — everything else (action execution, error
+handling) stays identical.
+
+```python
+def _do_proxmox_action(pve_type: str, node: str, vmid: int, action: str) -> dict:
+    """Execute a Proxmox VM/LXC action (start/stop/reboot/shutdown) via proxmoxer.
+
+    pve_type: 'qemu' for VMs, 'lxc' for containers.
+    Reads Proxmox credentials from the connections DB — matches the cluster that owns
+    the target node. Falls back to first proxmox connection or env vars if needed.
+    """
+    try:
+        from proxmoxer import ProxmoxAPI
+        from api.connections import get_connection, get_all_connections_for_platform
+    except ImportError as e:
+        return {"ok": False, "error": f"proxmoxer not available: {e}"}
+
+    # Resolve credentials — find the connection whose cluster contains the target node.
+    conn = None
+    try:
+        all_conns = get_all_connections_for_platform("proxmox")
+        if len(all_conns) == 1:
+            conn = all_conns[0]
+        elif len(all_conns) > 1:
+            # Use the proxmox_vms snapshot to match node → connection_id
+            try:
+                import asyncio as _asyncio
+                import json as _json
+                from api.db.base import get_sync_engine
+                from sqlalchemy import text as _text
+                with get_sync_engine().connect() as _sc:
+                    row = _sc.execute(
+                        _text("SELECT state FROM status_snapshots WHERE component = 'proxmox_vms' ORDER BY timestamp DESC LIMIT 1")
+                    ).fetchone()
+                if row:
+                    state = row[0]
+                    if isinstance(state, str):
+                        state = _json.loads(state)
+                    for cluster in state.get("clusters", []):
+                        all_vms = cluster.get("vms", []) + cluster.get("lxc", [])
+                        if any(v.get("node_api") == node or v.get("node") == node for v in all_vms):
+                            cid = cluster.get("connection_id")
+                            if cid:
+                                conn = get_connection(str(cid))
+                            break
+            except Exception as _e:
+                log.debug("_do_proxmox_action: snapshot node-match failed: %s", _e)
+            # Fall back to first connection if snapshot match failed
+            if not conn:
+                conn = all_conns[0]
+    except Exception:
+        pass
+
+    if conn:
+        creds = conn.get("credentials", {}) or {}
+        host = conn.get("host", "")
+        port = conn.get("port") or 8006
+        pve_user = creds.get("user", "")
+        token_name = creds.get("token_name", "")
+        token_secret = creds.get("secret", "")
+    else:
+        host = os.environ.get("PROXMOX_HOST", "")
+        port = int(os.environ.get("PROXMOX_PORT", "8006"))
+        pve_user = os.environ.get("PROXMOX_USER", "")
+        token_id_raw = os.environ.get("PROXMOX_TOKEN_ID", "")
+        if "!" in token_id_raw:
+            pve_user, token_name = token_id_raw.split("!", 1)
+        else:
+            token_name = token_id_raw
+        token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
+
+    if not host:
+        return {"ok": False, "error": "No Proxmox host configured. Add a proxmox connection in Settings → Connections."}
+
+    try:
+        prox = ProxmoxAPI(
+            host, port=port,
+            user=pve_user, token_name=token_name, token_value=token_secret,
+            verify_ssl=False, timeout=10,
+        )
+        endpoint = getattr(prox.nodes(node), pve_type)(vmid).status
+        if action == "start":
+            task = endpoint.start.post()
+        elif action == "stop":
+            task = endpoint.stop.post()
+        elif action == "reboot":
+            task = endpoint.reboot.post()
+        elif action == "shutdown":
+            task = endpoint.shutdown.post()
+        else:
+            return {"ok": False, "error": f"Unknown action: {action!r}"}
+
+        log.info("Proxmox %s: %s %s/%s vmid=%d task=%s", action, node, pve_type, action, vmid, task)
+        return {"ok": True, "task_id": str(task), "node": node, "vmid": vmid, "action": action}
+    except Exception as e:
+        log.error("_do_proxmox_action failed: %s", e)
+        return {"ok": False, "error": str(e)}
+```
+
+---
+
+## Change 2 — mcp_server/tools/vm.py — `proxmox_vm_power`
+
+Replace the credential resolution block inside `proxmox_vm_power` — specifically the
+section from the `try:` that imports `get_connection_for_platform` through the `if not conn:`
+guard. Replace with `get_all_connections_for_platform` and iterate connections until the
+VM is found.
+
+Find this exact block:
+
+```python
+    try:
+        from api.connections import get_connection_for_platform
+        from proxmoxer import ProxmoxAPI
+
+        conn = get_connection_for_platform("proxmox")
+        if not conn:
+            return {"status": "error",
+                    "message": "No Proxmox connection configured.",
+                    "data": None, "timestamp": _ts()}
+
+        creds = conn.get("credentials", {})
+        pve = ProxmoxAPI(
+            conn["host"],
+            port=conn.get("port", 8006),
+            user=creds.get("user"),
+            token_name=creds.get("token_name"),
+            token_value=creds.get("secret"),
+            verify_ssl=False,
+        )
+
+        # Find VM across all nodes by name
+        found = None
+        for node_info in pve.nodes.get():
+            node = node_info["node"]
+            for vm in pve.nodes(node).qemu.get():
+                name = vm.get("name", "")
+                if (vm_label.lower() in name.lower() or
+                        name.lower() in vm_label.lower()):
+                    found = {"node": node, "vmid": vm["vmid"], "name": name,
+                             "status": vm.get("status")}
+                    break
+            if found:
+                break
+```
+
+Replace with:
+
+```python
+    try:
+        from api.connections import get_all_connections_for_platform
+        from proxmoxer import ProxmoxAPI
+
+        all_conns = get_all_connections_for_platform("proxmox")
+        if not all_conns:
+            return {"status": "error",
+                    "message": "No Proxmox connection configured.",
+                    "data": None, "timestamp": _ts()}
+
+        # Search all Proxmox connections until VM is found
+        found = None
+        conn = None
+        for candidate in all_conns:
+            creds = candidate.get("credentials", {})
+            try:
+                pve = ProxmoxAPI(
+                    candidate["host"],
+                    port=candidate.get("port", 8006),
+                    user=creds.get("user"),
+                    token_name=creds.get("token_name"),
+                    token_value=creds.get("secret"),
+                    verify_ssl=False,
+                )
+                for node_info in pve.nodes.get():
+                    node = node_info["node"]
+                    for vm in pve.nodes(node).qemu.get():
+                        name = vm.get("name", "")
+                        if (vm_label.lower() in name.lower() or
+                                name.lower() in vm_label.lower()):
+                            found = {"node": node, "vmid": vm["vmid"], "name": name,
+                                     "status": vm.get("status")}
+                            conn = candidate
+                            break
+                    if found:
+                        break
+            except Exception:
+                continue
+            if found:
+                break
+```
+
+Also update the `ProxmoxAPI` call that follows the search block — it currently references
+`conn["host"]` etc. which still works since `conn` is now set to the matching candidate.
+No change needed there.
+
+---
+
+## Version bump
+Update `VERSION` in `api/constants.py`: `v2.29.5` → `v2.30.0`
+
+## Commit
+```
+git add -A
+git commit -m "fix(proxmox): v2.30.0 multi-connection support in Proxmox action paths"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 21:45:03
+========================================================================
+PROMPT COMPLETE: v2.30.0
+[STATUS] 1m51s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m52s
+========================================================================
