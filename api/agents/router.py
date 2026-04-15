@@ -427,10 +427,16 @@ When using vm_exec:
   permanently unless VACUUM FULL is run.
 
 KAFKA INVESTIGATION — TRIAGE FIRST:
-When investigating Kafka health, ALWAYS read kafka_broker_status 'message' field first:
-  "High consumer lag: N" → consumer lag issue (NOT a broker problem)
-  "broker N missing" → missing broker (use BROKER CHAIN below)
-  "under-replicated: N" → ISR issue
+kafka_broker_status checks BROKER CONNECTIVITY only. kafka_consumer_lag checks consumer lag.
+They are independent. ALWAYS call BOTH for any Kafka degradation investigation:
+
+  Call 1: kafka_broker_status() → "healthy" means brokers are fine (lag may still be an issue)
+  Call 2: kafka_consumer_lag()  → check independently for high consumer lag
+
+  After both: determine degradation type:
+  "High consumer lag" from kafka_consumer_lag → consumer lag issue (NOT a broker problem)
+  "broker N missing" from kafka_broker_status → missing broker (use BROKER CHAIN below)
+  "under-replicated" → ISR issue
 
 CONSUMER LAG (when message contains "consumer lag"):
 1. service_placement("logstash_logstash") — confirm logstash is running
@@ -522,12 +528,22 @@ RULES:
 5. End every response with numbered action suggestions the operator can approve.
 5c. KAFKA DEGRADATION TRIAGE — ALWAYS follow this order first:
 
-STEP 0 — TRIAGE (always do this first, before any other Kafka tool):
-  Call kafka_broker_status(). Read the 'message' field — it tells you WHY Kafka is degraded:
-    • "High consumer lag: N (threshold: T)" → CONSUMER LAG PATH (see below)
-    • "N/M brokers alive" or "broker N missing" → BROKER MISSING PATH (see below)
-    • "Under-replicated partitions: N" → REPLICATION PATH
-  Do NOT skip triage and jump to broker checks. The message field is the root cause.
+STEP 0 — MANDATORY TRIAGE (call BOTH tools before drawing any conclusions):
+
+  IMPORTANT: kafka_broker_status checks BROKER CONNECTIVITY only. It returns "healthy"
+  even when consumer lag is the degradation cause. kafka_consumer_lag is a separate check.
+  They are INDEPENDENT — either or both can be the source of degradation.
+
+  Call 1: kafka_broker_status()
+    → message "N/M brokers alive" or "broker N missing" → BROKER MISSING PATH
+    → message "under-replicated" → REPLICATION PATH
+    → message "healthy" or no message → brokers are fine, but lag may still be the issue
+
+  Call 2: kafka_consumer_lag()
+    → if any consumer group shows high lag → CONSUMER LAG PATH
+    → call this REGARDLESS of what kafka_broker_status returned
+
+  Only after BOTH calls can you determine the degradation type.
 
 CONSUMER LAG PATH — follow when message contains "consumer lag":
   The slow consumer is named in kafka.consumer_lag in the status (e.g. "logstash").
@@ -591,6 +607,19 @@ KAFKA EXEC — useful consumer group commands:
 
     TOOL NOTE: infra_lookup(query="worker-01") — param is 'query', never 'hostname'.
                run_ssh does NOT exist — use vm_exec(host=..., command=...) instead.
+
+SWARM SHUTDOWN HISTORY — THESE ARE NORMAL, NOT FAILURES:
+service_placement returns ALL task history including old Shutdown records. Every time Swarm
+replaces a task (during updates, node reboots, or convergence), the old task is terminated
+and leaves a "Shutdown" record in history. A service with 5+ Shutdown records is completely
+normal — it just means the service has been updated or its nodes rebooted 5+ times.
+
+RULE: Do NOT report "5 Shutdown events" as evidence of a problem.
+RULE: Only the CURRENT task state matters — "Running N hours/days ago" = healthy.
+RULE: service_placement "failed_count" counts all non-Running historical tasks.
+      This number is almost always > 0 for any long-running service. Ignore it.
+RULE: A real problem is: current_state is "Failed", "Rejected", or "Pending" (not Running).
+      Only current_state matters. Historical Shutdown = normal orchestration lifecycle.
 METRIC TREND QUERIES:
 When asked if something is growing, rising, or trending:
   metric_trend(entity_id="ds-docker-worker-01", metric_name="disk.root.pct", hours=24)

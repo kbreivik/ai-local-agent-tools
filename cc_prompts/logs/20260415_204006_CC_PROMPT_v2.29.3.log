@@ -1,0 +1,368 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.29.3.md (v2.29.3)
+Theme: fix(ui): Proxmox sort dropdown z-index, card alignment, expanded task templates
+
+Prompt content:
+
+# CC PROMPT — v2.29.3 — fix(ui): Proxmox sort dropdown z-index + card alignment + task templates
+
+## What this does
+Three UI fixes in ServiceCards.jsx and TaskTemplates.jsx:
+
+1. **Sort dropdown hidden behind cards** — `Section` filterBar wrapper has `overflow: 'hidden'`
+   which clips the absolutely-positioned sort dropdown. Fix: `overflow: 'visible'` + increase
+   dropdown z-index to 200.
+
+2. **ProxmoxCardCollapsed type/status centering** — type badge (LXC/VM) and status are
+   left-aligned in a row with no centering. Fix: center the row and add a small gap.
+
+3. **Task templates expansion** — add UniFi, PBS, TrueNAS, FortiGate groups; improve existing
+   Kafka template wording.
+Version bump: 2.29.2 → 2.29.3
+
+---
+
+## Change 1 — gui/src/components/ServiceCards.jsx: fix sort dropdown overflow + z-index
+
+### 1a — Remove overflow: hidden from filterBar wrapper in Section
+
+FIND (exact):
+```jsx
+          <div style={{ flex: 1, overflow: 'hidden', padding: '6px 10px' }}>{filterBar}</div>
+```
+
+REPLACE WITH:
+```jsx
+          <div style={{ flex: 1, overflow: 'visible', padding: '6px 10px', position: 'relative' }}>{filterBar}</div>
+```
+
+### 1b — Increase sort dropdown z-index from z-10 to z-[200] in ProxmoxFilterBar
+
+FIND (exact):
+```jsx
+              <div className="absolute top-full right-0 mt-0.5 z-10 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]">
+```
+
+REPLACE WITH:
+```jsx
+              <div className="absolute top-full right-0 mt-0.5 bg-[#0a0a15] border border-[#2a2440] rounded-md p-1 min-w-[80px]" style={{ zIndex: 200 }}>
+```
+
+### 1c — Add position relative to sort button container in ProxmoxFilterBar
+
+FIND (exact):
+```jsx
+          <div className="relative flex items-center gap-0.5">
+```
+
+REPLACE WITH:
+```jsx
+          <div className="relative flex items-center gap-0.5" style={{ zIndex: 100 }}>
+```
+
+---
+
+## Change 2 — gui/src/components/ServiceCards.jsx: center ProxmoxCardCollapsed content
+
+FIND (exact):
+```jsx
+function ProxmoxCardCollapsed({ vm }) {
+  const typeBadge = vm.type === 'lxc'
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030] mr-1">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040] mr-1">VM</span>
+  return (
+    <>
+      <div className="text-[10px] text-[#383850] mb-1">{vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM</div>
+      <div className="flex items-center">
+        {vm.problem
+          ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
+          : <>{typeBadge}<span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span></>}
+        {vm.maintenance && (
+          <span style={{
+            fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            borderRadius: 2, letterSpacing: 0.5, marginLeft: 4,
+          }}>MAINT</span>
+        )}
+      </div>
+    </>
+  )
+}
+```
+
+REPLACE WITH:
+```jsx
+function ProxmoxCardCollapsed({ vm }) {
+  const typeBadge = vm.type === 'lxc'
+    ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030]">LXC</span>
+    : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040]">VM</span>
+  return (
+    <div style={{ marginTop: 3 }}>
+      <div style={{
+        textAlign: 'center', fontSize: 10,
+        color: 'var(--text-3)', marginBottom: 4,
+        fontFamily: 'var(--font-mono)',
+      }}>
+        {vm.vcpus} vCPU · {vm.maxmem_gb} GB RAM
+      </div>
+      <div className="flex items-center justify-center gap-1.5">
+        {vm.problem
+          ? <div className="text-[10px] px-1.5 py-px rounded inline-flex items-center gap-1 bg-amber-950/40 text-amber-400 border border-amber-900/30">⚠ {vm.problem}</div>
+          : <>
+              {typeBadge}
+              <span className="text-[9px] px-1.5 py-px rounded bg-[#0d1a2a] text-blue-400 border border-[#1a2a3a]">● {vm.status}</span>
+            </>}
+        {vm.maintenance && (
+          <span style={{
+            fontSize: 7, fontFamily: 'var(--font-mono)', padding: '1px 4px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            borderRadius: 2, letterSpacing: 0.5,
+          }}>MAINT</span>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Change 3 — gui/src/components/TaskTemplates.jsx: expand templates
+
+Replace the entire `TEMPLATES` constant with an expanded version covering all services:
+
+FIND (exact — start of TEMPLATES):
+```jsx
+const TEMPLATES = [
+  {
+    group: 'KAFKA',
+```
+
+REPLACE the entire TEMPLATES array (from `const TEMPLATES = [` to the closing `]`) with:
+
+```jsx
+const TEMPLATES = [
+  {
+    group: 'KAFKA',
+    color: 'var(--accent)',
+    items: [
+      {
+        label: 'Why is Kafka degraded?',
+        task: 'Kafka_cluster is showing DEGRADED status. Check BOTH kafka_broker_status AND kafka_consumer_lag. Determine whether the cause is: (a) high consumer lag from logstash, (b) a missing broker, or (c) under-replicated partitions. Give me the root cause and specific fix steps.',
+      },
+      { label: 'Consumer lag check', task: 'Check Kafka consumer lag: call kafka_consumer_lag and report which consumer groups are behind, by how much, and whether the lag is growing or shrinking. Check if logstash is running and healthy.' },
+      { label: 'Kafka broker status', task: 'Check Kafka broker status — how many brokers are online, which partitions are under-replicated, report ISR status for topic hp1-logs.' },
+      { label: 'Kafka topic health', task: 'Check Kafka topic health for all topics: partition count, replication factor, ISR status. Flag any under-replicated partitions.' },
+      { label: 'Recover kafka_broker-3', task: 'Recover kafka_broker-3: check swarm node status, reboot worker-03 via Proxmox if it is Down, then verify broker rejoins the cluster.' },
+      { label: 'Kafka → Elastic pipeline', task: 'Check the full Kafka to Elasticsearch log pipeline: broker health, consumer lag, logstash service status and logs, and whether hp1-logs messages are being indexed in Elasticsearch.' },
+    ],
+  },
+  {
+    group: 'SWARM',
+    color: 'var(--cyan)',
+    items: [
+      { label: 'Swarm node status', task: 'Check Docker Swarm node status — list all nodes, show which are Down or Drain, report any services with failed tasks.' },
+      { label: 'Service health overview', task: 'List all Swarm services, show replicas running vs desired, flag any that are not converged. Show placement for any failing services.' },
+      { label: 'Force-update logstash', task: 'Force-update the logstash_logstash Swarm service to recover from any stale network or scheduling issues.' },
+      { label: 'Force-update kafka_broker-3', task: 'Force-update the kafka_broker-3 Swarm service to clear any network or scheduling issues on worker-03.' },
+      { label: 'Swarm cluster health', task: 'Give me a full Swarm cluster health report: nodes, managers, workers, services, tasks. Flag anything not in desired state.' },
+    ],
+  },
+  {
+    group: 'INFRASTRUCTURE',
+    color: 'var(--green)',
+    items: [
+      { label: 'Disk usage — all hosts', task: 'Check disk usage on all registered VM hosts. Flag any filesystem above 80% used. Show top directories consuming space on any full disks.' },
+      { label: 'Memory and load — all hosts', task: 'Check memory usage and load average on all registered VM hosts. Flag any hosts with free memory below 500MB or load above 4.' },
+      { label: 'Prune Docker images', task: 'Prune unused Docker images on all VM hosts. Show before/after disk reclaimed.' },
+      { label: 'Journalctl vacuum', task: 'Check journal disk usage on all VM hosts and vacuum journals older than 7 days if they exceed 500MB.' },
+      { label: 'VM host overview', task: 'Give me a health summary of all registered VM hosts: disk, memory, load, uptime. Flag anything that needs attention.' },
+    ],
+  },
+  {
+    group: 'ELASTIC',
+    color: 'var(--amber)',
+    items: [
+      { label: 'Elasticsearch health', task: 'Check Elasticsearch cluster health — nodes, shards, indices. Report any red or yellow indices and unassigned shards.' },
+      { label: 'Recent error logs', task: 'Search Elasticsearch for error-level log entries in the last 1 hour across all services. Summarise the top 5 error patterns with counts.' },
+      { label: 'Logstash → ES errors', task: 'Check if Logstash is successfully writing to Elasticsearch. Look for bulk request errors, connection failures, or 429 responses in logstash logs and ES error logs.' },
+      { label: 'Index stats', task: 'Show Elasticsearch index stats: document counts, index sizes, shard health. Flag any indices with high error rates or unusually low doc counts.' },
+    ],
+  },
+  {
+    group: 'PROXMOX',
+    color: '#a855f7',
+    items: [
+      { label: 'VM health overview', task: 'List all Proxmox VMs and LXC containers, show running vs stopped, CPU and memory usage. Flag any that are stopped unexpectedly or consuming excessive resources.' },
+      { label: 'Reboot worker-03', task: 'Reboot the worker-03 VM via Proxmox to recover the downed Swarm worker node. Verify it comes back online and the kafka_broker-3 service reschedules.' },
+      { label: 'VM resource usage', task: 'Check CPU, memory, and disk usage for all Proxmox VMs. Identify any VMs running above 80% resource utilization.' },
+      { label: 'LXC container status', task: 'List all LXC containers in Proxmox, show their status, resource allocation, and uptime. Flag any that are stopped or have problems.' },
+    ],
+  },
+  {
+    group: 'NETWORK',
+    color: '#22d3ee',
+    items: [
+      { label: 'UniFi device status', task: 'Check UniFi network device status — list all APs and switches, show which are connected vs disconnected, report client counts and any devices with issues.' },
+      { label: 'FortiGate interface status', task: 'Check FortiGate interface status — list all interfaces, show which are up/down, report any errors or unusual traffic on key interfaces.' },
+      { label: 'Network connectivity check', task: 'Check overall network health: FortiGate interface status, UniFi device connectivity, and whether all registered services are reachable.' },
+      { label: 'UniFi client count', task: 'How many wireless clients are currently connected to UniFi? Break down by AP if possible. Flag any APs that are offline.' },
+    ],
+  },
+  {
+    group: 'STORAGE',
+    color: '#818cf8',
+    items: [
+      { label: 'PBS datastore health', task: 'Check Proxmox Backup Server datastore health — used space, available space, GC status, recent backup task success rate. Flag any datastores above 85% full.' },
+      { label: 'TrueNAS pool status', task: 'Check TrueNAS pool status — health, used/free space, SMART status, any scrub errors. Flag any pools with degraded vdevs or high usage.' },
+      { label: 'Backup status check', task: 'Check recent backup job status across PBS. How many backups completed successfully in the last 24 hours? Any failures or warnings?' },
+      { label: 'Storage capacity overview', task: 'Give me a storage capacity overview: PBS datastore usage, TrueNAS pool usage, and Docker volume usage on all VM hosts. Flag anything above 80%.' },
+    ],
+  },
+  {
+    group: 'SECURITY',
+    color: 'var(--red)',
+    items: [
+      { label: 'SSH access audit', task: 'Check which VM hosts have verified SSH access via credential profiles. List any hosts that have not been successfully reached in the last 7 days.' },
+      { label: 'Recent auth failures', task: 'Search Elasticsearch for authentication failure log entries in the last 24 hours. Summarise by host and source IP.' },
+      { label: 'Firewall interface check', task: 'Check FortiGate for any interface errors, high error rates, or unusual traffic patterns in the last hour. Report any interfaces with more than 100 errors.' },
+    ],
+  },
+]
+```
+
+---
+
+## Version bump
+Update VERSION: 2.29.2 → 2.29.3
+
+## Commit
+```bash
+git add -A
+git commit -m "fix(ui): v2.29.3 Proxmox sort dropdown z-index, card alignment, expanded task templates"
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-15 20:40:06
+========================================================================
+PROMPT COMPLETE: v2.29.3
+[STATUS] 2m20s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m21s
+========================================================================
