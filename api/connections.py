@@ -192,20 +192,63 @@ def list_connections(platform: str = "") -> list[dict]:
         except Exception:
             return []
 
-    # Mask credentials in list view
+    # Derive credential_state per connection (non-secret) + mask raw credentials
     for r in rows:
-        r["credentials"] = "***" if r.get("credentials") else ""
+        raw_enc = r.get("credentials", "")
+        r["credentials"] = "***" if raw_enc else ""
         if r.get("last_seen"):
-            try:
-                r["last_seen"] = r["last_seen"].isoformat()
-            except AttributeError:
-                pass  # already a string (SQLite)
+            try: r["last_seen"] = r["last_seen"].isoformat()
+            except AttributeError: pass
         if r.get("created_at"):
-            try:
-                r["created_at"] = r["created_at"].isoformat()
-            except AttributeError:
-                pass
+            try: r["created_at"] = r["created_at"].isoformat()
+            except AttributeError: pass
         r["id"] = str(r["id"])
+
+        # Derive credential_state from config + username_cache
+        cfg = r.get("config") or {}
+        if isinstance(cfg, str):
+            try: cfg = json.loads(cfg)
+            except Exception: cfg = {}
+        profile_id = cfg.get("credential_profile_id")
+        cred_state: dict = {"source": "none", "username": r.get("username_cache", "")}
+
+        if profile_id:
+            # Profile-linked: fetch safe fields
+            try:
+                from api.db.credential_profiles import get_profile_safe
+                ps = get_profile_safe(str(profile_id))
+                if ps:
+                    cred_state = {
+                        "source":          "profile",
+                        "profile_id":      str(profile_id),
+                        "profile_name":    ps.get("name", ""),
+                        "profile_seq_id":  ps.get("seq_id"),
+                        "username":        ps.get("username", "") or r.get("username_cache", ""),
+                        "has_private_key": ps.get("has_private_key", False),
+                        "has_passphrase":  ps.get("has_passphrase", False),
+                        "has_password":    ps.get("has_password", False),
+                    }
+                else:
+                    cred_state = {
+                        "source":       "profile_not_found",
+                        "profile_id":   str(profile_id),
+                        "profile_name": "",
+                        "username":     r.get("username_cache", ""),
+                    }
+            except Exception:
+                cred_state = {"source": "profile_error", "username": r.get("username_cache", "")}
+        elif raw_enc:
+            # Inline credentials stored
+            cred_state = {
+                "source":          "inline",
+                "username":        r.get("username_cache", ""),
+                # We can't know has_private_key/has_password without decrypting in list view.
+                # Frontend shows inline-creds warning badge regardless.
+                "has_private_key": False,
+                "has_password":    bool(raw_enc),
+            }
+        r["credential_state"] = cred_state
+
     return rows
 
 

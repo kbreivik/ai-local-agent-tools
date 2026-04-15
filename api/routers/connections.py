@@ -60,6 +60,50 @@ def list_all(platform: str = "", _: str = Depends(get_current_user)):
     return {"status": "ok", "data": list_connections(platform)}
 
 
+@router.get("/export")
+def export_connections(_: str = Depends(get_current_user)):
+    """Export all connections as CSV. No secrets included.
+    Profile referenced by seq_id (human-readable stable ID).
+
+    Columns: seq_id, platform, label, host, port, role, os_type, jump_via_label
+    """
+    import csv, io
+    from api.connections import list_connections
+
+    all_conns = list_connections()
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=[
+        "profile_seq_id", "platform", "label", "host", "port",
+        "role", "os_type", "jump_via_label",
+    ], extrasaction="ignore")
+    writer.writeheader()
+    for c in all_conns:
+        cfg = c.get("config") or {}
+        if isinstance(cfg, str):
+            import json
+            try: cfg = json.loads(cfg)
+            except Exception: cfg = {}
+        cred_state = c.get("credential_state") or {}
+        row = {
+            "profile_seq_id":  cred_state.get("profile_seq_id", ""),
+            "platform":        c.get("platform", ""),
+            "label":           c.get("label", ""),
+            "host":            c.get("host", ""),
+            "port":            c.get("port", ""),
+            "role":            cfg.get("role", ""),
+            "os_type":         cfg.get("os_type", ""),
+            "jump_via_label":  cfg.get("jump_via_label", ""),
+        }
+        writer.writerow(row)
+
+    from fastapi.responses import Response
+    return Response(
+        content=out.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=connections_export.csv"},
+    )
+
+
 @router.get("/{connection_id}")
 def get_one(connection_id: str, _: str = Depends(get_current_user)):
     """Get connection detail (credentials masked in response)."""
@@ -153,3 +197,140 @@ def resume(connection_id: str, user_role: tuple = Depends(get_current_user_and_r
     conn = get_connection(connection_id)
     _trigger_collector_repoll(conn.get("platform", "") if conn else "")
     return result
+
+
+@router.post("/import")
+def import_connections(req: dict, user_role: tuple = Depends(get_current_user_and_role)):
+    """Import connections from CSV data (base64-encoded or raw string).
+
+    Body: { csv_data: "<base64 or raw CSV string>" }
+
+    Profile matched by profile_seq_id column. If seq_id not found:
+      - Creates connection with config.profile_not_found = true
+      - Reports as warning in results
+
+    Security: all values are validated; no SQL injection possible (parameterised queries).
+    Existing connections (same platform+label) are skipped with a 'exists' result.
+    """
+    import csv, io, base64, re, json
+    from api.connections import create_connection
+    from api.db.credential_profiles import get_profile_by_seq_id
+
+    username, role = user_role
+    if not role_meets(role, "imperial_officer"):
+        raise HTTPException(403, "imperial_officer or above required")
+
+    raw = req.get("csv_data", "")
+    if not raw:
+        raise HTTPException(400, "csv_data required")
+
+    # Attempt base64 decode; fall back to raw string
+    try:
+        csv_text = base64.b64decode(raw).decode("utf-8")
+    except Exception:
+        csv_text = raw
+
+    # Validate input length
+    if len(csv_text) > 500_000:
+        raise HTTPException(400, "CSV too large (max 500KB)")
+
+    reader = csv.DictReader(io.StringIO(csv_text))
+    required_cols = {"platform", "label", "host"}
+    if not reader.fieldnames or not required_cols.issubset(set(reader.fieldnames)):
+        raise HTTPException(400, f"CSV must contain columns: {required_cols}")
+
+    # Value sanitisation helper — strips control chars, limits length
+    _SAFE = re.compile(r'[\x00-\x1f\x7f]')
+    def _clean(v: str, max_len: int = 255) -> str:
+        return _SAFE.sub("", str(v or ""))[:max_len]
+
+    # Valid platforms (whitelist)
+    VALID_PLATFORMS = {
+        "proxmox","fortigate","fortiswitch","truenas","pbs","unifi",
+        "wazuh","grafana","portainer","kibana","netbox","synology",
+        "security_onion","syncthing","caddy","traefik","opnsense",
+        "adguard","bookstack","trilium","nginx","pihole","technitium",
+        "cisco","juniper","aruba","docker_host","vm_host","elasticsearch",
+        "logstash","windows",
+    }
+
+    results = []
+    for row in reader:
+        platform = _clean(row.get("platform", ""))
+        label    = _clean(row.get("label", ""))
+        host     = _clean(row.get("host", ""))
+
+        if not platform or not label or not host:
+            results.append({"label": label or "?", "status": "skip", "reason": "missing required fields"})
+            continue
+        if platform not in VALID_PLATFORMS:
+            results.append({"label": label, "status": "skip", "reason": f"unknown platform: {platform}"})
+            continue
+
+        # Parse port safely
+        try:
+            port = int(_clean(row.get("port", "443"))) if row.get("port") else 443
+            if port < 1 or port > 65535:
+                port = 443
+        except ValueError:
+            port = 443
+
+        # Resolve profile by seq_id
+        profile_not_found = False
+        profile_id = None
+        seq_id_raw = _clean(row.get("profile_seq_id", ""))
+        if seq_id_raw and seq_id_raw != "0" and seq_id_raw != "":
+            try:
+                seq_id = int(seq_id_raw)
+                if seq_id > 0:
+                    prof = get_profile_by_seq_id(seq_id)
+                    if prof:
+                        profile_id = str(prof["id"])
+                    else:
+                        profile_not_found = True
+            except ValueError:
+                profile_not_found = True
+
+        config = {
+            "role":    _clean(row.get("role", ""), 50),
+            "os_type": _clean(row.get("os_type", ""), 50),
+        }
+        if profile_id:
+            config["credential_profile_id"] = profile_id
+        if profile_not_found:
+            config["profile_not_found"] = True
+        jump_label = _clean(row.get("jump_via_label", ""), 100)
+        if jump_label:
+            config["_import_jump_label"] = jump_label  # resolved post-import
+
+        result = create_connection(
+            platform=platform, label=label, host=host, port=port,
+            auth_type="ssh" if platform in ("vm_host", "windows") else "api",
+            credentials={}, config=config,
+        )
+        if result.get("status") == "ok":
+            status = "created"
+            if profile_not_found:
+                status = "created_no_profile"
+        elif "UNIQUE constraint" in str(result.get("message", "")) or \
+             "duplicate key" in str(result.get("message", "")):
+            status = "exists"
+        else:
+            status = "error"
+
+        results.append({
+            "label":             label,
+            "status":            status,
+            "profile_not_found": profile_not_found,
+            "message":           result.get("message", ""),
+        })
+
+    ok = sum(1 for r in results if r["status"] in ("created", "created_no_profile"))
+    skipped = sum(1 for r in results if r["status"] in ("exists", "skip"))
+    errors = sum(1 for r in results if r["status"] == "error")
+
+    return {
+        "status": "ok",
+        "summary": {"created": ok, "skipped": skipped, "errors": errors},
+        "results": results,
+    }

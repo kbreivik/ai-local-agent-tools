@@ -544,7 +544,7 @@ const PLATFORMS = [
   'security_onion', 'syncthing', 'caddy', 'traefik', 'opnsense',
   'adguard', 'bookstack', 'trilium', 'nginx', 'pihole', 'technitium',
   'cisco', 'juniper', 'aruba',
-  'docker_host', 'vm_host', 'elasticsearch', 'logstash',
+  'docker_host', 'vm_host', 'windows', 'elasticsearch', 'logstash',
 ]
 
 const PLATFORM_AUTH = {
@@ -575,6 +575,45 @@ const PLATFORM_AUTH = {
   juniper:         { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'juniper_junos' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'Junos REST API key (optional — future use)' }] },
   aruba:           { auth_type: 'ssh', defaultPort: 22, fields: [{ key: 'username', label: 'Username', placeholder: 'admin' }, { key: 'password', label: 'Password', type: 'password' }, { key: 'device_type', label: 'Device Type', placeholder: 'aruba_os' }, { key: 'api_key', label: 'API Key', type: 'password', placeholder: 'AOS-CX API key (optional — future use)' }] },
   docker_host:     { auth_type: 'tcp', defaultPort: 2375, fields: [], _dockerHost: true },
+  windows:         {
+    auth_type: 'windows', defaultPort: 5985,
+    fields: [
+      {
+        key: 'username', label: 'Username',
+        placeholder: 'Administrator or DOMAIN\\user or user@domain.com',
+        hint: 'Accepts local\\user, DOMAIN\\user, or user@domain.com — stored as-is, format detected automatically',
+      },
+      { key: 'password', label: 'Password', type: 'password' },
+    ],
+    configFields: [
+      {
+        key: 'winrm_auth_method', label: 'WinRM Auth Method', type: 'select',
+        options: [
+          { value: 'ntlm',        label: 'NTLM (recommended)' },
+          { value: 'kerberos',    label: 'Kerberos (domain)' },
+          { value: 'basic',       label: 'Basic (plaintext — HTTPS only)' },
+          { value: 'certificate', label: 'Certificate' },
+        ],
+      },
+      {
+        key: 'account_type', label: 'Account Type', type: 'select',
+        hint: 'Informational — affects lockout risk display and agent behaviour',
+        options: [
+          { value: 'local',           label: 'Local account' },
+          { value: 'domain',          label: 'Domain account' },
+          { value: 'service',         label: 'Service account' },
+          { value: 'managed_service', label: 'Managed service account (gMSA)' },
+        ],
+      },
+      {
+        key: 'use_ssl', label: 'Use SSL (port 5986)', type: 'toggle',
+        hint: 'Switches to HTTPS WinRM — strongly recommended for production',
+      },
+    ],
+    advancedConfigFields: [
+      { key: 'is_jump_host', label: 'This is a jump host / bastion', type: 'toggle', hint: 'Not polled as a compute node.' },
+    ],
+  },
   vm_host:         {
     auth_type: 'ssh', defaultPort: 22,
     fields: [
