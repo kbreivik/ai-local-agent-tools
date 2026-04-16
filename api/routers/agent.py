@@ -736,6 +736,38 @@ async def _run_single_agent_step(
 
                 try:
                     if fn_name == "plan_action":
+                        # v2.31.10 blackout gate
+                        try:
+                            from api.db.agent_blackouts import check_active_blackout
+                            # Inspect the plan's proposed tool calls — we don't
+                            # know them yet here (plan_action is the gate ITSELF),
+                            # so check against any destructive action.
+                            active_bo = check_active_blackout(tool_name="")
+                        except Exception:
+                            active_bo = None
+                        if active_bo:
+                            plan_action_called = True  # prevent re-trigger loop
+                            result = {
+                                "status":   "blocked",
+                                "approved": False,
+                                "message":  (f"Blocked by active blackout: "
+                                             f"{active_bo.get('label','')} — "
+                                             f"{active_bo.get('reason','')}"),
+                                "data":     {"approved": False, "blackout": active_bo},
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            await manager.send_line(
+                                "step",
+                                f"[blackout] Plan blocked — {active_bo.get('label','')}",
+                                status="warning", session_id=session_id,
+                            )
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": json.dumps(result),
+                            })
+                            continue  # skip the real plan_action handling below
+
                         plan_action_called = True
                         # Try to acquire the global destructive lock
                         lock_ok = await plan_lock.acquire(session_id, owner_user)
