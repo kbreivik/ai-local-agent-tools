@@ -43,10 +43,14 @@ jobs:
           echo "version_tag=${{ env.IMAGE_NAME }}:${VERSION}" >> $GITHUB_OUTPUT
           echo "latest_tag=${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
 
-      - name: Sync package.json version
+      - name: Sync package.json + lockfile version
+        working-directory: gui
         run: |
-          jq --arg v "$(cat VERSION)" '.version = $v' gui/package.json > /tmp/pkg.json
-          mv /tmp/pkg.json gui/package.json
+          VER="$(cat ../VERSION)"
+          # npm version updates BOTH package.json and package-lock.json atomically.
+          # --no-git-tag-version prevents it from making a commit/tag.
+          # --allow-same-version lets it succeed if already at target (idempotent).
+          npm version --no-git-tag-version --allow-same-version "$VER"
 
       - name: Generate build_info.json
         run: python scripts/gen_build_info.py

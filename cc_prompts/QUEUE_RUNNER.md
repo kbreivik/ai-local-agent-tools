@@ -55,48 +55,6 @@ Verify push succeeded:
 git log --oneline -1
 ```
 
-### Step 5.5 — Build and push Docker image
-
-After the git push succeeds, build and push the container image. Tag with
-both `:latest` and the version string from the VERSION file, so every
-release is addressable by tag going forward.
-
-```bash
-cd D:\claude_code\ai-local-agent-tools
-VER=$(cat VERSION | tr -d '[:space:]')
-SHORT=$(git rev-parse --short HEAD)
-
-# Build (single-arch, linux/amd64 — matches agent-01). Adjust if needed.
-docker build \
-  --build-arg BUILD_COMMIT=$(git rev-parse HEAD) \
-  --build-arg BUILD_BRANCH=$(git branch --show-current) \
-  --build-arg BUILD_NUMBER=local \
-  -t ghcr.io/kbreivik/hp1-ai-agent:latest \
-  -t ghcr.io/kbreivik/hp1-ai-agent:${VER} \
-  -t ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT} \
-  .
-
-docker push ghcr.io/kbreivik/hp1-ai-agent:latest
-docker push ghcr.io/kbreivik/hp1-ai-agent:${VER}
-docker push ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT}
-```
-
-Requirements (verify before build):
-- Docker Desktop must be running on the dev machine
-- `docker login ghcr.io` must have been performed once with a PAT that has
-  `write:packages` scope — the login persists across invocations
-
-If the build fails:
-- Do NOT mark the prompt DONE
-- Output: `PROMPT FAILED: <version> — docker build: <first error line>`
-- Stop immediately. The operator will inspect and either fix the Dockerfile
-  or the credentials, then retry.
-
-If the push fails but the build succeeded:
-- Do NOT mark the prompt DONE
-- Output: `PROMPT FAILED: <version> — docker push: <error>`
-- Common causes: expired PAT, network, GHCR rate limit. Operator fixes and retries.
-
 ### Step 6 — Mark DONE in INDEX.md
 
 Update cc_prompts/INDEX.md: change the status column for this prompt

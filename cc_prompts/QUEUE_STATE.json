@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T13:51:18",
+  "updated_at": "2026-04-16T14:13:18",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1349,10 +1349,26 @@
       "filename": "CC_PROMPT_v2.31.12.md",
       "version": "v2.31.12",
       "theme": "feat(ci): Dockerfile at repo root + queue runner builds and pushes image",
+      "runner_status": "DONE",
+      "commit_sha": "9c56b54",
+      "error": "",
+      "started_at": "2026-04-16T13:51:18",
+      "finished_at": "2026-04-16T13:53:19",
+      "duration_s": 120.81559249999918,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_135118_CC_PROMPT_v2.31.12.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.13.md",
+      "version": "v2.31.13",
+      "theme": "fix(ci): unbreak CI — lockfile sync + workflow version step + undo v2.31.12 duplicates",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T13:51:18",
+      "started_at": "2026-04-16T14:13:18",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
