@@ -149,7 +149,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.32.2.md  | v2.32.2  | feat(agents): post-action verify step | DONE (c580c48) |
 | CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | DONE (4a71334) |
 | CC_PROMPT_v2.32.4.md  | v2.32.4  | fix(agents): final_answer truncation at 300 chars | DONE (306044f) |
-| CC_PROMPT_v2.32.5.md  | v2.32.5  | feat(agents): enforced tool call budgets per agent type | RUNNING |
+| CC_PROMPT_v2.32.5.md  | v2.32.5  | feat(agents): enforced tool call budgets per agent type | DONE (e3ce56c) |
+| CC_PROMPT_v2.32.6.md  | v2.32.6  | feat(infra): version-check refresh button + configurable timers | PENDING |
 
 ---
 
@@ -193,6 +194,13 @@ Adds _MAX_TOOL_CALLS_BY_TYPE: observe=8, investigate=16, execute=14, build=12.
 Checked at start of each LLM step — when exhausted, harness forces a summary with
 no further tool calls. Previously only max_steps (LLM rounds) was enforced but one
 step can fire multiple tool calls.
+
+**v2.32.6** — feat(infra): version-check refresh button + configurable timers.
+Fixes stale-cache issue where a new image push could take up to 10 min to appear
+in the expanded ghcr container card. Adds `?force=1` on `/containers/{id}/tags`
+to bypass `_GHCR_TAG_CACHE`, a "↻ Refresh versions" button in the expanded card,
+and two new DB-backed Settings → Infrastructure knobs: `ghcrTagCacheTTL` (default
+600s) and `autoUpdateInterval` (default 300s).
 
 ---
 

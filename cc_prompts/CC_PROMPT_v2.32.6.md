@@ -1,0 +1,389 @@
+# CC PROMPT — v2.32.6 — Version-check refresh button + configurable timers
+
+## What this does
+Fixes the stale-GHCR-tag-cache issue discovered in v2.32.5 (new images can take up
+to 10 minutes to appear in the expanded container card after a push). Three changes:
+
+1. **Force-refresh** — adds a `?force=1` query param to `/containers/{id}/tags` that
+   bypasses the in-memory cache, and wires a "↻ Refresh versions" button into the
+   expanded ghcr.io container card.
+2. **Configurable cache TTL** — the 600s `_GHCR_TAG_TTL` becomes a DB-backed setting
+   `ghcrTagCacheTTL` (default 600s). The Infrastructure tab exposes it.
+3. **Configurable auto-update interval** — `_AUTO_UPDATE_INTERVAL` becomes a
+   DB-backed setting `autoUpdateInterval` (default 300s). The Infrastructure tab
+   exposes it.
+
+Version bump: 2.32.5 → 2.32.6
+
+## Change 1 — api/routers/settings.py — Register new timer settings
+
+In `SETTINGS_KEYS`, find the existing auto-update line:
+
+```python
+    # Auto-update
+    "autoUpdate":               {"env": None,                   "sens": False, "default": False},
+```
+
+Replace that one line with three lines:
+
+```python
+    # Auto-update
+    "autoUpdate":               {"env": None,                   "sens": False, "default": False},
+    "autoUpdateInterval":       {"env": None,                   "sens": False, "default": 300},
+    "ghcrTagCacheTTL":          {"env": None,                   "sens": False, "default": 600},
+```
+
+## Change 2 — api/routers/dashboard.py — Read GHCR cache TTL from settings
+
+Find the constant at the top of the file:
+
+```python
+_GHCR_TAG_TTL = 600          # 10 minutes
+```
+
+Replace with a helper and keep the constant as the fallback:
+
+```python
+_GHCR_TAG_TTL_DEFAULT = 600  # 10 minutes (fallback when setting missing / invalid)
+
+
+def _get_ghcr_tag_ttl() -> int:
+    """Read GHCR tag cache TTL from settings DB, fall back to default."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        raw = get_backend().get_setting("ghcrTagCacheTTL")
+        if raw is None or raw == "":
+            return _GHCR_TAG_TTL_DEFAULT
+        ttl = int(raw)
+        return ttl if ttl > 0 else _GHCR_TAG_TTL_DEFAULT
+    except Exception:
+        return _GHCR_TAG_TTL_DEFAULT
+```
+
+Then in `_fetch_ghcr_tags`, find the cached check:
+
+```python
+    cached = _GHCR_TAG_CACHE.get(image_bare)
+    if cached and (_time.monotonic() - cached[1]) < _GHCR_TAG_TTL:
+        return cached[0]
+```
+
+Replace with:
+
+```python
+    cached = _GHCR_TAG_CACHE.get(image_bare)
+    if cached and (_time.monotonic() - cached[1]) < _get_ghcr_tag_ttl():
+        return cached[0]
+```
+
+## Change 3 — api/routers/dashboard.py — force param on tags endpoint
+
+Find the tags endpoint signature:
+
+```python
+@router.get("/containers/{container_id}/tags")
+async def get_container_tags(container_id: str, user: str = Depends(get_current_user)):
+```
+
+Replace with:
+
+```python
+@router.get("/containers/{container_id}/tags")
+async def get_container_tags(container_id: str, force: bool = False, user: str = Depends(get_current_user)):
+```
+
+Then find the body where `bare` is computed just before the `try:`:
+
+```python
+    bare = image.split("@")[0].split(":")[0]   # ghcr.io/kbreivik/hp1-ai-agent
+
+    try:
+        tags = await asyncio.to_thread(_fetch_ghcr_tags, bare)
+```
+
+Replace with:
+
+```python
+    bare = image.split("@")[0].split(":")[0]   # ghcr.io/kbreivik/hp1-ai-agent
+
+    if force:
+        _GHCR_TAG_CACHE.pop(bare, None)
+
+    try:
+        tags = await asyncio.to_thread(_fetch_ghcr_tags, bare)
+```
+
+## Change 4 — api/routers/dashboard.py — Read auto-update interval from settings
+
+Find the constant:
+
+```python
+_AUTO_UPDATE_INTERVAL = 300   # 5 minutes
+```
+
+Replace with a default + helper:
+
+```python
+_AUTO_UPDATE_INTERVAL_DEFAULT = 300   # 5 minutes (fallback when setting missing / invalid)
+
+
+def _get_auto_update_interval() -> int:
+    """Read auto-update interval (seconds) from settings DB, fall back to default."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        raw = get_backend().get_setting("autoUpdateInterval")
+        if raw is None or raw == "":
+            return _AUTO_UPDATE_INTERVAL_DEFAULT
+        val = int(raw)
+        return val if val > 0 else _AUTO_UPDATE_INTERVAL_DEFAULT
+    except Exception:
+        return _AUTO_UPDATE_INTERVAL_DEFAULT
+```
+
+Then find the scheduler:
+
+```python
+def _schedule_next_check() -> None:
+    """Schedule the next auto-update check using threading.Timer."""
+    import threading
+    global _auto_update_timer
+    if _auto_update_timer is not None:
+        _auto_update_timer.cancel()
+    _auto_update_timer = threading.Timer(_AUTO_UPDATE_INTERVAL, _check_and_update)
+    _auto_update_timer.daemon = True
+    _auto_update_timer.start()
+```
+
+Replace the `threading.Timer(_AUTO_UPDATE_INTERVAL, _check_and_update)` line with:
+
+```python
+    _auto_update_timer = threading.Timer(_get_auto_update_interval(), _check_and_update)
+```
+
+## Change 5 — gui/src/api.js — Add force arg to fetchContainerTags
+
+Find:
+
+```js
+export async function fetchContainerTags(containerId) {
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags`, {
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) return { tags: [], error: `HTTP ${r.status}` }
+  return r.json()
+}
+```
+
+Replace with:
+
+```js
+export async function fetchContainerTags(containerId, { force = false } = {}) {
+  const qs = force ? '?force=1' : ''
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags${qs}`, {
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) return { tags: [], error: `HTTP ${r.status}` }
+  return r.json()
+}
+```
+
+## Change 6 — gui/src/components/ServiceCards.jsx — Refactor tag loader + refresh button
+
+In `ContainerCardExpanded`, find the useEffect that fetches tags:
+
+```js
+  useEffect(() => {
+    if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
+    setTagsLoading(true)
+    fetchContainerTags(c.id)
+      .then(data => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        if (data.error && !data.tags?.length) {
+          setTagsError(data.error)
+          return
+        }
+        // Filter out versions before 1.12.2 (broken self-update, no sidecar recreate)
+        const MIN_SAFE = [1, 12, 2]
+        const t = (data.tags || []).filter(v => {
+          const parts = v.split('.').map(Number)
+          for (let i = 0; i < 3; i++) {
+            if ((parts[i] || 0) < MIN_SAFE[i]) return false
+            if ((parts[i] || 0) > MIN_SAFE[i]) return true
+          }
+          return true  // equal is ok
+        })
+        setTags(t)
+        setTagsError(null)
+        if (t[0]) {
+          setSelectedTag(t[0])
+          onTagsLoaded?.(c.id, t[0])
+        }
+      })
+      .catch(err => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        setTagsError(err?.message || 'fetch failed')
+      })
+  // onTagsLoaded intentionally excluded — it's a stable useCallback from the parent;
+  // including it would cause re-fetching on every render without behavior change.
+  }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
+```
+
+Replace with:
+
+```js
+  const loadTags = useCallback((force = false) => {
+    if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
+    setTagsLoading(true)
+    fetchContainerTags(c.id, { force })
+      .then(data => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        if (data.error && !data.tags?.length) {
+          setTagsError(data.error)
+          return
+        }
+        // Filter out versions before 1.12.2 (broken self-update, no sidecar recreate)
+        const MIN_SAFE = [1, 12, 2]
+        const t = (data.tags || []).filter(v => {
+          const parts = v.split('.').map(Number)
+          for (let i = 0; i < 3; i++) {
+            if ((parts[i] || 0) < MIN_SAFE[i]) return false
+            if ((parts[i] || 0) > MIN_SAFE[i]) return true
+          }
+          return true
+        })
+        setTags(t)
+        setTagsError(null)
+        if (t[0]) {
+          setSelectedTag(t[0])
+          onTagsLoaded?.(c.id, t[0])
+        }
+      })
+      .catch(err => {
+        if (!mounted.current) return
+        setTagsLoading(false)
+        setTagsError(err?.message || 'fetch failed')
+      })
+  // onTagsLoaded intentionally excluded — stable useCallback from parent.
+  }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadTags(false) }, [loadTags])
+```
+
+Then add `useCallback` to the React imports at the top of the file. Find:
+
+```js
+import { useEffect, useRef, useState } from 'react'
+```
+
+(Or the existing React import that already has useState/useEffect/useRef — the exact
+set depends on prior edits.) Add `useCallback` to the named imports so it reads:
+
+```js
+import { useCallback, useEffect, useRef, useState } from 'react'
+```
+
+Next, add the refresh button in the expanded ghcr version block. Find the line
+inside the ghcr version block:
+
+```js
+            {c.running_version && (
+              <div className="flex justify-between text-[9px] mb-1.5">
+                <span className="text-gray-700">Status</span>
+```
+
+Immediately AFTER the matching `</div>` that closes the Status row (the `mb-1.5`
+div that ends just before `{c.name?.includes('hp1_agent') && <AutoUpdateToggle />}`),
+insert a refresh-button row. The target insertion point is the blank line between
+`)}` (the close of the `{c.running_version && (...)}` block) and
+`{c.name?.includes('hp1_agent') && <AutoUpdateToggle />}`.
+
+Insert this block there:
+
+```js
+            <div className="flex justify-end mb-1">
+              <button
+                onClick={() => loadTags(true)}
+                disabled={tagsLoading}
+                className="text-[9px] px-1.5 py-0.5 rounded border border-[#2a2a4a] text-gray-500 hover:text-gray-300 hover:border-[#3a3a5a] disabled:opacity-50"
+                title="Force re-check GHCR for new versions (bypass cache)"
+              >
+                {tagsLoading ? '⟳ …' : '↻ Refresh versions'}
+              </button>
+            </div>
+```
+
+## Change 7 — gui/src/components/OptionsModal.jsx — Timer inputs in Infrastructure tab
+
+In `InfrastructureTab`, find the Auto-Update field block:
+
+```js
+        <Field label="Auto-Update" hint="Check GHCR every 5 min and auto-pull + restart when a newer version is available">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.autoUpdate === true || draft.autoUpdate === 'true'}
+              onChange={e => update('autoUpdate', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Enable automatic updates</span>
+          </label>
+          <UpdateStatus />
+        </Field>
+```
+
+Replace with:
+
+```js
+        <Field label="Auto-Update" hint="Auto-pull + restart when a newer version is available">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.autoUpdate === true || draft.autoUpdate === 'true'}
+              onChange={e => update('autoUpdate', e.target.checked)}
+              className="accent-blue-500"
+            />
+            <span className="text-xs text-gray-300">Enable automatic updates</span>
+          </label>
+          <UpdateStatus />
+        </Field>
+        <Field label="Auto-Update Interval (s)" hint="How often the auto-update task checks GHCR. Default: 300 (5 min).">
+          <TextInput
+            type="number"
+            value={draft.autoUpdateInterval ?? 300}
+            onChange={v => update('autoUpdateInterval', v === '' ? '' : Number(v))}
+            placeholder="300"
+          />
+        </Field>
+        <Field label="Version-Check Cache TTL (s)" hint="How long GHCR tag results are cached in memory. Lower = faster pickup of new pushes, more API calls. Default: 600 (10 min).">
+          <TextInput
+            type="number"
+            value={draft.ghcrTagCacheTTL ?? 600}
+            onChange={v => update('ghcrTagCacheTTL', v === '' ? '' : Number(v))}
+            placeholder="600"
+          />
+        </Field>
+```
+
+## Version bump
+
+Update VERSION file: 2.32.5 → 2.32.6
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(infra): v2.32.6 version-check refresh button + configurable timers
+
+Fixes stale-cache issue where newly pushed images could take up to 10 min
+to appear in the expanded container card.
+
+- Adds ?force=1 on /containers/{id}/tags to bypass _GHCR_TAG_CACHE
+- Adds ↻ Refresh versions button in expanded ghcr container cards
+- ghcrTagCacheTTL (default 600s) now DB-configurable via Settings → Infrastructure
+- autoUpdateInterval (default 300s) now DB-configurable via Settings → Infrastructure
+- Expanded InfrastructureTab with two new numeric inputs"
+git push origin main
+```
