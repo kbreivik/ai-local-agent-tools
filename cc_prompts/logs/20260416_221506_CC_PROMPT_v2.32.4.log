@@ -1,0 +1,218 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.32.4.md (v2.32.4)
+Theme: fix(agents): final_answer truncation at 300 chars
+
+Prompt content:
+
+# CC PROMPT — v2.32.4 — Fix final_answer truncation at 300 chars
+
+## What this does
+Fixes a bug where `final_answer` stored in the operations table is always truncated
+to 300 characters. The cause: `verdict_from_text()` in `orchestrator.py` truncates
+the summary to `text[:300]`, and `_stream_agent()` in `agent.py` uses
+`prior_verdict["summary"]` as `last_reasoning` which becomes the `final_answer`.
+
+The fix: use `step_result["output"]` (the full model output) for `last_reasoning`
+instead of the truncated verdict summary. The verdict summary remains short for
+coordinator inter-step context injection (where it's truncated further to 200 chars),
+but the final answer gets the full text.
+
+Version bump: 2.32.3 → 2.32.4
+
+## Change 1 — api/routers/agent.py — Use full output for last_reasoning
+
+In the `_stream_agent` function, find the cleanup section after the step loop.
+There's a line that reads:
+
+```python
+        last_reasoning = prior_verdict["summary"] if prior_verdict else ""
+```
+
+Replace it with:
+
+```python
+        # Use the full step output for final_answer, not the 300-char verdict summary
+        last_reasoning = ""
+        if prior_verdict:
+            # Try to get the full output from the last step result first
+            last_reasoning = prior_verdict.get("full_output") or prior_verdict.get("summary", "")
+```
+
+## Change 2 — api/routers/agent.py — Preserve full output in verdict
+
+In the step loop in `_stream_agent`, find the line that extracts the verdict:
+
+```python
+        prior_verdict = extract_structured_verdict(step_result["output"], step_info)
+```
+
+Add one line right after it to preserve the full output:
+
+```python
+        prior_verdict = extract_structured_verdict(step_result["output"], step_info)
+        prior_verdict["full_output"] = step_result.get("output", "")  # preserve for final_answer
+```
+
+## Change 3 — api/agents/orchestrator.py — Increase verdict summary to 1500 chars
+
+The 300-char limit is also too aggressive for the verdict summary itself (coordinator
+context, step headers, etc.). Increase to 1500 chars which still fits in the coordinator
+prompt budget but preserves much more useful context.
+
+In `verdict_from_text()`, find all instances of `text[:300]` and replace with `text[:1500]`:
+
+```python
+# There are 4 occurrences:
+# Line: return {"verdict": "HALT", "summary": text[:300]}
+# Line: return {"verdict": "HALT", "summary": text[:300]}  (the error one)
+# Line: return {"verdict": "ASK", "summary": text[:300]}
+# Line: result = {"verdict": "GO", "summary": text[:300]}
+```
+
+Replace each `text[:300]` with `text[:1500]`.
+
+## Version bump
+
+Update VERSION file: 2.32.3 → 2.32.4
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agents): v2.32.4 final_answer truncation at 300 chars
+
+verdict_from_text() truncated summary to text[:300], and _stream_agent
+used prior_verdict['summary'] as last_reasoning → final_answer was
+always cut to 300 chars.
+
+Fix: preserve full step output in verdict dict, use it for final_answer.
+Also increase verdict summary from 300→1500 chars for better coordinator
+context while staying within prompt budget."
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 22:15:06
+========================================================================
+Pushed successfully as 306044f.
+[STATUS] 1m03s
+
+PROMPT COMPLETE: v2.32.4
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m03s
+========================================================================

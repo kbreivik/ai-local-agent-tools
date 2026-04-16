@@ -488,6 +488,15 @@ async def _run_single_agent_step(
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
     max_steps = _MAX_STEPS_BY_TYPE.get(agent_type, 20)
+    # ─── Tool call budgets per agent type (v2.32.5) ──────────────────────────────
+    # Unlike max_steps (LLM inference rounds), this counts actual tool invocations.
+    # When exhausted, the harness forces a summary — no more tool calls allowed.
+    _MAX_TOOL_CALLS_BY_TYPE = {
+        "status": 8, "observe": 8,
+        "research": 16, "investigate": 16,
+        "action": 14, "execute": 14,
+        "build": 12,
+    }
     final_status = "completed"
     last_reasoning = ""
 
@@ -546,6 +555,52 @@ async def _run_single_agent_step(
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
                 final_status = "capped"
+                break
+
+            # v2.32.5: Tool call budget enforcement
+            _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            if len(tools_used_names) >= _tool_budget:
+                await manager.send_line(
+                    "step",
+                    f"[budget] Tool call budget reached ({len(tools_used_names)}/{_tool_budget}) "
+                    f"— forcing summary",
+                    status="ok", session_id=session_id,
+                )
+                # Inject force-summary message and let the model produce final text
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"TOOL BUDGET REACHED ({len(tools_used_names)}/{_tool_budget}). "
+                        "You have used all available tool calls. "
+                        "Write your final summary NOW as plain text — no more tool calls allowed. "
+                        "Use the data you have already gathered."
+                    ),
+                })
+                try:
+                    force_response = client.chat.completions.create(
+                        model=_lm_model(),
+                        messages=messages,
+                        tools=None,
+                        tool_choice=None,
+                        temperature=0.3,
+                        max_tokens=800,
+                        extra_body={"min_p": 0.1},
+                    )
+                    forced_text = force_response.choices[0].message.content or ""
+                    if forced_text:
+                        last_reasoning = forced_text
+                        await manager.send_line("reasoning", forced_text, session_id=session_id)
+                except Exception as _fe:
+                    log.debug("Tool budget force summary failed: %s", _fe)
+
+                if is_final_step:
+                    choices = _extract_choices(last_reasoning) if last_reasoning else None
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": last_reasoning or f"Agent reached tool budget ({_tool_budget}).",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 break
 
             # Inject working memory into context for step > 1
