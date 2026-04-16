@@ -4,6 +4,17 @@ on:
   push:
     branches: [main, 'v2/**']
     tags: ['v*']
+    # Skip builds for commits that ONLY touch the prompt queue bookkeeping
+    # (DONE-mark chore commits from run_queue.sh). These commits contain the
+    # same source tree as the preceding code commit — rebuilding produces an
+    # identical image. Skipping avoids the cancel-in-progress churn.
+    #
+    # Note: paths-ignore ONLY skips if every changed path in the commit
+    # matches. Commits that touch cc_prompts/ AND anything else still run.
+    paths-ignore:
+      - 'cc_prompts/**'
+      - '*.md'
+      - 'docs/**'
 
 # Cancel in-progress builds on the same branch — only the latest commit's
 # build pushes :latest, preventing older commits from overwriting it.
