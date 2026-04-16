@@ -237,6 +237,7 @@ function DoneFooter({ steps, elapsed, sessionId, onFullLog }) {
           </>
         ) : null}
         <button
+          title="Open this session's Operations row"
           onClick={() => {
             if (sessionId) {
               window.dispatchEvent(new CustomEvent('open-session-output', { detail: { session_id: sessionId } }))

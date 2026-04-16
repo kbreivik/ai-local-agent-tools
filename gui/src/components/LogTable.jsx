@@ -422,12 +422,27 @@ function buildOpTree(ops) {
 
 // ── Operations view ───────────────────────────────────────────────────────────
 
-export function OpsView({ refreshTick }) {
+export function OpsView({ refreshTick, highlightSessionId = '' }) {
   const [ops, setOps]         = useState([])
   const [loading, setLoading] = useState(false)
   const [detail, setDetail]   = useState(null)  // {op, tool_calls}
   const [ratedOnly, setRatedOnly] = useState(false)
   const [treeMode, setTreeMode]   = useState(true)
+  const [flashSessionId, setFlashSessionId] = useState('')
+
+  // React to highlightSessionId prop changes
+  useEffect(() => {
+    if (!highlightSessionId) return
+    setFlashSessionId(highlightSessionId)
+    // Scroll the row into view once data loads
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-session-id="${highlightSessionId}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 150)
+    // Clear flash after 1.5s
+    const t2 = setTimeout(() => setFlashSessionId(''), 1500)
+    return () => { clearTimeout(t); clearTimeout(t2) }
+  }, [highlightSessionId])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -481,7 +496,8 @@ export function OpsView({ refreshTick }) {
             <tbody>
               {(treeMode ? buildOpTree(visible) : visible.map(op => ({ op, depth: 0 }))).map(({ op, depth }) => (
                 <>
-                  <tr key={op.id} className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer"
+                  <tr key={op.id} data-session-id={op.session_id}
+                      className={`border-b border-slate-800 hover:bg-slate-800 cursor-pointer${flashSessionId === op.session_id ? ' ds-flash-amber' : ''}`}
                       onClick={() => openDetail(op)}>
                     <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
                       {depth > 0 && (

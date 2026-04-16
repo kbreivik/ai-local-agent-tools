@@ -1,0 +1,399 @@
+# CC PROMPT — v2.31.14 — fix(ui): empty plan modal + Logs default tab + Full-log target
+
+## What this does
+Three user-reported bugs from v2.31.13 testing:
+
+1. **Empty plan modal** — the model can call `plan_action()` with missing or
+   empty `summary` and `steps`. The agent loop accepts this and broadcasts
+   `plan_pending` to the GUI with no content. The operator sees only risk
+   badges + Cancel/Confirm — unable to approve meaningfully. Fix: validate
+   args before broadcasting, reject with a clear error the model can act on,
+   loop back so the model retries with proper args.
+
+2. **"Full log →" button lands on Live Logs instead of the session's output** —
+   the button dispatches `open-session-output` then `navigate-to-logs`, but
+   `LogsPanel` hasn't mounted its event listener yet when the first event
+   fires. The `setTab('Session Output')` call is lost and the panel renders
+   its default tab. Fix: move the pending-session state into a module-level
+   holder that survives before the listener attaches, and re-target the
+   button to **Logs → Operations with the matching row auto-expanded**.
+
+3. **Sidebar "Logs" defaults to Live Logs** — most ops usage wants
+   Operations (historical runs). Live Logs is secondary. Fix: change the
+   default sub-tab to `Operations`.
+
+Four changes. All small.
+
+---
+
+## Change 1 — `api/routers/agent.py` — validate `plan_action` args
+
+Open `api/routers/agent.py`. Find the `elif fn_name == "plan_action":` branch
+inside `_run_single_agent_step`. It currently looks like:
+
+```python
+                    if fn_name == "plan_action":
+                        plan_action_called = True
+                        # Try to acquire the global destructive lock
+                        lock_ok = await plan_lock.acquire(session_id, owner_user)
+                        ...
+                        else:
+                            # Intercept: broadcast plan to GUI, suspend until approved/rejected
+                            plan = {
+                                "summary":    fn_args.get("summary", ""),
+                                "steps":      fn_args.get("steps") or [],
+                                "risk_level": fn_args.get("risk_level", "medium"),
+                                "reversible": fn_args.get("reversible", True),
+                            }
+                            await manager.broadcast({
+                                "type":       "plan_pending",
+                                "plan":       plan,
+                                ...
+                            })
+```
+
+Before the `await manager.broadcast({...plan_pending...})` line, insert a
+validation block. Find the `plan = {...}` dict construction and immediately
+after it, before the broadcast:
+
+```python
+                            plan = {
+                                "summary":    fn_args.get("summary", ""),
+                                "steps":      fn_args.get("steps") or [],
+                                "risk_level": fn_args.get("risk_level", "medium"),
+                                "reversible": fn_args.get("reversible", True),
+                            }
+
+                            # v2.31.14 — reject empty plans before showing modal
+                            _plan_summary = (plan["summary"] or "").strip()
+                            _plan_steps   = [s for s in plan["steps"] if s]
+                            if not _plan_summary or not _plan_steps:
+                                # Don't broadcast plan_pending with empty content.
+                                # Release the lock we just acquired, report error
+                                # back to the model, keep plan_action_called=False
+                                # so the safety gate will still trigger next time.
+                                await plan_lock.release(session_id)
+                                plan_action_called = False
+                                negative_signals += 1
+                                result = {
+                                    "status":   "error",
+                                    "approved": False,
+                                    "message": (
+                                        "plan_action() rejected: "
+                                        f"{'empty summary' if not _plan_summary else 'empty steps list'}. "
+                                        "Required: summary (non-empty prose describing the overall change) "
+                                        "AND steps (list of 2-6 concrete actions, each a short sentence). "
+                                        "Retry with BOTH fields populated. Example:\n"
+                                        "plan_action(\n"
+                                        "  summary=\"Prune unused Docker images on all Swarm nodes\",\n"
+                                        "  steps=[\"Get docker system df before state on each host\",\n"
+                                        "         \"Run docker image prune -a -f on each host\",\n"
+                                        "         \"Get docker system df after state on each host\",\n"
+                                        "         \"Report reclaimed bytes per host\"],\n"
+                                        "  risk_level=\"medium\",\n"
+                                        "  reversible=False,\n"
+                                        ")"
+                                    ),
+                                    "data": {"approved": False, "reason": "empty_plan"},
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                                await manager.send_line(
+                                    "step",
+                                    "[plan] Rejected — empty summary or steps; asking model to retry",
+                                    status="warning", session_id=session_id,
+                                )
+                                # Skip the broadcast + confirmation wait. The tool
+                                # result below ( `messages.append({role: tool, ...})`)
+                                # will carry this error back to the model, which
+                                # will re-plan on the next loop iteration.
+                            else:
+                                # Intercept: broadcast plan to GUI, suspend until approved/rejected
+                                await manager.broadcast({
+                                    "type":       "plan_pending",
+                                    "plan":       plan,
+                                    "session_id": session_id,
+                                    "timestamp":  datetime.now(timezone.utc).isoformat(),
+                                })
+                                # ... rest of the existing broadcast/approve/reject flow moves inside this else:
+```
+
+Then **indent the existing `await manager.broadcast({type: plan_pending...})`
+block and everything that follows it in the plan-approved path** (the
+`await manager.send_line("[plan] Waiting for user approval...")`, the
+`wait_for_confirmation`, the approved/rejected `result = {...}` assignments,
+and the final `await plan_lock.release(session_id)`) so they live inside
+the new `else:` clause. The shape:
+
+```python
+                        else:
+                            plan = {...}
+                            _plan_summary = ...
+                            _plan_steps = ...
+                            if not _plan_summary or not _plan_steps:
+                                # release lock, set error result, skip approval flow
+                                ...
+                            else:
+                                # broadcast plan_pending, await confirmation, release lock
+                                await manager.broadcast({...})
+                                await manager.send_line(...)
+                                from api.confirmation import wait_for_confirmation
+                                from api.memory.feedback import record_feedback_signal as _rfs
+                                approved = await wait_for_confirmation(session_id)
+                                if approved:
+                                    ...
+                                else:
+                                    ...
+                                await plan_lock.release(session_id)
+```
+
+**CRITICAL**: only the original broadcast + confirmation flow moves inside
+the new `else:` branch. The top-level `lock_ok = await plan_lock.acquire(...)`
+check and its `if not lock_ok:` branch stay as they are — they run *before*
+the new validation.
+
+Read the file carefully before editing and preserve the exact existing
+indentation of the outer branches.
+
+---
+
+## Change 2 — `gui/src/components/LogsPanel.jsx` — default tab = Operations + pending-session holder
+
+Open `gui/src/components/LogsPanel.jsx`. Find the root component:
+
+```jsx
+export default function LogsPanel() {
+  const [tab, setTab] = useState('Live Logs')
+  const [sessionOutputId, setSessionOutputId] = useState(null)
+
+  // Listen for open-session-output events from AgentFeed
+  useEffect(() => {
+    const handler = (e) => {
+      const sid = e.detail?.session_id
+      if (sid) {
+        setSessionOutputId(sid)
+        setTab('Session Output')
+      }
+    }
+    window.addEventListener('open-session-output', handler)
+    return () => window.removeEventListener('open-session-output', handler)
+  }, [])
+```
+
+Replace with:
+
+```jsx
+// Module-level holder so the pending session survives the race window between
+// the Commands-panel event dispatch and LogsPanel mounting its listener.
+// Cleared after consumption.
+let _pendingSessionOutputId = null
+let _pendingTabOverride     = null
+
+// Listen at module load so the event is captured even before LogsPanel mounts.
+if (typeof window !== 'undefined') {
+  window.addEventListener('open-session-output', (e) => {
+    const sid = e?.detail?.session_id
+    if (sid) {
+      _pendingSessionOutputId = sid
+      // Default behaviour: land on Operations with the session highlighted.
+      // The user-facing expectation is "raw log in Logs → Operations".
+      _pendingTabOverride = 'Operations'
+      // Mirror into window for the LogsPanel mount to read synchronously.
+      window.__ds_pendingSession = { sid, tab: 'Operations' }
+    }
+  })
+}
+
+export default function LogsPanel() {
+  // Read any pending session that arrived before mount, then clear it.
+  const initialSession = _pendingSessionOutputId || (typeof window !== 'undefined' && window.__ds_pendingSession?.sid) || null
+  const initialTab     = _pendingTabOverride     || (typeof window !== 'undefined' && window.__ds_pendingSession?.tab) || 'Operations'
+  const [tab, setTab] = useState(initialTab)
+  const [sessionOutputId, setSessionOutputId] = useState(initialSession)
+  const [highlightSessionId, setHighlightSessionId] = useState(initialSession)
+
+  // Clear module state once consumed
+  useEffect(() => {
+    _pendingSessionOutputId = null
+    _pendingTabOverride     = null
+    if (typeof window !== 'undefined') delete window.__ds_pendingSession
+  }, [])
+
+  // Listen for subsequent open-session-output events while mounted
+  useEffect(() => {
+    const handler = (e) => {
+      const sid = e.detail?.session_id
+      if (sid) {
+        setHighlightSessionId(sid)
+        setSessionOutputId(sid)
+        setTab('Operations')
+      }
+    }
+    window.addEventListener('open-session-output', handler)
+    return () => window.removeEventListener('open-session-output', handler)
+  }, [])
+```
+
+Then find the `OpsView` call site:
+
+```jsx
+        {tab === 'Operations'     && <OpsView refreshTick={0} />}
+```
+
+Replace with:
+
+```jsx
+        {tab === 'Operations'     && <OpsView refreshTick={0} highlightSessionId={highlightSessionId} />}
+```
+
+(The new prop is additive — OpsView will ignore it if it doesn't consume it
+yet. Change 3 below wires it up in OpsView itself.)
+
+---
+
+## Change 3 — `gui/src/components/LogTable.jsx` — OpsView accepts `highlightSessionId`
+
+Open `gui/src/components/LogTable.jsx`. Find the `OpsView` export. Add a
+`highlightSessionId` prop, and when it's present:
+
+- Auto-filter / auto-scroll to that session's row
+- Auto-expand that row to show details (same action as clicking it)
+- Apply a short-lived visual highlight (1.5s amber border pulse)
+
+Pattern (adapt to the existing structure — the file is long, read it first):
+
+```jsx
+export function OpsView({ refreshTick, highlightSessionId = '' }) {
+  // ... existing state ...
+  const [expandedRow, setExpandedRow] = useState(null)
+  const [flashSessionId, setFlashSessionId] = useState('')
+
+  // React to highlightSessionId prop changes
+  useEffect(() => {
+    if (!highlightSessionId) return
+    // Expand the matching row and flash it
+    setExpandedRow(highlightSessionId)
+    setFlashSessionId(highlightSessionId)
+    // Scroll the row into view once data loads
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-session-id="${highlightSessionId}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 150)
+    // Clear flash after 1.5s
+    const t2 = setTimeout(() => setFlashSessionId(''), 1500)
+    return () => { clearTimeout(t); clearTimeout(t2) }
+  }, [highlightSessionId])
+
+  // ... in the row rendering loop, add data-session-id and a flash class:
+  // <tr data-session-id={row.session_id}
+  //     className={flashSessionId === row.session_id ? 'ds-flash-amber' : ''}>
+```
+
+And add a minimal CSS rule for the flash. In `gui/src/index.css` (or
+wherever global styles live — check first), append:
+
+```css
+@keyframes ds-flash-amber {
+  0%   { background-color: transparent; }
+  20%  { background-color: rgba(204, 136, 0, 0.25); }
+  100% { background-color: transparent; }
+}
+.ds-flash-amber {
+  animation: ds-flash-amber 1.5s ease-out;
+}
+```
+
+If `OpsView` doesn't currently support per-row expansion (read the file
+first), the minimum viable version is: just scroll to the row and flash it.
+Expansion can be a follow-up.
+
+---
+
+## Change 4 — `gui/src/components/AgentFeed.jsx` — Full log button target
+
+Open `gui/src/components/AgentFeed.jsx`. Find the "Full log →" button inside
+`DoneFooter`:
+
+```jsx
+        <button
+          onClick={() => {
+            if (sessionId) {
+              window.dispatchEvent(new CustomEvent('open-session-output', { detail: { session_id: sessionId } }))
+              window.dispatchEvent(new CustomEvent('navigate-to-logs'))
+            } else {
+              onFullLog?.()
+            }
+          }}
+```
+
+No code change to the button — the fix is entirely in LogsPanel (Change 2).
+But **verify the dispatch order**: `open-session-output` must fire *before*
+`navigate-to-logs`. The module-level listener in Change 2 captures it
+regardless of timing, but ordering keeps the intended semantics clean.
+
+If the file has any `title={}` on this button, update it to reflect the new
+target:
+
+```jsx
+        <button
+          title="Open this session's Operations row"
+          onClick={() => {
+            ...
+          }}
+```
+
+---
+
+## Commit
+```
+git add -A
+git commit -m "fix(ui): v2.31.14 empty plan modal + Logs default tab + Full-log to Operations"
+git push origin main
+```
+
+---
+
+## How to test
+
+1. **Plan validation (Bug 1)** — run a destructive task that typically
+   triggers an empty plan modal:
+   ```
+   Prune unused Docker images on all VM hosts
+   ```
+   Expected:
+   - First `plan_action()` call may arrive empty — should NOT open the modal.
+   - Agent output shows `[plan] Rejected — empty summary or steps; asking model to retry`.
+   - Model retries `plan_action()` with proper summary + steps; the real
+     modal opens showing all four sections.
+   - Approve → agent proceeds.
+
+2. **Logs default tab (Bug 3)** — click `Logs` in the sidebar. Operations
+   tab should be active, not Live Logs. Click each sibling tab, then navigate
+   away and back — default returns to Operations.
+
+3. **Full log target (Bug 2)** — after any completed task, click "Full log →"
+   at the bottom of the Commands panel output. Expected:
+   - Immediate navigation to Logs → Operations tab (not Live Logs).
+   - The row for that session is scrolled into view.
+   - Brief amber flash on the row.
+   - Row is expanded (if OpsView supports expansion).
+
+4. **Regression check** — the existing `Session Output` sub-tab path should
+   still work if an external trigger dispatches with its own tab preference
+   later; for now, the single consumer of `open-session-output` is the
+   Full-log button, which goes to Operations.
+
+---
+
+## Notes
+
+- The LogsPanel fix uses a module-level listener that primes state before
+  mount. This is equivalent to how `AgentOutputContext` handles its own
+  WebSocket — both handle the "subscriber mounts after publisher fires"
+  case, which is endemic in React SPAs.
+- The plan validation returns `status: "error"` rather than `"blocked"` so
+  the model treats it as a recoverable mistake, not a policy wall. Blocked
+  would cause the model to escalate instead of retry.
+- The agent Observe/Execute classification of "prune" is a separate concern
+  (a prune task should classify as Execute). Not fixed in this prompt — the
+  current safety block via DESTRUCTIVE_TOOLS catches it regardless. Can be
+  addressed later in a classifier-tuning prompt.

@@ -789,47 +789,91 @@ async def _run_single_agent_step(
                                 "risk_level": fn_args.get("risk_level", "medium"),
                                 "reversible": fn_args.get("reversible", True),
                             }
-                            await manager.broadcast({
-                                "type":       "plan_pending",
-                                "plan":       plan,
-                                "session_id": session_id,
-                                "timestamp":  datetime.now(timezone.utc).isoformat(),
-                            })
-                            await manager.send_line(
-                                "step",
-                                f"[plan] Waiting for user approval: {plan['summary']}",
-                                status="ok", session_id=session_id,
-                            )
-                            from api.confirmation import wait_for_confirmation
-                            from api.memory.feedback import record_feedback_signal as _rfs
-                            approved = await wait_for_confirmation(session_id)
-                            if approved:
-                                positive_signals += 1
-                                asyncio.create_task(_rfs(
-                                    task, "plan_approved", plan["summary"][:120]
-                                ))
-                                result = {
-                                    "status":   "ok",
-                                    "approved": True,
-                                    "message":  "User confirmed. Proceed with plan.",
-                                    "data":     {"approved": True},
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                }
-                                await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
-                            else:
+
+                            # v2.31.14 — reject empty plans before showing modal
+                            _plan_summary = (plan["summary"] or "").strip()
+                            _plan_steps   = [s for s in plan["steps"] if s]
+                            if not _plan_summary or not _plan_steps:
+                                # Don't broadcast plan_pending with empty content.
+                                # Release the lock we just acquired, report error
+                                # back to the model, keep plan_action_called=False
+                                # so the safety gate will still trigger next time.
+                                await plan_lock.release(session_id)
+                                plan_action_called = False
                                 negative_signals += 1
-                                asyncio.create_task(_rfs(
-                                    task, "plan_cancelled", plan["summary"][:120]
-                                ))
                                 result = {
-                                    "status":   "ok",
+                                    "status":   "error",
                                     "approved": False,
-                                    "message":  "User cancelled. Do not proceed.",
-                                    "data":     {"approved": False},
+                                    "message": (
+                                        "plan_action() rejected: "
+                                        f"{'empty summary' if not _plan_summary else 'empty steps list'}. "
+                                        "Required: summary (non-empty prose describing the overall change) "
+                                        "AND steps (list of 2-6 concrete actions, each a short sentence). "
+                                        "Retry with BOTH fields populated. Example:\n"
+                                        "plan_action(\n"
+                                        "  summary=\"Prune unused Docker images on all Swarm nodes\",\n"
+                                        "  steps=[\"Get docker system df before state on each host\",\n"
+                                        "         \"Run docker image prune -a -f on each host\",\n"
+                                        "         \"Get docker system df after state on each host\",\n"
+                                        "         \"Report reclaimed bytes per host\"],\n"
+                                        "  risk_level=\"medium\",\n"
+                                        "  reversible=False,\n"
+                                        ")"
+                                    ),
+                                    "data": {"approved": False, "reason": "empty_plan"},
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
-                                await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
-                            await plan_lock.release(session_id)
+                                await manager.send_line(
+                                    "step",
+                                    "[plan] Rejected — empty summary or steps; asking model to retry",
+                                    status="warning", session_id=session_id,
+                                )
+                                # Skip the broadcast + confirmation wait. The tool
+                                # result below ( `messages.append({role: tool, ...})`)
+                                # will carry this error back to the model, which
+                                # will re-plan on the next loop iteration.
+                            else:
+                                await manager.broadcast({
+                                    "type":       "plan_pending",
+                                    "plan":       plan,
+                                    "session_id": session_id,
+                                    "timestamp":  datetime.now(timezone.utc).isoformat(),
+                                })
+                                await manager.send_line(
+                                    "step",
+                                    f"[plan] Waiting for user approval: {plan['summary']}",
+                                    status="ok", session_id=session_id,
+                                )
+                                from api.confirmation import wait_for_confirmation
+                                from api.memory.feedback import record_feedback_signal as _rfs
+                                approved = await wait_for_confirmation(session_id)
+                                if approved:
+                                    positive_signals += 1
+                                    asyncio.create_task(_rfs(
+                                        task, "plan_approved", plan["summary"][:120]
+                                    ))
+                                    result = {
+                                        "status":   "ok",
+                                        "approved": True,
+                                        "message":  "User confirmed. Proceed with plan.",
+                                        "data":     {"approved": True},
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    }
+                                    await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
+                                else:
+                                    negative_signals += 1
+                                    asyncio.create_task(_rfs(
+                                        task, "plan_cancelled", plan["summary"][:120]
+                                    ))
+                                    result = {
+                                        "status":   "ok",
+                                        "approved": False,
+                                        "message":  "User cancelled. Do not proceed.",
+                                        "data":     {"approved": False},
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    }
+                                    await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
+                                await plan_lock.release(session_id)
 
                     elif fn_name == "clarifying_question":
                         # Intercept: broadcast question to GUI, suspend until answered

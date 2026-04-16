@@ -624,17 +624,50 @@ function DataHealthView() {
 
 const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', 'Result Refs', 'Data Health', 'Actions']
 
-export default function LogsPanel() {
-  const [tab, setTab] = useState('Live Logs')
-  const [sessionOutputId, setSessionOutputId] = useState(null)
+// Module-level holder so the pending session survives the race window between
+// the Commands-panel event dispatch and LogsPanel mounting its listener.
+// Cleared after consumption.
+let _pendingSessionOutputId = null
+let _pendingTabOverride     = null
 
-  // Listen for open-session-output events from AgentFeed
+// Listen at module load so the event is captured even before LogsPanel mounts.
+if (typeof window !== 'undefined') {
+  window.addEventListener('open-session-output', (e) => {
+    const sid = e?.detail?.session_id
+    if (sid) {
+      _pendingSessionOutputId = sid
+      // Default behaviour: land on Operations with the session highlighted.
+      // The user-facing expectation is "raw log in Logs → Operations".
+      _pendingTabOverride = 'Operations'
+      // Mirror into window for the LogsPanel mount to read synchronously.
+      window.__ds_pendingSession = { sid, tab: 'Operations' }
+    }
+  })
+}
+
+export default function LogsPanel() {
+  // Read any pending session that arrived before mount, then clear it.
+  const initialSession = _pendingSessionOutputId || (typeof window !== 'undefined' && window.__ds_pendingSession?.sid) || null
+  const initialTab     = _pendingTabOverride     || (typeof window !== 'undefined' && window.__ds_pendingSession?.tab) || 'Operations'
+  const [tab, setTab] = useState(initialTab)
+  const [sessionOutputId, setSessionOutputId] = useState(initialSession)
+  const [highlightSessionId, setHighlightSessionId] = useState(initialSession)
+
+  // Clear module state once consumed
+  useEffect(() => {
+    _pendingSessionOutputId = null
+    _pendingTabOverride     = null
+    if (typeof window !== 'undefined') delete window.__ds_pendingSession
+  }, [])
+
+  // Listen for subsequent open-session-output events while mounted
   useEffect(() => {
     const handler = (e) => {
       const sid = e.detail?.session_id
       if (sid) {
+        setHighlightSessionId(sid)
         setSessionOutputId(sid)
-        setTab('Session Output')
+        setTab('Operations')
       }
     }
     window.addEventListener('open-session-output', handler)
@@ -665,7 +698,7 @@ export default function LogsPanel() {
       <div className="flex-1 overflow-hidden min-h-0">
         {tab === 'Live Logs'      && <LiveLogsView />}
         {tab === 'Tool Calls'     && <ToolCallsView refreshTick={0} />}
-        {tab === 'Operations'     && <OpsView refreshTick={0} />}
+        {tab === 'Operations'     && <OpsView refreshTick={0} highlightSessionId={highlightSessionId} />}
         {tab === 'Escalations'    && <EscView refreshTick={0} />}
         {tab === 'Stats'          && <StatsView />}
         {tab === 'Result Refs'    && <ResultRefsView />}
