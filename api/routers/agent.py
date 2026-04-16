@@ -80,6 +80,39 @@ DESTRUCTIVE_TOOLS = frozenset({
     "swarm_service_force_update", "proxmox_vm_power",
 })
 
+# ─── Hard caps on agent runs (v2.31.8) ───────────────────────────────────────
+# All env-configurable so an operator can tighten them without a redeploy.
+_AGENT_MAX_WALL_CLOCK_S   = int(os.environ.get("AGENT_MAX_WALL_CLOCK_S",   "600"))   # 10 min
+_AGENT_MAX_TOTAL_TOKENS   = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS",   "120000"))
+_AGENT_MAX_DESTRUCTIVE    = int(os.environ.get("AGENT_MAX_DESTRUCTIVE",    "3"))
+_AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
+
+
+def _cap_exceeded(
+    *,
+    started_monotonic: float,
+    total_tokens: int,
+    destructive_calls: int,
+    tool_failures: int,
+) -> tuple[bool, str]:
+    """Return (exceeded, reason). reason is human-readable or empty."""
+    import time as _t
+    elapsed = _t.monotonic() - started_monotonic
+    if elapsed > _AGENT_MAX_WALL_CLOCK_S:
+        return True, (f"wall-clock cap exceeded ({int(elapsed)}s > "
+                      f"{_AGENT_MAX_WALL_CLOCK_S}s)")
+    if total_tokens > _AGENT_MAX_TOTAL_TOKENS:
+        return True, (f"token cap exceeded ({total_tokens} > "
+                      f"{_AGENT_MAX_TOTAL_TOKENS})")
+    if destructive_calls > _AGENT_MAX_DESTRUCTIVE:
+        return True, (f"destructive-call cap exceeded ({destructive_calls} > "
+                      f"{_AGENT_MAX_DESTRUCTIVE})")
+    if tool_failures > _AGENT_MAX_TOOL_FAILURES:
+        return True, (f"tool-failure cap exceeded ({tool_failures} > "
+                      f"{_AGENT_MAX_TOOL_FAILURES})")
+    return False, ""
+
+
 # Per-session cancellation flags — set by POST /api/agent/stop
 # Values are (flag: bool, inserted_at: float) where inserted_at is time.monotonic().
 # Entries older than _CANCEL_FLAG_TTL_SECONDS are pruned by _cleanup_stale_cancel_flags().
@@ -363,6 +396,10 @@ async def _run_single_agent_step(
     last_reasoning = ""
 
     try:
+        import time as _time
+        _run_started = _time.monotonic()
+        _destructive_calls = 0
+        _tool_failures = 0
         _cleanup_stale_cancel_flags()
         while step < max_steps:
             # Check cancellation flag before each step
@@ -378,6 +415,42 @@ async def _run_single_agent_step(
                 break
 
             step += 1
+
+            exceeded, reason = _cap_exceeded(
+                started_monotonic=_run_started,
+                total_tokens=total_prompt_tokens + total_completion_tokens,
+                destructive_calls=_destructive_calls,
+                tool_failures=_tool_failures,
+            )
+            if exceeded:
+                await manager.send_line(
+                    "halt", f"CAP: {reason}",
+                    status="escalated", session_id=session_id,
+                )
+                # Persist to escalation table so it shows in the banner
+                try:
+                    from api.routers.escalations import record_escalation
+                    record_escalation(
+                        session_id=session_id,
+                        reason=f"Agent halted by cap: {reason}",
+                        operation_id=operation_id,
+                        severity="warning",
+                    )
+                except Exception:
+                    pass
+                last_reasoning = (
+                    f"Task stopped — {reason}. Partial findings above may be "
+                    f"useful; re-run with a narrower task if needed."
+                )
+                await manager.send_line("reasoning", last_reasoning, session_id=session_id)
+                if is_final_step:
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": last_reasoning, "status": "ok", "choices": [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                final_status = "capped"
+                break
 
             # Inject working memory into context for step > 1
             if step > 1 and _working_memory and len(messages) >= 2:
@@ -857,6 +930,8 @@ async def _run_single_agent_step(
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
+                        if fn_name in DESTRUCTIVE_TOOLS:
+                            _destructive_calls += 1
                 except Exception as e:
                     err_str = str(e)
                     result = {"status": "error", "message": err_str, "data": None,
@@ -925,6 +1000,9 @@ async def _run_single_agent_step(
                 _is_hard_failure = result_status in ("failed", "escalated") or (fn_name == "escalate" and result_status != "blocked")
                 _is_degraded = result_status == "degraded"
                 _is_investigate = agent_type in ("research", "investigate", "status", "observe")
+
+                if _is_hard_failure or result_status == "error":
+                    _tool_failures += 1
 
                 if _is_degraded and _is_investigate:
                     # Research/investigate/observe agents: degraded is a FINDING, not a halt.
