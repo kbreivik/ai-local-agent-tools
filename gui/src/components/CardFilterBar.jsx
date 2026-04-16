@@ -9,7 +9,7 @@ const STATUS_CARD_KEYS = [
 ]
 
 // Infra detail sections (ServiceCards bottom section)
-const INFRA_SECTION_KEYS = [
+export const INFRA_SECTION_KEYS = [
   { key: 'containers_local', label: 'Docker',   group: 'infra' },
   { key: 'containers_swarm', label: 'Swarm',    group: 'infra' },
   { key: 'vms',              label: 'VMs',      group: 'infra' },
