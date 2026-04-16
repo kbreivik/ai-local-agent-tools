@@ -146,6 +146,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.31.22.md | v2.31.22 | fix(auth): profile-first credential resolution + passphrase kwarg | DONE (11684c9) |
 | CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | RUNNING |
 | CC_PROMPT_v2.32.1.md  | v2.32.1  | refactor(agents): structured system prompts for execute + build | DONE (cf60ded) |
+| CC_PROMPT_v2.32.2.md  | v2.32.2  | feat(agents): post-action verify step | RUNNING |
+| CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | PENDING |
 
 ---
 
@@ -357,6 +359,18 @@ recovery, runbook check, propose subtask), Blocked Command/Tool Rules, Escalate 
 Rule, Tool Budget, Completion Conditions, Response Style. BUILD_PROMPT restructured into
 Role, Constraints, Tool Budget, Tool Usage (workflow), Completion Conditions. All 4 agent
 prompts now use consistent ═══ SECTION ═══ separators. No logic changes.
+
+**v2.32.2** — feat(agents): post-action verify step.
+After a destructive tool returns status=ok, the harness automatically calls a read-only
+verification tool to confirm state changed (swarm_service_force_update → service_health,
+proxmox_vm_power → swarm_node_status, service_upgrade → post_upgrade_verify, etc).
+Verification is harness-driven, not model-decided. Results streamed as [verify] steps
+and appended to tool result so model sees pass/fail. Catches premature completion.
+
+**v2.32.3** — feat(agents): attempt history table + context injection.
+New agent_attempts table records entity_id, task_type, tools_used, outcome, summary after
+every agent run. Before each new run, harness queries last 3 attempts for the detected
+entity and injects into system prompt. Prevents repeated failures with same approach.
 
 ---
 

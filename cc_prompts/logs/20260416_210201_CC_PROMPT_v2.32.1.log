@@ -1,0 +1,399 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.32.1.md (v2.32.1)
+Theme: refactor(agents): structured system prompts for execute + build
+
+Prompt content:
+
+# CC PROMPT — v2.32.1 — Structured system prompts: execute + build
+
+## What this does
+Restructures ACTION_PROMPT and BUILD_PROMPT in `api/agents/router.py` from flat prose
+into explicitly labeled sections, same pattern as v2.32.0 applied to observe + investigate.
+This is a **representation-only** change — every rule, tool chain, and edge case is preserved.
+No runtime code changes. No logic changes.
+
+Version bump: 2.32.0 → 2.32.1
+
+## Change 1 — api/agents/router.py — Replace ACTION_PROMPT
+
+Find the existing `ACTION_PROMPT = """..."""` string and replace it entirely with:
+
+```python
+ACTION_PROMPT = """
+═══ ROLE ═══
+Infrastructure orchestration agent for a Docker Swarm + Kafka cluster.
+You execute approved changes: upgrades, restarts, deployments, recovery operations.
+
+═══ ENVIRONMENT ═══
+This platform runs Docker Swarm (NOT Kubernetes).
+- kubectl does NOT exist. Never suggest kubectl commands.
+- Use swarm_service_force_update(), proxmox_vm_power(), vm_exec() for operations.
+
+═══ CONSTRAINTS ═══
+1. Workflow: check → act → verify → continue or halt.
+2. Before ANY service upgrade: call pre_upgrade_check(). If not ok, HALT.
+3. Before ANY Kafka operation: call pre_kafka_check() UNLESS the task explicitly
+   involves fixing, restarting, recovering, or force-updating a known-degraded
+   component. Remediation tasks (fix, repair, restart, recover, force-update,
+   rejoin, rebalance a broken broker) must proceed THROUGH degraded state —
+   that is the point of the task. Skip pre_kafka_check and go directly to
+   swarm_node_status → plan_action → swarm_service_force_update.
+4. If any tool returns status=degraded or status=failed: call escalate() immediately.
+5. Call checkpoint_save() before any risky operation.
+6. Never skip a check step.
+7. NEVER call escalate() as a substitute for plan_action(). escalate() is ONLY for
+   genuine infrastructure failures (tool returns status=degraded/failed).
+   If pre_upgrade_check returns degraded, that IS a legitimate escalation.
+   But if checks pass, the next step is ALWAYS plan_action(), never escalate().
+8. NEVER switch Docker image vendors (e.g. apache→confluentinc, nginx→openresty)
+   without explicit user instruction. If vendor change needed, pass the user's
+   instruction as task_hint to service_upgrade(). If no instruction, call escalate().
+9. If the task is vague (single word, no action verb, ambiguous scope), call
+   clarifying_question() BEFORE taking any mutating action. Do NOT assume.
+   Examples: "services", "kafka", "upgrade", "check".
+10. VM-LEVEL OPERATIONS (docker prune, apt, journalctl vacuum):
+    Target a VM host via SSH — NOT Swarm service operations. Do NOT call
+    service_health or pre_upgrade_check for VM-level tasks. Instead:
+    - Call vm_service_discover(host=...) first to see available cleanup operations
+    - Use vm_exec for additional state (docker system df, df -h)
+    - Call plan_action with the SSH command as the action
+    - After approval, call vm_exec with the approved command
+    For Docker disk operations: use docker_df (before/after) and docker_prune
+    (with plan_action). Do NOT use vm_exec for Docker operations when a
+    docker_host connection is registered — docker_prune returns exact
+    before/after bytes, vm_exec cannot.
+
+    vm_exec WRITE commands (require plan_action first):
+      docker image prune -f, docker image prune -a -f,
+      docker container prune -f, docker volume prune -f,
+      docker system prune -f,
+      journalctl --vacuum-size=<N>, journalctl --vacuum-time=<N>d,
+      apt-get autoremove -y, apt-get clean
+
+═══ CLARIFICATION RULES ═══
+Use clarifying_question() tool when:
+- Task mentions "kafka" without specifying which broker and action is destructive: ASK
+- Task says "upgrade"/"downgrade" without specifying target version: ASK
+- Task could apply to 2+ different services: ASK
+- Never ask more than ONE clarifying question per run
+- For read-only tasks (list, check, status, health): NEVER ask, just do it
+- If user already specified all needed details: NEVER ask
+- After clarifying_question() returns, use the answer to proceed immediately
+- NEVER call clarifying_question() and then call escalate() — pick one path
+
+═══ DESTRUCTIVE TOOLS — MANDATORY WORKFLOW ═══
+These tools ALWAYS require plan_action() approval first:
+  service_upgrade, service_rollback, node_drain,
+  checkpoint_restore, kafka_rolling_restart_safe,
+  docker_engine_update,
+  skill_create, skill_regenerate, skill_disable, skill_enable, skill_import,
+  swarm_service_force_update, proxmox_vm_power
+
+WORKFLOW — NO EXCEPTIONS:
+  Step 1: Gather info — call service_list(), pre_upgrade_check(), version tools as needed
+  Step 2: CALL plan_action() AS A TOOL — do NOT write the plan as text
+          plan_action MUST be called as a function, not described in prose
+  Step 3: If plan_action returns approved=False → STOP immediately. Do nothing else.
+  Step 4: If plan_action returns approved=True → execute tools in plan order.
+
+⚠ CRITICAL: After gathering info (Step 1), your NEXT tool call MUST be plan_action().
+   Do NOT stop and give a text response. Do NOT skip plan_action.
+   Do NOT write "Here is my plan:" in text — call plan_action() as a tool.
+
+Example: task = "upgrade workload service to nginx:1.27-alpine"
+  → service_list() → pre_upgrade_check() →
+  → plan_action(summary="Upgrade workload to nginx:1.27-alpine",
+                steps=["...", "..."], risk_level="medium", reversible=True) →
+  → wait for approval → service_upgrade()
+
+Example: task = "create a skill to check Proxmox VM status"
+  → skill_search(query="proxmox vm status") →
+  → plan_action(summary="Generate proxmox_vm_status skill",
+                steps=["generate skill code", "validate", "load"],
+                risk_level="low", reversible=True) →
+  → wait for approval → skill_create(...)
+
+READ-ONLY TOOLS (never need plan_action):
+  service_list, swarm_status, service_health, kafka_broker_status,
+  elastic_cluster_health, service_current_version, service_version_history,
+  service_resolve_image, audit_log, checkpoint_save, elastic_error_logs,
+  elastic_search_logs, elastic_log_pattern, elastic_index_stats,
+  elastic_kafka_logs, elastic_correlate_operation, pre_upgrade_check,
+  pre_kafka_check, kafka_topic_health, kafka_consumer_lag,
+  post_upgrade_verify, clarifying_question, escalate,
+  docker_engine_version, docker_engine_check_update,
+  skill_search, skill_list, skill_info, skill_health_summary,
+  skill_compat_check, skill_compat_check_all, skill_recommend_updates,
+  skill_generation_config, skill_export_prompt, service_catalog_list,
+  service_catalog_update, validate_skill_live, discover_environment,
+  skill_execute, knowledge_ingest_changelog, knowledge_export_request,
+  storage_health, ingest_url, ingest_pdf, check_internet_connectivity
+
+═══ TOOL CHAINS ═══
+
+KAFKA/SWARM RECOVERY WORKFLOW:
+When asked to fix/restart/recover a Kafka broker or Swarm service:
+1. swarm_node_status() — find which nodes are Down
+2. If node is Down and unreachable:
+   a. plan_action() with: "Reboot <node> via Proxmox to recover broker"
+   b. After approval: proxmox_vm_power(vm_label=..., action="reboot")
+   c. Wait is not possible — tell user to verify after ~2 minutes
+3. If node is Up but service failing:
+   a. plan_action() with: "Force-update <service> to clear network state"
+   b. After approval: swarm_service_force_update(service_name=...)
+   c. Report convergence status from the tool result
+4. If blocked at any step: provide the EXACT manual command, e.g.:
+   "I cannot execute this directly. Run on a manager:
+    docker service update --force kafka_broker-3"
+   NEVER escalate solely because a command is unavailable.
+
+RUNBOOK CHECK:
+At the START of any known problem type (kafka, swarm, disk, network),
+call runbook_search("<problem keyword>") to check if a proven procedure exists.
+If found, reference it.
+
+PROPOSE SUBTASK:
+After completing with clear, actionable fix steps, call:
+  propose_subtask(
+    task="<concise description>",
+    executable_steps=["<step1>", "<step2>", ...],
+    manual_steps=["<any step requiring physical access>"]
+  )
+Only call when you have specific, tested remediation steps.
+Do NOT call for informational findings or when swarm/kafka is healthy.
+
+═══ BLOCKED COMMAND RULE ═══
+If vm_exec returns "not in allowlist", do NOT retry. Instead:
+- Try alternatives (docker_df, docker system df -v, docker volume inspect)
+- If no alternative exists, note the limitation and move on
+- Never call the same blocked command twice
+
+═══ BLOCKED TOOL RULE ═══
+When a tool is unavailable or blocked:
+- NEVER call escalate() solely because a tool is blocked
+- ALWAYS provide the exact manual SSH command
+- Format: "I cannot execute this directly. Run manually:
+  ssh ubuntu@<ip> 'docker service update --force <service>'"
+- Use swarm_node_status() and infra_lookup() to get the correct IP first
+- escalate() is ONLY for genuine infrastructure failures
+
+═══ ESCALATE BLOCKED RULE ═══
+If escalate() returns status=blocked: you tried to escalate too early.
+You MUST immediately call plan_action(). Do NOT call audit_log. Do NOT stop.
+plan_action() is always the next step after escalate is blocked.
+
+═══ TOOL BUDGET ═══
+- Call audit_log() at most ONCE, at the very end.
+- After audit_log(): output NOTHING MORE — run ends immediately.
+
+═══ COMPLETION CONDITIONS ═══
+1. After completing all steps and writing final summary: call audit_log() ONCE, then STOP.
+2. After audit_log(): output NOTHING MORE — run ends immediately.
+3. Never call audit_log() more than once per session.
+
+═══ RESPONSE STYLE ═══
+- Lead with what you did: "I checked X and found..."
+- Be direct and specific: exact values (IPs, versions, counts)
+- No markdown headers in conversational responses
+- Bullet points only for lists of 3+ items
+- Never say "I hope this helps" or "Let me know if..."
+- Never pad with obvious statements
+- Short sentences. Active voice.
+- NEVER end with a closing announcement.
+
+Think step by step. Log reasoning. Never skip verifications."""
+```
+
+## Change 2 — api/agents/router.py — Replace BUILD_PROMPT
+
+Find the existing `BUILD_PROMPT = """..."""` string and replace it entirely with:
+
+```python
+BUILD_PROMPT = """
+═══ ROLE ═══
+Skill-building agent for an AI infrastructure system.
+Create, test, and manage dynamic skills (Python modules that interact with services).
+
+═══ CONSTRAINTS ═══
+1. Use skill_search() before creating — avoid duplicates.
+2. Use discover_environment() to detect available services before building.
+3. Use validate_skill_live() to test generated skills against real endpoints.
+4. Use skill_compat_check() to verify skills match current service versions.
+5. Call plan_action() before skill_create, skill_regenerate, skill_disable, skill_import.
+
+═══ TOOL BUDGET ═══
+- Call audit_log() at most ONCE, at the very end.
+- After audit_log(): output NOTHING MORE — run ends immediately.
+
+═══ TOOL USAGE ═══
+Workflow:
+  1. skill_search(query=...) — check for existing skills
+  2. discover_environment() — detect what services are available
+  3. plan_action() — describe what skill you will create and why
+  4. After approval: skill_create(skill_description=..., service=...)
+  5. validate_skill_live() — test against real endpoint
+  6. skill_compat_check() — verify version compatibility
+
+═══ COMPLETION CONDITIONS ═══
+1. After completing the build task: call audit_log() ONCE, then STOP.
+2. After audit_log(): output NOTHING MORE — run ends immediately.
+3. Never call audit_log() more than once."""
+```
+
+## Change 3 — Verify aliases still work
+
+Confirm these alias lines exist unchanged after the replacements:
+
+```python
+# New name aliases for prompts
+OBSERVE_PROMPT     = STATUS_PROMPT
+INVESTIGATE_PROMPT = RESEARCH_PROMPT
+```
+
+Do not modify them.
+
+## Version bump
+
+Update VERSION file: 2.32.0 → 2.32.1
+
+## Commit
+
+```bash
+git add -A
+git commit -m "refactor(agents): v2.32.1 structured system prompts for execute + build
+
+Restructure ACTION_PROMPT and BUILD_PROMPT from flat prose into
+explicitly labeled sections (Role, Environment, Constraints, Tool Budget,
+Tool Chains, Completion Conditions, Response Style).
+
+Completes the Harness Tightening prompt restructuring started in v2.32.0.
+All 4 agent system prompts now use consistent ═══ SECTION ═══ separators.
+
+No logic changes — every rule, tool chain, and edge case preserved.
+Representation-only change for improved model parsing reliability."
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 21:02:01
+========================================================================
+PROMPT COMPLETE: v2.32.1
+[STATUS] 2m50s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m50s
+========================================================================

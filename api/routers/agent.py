@@ -80,6 +80,102 @@ DESTRUCTIVE_TOOLS = frozenset({
     "swarm_service_force_update", "proxmox_vm_power",
 })
 
+# ─── Post-action verification map (v2.32.2) ──────────────────────────────────
+# Maps destructive tool → (verify_tool_name, args_builder_function)
+# args_builder receives the original tool's fn_args and returns verify tool args.
+# Only tools where state verification is meaningful are included.
+
+def _verify_spec(tool_name: str, fn_args: dict) -> tuple[str, dict] | None:
+    """Return (verify_tool, verify_args) for a destructive tool, or None if no verify needed."""
+    if tool_name == "swarm_service_force_update":
+        svc = fn_args.get("service_name", "")
+        if svc:
+            return ("service_health", {"service_name": svc})
+    elif tool_name == "proxmox_vm_power":
+        # After rebooting a VM, check if Swarm nodes recovered
+        return ("swarm_node_status", {})
+    elif tool_name == "service_upgrade":
+        svc = fn_args.get("service_name", "")
+        if svc:
+            return ("post_upgrade_verify", {"service_name": svc})
+    elif tool_name == "service_rollback":
+        svc = fn_args.get("service_name", "")
+        if svc:
+            return ("service_health", {"service_name": svc})
+    elif tool_name == "node_drain":
+        return ("swarm_node_status", {})
+    elif tool_name == "node_activate":
+        return ("swarm_node_status", {})
+    # docker_prune already returns before/after data — no separate verify needed
+    # skill tools don't need infra verification
+    return None
+
+
+async def _auto_verify(
+    tool_name: str,
+    fn_args: dict,
+    session_id: str,
+    operation_id: str,
+) -> dict | None:
+    """Run post-action verification. Returns verify result dict or None if skipped.
+
+    Called by the agent loop after a destructive tool returns status=ok.
+    The verification is harness-driven — the model doesn't decide to verify,
+    the harness does it automatically.
+    """
+    spec = _verify_spec(tool_name, fn_args)
+    if spec is None:
+        return None
+
+    verify_name, verify_args = spec
+
+    await manager.send_line(
+        "step",
+        f"[verify] Auto-verifying via {verify_name}...",
+        status="ok", session_id=session_id,
+    )
+
+    try:
+        verify_result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda vn=verify_name, va=verify_args: invoke_tool(vn, va)
+        )
+    except Exception as e:
+        log.debug("Auto-verify %s failed: %s", verify_name, e)
+        await manager.send_line(
+            "step",
+            f"[verify] {verify_name} failed: {str(e)[:100]}",
+            status="warning", session_id=session_id,
+        )
+        return None
+
+    v_status = verify_result.get("status", "error") if isinstance(verify_result, dict) else "error"
+    v_message = verify_result.get("message", "") if isinstance(verify_result, dict) else str(verify_result)
+
+    # Log the verify call
+    await logger_mod.log_tool_call(
+        operation_id, verify_name, verify_args, verify_result,
+        _lm_model(), 0, status="ok",
+    )
+
+    # Determine if verification passed
+    passed = v_status in ("ok", "healthy")
+    icon = "✓" if passed else "⚠"
+
+    await manager.send_line(
+        "step",
+        f"[verify] {icon} {verify_name} → {v_status} | {v_message[:120]}",
+        tool=verify_name, status="ok" if passed else "warning",
+        session_id=session_id,
+    )
+
+    return {
+        "verify_tool": verify_name,
+        "verify_status": v_status,
+        "verify_message": v_message[:200],
+        "passed": passed,
+    }
+
+
 # ─── Hard caps on agent runs (v2.31.8) ───────────────────────────────────────
 # All env-configurable so an operator can tighten them without a redeploy.
 _AGENT_MAX_WALL_CLOCK_S   = int(os.environ.get("AGENT_MAX_WALL_CLOCK_S",   "600"))   # 10 min
@@ -699,6 +795,7 @@ async def _run_single_agent_step(
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
                 tools_used_names.append(fn_name)
+                tool_content_suffix = ""  # v2.32.2: populated by auto-verify after destructive tools
                 try:
                     fn_args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
@@ -1006,8 +1103,6 @@ async def _run_single_agent_step(
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
-                        if fn_name in DESTRUCTIVE_TOOLS:
-                            _destructive_calls += 1
                 except Exception as e:
                     err_str = str(e)
                     result = {"status": "error", "message": err_str, "data": None,
@@ -1027,6 +1122,30 @@ async def _run_single_agent_step(
                 duration_ms = int((time.monotonic() - t0) * 1000)
                 result_status = result.get("status", "error") if isinstance(result, dict) else "error"
                 result_msg = result.get("message", "") if isinstance(result, dict) else str(result)
+
+                if fn_name in DESTRUCTIVE_TOOLS:
+                    _destructive_calls += 1
+                    # v2.32.2: Auto-verify after successful destructive action
+                    if result_status == "ok" or (isinstance(result, dict) and result.get("data", {}).get("approved")):
+                        _vr = await _auto_verify(fn_name, fn_args, session_id, operation_id)
+                        if _vr and not _vr["passed"]:
+                            # Verification failed — inject warning into model context
+                            _verify_warning = (
+                                f"[HARNESS VERIFY WARNING] After {fn_name} returned ok, "
+                                f"auto-verification via {_vr['verify_tool']} returned "
+                                f"{_vr['verify_status']}: {_vr['verify_message']}. "
+                                f"The action may not have taken effect yet."
+                            )
+                            # Don't append as separate message — will be included
+                            # in the tool result content below
+                            tool_content_suffix = f"\n\n{_verify_warning}"
+                        elif _vr and _vr["passed"]:
+                            tool_content_suffix = (
+                                f"\n\n[HARNESS VERIFY OK] {_vr['verify_tool']} confirmed: "
+                                f"{_vr['verify_status']}"
+                            )
+                        else:
+                            tool_content_suffix = ""
 
                 # Store tool execution in memory (non-blocking)
                 _mem_after(fn_name, fn_args, result, result_status, duration_ms)
@@ -1070,7 +1189,7 @@ async def _run_single_agent_step(
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": tool_content,
+                    "content": tool_content + tool_content_suffix,
                 })
 
                 _is_hard_failure = result_status in ("failed", "escalated") or (fn_name == "escalate" and result_status != "blocked")
