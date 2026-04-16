@@ -412,20 +412,14 @@ def resolve_credentials_for_connection(connection: dict, all_connections: list[d
     """Return effective credentials for a connection.
 
     Priority:
-    1. Connection's own inline credentials (if non-empty username or key)
-    2. Linked credential profile (connection.config.credential_profile_id)
-    3. Shared credential connection (existing shared_credentials fallback)
+    1. Linked credential profile (connection.config.credential_profile_id)
+       — when a profile is linked, it is the authoritative credential source.
+         Inline creds are ignored (they may be stale from before the profile
+         was linked).
+    2. Connection's own inline credentials (if non-empty key or password)
+    3. Empty dict (no credentials available)
     """
-    creds = connection.get('credentials') or {}
-    if isinstance(creds, str):
-        try: creds = json.loads(creds)
-        except Exception: creds = {}
-
-    # Has its own credentials
-    if creds.get('username') or creds.get('private_key') or creds.get('password'):
-        return creds
-
-    # Linked profile
+    # Check for linked profile FIRST — profile is authoritative when set
     cfg = connection.get('config') or {}
     if isinstance(cfg, str):
         try: cfg = json.loads(cfg)
@@ -434,7 +428,19 @@ def resolve_credentials_for_connection(connection: dict, all_connections: list[d
     if profile_id:
         profile = get_profile(profile_id)
         if profile:
-            return profile.get('credentials') or {}
+            profile_creds = profile.get('credentials') or {}
+            if isinstance(profile_creds, str):
+                try: profile_creds = json.loads(profile_creds)
+                except Exception: profile_creds = {}
+            if profile_creds.get('username') or profile_creds.get('private_key') or profile_creds.get('password'):
+                return profile_creds
+            # Profile exists but has no usable creds — log and fall through
+            log.warning("resolve_credentials: profile %s linked but has no usable credentials", profile_id)
 
-    # shared_credentials connection flag removed in v2.26.10 — credential profiles replace this
+    # Inline credentials (no profile linked, or profile was empty)
+    creds = connection.get('credentials') or {}
+    if isinstance(creds, str):
+        try: creds = json.loads(creds)
+        except Exception: creds = {}
+
     return creds

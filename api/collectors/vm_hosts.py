@@ -48,7 +48,7 @@ done
 
 
 def _ssh_run(host, port, username, password, private_key, script,
-             jump_host=None, _log_meta=None):
+             jump_host=None, _log_meta=None, passphrase=None):
     """Run script on remote host via paramiko. If jump_host dict provided,
     connect via ProxyJump: transport to bastion, direct-tcpip channel to target.
 
@@ -61,10 +61,11 @@ def _ssh_run(host, port, username, password, private_key, script,
     import paramiko
     import io
 
-    def _make_pkey(key_str):
+    def _make_pkey(key_str, passphrase=None):
+        pw = passphrase if passphrase else None
         for cls in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
             try:
-                return cls.from_private_key(io.StringIO(key_str))
+                return cls.from_private_key(io.StringIO(key_str), password=pw)
             except Exception:
                 continue
         raise ValueError("Could not parse private key (tried RSA, Ed25519, ECDSA)")
@@ -85,7 +86,7 @@ def _ssh_run(host, port, username, password, private_key, script,
         j_transport = paramiko.Transport((jump_host["host"], jump_host["port"]))
         j_transport.connect()
         if jump_host.get("private_key"):
-            j_transport.auth_publickey(jump_host["username"], _make_pkey(jump_host["private_key"]))
+            j_transport.auth_publickey(jump_host["username"], _make_pkey(jump_host["private_key"], jump_host.get("passphrase")))
         elif jump_host.get("password"):
             j_transport.auth_password(jump_host["username"], jump_host["password"])
 
@@ -97,7 +98,7 @@ def _ssh_run(host, port, username, password, private_key, script,
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(hostname=host, port=port, username=username, sock=chan,
                        timeout=15, look_for_keys=False, allow_agent=False,
-                       **({"pkey": _make_pkey(private_key)} if private_key else
+                       **({"pkey": _make_pkey(private_key, passphrase)} if private_key else
                           {"password": password} if password else
                           {"look_for_keys": True, "allow_agent": True}))
         try:
@@ -131,7 +132,7 @@ def _ssh_run(host, port, username, password, private_key, script,
         kw = dict(hostname=host, port=port, username=username,
                   timeout=15, look_for_keys=False, allow_agent=False)
         if private_key:
-            kw["pkey"] = _make_pkey(private_key)
+            kw["pkey"] = _make_pkey(private_key, passphrase)
         elif password:
             kw["password"] = password
         else:

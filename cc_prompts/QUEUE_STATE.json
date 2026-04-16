@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T18:53:09",
+  "updated_at": "2026-04-16T20:09:31",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1493,10 +1493,26 @@
       "filename": "CC_PROMPT_v2.31.21.md",
       "version": "v2.31.21",
       "theme": "fix(windows): OS name Win11, uptime fallback, WinRM false-positive",
+      "runner_status": "DONE",
+      "commit_sha": "ca97cab",
+      "error": "",
+      "started_at": "2026-04-16T18:53:09",
+      "finished_at": "2026-04-16T18:54:41",
+      "duration_s": 92.21121349999885,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_185309_CC_PROMPT_v2.31.21.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.22.md",
+      "version": "v2.31.22",
+      "theme": "fix(auth): profile-first credential resolution + passphrase kwarg",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T18:53:09",
+      "started_at": "2026-04-16T20:09:31",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
