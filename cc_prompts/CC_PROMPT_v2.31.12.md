@@ -1,0 +1,293 @@
+# CC PROMPT — v2.31.12 — feat(ci): Dockerfile at repo root + queue runner builds & pushes image
+
+## What this does
+Fixes the broken image pipeline. Right now `ghcr.io/kbreivik/hp1-ai-agent:latest`
+is frozen at the v2.31.1 build (07:36 this morning) and no version-tagged
+images exist for v2.30.0+. Root cause: the repo has no Dockerfile and the
+queue runner (`QUEUE_RUNNER.md`) doesn't tell CC to build the image when a
+prompt finishes — so every recent prompt committed code to git but never
+produced a new Docker image.
+
+This prompt:
+1. Adds a top-level `Dockerfile` (canonical, repo-tracked).
+2. Adds `.dockerignore`.
+3. Updates `cc_prompts/QUEUE_RUNNER.md` with a new Step 5.5 that builds and
+   pushes the image on every CC run — so all future prompts auto-build.
+4. Performs the first build itself at the end of this prompt, so the v2.31.12
+   image lands in GHCR with all v2.31.3..v2.31.11 changes accumulated.
+
+---
+
+## Pre-flight — find the canonical Dockerfile
+
+Before writing Change 1, check whether a Dockerfile already exists anywhere
+in or near the working tree:
+
+```bash
+# On the dev machine where CC runs
+find D:/claude_code/ai-local-agent-tools -name 'Dockerfile*' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null
+ls -la D:/claude_code/ai-local-agent-tools/docker/ 2>/dev/null
+```
+
+If one is found anywhere, **copy its contents verbatim** to the repo root as
+`Dockerfile` and skip to Change 2. The production image that's running today
+was built from SOME Dockerfile — find and use that one. Do not rewrite from
+scratch if a working recipe exists.
+
+If nothing is found, use the template in Change 1 below.
+
+---
+
+## Change 1 — Dockerfile — NEW FILE at repo root
+
+Use this template only if no existing Dockerfile was found:
+
+```dockerfile
+# syntax=docker/dockerfile:1.6
+
+# ── Stage 1: GUI build (Vite) ─────────────────────────────────────────────────
+FROM node:20-alpine AS gui-builder
+WORKDIR /gui
+COPY gui/package.json gui/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+COPY gui/ ./
+RUN npm run build
+
+# ── Stage 2: Python runtime ───────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# System deps: git (build_info), ssh-client (vm_exec), curl (healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git openssh-client curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python deps first (cache-friendly layer)
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+# Source
+COPY api/         ./api/
+COPY mcp_server/  ./mcp_server/
+COPY scripts/     ./scripts/
+COPY VERSION      ./
+# Add any other top-level runtime modules here if present.
+
+# GUI artefacts from stage 1
+COPY --from=gui-builder /gui/dist /app/gui/dist
+
+# Build-time metadata (optional — script tolerates missing values)
+ARG BUILD_COMMIT=unknown
+ARG BUILD_BRANCH=unknown
+ARG BUILD_NUMBER=local
+ENV BUILD_COMMIT=${BUILD_COMMIT} \
+    BUILD_BRANCH=${BUILD_BRANCH} \
+    BUILD_NUMBER=${BUILD_NUMBER}
+RUN python scripts/gen_build_info.py || true
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**If `requirements.txt` does not exist at repo root**, look for
+`api/requirements.txt` or `pyproject.toml` / `setup.py` and adjust the COPY
++ install lines accordingly. Inspect before assuming.
+
+---
+
+## Change 2 — .dockerignore — NEW FILE at repo root
+
+```
+# VCS / editor
+.git
+.github
+.vscode
+.idea
+*.swp
+
+# Python caches
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
+
+# Node / GUI intermediate
+gui/node_modules
+gui/dist
+gui/.vite
+
+# Repo-only content
+cc_prompts
+tests
+*.md
+!VERSION
+
+# Local scratch
+*.log
+*.sqlite
+*.db
+tmp
+scratch
+test_output
+```
+
+---
+
+## Change 3 — update cc_prompts/QUEUE_RUNNER.md — add Step 5.5 (build + push image)
+
+Open `cc_prompts/QUEUE_RUNNER.md`. Find the existing Step 5 (Commit and push)
+and Step 6 (Mark DONE in INDEX.md). Between them, insert a new step:
+
+```markdown
+### Step 5.5 — Build and push Docker image
+
+After the git push succeeds, build and push the container image. Tag with
+both `:latest` and the version string from the VERSION file, so every
+release is addressable by tag going forward.
+
+```bash
+cd D:\claude_code\ai-local-agent-tools
+VER=$(cat VERSION | tr -d '[:space:]')
+SHORT=$(git rev-parse --short HEAD)
+
+# Build (single-arch, linux/amd64 — matches agent-01). Adjust if needed.
+docker build \
+  --build-arg BUILD_COMMIT=$(git rev-parse HEAD) \
+  --build-arg BUILD_BRANCH=$(git branch --show-current) \
+  --build-arg BUILD_NUMBER=local \
+  -t ghcr.io/kbreivik/hp1-ai-agent:latest \
+  -t ghcr.io/kbreivik/hp1-ai-agent:${VER} \
+  -t ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT} \
+  .
+
+docker push ghcr.io/kbreivik/hp1-ai-agent:latest
+docker push ghcr.io/kbreivik/hp1-ai-agent:${VER}
+docker push ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT}
+```
+
+Requirements (verify before build):
+- Docker Desktop must be running on the dev machine
+- `docker login ghcr.io` must have been performed once with a PAT that has
+  `write:packages` scope — the login persists across invocations
+
+If the build fails:
+- Do NOT mark the prompt DONE
+- Output: `PROMPT FAILED: <version> — docker build: <first error line>`
+- Stop immediately. The operator will inspect and either fix the Dockerfile
+  or the credentials, then retry.
+
+If the push fails but the build succeeded:
+- Do NOT mark the prompt DONE
+- Output: `PROMPT FAILED: <version> — docker push: <error>`
+- Common causes: expired PAT, network, GHCR rate limit. Operator fixes and retries.
+```
+
+Keep the existing Step 6 (Mark DONE in INDEX.md) and Step 7 (STOP) unchanged —
+they now come after the new Step 5.5.
+
+---
+
+## Change 4 — one-time build for v2.31.12
+
+This prompt itself triggers the first build with the new setup. After
+Changes 1-3 are committed and pushed, execute the build commands from the
+new Step 5.5 (same commands, just run them once for this prompt):
+
+```bash
+cd D:\claude_code\ai-local-agent-tools
+VER=$(cat VERSION | tr -d '[:space:]')    # should be 2.31.12 after bump
+SHORT=$(git rev-parse --short HEAD)
+
+docker build \
+  --build-arg BUILD_COMMIT=$(git rev-parse HEAD) \
+  --build-arg BUILD_BRANCH=$(git branch --show-current) \
+  --build-arg BUILD_NUMBER=local \
+  -t ghcr.io/kbreivik/hp1-ai-agent:latest \
+  -t ghcr.io/kbreivik/hp1-ai-agent:${VER} \
+  -t ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT} \
+  .
+
+docker push ghcr.io/kbreivik/hp1-ai-agent:latest
+docker push ghcr.io/kbreivik/hp1-ai-agent:${VER}
+docker push ghcr.io/kbreivik/hp1-ai-agent:sha-${SHORT}
+```
+
+Output the resulting image digest so the operator can verify on agent-01:
+```bash
+docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/kbreivik/hp1-ai-agent:latest
+```
+
+---
+
+## Commit (Changes 1-3, before the build)
+```
+git add -A
+git commit -m "feat(ci): v2.31.12 Dockerfile + queue runner builds and pushes image"
+git push origin main
+```
+
+Then run the build in Change 4.
+
+---
+
+## How to test after completion
+
+1. **Tags exist in GHCR**:
+   ```bash
+   docker pull ghcr.io/kbreivik/hp1-ai-agent:2.31.12
+   docker pull ghcr.io/kbreivik/hp1-ai-agent:latest
+   ```
+   Both should succeed, same digest.
+
+2. **Deploy on agent-01**:
+   ```bash
+   cd /opt/hp1-agent/docker
+   docker compose pull hp1_agent
+   docker compose up -d hp1_agent
+   curl -s http://192.168.199.10:8000/api/health | head -6
+   ```
+   Version should read `2.31.12`. All v2.31.3..v2.31.11 changes will be live
+   because the build snapshot includes them all.
+
+3. **Live Output panel (v2.31.3)** — hard-refresh the UI, DevTools Network WS
+   should show `ws://…/ws/output` with no `?token=`, status 101. Run an observe
+   task, output should stream in real time.
+
+4. **Recent Actions tab (v2.31.6)** — Logs → Actions lists rows.
+
+5. **Agent loop caps (v2.31.8)**:
+   ```bash
+   docker exec hp1_agent python -c "from api.routers.agent import _AGENT_MAX_WALL_CLOCK_S; print(_AGENT_MAX_WALL_CLOCK_S)"
+   ```
+   Should print `600`.
+
+6. **Future prompts auto-build** — run any subsequent prompt via `run_queue.sh`
+   and confirm that after the git commit, a new image appears in GHCR with
+   the new version tag. No more manual builds needed.
+
+---
+
+## Notes
+
+- This does NOT add GitHub Actions CI. That's cleaner long-term (builds don't
+  depend on the operator's dev machine being online + logged in), but it's
+  a separate follow-up. This prompt restores the previously-working pattern:
+  CC builds locally after committing, matching how v2.29.x images landed
+  in the registry.
+- If operator prefers GitHub Actions later, that's a small v2.31.x follow-up
+  — the Dockerfile and .dockerignore added here are prerequisites either way.
+- `docker login ghcr.io` uses a GitHub PAT with `write:packages` scope. If
+  the PAT has expired, refresh it via github.com → Settings → Developer
+  settings → Personal access tokens, then re-run `docker login`.

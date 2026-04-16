@@ -1,28 +1,34 @@
+# VCS / editor
 .git
-.gitignore
+.github
+.vscode
+.idea
+*.swp
+
+# Python caches
 __pycache__
 *.pyc
-*.pyo
-.mypy_cache
 .pytest_cache
-.code-index
-node_modules
+.mypy_cache
+.ruff_cache
 .venv
 venv
-*.egg-info
-dist
-build
-docker/.env
-data/hp1_agent.db
-data/skills.db
-data/skill_exports/*
-data/skill_imports/*
-logs/*
-checkpoints/*
-.env
-*.bak
-files.zip
+
+# Node / GUI intermediate
 gui/node_modules
 gui/dist
-state/
-cc_prompts/
+gui/.vite
+
+# Repo-only content
+cc_prompts
+tests
+*.md
+!VERSION
+
+# Local scratch
+*.log
+*.sqlite
+*.db
+tmp
+scratch
+test_output

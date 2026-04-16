@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T13:43:26",
+  "updated_at": "2026-04-16T13:51:18",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1333,10 +1333,26 @@
       "filename": "CC_PROMPT_v2.31.11.md",
       "version": "v2.31.11",
       "theme": "feat(tests): regression tests for tool safety + frontend sync",
+      "runner_status": "DONE",
+      "commit_sha": "3a07112",
+      "error": "",
+      "started_at": "2026-04-16T13:43:26",
+      "finished_at": "2026-04-16T13:46:16",
+      "duration_s": 169.74362490000203,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_134326_CC_PROMPT_v2.31.11.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.12.md",
+      "version": "v2.31.12",
+      "theme": "feat(ci): Dockerfile at repo root + queue runner builds and pushes image",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T13:43:26",
+      "started_at": "2026-04-16T13:51:18",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
