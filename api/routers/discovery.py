@@ -406,18 +406,36 @@ async def test_device(req: dict, _: str = Depends(get_current_user)):
             ok = "deathstar-ok" in out
             message = "SSH OK" if ok else f"SSH response: {out[:80]}"
         elif auth_type == "windows" or platform == "windows":
-            import httpx, urllib3
-            urllib3.disable_warnings()
-            winrm_port = port or 5985
-            scheme = "https" if winrm_port == 5986 else "http"
-            try:
-                r = httpx.get(f"{scheme}://{host}:{winrm_port}/wsman",
-                              verify=False, timeout=8)
-                ok = r.status_code < 500
-                message = f"WinRM HTTP {r.status_code}"
-            except Exception as e:
+            # Real auth test via pywinrm — runs hostname + Get-Date on target
+            from api.collectors.windows import _winrm_run
+            winrm_transport = (creds.get("winrm_auth_method") or "ntlm").lower()
+            use_ssl         = bool(creds.get("use_ssl", False))
+            winrm_port      = port if port else (5986 if use_ssl else 5985)
+            username        = creds.get("username", "")
+            password        = creds.get("password", "")
+            if not username or not password:
                 ok = False
-                message = str(e)[:80]
+                message = "missing username or password in profile"
+            else:
+                try:
+                    out = await asyncio.to_thread(
+                        _winrm_run, host, winrm_port, username, password,
+                        "hostname; Get-Date -Format 'o'",
+                        winrm_transport, use_ssl, 10, 8,
+                    )
+                    first_line = (out.splitlines() or [""])[0].strip()
+                    ok = bool(first_line)
+                    message = f"WinRM OK: {first_line[:40]}" if ok else "WinRM returned empty"
+                except Exception as e:
+                    ok = False
+                    # Surface auth vs reachability distinction where possible
+                    msg = str(e)
+                    if "401" in msg or "unauthorized" in msg.lower():
+                        message = f"WinRM auth failed: {msg[:100]}"
+                    elif "refused" in msg.lower() or "timed out" in msg.lower():
+                        message = f"WinRM unreachable: {msg[:100]}"
+                    else:
+                        message = f"WinRM error: {msg[:100]}"
         else:
             import httpx, urllib3
             urllib3.disable_warnings()

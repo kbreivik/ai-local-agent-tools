@@ -1,3 +1,51 @@
+# CC PROMPT — v2.31.15 — feat(windows): real WinRM collector + auth-verified discovery test
+
+## What this does
+The Windows platform is currently a stub — the UI accepts Windows connections
+and credential profiles, but the collector never actually calls WinRM and the
+discovery test endpoint only checks port reachability. User verified NTLM
+works end-to-end via pywinrm from the agent-01 host, so the only remaining
+gap is wiring it into DEATHSTAR.
+
+This prompt does four small things:
+
+1. Add `pywinrm>=0.5.0` to `requirements.txt` so the runtime image can call
+   WinRM.
+2. Replace the `WindowsCollector._collect_sync()` stub with a real poll
+   (hostname, uptime, CPU, memory, disks, critical services) modelled on
+   the vm_hosts collector but in PowerShell.
+3. Add a shared `_winrm_run()` helper that handles credential resolution
+   (profile → inline), transport selection (ntlm | basic | kerberos),
+   http/https, and logging.
+4. Upgrade `/api/discovery/test` Windows branch from port-check to a real
+   authenticated `hostname; Get-Date` call, so "Test" in the UI actually
+   proves the credentials work.
+
+Scope intentionally stops short of a `win_exec` agent tool — that's v2.31.16
+once polling is verified in the live dashboard.
+
+---
+
+## Change 1 — `requirements.txt`
+
+Open `requirements.txt`. Add one line, alphabetically near `paramiko`:
+
+```
+pywinrm>=0.5.0
+```
+
+(`pywinrm` pulls in `requests`, `requests-ntlm`, `pyspnego` transitively —
+those are already supported on slim-bookworm.)
+
+---
+
+## Change 2 — `api/collectors/windows.py` — full rewrite
+
+Replace the entire file with the following. The shape mirrors
+`api/collectors/vm_hosts.py`: a pure-sync `_winrm_run`, a `_poll_one_host`,
+and a `WindowsCollector` class that uses a ThreadPoolExecutor.
+
+```python
 """WindowsCollector — polls all platform='windows' connections via WinRM.
 
 Auth via a credential profile with auth_type='windows', or inline credentials
@@ -341,3 +389,148 @@ class WindowsCollector(BaseCollector):
                 },
             ))
         return entities if entities else super().to_entities(state)
+```
+
+---
+
+## Change 3 — `api/routers/discovery.py` — real WinRM auth in `/test`
+
+Open `api/routers/discovery.py`. Find the Windows branch inside
+`test_device()` — it currently does a bare `httpx.get(f"{scheme}://{host}:{winrm_port}/wsman")`.
+Replace that branch with an authenticated call using the same helper the
+collector uses:
+
+Find:
+
+```python
+        elif auth_type == "windows" or platform == "windows":
+            import httpx, urllib3
+            urllib3.disable_warnings()
+            winrm_port = port or 5985
+            scheme = "https" if winrm_port == 5986 else "http"
+            try:
+                r = httpx.get(f"{scheme}://{host}:{winrm_port}/wsman",
+                              verify=False, timeout=8)
+                ok = r.status_code < 500
+                message = f"WinRM HTTP {r.status_code}"
+            except Exception as e:
+                ok = False
+                message = str(e)[:80]
+```
+
+Replace with:
+
+```python
+        elif auth_type == "windows" or platform == "windows":
+            # Real auth test via pywinrm — runs hostname + Get-Date on target
+            from api.collectors.windows import _winrm_run
+            winrm_transport = (creds.get("winrm_auth_method") or "ntlm").lower()
+            use_ssl         = bool(creds.get("use_ssl", False))
+            winrm_port      = port if port else (5986 if use_ssl else 5985)
+            username        = creds.get("username", "")
+            password        = creds.get("password", "")
+            if not username or not password:
+                ok = False
+                message = "missing username or password in profile"
+            else:
+                try:
+                    out = await asyncio.to_thread(
+                        _winrm_run, host, winrm_port, username, password,
+                        "hostname; Get-Date -Format 'o'",
+                        winrm_transport, use_ssl, 10, 8,
+                    )
+                    first_line = (out.splitlines() or [""])[0].strip()
+                    ok = bool(first_line)
+                    message = f"WinRM OK: {first_line[:40]}" if ok else "WinRM returned empty"
+                except Exception as e:
+                    ok = False
+                    # Surface auth vs reachability distinction where possible
+                    msg = str(e)
+                    if "401" in msg or "unauthorized" in msg.lower():
+                        message = f"WinRM auth failed: {msg[:100]}"
+                    elif "refused" in msg.lower() or "timed out" in msg.lower():
+                        message = f"WinRM unreachable: {msg[:100]}"
+                    else:
+                        message = f"WinRM error: {msg[:100]}"
+```
+
+The `asyncio` import is already at the top of the endpoint. The `_winrm_run`
+import is deferred inside the branch so the rest of the discovery module
+doesn't hard-fail if pywinrm is somehow missing.
+
+---
+
+## Change 4 — expose the CPU% + disks in the dashboard snapshot
+
+(No file change required — the existing `ConnectionSectionCards` in
+`gui/src/App.jsx` renders `hosts` with the standard InfraCard shape and will
+display `cpu_pct` / `mem_pct` / `uptime_fmt` out of the box. Skip this step —
+listed only so CC doesn't guess there's more frontend work to do.)
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(windows): v2.31.15 real WinRM collector + auth-verified discovery test"
+git push origin main
+```
+
+---
+
+## How to test
+
+After CI builds and you deploy v2.31.15 on agent-01:
+
+1. **Verify pywinrm is in the image**:
+   ```bash
+   docker exec hp1_agent python -c "import winrm; print(winrm.__version__)"
+   # expect: 0.5.x
+   ```
+
+2. **Run the auth-verified discovery test via UI**: Settings → Connections
+   → Discovered → select your Windows host → Test. Should return
+   `WinRM OK: <HOSTNAME>` (not a bare HTTP 405). If it returns
+   `WinRM auth failed: 401`, the credential profile has wrong password or
+   wrong transport — double-check `winrm_auth_method=ntlm` in the profile.
+
+3. **Same test via curl** (if you prefer the backend directly):
+   ```bash
+   curl -s -b /tmp/hp1.cookies -X POST \
+     http://192.168.199.10:8000/api/discovery/test \
+     -H 'Content-Type: application/json' \
+     -d '{"host":"192.168.199.51","port":5985,"platform":"windows","profile_id":"<UUID>"}' \
+     | python3 -m json.tool
+   ```
+   Expect `"ok": true, "message": "WinRM OK: <hostname>"`.
+
+4. **Force a collector poll and inspect the snapshot**:
+   ```bash
+   curl -s -b /tmp/hp1.cookies http://192.168.199.10:8000/api/collectors/windows/poll -X POST
+   sleep 2
+   curl -s -b /tmp/hp1.cookies http://192.168.199.10:8000/api/status \
+     | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('windows',{}),indent=2))"
+   ```
+   Expect `health: healthy`, one entry per Windows host with real hostname,
+   CPU%, memory%, disks, and services.
+
+5. **Dashboard card**: the Windows host should now render in the COMPUTE
+   section with the normal VM-card shape (green dot, uptime, CPU, memory).
+   Red dot + `problem` text if anything fails.
+
+---
+
+## Notes
+
+- Kerberos transport needs a working `krb5.conf` in the container. NTLM is
+  recommended for LAN setups — it needs no extra config.
+- If you later want to widen the watched services list, add a settings key
+  `windowsWatchedServices` (seeded via `api/routers/settings.py`) and inject
+  into the PS script. Not in this prompt — keep scope tight.
+- No agent tool (`win_exec`) yet. That's v2.31.16 once polling is confirmed
+  live.
+- The change detection + metric_samples + entity_history writes that
+  `vm_hosts.py` does are intentionally **not** mirrored here — they can be
+  added later in a small follow-up once you decide what Windows metrics
+  matter for trending. Current scope is: get a green dot in the dashboard.

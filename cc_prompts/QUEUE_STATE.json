@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T14:46:01",
+  "updated_at": "2026-04-16T15:58:57",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1381,10 +1381,26 @@
       "filename": "CC_PROMPT_v2.31.14.md",
       "version": "v2.31.14",
       "theme": "fix(ui): empty plan modal + Logs default tab + Full-log to Operations",
+      "runner_status": "DONE",
+      "commit_sha": "d0649d3",
+      "error": "",
+      "started_at": "2026-04-16T14:46:01",
+      "finished_at": "2026-04-16T14:49:06",
+      "duration_s": 185.22758880000038,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_144601_CC_PROMPT_v2.31.14.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.15.md",
+      "version": "v2.31.15",
+      "theme": "feat(windows): real WinRM collector + auth-verified discovery test",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T14:46:01",
+      "started_at": "2026-04-16T15:58:57",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
