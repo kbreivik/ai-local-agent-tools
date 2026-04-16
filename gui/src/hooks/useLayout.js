@@ -16,6 +16,7 @@ export const DEFAULT_LAYOUT = {
     { tiles: ['NETWORK'] },
     { tiles: ['STORAGE', 'SECURITY'] },
     { tiles: ['VM_HOSTS'] },
+    { tiles: ['WINDOWS'] },
   ],
   collapsed: [],
   prefs: {
@@ -43,6 +44,9 @@ export function useLayout() {
             )
             if (!allTiles.includes('VM_HOSTS')) {
               parsed.rows = [...(parsed.rows || []), { tiles: ['VM_HOSTS'] }]
+            }
+            if (!allTiles.includes('WINDOWS')) {
+              parsed.rows = [...(parsed.rows || []), { tiles: ['WINDOWS'] }]
             }
             setLayout(parsed)
           } catch { /* use default */ }

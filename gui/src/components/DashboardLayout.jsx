@@ -45,6 +45,7 @@ const TILE_META = {
   STORAGE:    { icon: '⊠', badge: 'DATA' },
   SECURITY:   { icon: '⊛', badge: 'SOC' },
   VM_HOSTS:   { icon: '⬢', badge: 'NODES' },
+  WINDOWS:    { icon: '⊞', badge: 'WINRM' },
 }
 
 // Human-readable display names for tile headers (key → label)
@@ -56,6 +57,7 @@ const TILE_DISPLAY_NAMES = {
   STORAGE:    'Storage',
   SECURITY:   'Security',
   VM_HOSTS:   'VM Hosts',
+  WINDOWS:    'Windows',
 }
 
 const ACTION_BTN = {

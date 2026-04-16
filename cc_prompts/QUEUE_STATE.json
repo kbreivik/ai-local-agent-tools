@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T15:58:57",
+  "updated_at": "2026-04-16T16:31:04",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1397,10 +1397,26 @@
       "filename": "CC_PROMPT_v2.31.15.md",
       "version": "v2.31.15",
       "theme": "feat(windows): real WinRM collector + auth-verified discovery test",
+      "runner_status": "DONE",
+      "commit_sha": "72c3573",
+      "error": "",
+      "started_at": "2026-04-16T15:58:57",
+      "finished_at": "2026-04-16T16:01:06",
+      "duration_s": 129.3542174999966,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_155857_CC_PROMPT_v2.31.15.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.16.md",
+      "version": "v2.31.16",
+      "theme": "fix(windows): WMI-free POLL script + dedicated WINDOWS dashboard section",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T15:58:57",
+      "started_at": "2026-04-16T16:31:04",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

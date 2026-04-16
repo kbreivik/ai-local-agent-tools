@@ -25,32 +25,80 @@ _DEFAULT_HTTPS_PORT = 5986
 # Services we care about by default. Add more via settings later if needed.
 _DEFAULT_WATCHED_SERVICES = ["WinRM", "Spooler", "W32Time", "LanmanServer", "Dnscache"]
 
-# Single PowerShell script — results delimited by '=KEY=' lines. Keep output small.
+# WMI-free poll script.
+# Works for a non-admin Windows user who is in:
+#   - Remote Management Users        (WinRM access)
+#   - Performance Monitor Users      (Get-Counter / PDH)
+#   - Event Log Readers              (not used yet; reserved for future)
+# plus PSSessionConfiguration Read + Invoke on Microsoft.PowerShell.
+#
+# Intentionally avoids Get-CimInstance Win32_* — those require DCOM +
+# Root\CIMV2 namespace permission which least-privilege users don't have.
 _POLL_PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 
 function Emit($k, $v) { Write-Output "=$k="; Write-Output $v }
 
-Emit HOSTNAME (hostname)
-Emit UPTIME_S ([int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds)
-Emit OS_CAPTION ((Get-CimInstance Win32_OperatingSystem).Caption)
-Emit OS_VERSION ((Get-CimInstance Win32_OperatingSystem).Version)
+# --- Hostname + uptime + OS ------------------------------------------------
+Emit HOSTNAME   $env:COMPUTERNAME
 
-$mem = Get-CimInstance Win32_OperatingSystem
-Emit MEM_TOTAL_KB ($mem.TotalVisibleMemorySize)
-Emit MEM_FREE_KB  ($mem.FreePhysicalMemory)
+# TickCount64 is milliseconds since boot; available on all Windows versions
+# since 2008 R2. No WMI, no admin.
+try { $uptimeMs = [Environment]::TickCount64 } catch { $uptimeMs = 0 }
+Emit UPTIME_S   ([int]([int64]$uptimeMs / 1000))
 
-$cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-Emit CPU_PCT ([int]$cpu)
+# Registry read — no admin needed, any authenticated user can read.
+$regPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+$prod = (Get-ItemProperty -Path $regPath -Name 'ProductName'        -ErrorAction SilentlyContinue).ProductName
+$dver = (Get-ItemProperty -Path $regPath -Name 'DisplayVersion'     -ErrorAction SilentlyContinue).DisplayVersion
+$curr = (Get-ItemProperty -Path $regPath -Name 'CurrentBuildNumber' -ErrorAction SilentlyContinue).CurrentBuildNumber
+$ubr  = (Get-ItemProperty -Path $regPath -Name 'UBR'                -ErrorAction SilentlyContinue).UBR
+Emit OS_CAPTION ($prod)
+Emit OS_VERSION ("$curr.$ubr" + $(if ($dver) { " ($dver)" } else { "" }))
 
+# --- Memory total + free via VB ComputerInfo (no WMI, no admin) ------------
+try {
+    Add-Type -AssemblyName 'Microsoft.VisualBasic' -ErrorAction SilentlyContinue
+    $ci = New-Object Microsoft.VisualBasic.Devices.ComputerInfo
+    $memTotalBytes = [int64]$ci.TotalPhysicalMemory
+    $memFreeBytes  = [int64]$ci.AvailablePhysicalMemory
+} catch {
+    $memTotalBytes = 0
+    $memFreeBytes  = 0
+}
+Emit MEM_TOTAL_BYTES $memTotalBytes
+Emit MEM_FREE_BYTES  $memFreeBytes
+
+# --- CPU via PDH perf counter (Performance Monitor Users required) --------
+try {
+    $cpuSample = (Get-Counter -Counter '\Processor(_Total)\% Processor Time' `
+                  -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop).CounterSamples[0].CookedValue
+    $cpuPct = [int]$cpuSample
+} catch {
+    # Fallback: read via .NET PerformanceCounter API directly
+    try {
+        $pc = New-Object System.Diagnostics.PerformanceCounter('Processor', '% Processor Time', '_Total')
+        $null = $pc.NextValue()  # first sample is always 0
+        Start-Sleep -Milliseconds 500
+        $cpuPct = [int]$pc.NextValue()
+        $pc.Close()
+    } catch { $cpuPct = -1 }
+}
+Emit CPU_PCT $cpuPct
+
+# --- Disks via Get-PSDrive (no WMI, no admin) ------------------------------
 Emit DISKS_BEGIN ''
-Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+    Where-Object { $_.Used -ne $null -and ($_.Used + $_.Free) -gt 0 } |
     ForEach-Object {
-        $pct = if ($_.Size -gt 0) { [int]((($_.Size - $_.FreeSpace) / $_.Size) * 100) } else { 0 }
-        Write-Output ("{0}|{1}|{2}|{3}" -f $_.DeviceID, $_.Size, $_.FreeSpace, $pct)
+        $total = [int64]($_.Used + $_.Free)
+        $free  = [int64]$_.Free
+        $pct   = if ($total -gt 0) { [int]((($total - $free) / $total) * 100) } else { 0 }
+        Write-Output ("{0}:|{1}|{2}|{3}" -f $_.Name, $total, $free, $pct)
     }
 Emit DISKS_END ''
 
+# --- Watched services (Get-Service, no WMI) --------------------------------
 Emit SERVICES_BEGIN ''
 $watched = 'WinRM','Spooler','W32Time','LanmanServer','Dnscache'
 foreach ($s in $watched) {
@@ -147,10 +195,10 @@ def _parse_poll_output(output, label, host):
     os_version  = first("OS_VERSION")
     uptime_secs = _int("UPTIME_S")
 
-    mem_total_kb = _int("MEM_TOTAL_KB")
-    mem_free_kb  = _int("MEM_FREE_KB")
-    mem_used_kb  = max(0, mem_total_kb - mem_free_kb)
-    mem_pct = round((mem_used_kb / mem_total_kb) * 100) if mem_total_kb else 0
+    mem_total_bytes = _int("MEM_TOTAL_BYTES")
+    mem_free_bytes  = _int("MEM_FREE_BYTES")
+    mem_used_bytes  = max(0, mem_total_bytes - mem_free_bytes)
+    mem_pct = round((mem_used_bytes / mem_total_bytes) * 100) if mem_total_bytes else 0
 
     cpu_pct = _int("CPU_PCT")
 
@@ -220,8 +268,8 @@ def _parse_poll_output(output, label, host):
         "uptime_secs": uptime_secs,
         "uptime_fmt":  _fmt_uptime(uptime_secs),
         "cpu_pct":     cpu_pct,
-        "mem_total_bytes": mem_total_kb * 1024,
-        "mem_used_bytes":  mem_used_kb  * 1024,
+        "mem_total_bytes": mem_total_bytes,
+        "mem_used_bytes":  mem_used_bytes,
         "mem_pct":     mem_pct,
         "disks":       disks,
         "services":    services,
@@ -327,7 +375,7 @@ class WindowsCollector(BaseCollector):
                 label=label,
                 component=self.component,
                 platform="windows",
-                section="COMPUTE",
+                section="WINDOWS",
                 status=_DOT_STATUS.get(h.get("dot", "grey"), "unknown"),
                 last_error=h.get("problem"),
                 metadata={

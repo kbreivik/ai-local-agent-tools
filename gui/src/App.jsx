@@ -30,6 +30,7 @@ import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
+import WindowsSection from './components/WindowsSection'
 import RunbooksPanel from './components/RunbooksPanel'
 import DiscoveredView from './components/DiscoveredView'
 import { SkeletonGrid } from './components/SkeletonCard'
@@ -665,7 +666,7 @@ function AlertsPanel() {
 
 function DrillDownBar({ search, setSearch, showFilter, setShowFilter, typeFilter, setTypeFilter, globalMaint, setGlobalMaint, stats, compareMode, compareSet, onToggleCompare, layoutDirty, onSaveLayout, onExpandAllCards, onCollapseAllCards, onExpandAllSections, onCollapseAllSections, allCardsExpanded, allSectionsExpanded, summaryStale, onRefreshSummary }) {
   const showFilters = ['ALL', 'ERRORS', 'DEGRADED', 'IN MAINT']
-  const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY']
+  const typeFilters = ['ALL', 'PLATFORM', 'COMPUTE', 'NETWORK', 'STORAGE', 'SECURITY', 'WINDOWS']
   const _btn = (active) => ({
     padding: '2px 6px', fontSize: 9, fontFamily: 'var(--font-mono)',
     background: active ? 'var(--accent-dim)' : 'transparent',
@@ -1276,6 +1277,11 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
     VM_HOSTS: showSection('COMPUTE') ? (
       summaryLoading ? <SkeletonGrid count={5} /> :
       <VMHostsSection showFilter={showFilter} onEntityDetail={onEntityClick} />
+    ) : null,
+    WINDOWS: showSection('WINDOWS') ? (
+      <ServiceCardsErrorBoundary>
+        <WindowsSection showFilter={showFilter} onEntityDetail={onEntityClick} />
+      </ServiceCardsErrorBoundary>
     ) : null,
   }
 

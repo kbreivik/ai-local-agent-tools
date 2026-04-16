@@ -18,6 +18,7 @@ export const INFRA_SECTION_KEYS = [
   { key: 'pbs',              label: 'PBS',      group: 'infra' },
   { key: 'truenas',          label: 'TrueNAS',  group: 'infra' },
   { key: 'fortigate',        label: 'FortiGate', group: 'infra' },
+  { key: 'windows',          label: 'Windows',   group: 'infra' },
 ]
 
 export const ALL_CARD_KEYS = [...STATUS_CARD_KEYS, ...INFRA_SECTION_KEYS]
