@@ -875,6 +875,25 @@ async def _run_single_agent_step(
                     _lm_model(), duration_ms
                 )
 
+                # Immutable audit row for destructive / remote-exec tools (v2.31.2)
+                try:
+                    from api.db.agent_actions import write_action, is_audited
+                    if is_audited(fn_name):
+                        write_action(
+                            session_id=session_id,
+                            operation_id=operation_id,
+                            task_id=session_id,           # no separate task_id today
+                            tool_name=fn_name,
+                            args=fn_args,
+                            result_status=result_status,
+                            result_summary=result_msg,
+                            duration_ms=duration_ms,
+                            owner_user=owner_user,
+                            was_planned=plan_action_called,
+                        )
+                except Exception as _ae:
+                    log.debug("agent_actions write failed: %s", _ae)
+
                 # Stream to GUI
                 await manager.send_line(
                     "tool",

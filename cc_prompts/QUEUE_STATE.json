@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T09:31:56",
+  "updated_at": "2026-04-16T12:13:42",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1173,10 +1173,26 @@
       "filename": "CC_PROMPT_v2.31.1.md",
       "version": "v2.31.1",
       "theme": "fix(security): crypto boot-safety + key fingerprint + canary",
+      "runner_status": "DONE",
+      "commit_sha": "5870e88",
+      "error": "",
+      "started_at": "2026-04-16T09:31:56",
+      "finished_at": "2026-04-16T09:34:07",
+      "duration_s": 130.8733405999992,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_093156_CC_PROMPT_v2.31.1.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.2.md",
+      "version": "v2.31.2",
+      "theme": "feat(security): agent_actions audit table for destructive tool calls",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T09:31:56",
+      "started_at": "2026-04-16T12:13:42",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

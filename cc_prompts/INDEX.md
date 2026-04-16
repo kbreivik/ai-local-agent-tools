@@ -123,6 +123,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.31.0.md  | v2.31.0  | feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks | DONE (4da63fd) |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
 | CC_PROMPT_v2.31.1.md  | v2.31.1  | fix(security): crypto boot-safety + key fingerprint + canary | DONE (3c6feb7) |
+| CC_PROMPT_v2.31.2.md  | v2.31.2  | feat(security): agent_actions audit table for destructive tool calls | RUNNING |
 
 ---
 
@@ -297,6 +298,23 @@ with a canonical encrypted string on first boot. New /api/health/crypto endpoint
 returns {status: ok|unseeded|mismatch|error, fingerprint, message}. api/main.py wires
 check_encryption_key_safe() right after init_db() (before any encrypted reads) and
 ensure_crypto_canary() after migrate_plaintext_secrets().
+
+**v2.31.2** — feat(security): agent_actions audit table for destructive tool calls.
+Immutable forensic record of every audited tool invocation the agent makes. New
+api/db/agent_actions.py: agent_actions table (id, timestamp, session_id, operation_id,
+tool_name, args_redacted, result_status, result_summary, duration_ms, owner_user,
+was_planned, blast_radius), write_action() (never raises — audit failures never block
+the agent loop), list_actions() with session/tool/user/since filters, redact_args()
+walking nested dicts and replacing values under keys matching pass/password/secret/token/
+key/credential/auth/bearer/api_key, BLAST_RADIUS map (node/service/cluster/fleet) and
+AUDITED_TOOLS frozenset covering destructive tools plus vm_exec and kafka_exec (any
+command) for complete remote-exec forensics. New api/routers/agent_actions_api.py:
+GET /api/agent/actions with query filters (session_id, tool_name, user, since, limit
+1-500), role-gated to sith_lord + imperial_officer (403 otherwise). api/routers/agent.py
+adds one try-except block right after log_tool_call() in _run_single_agent_step,
+calling write_action() with owner_user + plan_action_called flag. api/main.py wires
+init_agent_actions() in lifespan and mounts the router. No UI this version — Recent
+Actions tab comes in v2.31.3.
 
 ---
 

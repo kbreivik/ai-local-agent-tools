@@ -31,6 +31,7 @@ from api.routers.notifications import router as notifications_router
 from api.routers.credential_profiles import router as cred_profiles_router
 from api.routers.layout import router as layout_router
 from api.routers.escalations import router as escalations_router, init_escalations
+from api.routers.agent_actions_api import router as agent_actions_router
 from api.routers.errors import router as errors_router
 from api.routers.users import router as users_router
 from api.routers.entities import router as entities_router
@@ -178,6 +179,12 @@ async def lifespan(app: FastAPI):
         init_escalations()
     except Exception as e:
         _log.debug("Escalations table init skipped: %s", e)
+    # Initialize agent_actions audit table
+    try:
+        from api.db.agent_actions import init_agent_actions
+        init_agent_actions()
+    except Exception as e:
+        _log.debug("agent_actions init skipped: %s", e)
     # Initialize VM action audit log table
     try:
         from api.db.vm_action_log import init_vm_action_log
@@ -403,6 +410,7 @@ app.include_router(entities_router)
 app.include_router(cred_profiles_router)
 app.include_router(layout_router)
 app.include_router(escalations_router)
+app.include_router(agent_actions_router)
 app.include_router(errors_router)
 app.include_router(vm_exec_allowlist_router)
 app.include_router(runbooks_router)
