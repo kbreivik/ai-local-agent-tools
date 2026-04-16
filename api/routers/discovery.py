@@ -406,7 +406,7 @@ async def test_device(req: dict, _: str = Depends(get_current_user)):
             ok = "deathstar-ok" in out
             message = "SSH OK" if ok else f"SSH response: {out[:80]}"
         elif auth_type == "windows" or platform == "windows":
-            # Real auth test via pywinrm — runs hostname + Get-Date on target
+            # Real auth test via pypsrp — runs hostname + Get-Date on target
             from api.collectors.windows import _winrm_run
             winrm_transport = (creds.get("winrm_auth_method") or "ntlm").lower()
             use_ssl         = bool(creds.get("use_ssl", False))

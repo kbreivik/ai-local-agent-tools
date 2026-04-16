@@ -1,0 +1,445 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.31.16.md (v2.31.16)
+Theme: fix(windows): WMI-free POLL script + dedicated WINDOWS dashboard section
+
+Prompt content:
+
+# CC PROMPT — v2.31.16 — fix(windows): WMI-free POLL script + dedicated WINDOWS dashboard section
+
+## What this does
+v2.31.15's POLL script used `Get-CimInstance Win32_*` which goes through
+DCOM/WMI — that requires `Root\CIMV2` namespace permission the user doesn't
+have (and doesn't want to grant). The user's `ai-agent` is a least-privilege
+account with membership in:
+  - Remote Management Users (WinRM session access ✓)
+  - Performance Monitor Users (PDH counters ✓)
+  - Event Log Readers (WinEvent ✓)
+  - PSSessionConfiguration ACL: Read + Invoke ✓
+
+…but intentionally NOT local Administrator. So WMI calls fail with
+`wsmanfault_code: 5 (Access is denied)` even though `hostname; Get-Date`
+works fine.
+
+This prompt does two small things:
+
+1. **Rewrite `_POLL_PS`** to get the same host data without touching WMI.
+   Uses `[Environment]`, `Microsoft.VisualBasic.Devices.ComputerInfo`,
+   registry reads, `Get-Counter`, `Get-PSDrive`, and `Get-Service`. All of
+   these work with the groups the agent user already has.
+2. **Move Windows cards to a dedicated `WINDOWS` dashboard section** (change
+   `section="COMPUTE"` → `section="WINDOWS"` in `to_entities()`) and ensure
+   `CardFilterBar.jsx` has `windows` in `INFRA_SECTION_KEYS` so the section
+   renders.
+
+Two file changes total.
+
+---
+
+## Change 1 — `api/collectors/windows.py` — replace `_POLL_PS`
+
+Open `api/collectors/windows.py`. Find the `_POLL_PS = r"""..."""` multi-line
+string (starts near the top of the file, right after the `_DEFAULT_WATCHED_SERVICES`
+list). **Replace the entire `_POLL_PS` constant** with:
+
+```python
+# WMI-free poll script.
+# Works for a non-admin Windows user who is in:
+#   - Remote Management Users        (WinRM access)
+#   - Performance Monitor Users      (Get-Counter / PDH)
+#   - Event Log Readers              (not used yet; reserved for future)
+# plus PSSessionConfiguration Read + Invoke on Microsoft.PowerShell.
+#
+# Intentionally avoids Get-CimInstance Win32_* — those require DCOM +
+# Root\CIMV2 namespace permission which least-privilege users don't have.
+_POLL_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+
+function Emit($k, $v) { Write-Output "=$k="; Write-Output $v }
+
+# --- Hostname + uptime + OS ------------------------------------------------
+Emit HOSTNAME   $env:COMPUTERNAME
+
+# TickCount64 is milliseconds since boot; available on all Windows versions
+# since 2008 R2. No WMI, no admin.
+try { $uptimeMs = [Environment]::TickCount64 } catch { $uptimeMs = 0 }
+Emit UPTIME_S   ([int]([int64]$uptimeMs / 1000))
+
+# Registry read — no admin needed, any authenticated user can read.
+$regPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+$prod = (Get-ItemProperty -Path $regPath -Name 'ProductName'        -ErrorAction SilentlyContinue).ProductName
+$dver = (Get-ItemProperty -Path $regPath -Name 'DisplayVersion'     -ErrorAction SilentlyContinue).DisplayVersion
+$curr = (Get-ItemProperty -Path $regPath -Name 'CurrentBuildNumber' -ErrorAction SilentlyContinue).CurrentBuildNumber
+$ubr  = (Get-ItemProperty -Path $regPath -Name 'UBR'                -ErrorAction SilentlyContinue).UBR
+Emit OS_CAPTION ($prod)
+Emit OS_VERSION ("$curr.$ubr" + $(if ($dver) { " ($dver)" } else { "" }))
+
+# --- Memory total + free via VB ComputerInfo (no WMI, no admin) ------------
+try {
+    Add-Type -AssemblyName 'Microsoft.VisualBasic' -ErrorAction SilentlyContinue
+    $ci = New-Object Microsoft.VisualBasic.Devices.ComputerInfo
+    $memTotalBytes = [int64]$ci.TotalPhysicalMemory
+    $memFreeBytes  = [int64]$ci.AvailablePhysicalMemory
+} catch {
+    $memTotalBytes = 0
+    $memFreeBytes  = 0
+}
+Emit MEM_TOTAL_BYTES $memTotalBytes
+Emit MEM_FREE_BYTES  $memFreeBytes
+
+# --- CPU via PDH perf counter (Performance Monitor Users required) --------
+try {
+    $cpuSample = (Get-Counter -Counter '\Processor(_Total)\% Processor Time' `
+                  -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop).CounterSamples[0].CookedValue
+    $cpuPct = [int]$cpuSample
+} catch {
+    # Fallback: read via .NET PerformanceCounter API directly
+    try {
+        $pc = New-Object System.Diagnostics.PerformanceCounter('Processor', '% Processor Time', '_Total')
+        $null = $pc.NextValue()  # first sample is always 0
+        Start-Sleep -Milliseconds 500
+        $cpuPct = [int]$pc.NextValue()
+        $pc.Close()
+    } catch { $cpuPct = -1 }
+}
+Emit CPU_PCT $cpuPct
+
+# --- Disks via Get-PSDrive (no WMI, no admin) ------------------------------
+Emit DISKS_BEGIN ''
+Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+    Where-Object { $_.Used -ne $null -and ($_.Used + $_.Free) -gt 0 } |
+    ForEach-Object {
+        $total = [int64]($_.Used + $_.Free)
+        $free  = [int64]$_.Free
+        $pct   = if ($total -gt 0) { [int]((($total - $free) / $total) * 100) } else { 0 }
+        Write-Output ("{0}:|{1}|{2}|{3}" -f $_.Name, $total, $free, $pct)
+    }
+Emit DISKS_END ''
+
+# --- Watched services (Get-Service, no WMI) --------------------------------
+Emit SERVICES_BEGIN ''
+$watched = 'WinRM','Spooler','W32Time','LanmanServer','Dnscache'
+foreach ($s in $watched) {
+    $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
+    if ($svc) { Write-Output ("{0}:{1}" -f $svc.Name, $svc.Status) }
+    else      { Write-Output ("{0}:missing" -f $s) }
+}
+Emit SERVICES_END ''
+"""
+```
+
+Next, **update `_parse_poll_output`** to match the new output keys. Find
+the existing `_parse_poll_output` function and replace the memory parsing
+block. Specifically, the old code reads `MEM_TOTAL_KB` and `MEM_FREE_KB`
+(in kilobytes from Win32_OS). The new script emits `MEM_TOTAL_BYTES` and
+`MEM_FREE_BYTES` directly.
+
+Find this block in `_parse_poll_output`:
+```python
+    mem_total_kb = _int("MEM_TOTAL_KB")
+    mem_free_kb  = _int("MEM_FREE_KB")
+    mem_used_kb  = max(0, mem_total_kb - mem_free_kb)
+    mem_pct = round((mem_used_kb / mem_total_kb) * 100) if mem_total_kb else 0
+```
+
+Replace with:
+```python
+    mem_total_bytes = _int("MEM_TOTAL_BYTES")
+    mem_free_bytes  = _int("MEM_FREE_BYTES")
+    mem_used_bytes  = max(0, mem_total_bytes - mem_free_bytes)
+    mem_pct = round((mem_used_bytes / mem_total_bytes) * 100) if mem_total_bytes else 0
+```
+
+And in the final returned dict at the bottom of `_parse_poll_output`, find:
+```python
+        "mem_total_bytes": mem_total_kb * 1024,
+        "mem_used_bytes":  mem_used_kb  * 1024,
+```
+
+Replace with:
+```python
+        "mem_total_bytes": mem_total_bytes,
+        "mem_used_bytes":  mem_used_bytes,
+```
+
+Also update the disk parser — the new script emits `"C:|total|free|pct"`
+(with a trailing colon on the drive letter, matching the original which
+had `"C:"` as the device id from Win32_LogicalDisk). The existing parser
+already handles `DeviceID|total|free|pct`. No change needed there.
+
+---
+
+## Change 2 — `api/collectors/windows.py` — put cards in a dedicated WINDOWS section
+
+In the same file, find `WindowsCollector.to_entities()`. It currently sets:
+```python
+                section="COMPUTE",
+```
+
+Change to:
+```python
+                section="WINDOWS",
+```
+
+Rationale: Windows hosts get their own dashboard row the same way PBS,
+TrueNAS, and UniFi do. Keeps COMPUTE as pure Linux VMs and scales better
+when more Windows hosts are added.
+
+---
+
+## Change 3 — `gui/src/components/CardFilterBar.jsx` — register WINDOWS section
+
+Open `gui/src/components/CardFilterBar.jsx`. Find the `INFRA_SECTION_KEYS`
+constant (or whatever it's named — should be a list of section keys used
+to render filter chips).
+
+Add `'windows'` to the list if it isn't already present. Based on the
+existing pattern, it likely looks like:
+```js
+const INFRA_SECTION_KEYS = [
+  'compute', 'network', 'storage', 'security',
+  'proxmox', 'vm_hosts', 'containers', 'swarm',
+  'kafka', 'unifi', 'pbs', 'truenas', 'fortigate',
+  // ...
+]
+```
+
+Add `'windows'` in a sensible slot (suggest: next to `vm_hosts`).
+
+If `CardFilterBar.jsx` uses a different structure (object with labels, for
+example), add an entry like:
+```js
+windows: { label: 'WINDOWS', icon: '🪟' },   // or whatever the icon convention is
+```
+
+Read the file first to match the existing pattern. Don't invent a
+different structure.
+
+---
+
+## Change 4 — `gui/src/App.jsx` — render WINDOWS section
+
+Open `gui/src/App.jsx`. Search for how existing collector-driven sections
+render (e.g. `pbs`, `truenas`, `unifi`). The `ConnectionSectionCards`
+component or similar section renderer likely takes the dashboard snapshot
+and maps collector keys → sections.
+
+Look for a mapping like:
+```js
+const SECTION_FOR = {
+  proxmox_vms: 'COMPUTE',
+  vm_hosts:    'COMPUTE',
+  pbs:         'STORAGE',
+  truenas:     'STORAGE',
+  unifi:       'NETWORK',
+  // ...
+}
+```
+
+Add:
+```js
+  windows:     'WINDOWS',
+```
+
+Or, if sections are rendered from entities' `section` field directly
+(likely — since `to_entities()` sets it), then the only thing needed is
+the `CardFilterBar` registration from Change 3, and a `WINDOWS` entry in
+whatever component iterates the sections to render section headers.
+
+If there's a `SECTION_HEADERS` or `SECTION_LABELS` object, add:
+```js
+  WINDOWS: 'WINDOWS',
+```
+
+Again, read first, don't invent structure.
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(windows): v2.31.16 WMI-free POLL script + dedicated WINDOWS section"
+git push origin main
+```
+
+---
+
+## How to test
+
+After CI builds and you deploy v2.31.16 on agent-01:
+
+1. **Verify no WMI usage**:
+   ```bash
+   docker exec hp1_agent grep -c "Win32_" api/collectors/windows.py
+   # expect: 0 — the rewritten POLL uses no WMI classes
+   ```
+
+2. **Force poll**:
+   ```bash
+   curl -s -b /tmp/hp1.cookies -X POST http://192.168.199.10:8000/api/collectors/windows/poll
+   sleep 3
+   curl -s -b /tmp/hp1.cookies http://192.168.199.10:8000/api/entities \
+     | python3 -c "import sys,json;[print(json.dumps(e,indent=2)) for e in json.load(sys.stdin) if e['component']=='windows']"
+   ```
+
+   Expected: `status: "healthy"`, real `hostname` (MS-S1-SRV-01), `cpu_pct`
+   0–100, `mem_pct` 0–100, `uptime_fmt`, `max_disk_pct`, `last_error: null`.
+
+3. **Dashboard render**:
+   - Refresh the UI. Look for a new **WINDOWS** section below COMPUTE/NETWORK.
+   - Should show one card for MS-S1 with green/amber dot, hostname, uptime,
+     CPU%, memory%, disk bar.
+   - Filter bar should include a `WINDOWS` chip.
+
+4. **No permission errors in logs**:
+   ```bash
+   docker logs hp1_agent 2>&1 | grep -i -E "(windows|winrm|wsman)" | tail -20
+   # expect: no "Access is denied" / "wsmanfault_code"
+   ```
+
+5. **Regression — discovery test still works**:
+   Settings → Connections → Discovered → Test the MS-S1 row → still returns
+   `WinRM OK: MS-S1-SRV-01` (unchanged — `hostname; Get-Date` has never
+   needed WMI).
+
+---
+
+## Notes
+
+- If `Get-Counter` fails for some reason (e.g. PerfMon service stopped), the
+  script falls back to `System.Diagnostics.PerformanceCounter`. If THAT also
+  fails, `cpu_pct` comes back as `-1` and the card shows a warning — but the
+  rest of the poll still succeeds. No binary pass/fail.
+- Memory total from `ComputerInfo` matches what `systeminfo` reports. Within
+  ~1–2% of WMI's `Win32_ComputerSystem.TotalPhysicalMemory`.
+- The WMI-free approach loses a few fields we had before: no WMI means no
+  bios version, no motherboard info, no network adapter stats. Those can be
+  added later via `ipconfig` parsing / registry reads if needed.
+- Future (not this prompt):
+  - **Event Log tail** in the card (uses Event Log Readers — already granted)
+  - **Scheduled task status** (`schtasks.exe` — no special perms)
+  - **win_exec agent tool** (analogous to vm_exec; gated behind DESTRUCTIVE_TOOLS)
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 16:31:04
+========================================================================
+PROMPT COMPLETE: v2.31.16
+[STATUS] 4m43s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  4m43s
+========================================================================

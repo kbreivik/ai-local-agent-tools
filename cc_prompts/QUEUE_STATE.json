@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T16:31:04",
+  "updated_at": "2026-04-16T17:05:45",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1413,10 +1413,26 @@
       "filename": "CC_PROMPT_v2.31.16.md",
       "version": "v2.31.16",
       "theme": "fix(windows): WMI-free POLL script + dedicated WINDOWS dashboard section",
+      "runner_status": "DONE",
+      "commit_sha": "290019f",
+      "error": "",
+      "started_at": "2026-04-16T16:31:04",
+      "finished_at": "2026-04-16T16:35:47",
+      "duration_s": 283.37630720000016,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_163104_CC_PROMPT_v2.31.16.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.17.md",
+      "version": "v2.31.17",
+      "theme": "fix(windows): swap pywinrm→pypsrp (PSRP over Microsoft.PowerShell endpoint)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T16:31:04",
+      "started_at": "2026-04-16T17:05:45",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

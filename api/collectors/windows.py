@@ -115,7 +115,7 @@ def _resolve_winrm_creds(conn, all_conns):
     from api.db.credential_profiles import resolve_credentials_for_connection
     creds = resolve_credentials_for_connection(conn, all_conns) or {}
     transport = (creds.get("winrm_auth_method") or "ntlm").lower()
-    # Normalise — pywinrm accepts: basic, plaintext, ntlm, kerberos, credssp, certificate
+    # Normalise — pypsrp accepts: negotiate, ntlm, kerberos, basic, certificate, credssp
     if transport not in ("basic", "plaintext", "ntlm", "kerberos", "credssp", "certificate"):
         transport = "ntlm"
     return {
@@ -129,37 +129,65 @@ def _resolve_winrm_creds(conn, all_conns):
 def _winrm_run(host, port, username, password, script,
                transport="ntlm", use_ssl=False, read_timeout=30,
                operation_timeout=25):
-    """Run a PowerShell script on a Windows host via WinRM. Returns stdout str.
-    Raises RuntimeError on non-zero PS exit or auth failure.
-    """
-    import winrm
+    """Run a PowerShell script on a Windows host via PSRP (pypsrp).
 
-    scheme = "https" if use_ssl else "http"
-    endpoint = f"{scheme}://{host}:{port}/wsman"
+    Uses the Microsoft.PowerShell endpoint, not WinRS — which means the
+    target user only needs Invoke on the PSSessionConfiguration, not
+    Execute on the default WinRS cmd shell SDDL.
+
+    Returns stdout str. Raises RuntimeError on PS errors or auth failure.
+    """
+    from pypsrp.client import Client
+
+    # pypsrp accepts: 'negotiate' (default), 'ntlm', 'kerberos',
+    # 'basic', 'certificate', 'credssp'. Keep our accepted set in sync
+    # with pypsrp's vocabulary.
+    _VALID_AUTH = ("negotiate", "ntlm", "kerberos", "basic", "certificate", "credssp")
+    auth = (transport or "ntlm").lower()
+    if auth not in _VALID_AUTH:
+        auth = "ntlm"
 
     t0 = time.monotonic()
-    session = winrm.Session(
-        endpoint,
-        auth=(username, password),
-        transport=transport,
-        server_cert_validation="ignore" if use_ssl else "validate",
-        read_timeout_sec=read_timeout,
-        operation_timeout_sec=operation_timeout,
+    log.debug("PSRP exec → %s@%s:%d (%s, ssl=%s) | cmd: %s",
+              username, host, port, auth, use_ssl,
+              (script or "")[:80].replace("\n", " "))
+
+    client = Client(
+        server=host,
+        port=port,
+        username=username,
+        password=password,
+        ssl=use_ssl,
+        auth=auth,
+        cert_validation=False if use_ssl else True,
+        read_timeout=read_timeout,
+        operation_timeout=operation_timeout,
     )
-    log.debug("WinRM exec → %s@%s:%d (%s) | cmd: %s",
-              username, host, port, transport, script[:80].replace("\n", " "))
 
-    result = session.run_ps(script)
+    try:
+        output, streams, had_errors = client.execute_ps(script)
+    except Exception as e:
+        # pypsrp raises WSManFaultError / AuthenticationError / etc.
+        # Normalise to RuntimeError so callers (collector + discovery test)
+        # don't need to import pypsrp-specific exception types.
+        raise RuntimeError(str(e)) from e
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
     elapsed = int((time.monotonic() - t0) * 1000)
-    stdout = result.std_out.decode("utf-8", errors="replace") if result.std_out else ""
-    stderr = result.std_err.decode("utf-8", errors="replace") if result.std_err else ""
+    if had_errors:
+        # streams.error is a list of ErrorRecord objects — coerce to strings
+        err_text = "\n".join(str(e) for e in (streams.error or []))
+        raise RuntimeError(
+            f"PowerShell errors ({elapsed}ms): {err_text[:400] or 'had_errors=True, no error records'}"
+        )
 
-    if result.status_code != 0:
-        raise RuntimeError(f"WinRM exit {result.status_code}: {stderr[:200] or stdout[:200]}")
-
-    log.debug("WinRM exec ← %s@%s:%d | %d bytes | %dms",
-              username, host, port, len(stdout), elapsed)
-    return stdout
+    log.debug("PSRP exec ← %s@%s:%d | %d bytes | %dms",
+              username, host, port, len(output or ""), elapsed)
+    return output or ""
 
 
 def _parse_poll_output(output, label, host):
