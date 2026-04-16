@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T17:05:45",
+  "updated_at": "2026-04-16T17:12:11",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1429,10 +1429,26 @@
       "filename": "CC_PROMPT_v2.31.17.md",
       "version": "v2.31.17",
       "theme": "fix(windows): swap pywinrm→pypsrp (PSRP over Microsoft.PowerShell endpoint)",
+      "runner_status": "DONE",
+      "commit_sha": "f26458b",
+      "error": "",
+      "started_at": "2026-04-16T17:05:45",
+      "finished_at": "2026-04-16T17:07:09",
+      "duration_s": 83.97160150000127,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_170545_CC_PROMPT_v2.31.17.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.18.md",
+      "version": "v2.31.18",
+      "theme": "docs(windows): WINDOWS_SETUP.md + README index entry",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T17:05:45",
+      "started_at": "2026-04-16T17:12:11",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

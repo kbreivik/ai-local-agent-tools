@@ -8,6 +8,18 @@ Open-source local AI infrastructure orchestration agent. A Python MCP server + F
 
 ---
 
+## Documentation
+
+- [`README.md`](README.md) — this file
+- [`HOW_TO_USE.md`](HOW_TO_USE.md) — getting-started operator guide
+- [`AGENT_HARNESS.md`](AGENT_HARNESS.md) — agent loop + prompt architecture
+- [`HP1_DATABASE_LAYER.md`](HP1_DATABASE_LAYER.md) — DB schema reference
+- [`WINDOWS_SETUP.md`](WINDOWS_SETUP.md) — Windows host prep for the WinRM collector
+- [`ROADMAP.md`](ROADMAP.md) — planned work
+- [`TODO.md`](TODO.md) — active TODOs
+
+---
+
 ## Architecture Overview
 
 ```
