@@ -104,12 +104,14 @@ async def get_dashboard_summary(user: str = Depends(get_current_user)):
             vms_snap,
             external_snap,
             vm_hosts_snap,
+            windows_snap,
         ) = await _asyncio.gather(
             q.get_latest_snapshot(conn, "docker_agent01"),
             q.get_latest_snapshot(conn, "swarm"),
             q.get_latest_snapshot(conn, "proxmox_vms"),
             q.get_latest_snapshot(conn, "external_services"),
             q.get_latest_snapshot(conn, "vm_hosts"),
+            q.get_latest_snapshot(conn, "windows"),
         )
 
     containers_state = _parse_state(containers_snap)
@@ -117,6 +119,7 @@ async def get_dashboard_summary(user: str = Depends(get_current_user)):
     vms_state        = _parse_state(vms_snap)
     external_state   = _parse_state(external_snap)
     vm_hosts_state   = _parse_state(vm_hosts_snap)
+    windows_state    = _parse_state(windows_snap)
 
     # Enrich swarm services with dot/problem
     services = []
@@ -165,6 +168,11 @@ async def get_dashboard_summary(user: str = Depends(get_current_user)):
             "vms":        vm_hosts_state.get("vms", []),
             "health":     vm_hosts_state.get("health", "unknown"),
             "last_updated": vm_hosts_snap.get("timestamp") if vm_hosts_snap else None,
+        },
+        "windows": {
+            "hosts":        windows_state.get("hosts", []),
+            "health":       windows_state.get("health", "unknown"),
+            "last_updated": windows_snap.get("timestamp") if windows_snap else None,
         },
         "collectors": collectors,
     }

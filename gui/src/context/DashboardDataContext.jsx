@@ -188,6 +188,7 @@ export function DashboardDataProvider({ children }) {
   const swarmData      = summary?.swarm      ?? null
   const vmsData        = summary?.vms        ?? null
   const vmHostsData    = summary?.vm_hosts   ?? null
+  const windowsData    = summary?.windows    ?? null
   const collectorsData = summary?.collectors ?? {}
   const externalData   = external            ?? summary?.external ?? null
 
@@ -204,6 +205,7 @@ export function DashboardDataProvider({ children }) {
       swarmData,
       vmsData,
       vmHostsData,
+      windowsData,
       externalData,
       collectorsData,
 

@@ -1,11 +1,9 @@
 /**
- * WindowsSection — self-contained Windows hosts dashboard section.
- * Fetches data from the windows collector, renders one card per host.
+ * WindowsSection — Windows hosts dashboard section.
+ * Reads data from DashboardDataContext (via /api/dashboard/summary).
  */
-import { useState, useEffect } from 'react'
-import { authHeaders } from '../api'
-
-const BASE = import.meta.env.VITE_API_BASE ?? ''
+import { useState } from 'react'
+import { useDashboardData } from '../context/DashboardDataContext'
 
 function MemBar({ usedBytes, totalBytes, pct }) {
   const color = pct > 90 ? 'var(--red)' : pct > 80 ? 'var(--amber)' : 'var(--green)'
@@ -108,26 +106,17 @@ function WinCard({ host, onEntityDetail }) {
 }
 
 export default function WindowsSection({ showFilter, onEntityDetail }) {
-  const [data, setData] = useState(null)
-
-  useEffect(() => {
-    const load = () => {
-      fetch(`${BASE}/api/collectors/windows/data`, { headers: authHeaders() })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d?.data) setData(d.data) })
-        .catch(() => {})
-    }
-    load()
-    const id = setInterval(load, 60000)
-    return () => clearInterval(id)
-  }, [])
+  const { windowsData, summaryLoading } = useDashboardData()
+  const data = windowsData
 
   if (!data || !data.hosts || data.hosts.length === 0) {
     return (
       <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)', padding: 12 }}>
-        {data?.health === 'unconfigured'
+        {summaryLoading
+          ? 'Loading Windows hosts…'
+          : data?.health === 'unconfigured'
           ? 'No Windows connections configured — add one in Settings → Connections'
-          : 'Loading Windows hosts…'}
+          : 'No Windows hosts yet — collector may still be warming up'}
       </div>
     )
   }
