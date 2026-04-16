@@ -122,6 +122,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.30.1.md  | v2.30.1  | fix(auth): remove token from localStorage, cookie-first auth | DONE (733745b) |
 | CC_PROMPT_v2.31.0.md  | v2.31.0  | feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks | DONE (4da63fd) |
 | CC_PROMPT_v2.26.7.md | v2.26.7 | VM Hosts: entity_id, to_entities(), ask/detail buttons, naming fix | DONE (11f9dc8) |
+| CC_PROMPT_v2.31.1.md  | v2.31.1  | fix(security): crypto boot-safety + key fingerprint + canary | RUNNING |
 
 ---
 
@@ -285,6 +286,17 @@ connections DB (platform=bookstack) then env vars. Background threading.Timer sc
 api/routers/docs.py: POST /api/docs/bookstack/sync (manual trigger, runs in background
 thread) + GET /api/docs/bookstack/status. api/main.py: scheduler wired to lifespan.
 api/routers/settings.py: seeds bookstackSyncEnabled (false) + bookstackSyncIntervalHours (6).
+
+**v2.31.1** — fix(security): crypto boot-safety + key fingerprint + canary.
+Prevents silent data corruption when SETTINGS_ENCRYPTION_KEY goes missing on restart.
+api/crypto.py gains key_fingerprint() (SHA-256 first 8 chars, safe to log),
+_has_encrypted_data_in_db() (scans connections/credential_profiles/crypto_canary for
+enc:: prefix), check_encryption_key_safe() (raises RuntimeError in lifespan if env key
+is missing but DB already has encrypted rows), and a new crypto_canary table seeded
+with a canonical encrypted string on first boot. New /api/health/crypto endpoint
+returns {status: ok|unseeded|mismatch|error, fingerprint, message}. api/main.py wires
+check_encryption_key_safe() right after init_db() (before any encrypted reads) and
+ensure_crypto_canary() after migrate_plaintext_secrets().
 
 ---
 

@@ -403,3 +403,11 @@ async def get_pipeline_health(_: str = Depends(get_current_user)):
             "es_stale": es_stale,
         },
     }
+
+
+@router.get("/health/crypto")
+def health_crypto(_: str = Depends(get_current_user)):
+    """Verify the crypto canary decrypts with the current SETTINGS_ENCRYPTION_KEY.
+    Returns {status, fingerprint, message}. status: ok|unseeded|mismatch|error."""
+    from api.crypto import verify_crypto_canary
+    return verify_crypto_canary()

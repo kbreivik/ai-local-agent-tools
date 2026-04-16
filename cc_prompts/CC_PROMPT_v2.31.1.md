@@ -1,74 +1,25 @@
-"""Fernet encryption for secrets in the settings table.
+# CC PROMPT — v2.31.1 — fix(security): crypto boot-safety + key fingerprint + canary
 
-Key source: SETTINGS_ENCRYPTION_KEY env var (base64 Fernet key).
-If not set on first startup, generates one and logs a warning.
-The key MUST be persisted in .env via Ansible — never stored in DB.
-"""
-import base64
-import logging
-import os
+## What this does
+Prevents silent data corruption when `SETTINGS_ENCRYPTION_KEY` is missing on restart.
+Today `api/crypto.py` generates a new ephemeral Fernet key when the env var is unset —
+every subsequent decrypt of existing data returns empty and every stored credential
+becomes unrecoverable garbage. Fix: (1) refuse to boot if the DB already has encrypted
+rows but the env var is missing, (2) log the key fingerprint (SHA-256 first 8 chars) on
+startup so operators can detect drift across restarts, (3) persist a decryptable canary
+row so `/api/health/crypto` can verify the current key still decrypts existing data.
 
-from cryptography.fernet import Fernet, InvalidToken
+Three changes across three files. Version bump: v2.31.0 → v2.31.1
 
-log = logging.getLogger(__name__)
+---
 
-_fernet: Fernet | None = None
-_PREFIX = "enc::"  # prefix to identify encrypted values in DB
+## Change 1 — api/crypto.py — add fingerprint, canary, boot-safety check
 
+**Append** the following block to the end of `api/crypto.py`. Do not modify the existing
+`_get_fernet`, `encrypt_value`, `decrypt_value`, or `is_encrypted` functions — the
+existing fallback stays intact for first-run bootstrap (fresh install, empty DB).
 
-def _get_fernet() -> Fernet:
-    """Return cached Fernet instance. Creates key on first call if missing."""
-    global _fernet
-    if _fernet is not None:
-        return _fernet
-
-    key = os.environ.get("SETTINGS_ENCRYPTION_KEY", "")
-    if not key:
-        key = Fernet.generate_key().decode()
-        os.environ["SETTINGS_ENCRYPTION_KEY"] = key
-        log.warning(
-            "SETTINGS_ENCRYPTION_KEY not set — generated ephemeral key. "
-            "Add this to docker/.env to persist across restarts:\n"
-            "  SETTINGS_ENCRYPTION_KEY=%s", key
-        )
-    _fernet = Fernet(key.encode() if isinstance(key, str) else key)
-    return _fernet
-
-
-def encrypt_value(plaintext: str) -> str:
-    """Encrypt a plaintext string. Returns prefixed ciphertext."""
-    if not plaintext or is_encrypted(plaintext):
-        return plaintext
-    f = _get_fernet()
-    ct = f.encrypt(plaintext.encode()).decode()
-    return f"{_PREFIX}{ct}"
-
-
-def decrypt_value(ciphertext: str) -> str:
-    """Decrypt a prefixed ciphertext string. Returns plaintext.
-
-    If value is not encrypted (no prefix), returns as-is.
-    If decryption fails (wrong key), returns empty string + logs warning.
-    """
-    if not ciphertext or not is_encrypted(ciphertext):
-        return ciphertext
-    raw = ciphertext[len(_PREFIX):]
-    try:
-        f = _get_fernet()
-        return f.decrypt(raw.encode()).decode()
-    except InvalidToken:
-        log.warning("Failed to decrypt value — key may have changed. Returning empty.")
-        return ""
-    except Exception as e:
-        log.warning("Decryption error: %s", e)
-        return ""
-
-
-def is_encrypted(value: str) -> bool:
-    """Check if a value has the encryption prefix."""
-    return isinstance(value, str) and value.startswith(_PREFIX)
-
-
+```python
 # ─── Boot-safety, fingerprint, canary ─────────────────────────────────────────
 
 import hashlib
@@ -344,3 +295,110 @@ def verify_crypto_canary() -> dict:
             "data is likely unrecoverable with the current key."
         ),
     }
+```
+
+---
+
+## Change 2 — api/main.py — wire safety check + canary seed into lifespan
+
+Two small insertions in the `lifespan` async context manager.
+
+**2a.** Immediately after `await init_db()` and BEFORE `check_secrets()`. This must run
+before any code that touches encrypted values (settings migration, connections init).
+
+Find:
+```python
+    await init_db()
+    check_secrets()
+```
+
+Replace with:
+```python
+    await init_db()
+    # Crypto boot-safety: refuse to start if env key is missing but encrypted data exists
+    from api.crypto import check_encryption_key_safe
+    check_encryption_key_safe()
+    check_secrets()
+```
+
+**2b.** After the existing `migrate_plaintext_secrets(SETTINGS_KEYS)` try/except block.
+Find:
+```python
+    # Encrypt any plaintext secrets in settings table (one-time migration)
+    try:
+        from api.settings_manager import migrate_plaintext_secrets
+        from api.routers.settings import SETTINGS_KEYS
+        migrate_plaintext_secrets(SETTINGS_KEYS)
+    except Exception as e:
+        _log.debug("Secret encryption migration skipped: %s", e)
+```
+
+Add immediately after that block (still inside the lifespan):
+```python
+    # Seed crypto canary row for future key-drift detection
+    try:
+        from api.crypto import ensure_crypto_canary
+        ensure_crypto_canary()
+    except Exception as e:
+        _log.debug("Crypto canary seed skipped: %s", e)
+```
+
+---
+
+## Change 3 — api/routers/status.py — add /api/health/crypto endpoint
+
+Append this new route to `api/routers/status.py` (the existing status router).
+
+```python
+
+@router.get("/health/crypto")
+def health_crypto(_: str = Depends(get_current_user)):
+    """Verify the crypto canary decrypts with the current SETTINGS_ENCRYPTION_KEY.
+    Returns {status, fingerprint, message}. status: ok|unseeded|mismatch|error."""
+    from api.crypto import verify_crypto_canary
+    return verify_crypto_canary()
+```
+
+If `get_current_user` or `Depends` is not already imported in this file, add at the
+top of the imports:
+```python
+from fastapi import Depends
+from api.auth import get_current_user
+```
+(Leave any existing imports untouched — just add these if missing.)
+
+---
+
+## Version bump
+- Update `VERSION` in `api/constants.py`: `v2.31.0` → `v2.31.1`
+- Update root `/VERSION` file: `2.31.0` → `2.31.1`
+
+## Commit
+```
+git add -A
+git commit -m "fix(security): v2.31.1 crypto boot-safety + key fingerprint + canary"
+git push origin main
+```
+
+---
+
+## How to test after deploy
+
+Run after `docker compose ... up -d hp1_agent`:
+
+1. **Normal restart logs** — `docker compose logs hp1_agent | grep -i crypto` should show
+   `Crypto: SETTINGS_ENCRYPTION_KEY present (fingerprint=XXXXXXXX)` and on first run
+   also `Crypto: canary seeded (fingerprint=XXXXXXXX)`. The fingerprint must stay
+   stable across restarts.
+
+2. **Health endpoint** — authenticated GET `https://192.168.199.10:8000/api/health/crypto`
+   → `{"status":"ok","fingerprint":"XXXXXXXX","message":"Canary decrypted successfully — encryption key is valid."}`
+
+3. **Drift detection (destructive test — do last)** — temporarily comment out
+   `SETTINGS_ENCRYPTION_KEY` in `/opt/hp1-agent/docker/.env` and restart. The container
+   should exit non-zero. Logs must contain the `REFUSING TO START` message. Restore
+   the line and restart — service comes back healthy.
+
+4. **Login + connection CRUD still work** — confirm existing Proxmox / PBS / vm_host
+   connections still decrypt and the collectors still poll them normally. No
+   regression in credential retrieval.

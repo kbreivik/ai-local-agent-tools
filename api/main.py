@@ -85,6 +85,9 @@ CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "false").lower() == "true"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Crypto boot-safety: refuse to start if env key is missing but encrypted data exists
+    from api.crypto import check_encryption_key_safe
+    check_encryption_key_safe()
     check_secrets()
     await _start_logger()
     await _start_session_store()
@@ -110,6 +113,12 @@ async def lifespan(app: FastAPI):
         migrate_plaintext_secrets(SETTINGS_KEYS)
     except Exception as e:
         _log.debug("Secret encryption migration skipped: %s", e)
+    # Seed crypto canary row for future key-drift detection
+    try:
+        from api.crypto import ensure_crypto_canary
+        ensure_crypto_canary()
+    except Exception as e:
+        _log.debug("Crypto canary seed skipped: %s", e)
     # Initialize pgvector RAG schema (no-op if pgvector unavailable)
     try:
         from api.rag.schema import init_doc_chunks

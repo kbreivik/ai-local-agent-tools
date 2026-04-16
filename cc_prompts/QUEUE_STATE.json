@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-15T22:09:09",
+  "updated_at": "2026-04-16T09:31:56",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1157,10 +1157,26 @@
       "filename": "CC_PROMPT_v2.31.0.md",
       "version": "v2.31.0",
       "theme": "feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks",
+      "runner_status": "DONE",
+      "commit_sha": "0ce9f3f",
+      "error": "",
+      "started_at": "2026-04-15T22:09:09",
+      "finished_at": "2026-04-15T22:14:12",
+      "duration_s": 303.2630452000303,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260415_220909_CC_PROMPT_v2.31.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.1.md",
+      "version": "v2.31.1",
+      "theme": "fix(security): crypto boot-safety + key fingerprint + canary",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-15T22:09:09",
+      "started_at": "2026-04-16T09:31:56",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
