@@ -144,6 +144,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.31.20.md | v2.31.20 | fix(windows): WindowsSection reads from DashboardDataContext | DONE (ed65266) |
 | CC_PROMPT_v2.31.21.md | v2.31.21 | fix(windows): OS name Win11, uptime fallback, WinRM false-positive | DONE (22f7c73) |
 | CC_PROMPT_v2.31.22.md | v2.31.22 | fix(auth): profile-first credential resolution + passphrase kwarg | DONE (11684c9) |
+| CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | RUNNING |
 
 ---
 
@@ -335,6 +336,17 @@ adds one try-except block right after log_tool_call() in _run_single_agent_step,
 calling write_action() with owner_user + plan_action_called flag. api/main.py wires
 init_agent_actions() in lifespan and mounts the router. No UI this version — Recent
 Actions tab comes in v2.31.3.
+
+**v2.32.0** — refactor(agents): structured system prompts for observe + investigate.
+Restructures STATUS_PROMPT and RESEARCH_PROMPT from flat prose into explicitly labeled
+sections using ═══ SECTION ═══ separators: Role, Environment, Constraints, Tool Budget,
+Tool Chains, Completion Conditions, Failure Taxonomy, Output Format, Response Style.
+No logic changes — every rule, tool chain, and edge case preserved. Representation-only
+change based on harness engineering research (Tsinghua NLH paper): structured prompt
+format improves model parsing reliability. Deduplicates rules that were stated 2-3 times
+across scattered paragraphs. Groups related content (all Kafka chains together, all
+constraints together, exit code rules consolidated). Next: v2.32.1 applies same pattern
+to ACTION_PROMPT and BUILD_PROMPT.
 
 ---
 

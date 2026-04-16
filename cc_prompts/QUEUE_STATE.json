@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T20:09:31",
+  "updated_at": "2026-04-16T20:50:51",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1509,10 +1509,26 @@
       "filename": "CC_PROMPT_v2.31.22.md",
       "version": "v2.31.22",
       "theme": "fix(auth): profile-first credential resolution + passphrase kwarg",
+      "runner_status": "DONE",
+      "commit_sha": "0f1cd31",
+      "error": "",
+      "started_at": "2026-04-16T20:09:31",
+      "finished_at": "2026-04-16T20:10:55",
+      "duration_s": 84.0098582999999,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_200931_CC_PROMPT_v2.31.22.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.32.0.md",
+      "version": "v2.32.0",
+      "theme": "refactor(agents): structured system prompts for observe + investigate",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T20:09:31",
+      "started_at": "2026-04-16T20:50:51",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
