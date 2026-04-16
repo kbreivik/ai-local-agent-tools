@@ -173,7 +173,9 @@ def _summarize_tool_result(tool_name, result, status, message,
 
     full = json.dumps(result, default=str)
     if len(full) <= _LARGE_RESULT_BYTES:
-        return full
+        from api.security.prompt_sanitiser import sanitise
+        cleaned, _ = sanitise(full, max_chars=4000, source_hint=f"tool_result:{tool_name}")
+        return cleaned
 
     data = result.get("data")
     list_data = None
@@ -191,7 +193,7 @@ def _summarize_tool_result(tool_name, result, status, message,
             from api.db.result_store import store_result
             ref_summary = store_result(tool_name, list_data,
                                        operation_id=operation_id, session_id=session_id)
-            return json.dumps({
+            out_json = json.dumps({
                 "status": status, "message": message[:200],
                 "data": {
                     **{k: v for k, v in (data.items() if isinstance(data, dict) else {}.items())
@@ -199,12 +201,18 @@ def _summarize_tool_result(tool_name, result, status, message,
                     list_key: ref_summary,
                 },
             }, default=str)
+            from api.security.prompt_sanitiser import sanitise
+            cleaned, _ = sanitise(out_json, max_chars=4000, source_hint=f"tool_result:{tool_name}")
+            return cleaned
         except Exception:
-            return json.dumps({
+            out_json = json.dumps({
                 "status": status, "message": message[:200],
                 "data": {list_key: list_data[:10], f"{list_key}_total": len(list_data),
                          f"{list_key}_truncated": True},
             }, default=str)
+            from api.security.prompt_sanitiser import sanitise
+            cleaned, _ = sanitise(out_json, max_chars=4000, source_hint=f"tool_result:{tool_name}")
+            return cleaned
 
     summary = {"status": status, "message": message[:200]}
     if isinstance(data, dict):
@@ -216,7 +224,10 @@ def _summarize_tool_result(tool_name, result, status, message,
         summary["data"] = compact
     elif isinstance(data, list):
         summary["data"] = f"[{len(data)} items]"
-    return json.dumps(summary, default=str)
+    out_json = json.dumps(summary, default=str)
+    from api.security.prompt_sanitiser import sanitise
+    cleaned, _ = sanitise(out_json, max_chars=4000, source_hint=f"tool_result:{tool_name}")
+    return cleaned
 
 
 def _extract_working_memory(think_text: str, step: int) -> str:
@@ -1273,6 +1284,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                     + "find / -size +100M -type f, docker system df, "
                     + "docker volume ls | head -20, apt list --upgradable\n\n"
                 )
+                from api.security.prompt_sanitiser import sanitise
+                cap_hint, _ = sanitise(cap_hint, max_chars=2000, source_hint="vm_host_capabilities")
                 system_prompt = cap_hint + system_prompt
     except Exception:
         pass
@@ -1304,6 +1317,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
         if _entity_hints:
             history_hint = "RECENT ENTITY ACTIVITY (last 48h):\n" + "\n".join(_entity_hints) + "\n\n"
+            from api.security.prompt_sanitiser import sanitise
+            history_hint, _ = sanitise(history_hint, max_chars=2000, source_hint="entity_history")
             system_prompt = history_hint + system_prompt
     except Exception:
         pass
@@ -1865,6 +1880,8 @@ async def ask_agent(req: AskRequest, _: str = Depends(get_current_user)):
             ctx_lines.append(f"Metadata: {meta_str}")
 
     user_msg = "\n".join(ctx_lines) + f"\n\nQuestion: {question}"
+    from api.security.prompt_sanitiser import sanitise
+    user_msg, _ = sanitise(user_msg, max_chars=6000, source_hint="entity_ask_context")
 
     async def generate():
         try:
