@@ -6,6 +6,7 @@
  */
 import { useEffect, useState, useRef } from 'react'
 import { ToolCallsView, OpsView, EscView, StatsView, SessionOutputView } from './LogTable'
+import AgentActionsTab from './AgentActionsTab'
 import { createUnifiedLogStream, authHeaders, fetchResultRefs, fetchResultRef, fetchPipelineHealth } from '../api'
 
 const _CONN_BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -621,7 +622,7 @@ function DataHealthView() {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', 'Result Refs', 'Data Health']
+const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', 'Result Refs', 'Data Health', 'Actions']
 
 export default function LogsPanel() {
   const [tab, setTab] = useState('Live Logs')
@@ -669,6 +670,7 @@ export default function LogsPanel() {
         {tab === 'Stats'          && <StatsView />}
         {tab === 'Result Refs'    && <ResultRefsView />}
         {tab === 'Data Health'    && <DataHealthView />}
+        {tab === 'Actions'        && <AgentActionsTab />}
         {tab === 'Session Output' && sessionOutputId && (
           <SessionOutputView
             sessionId={sessionOutputId}

@@ -1,0 +1,460 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.31.5.md (v2.31.5)
+Theme: feat(security): encryption key rotation CLI
+
+Prompt content:
+
+# CC PROMPT — v2.31.5 — feat(security): encryption key rotation CLI
+
+## What this does
+Adds the missing ability to rotate `SETTINGS_ENCRYPTION_KEY`. Today, if the key is
+ever exposed, the only remedy is to re-enter every credential by hand. This
+prompt adds `scripts/rotate_encryption_key.py`: decrypts every `enc::`-prefixed
+value in the DB with an `--old` Fernet key, re-encrypts with `--new`, in one
+psycopg2 transaction. The v2.31.1 `crypto_canary` row is both the pre-flight
+validation gate and the post-flight verification.
+
+Two changes:
+1. **EDIT** `api/crypto.py` — add `encrypt_with_key()` / `decrypt_with_key()` /
+   `fingerprint_of_key()` helpers so two keys can co-exist in one process.
+2. **NEW** `scripts/rotate_encryption_key.py` — the CLI.
+
+---
+
+## Change 1 — api/crypto.py — append key-parameterised helpers
+
+Append to the end of `api/crypto.py`. Do NOT modify any existing function.
+
+```python
+# ─── Key-parameterised helpers (for rotation tooling) ────────────────────────
+
+def _fernet_from_key(key: str) -> Fernet:
+    """Build a Fernet instance from a raw base64 key string."""
+    if not key:
+        raise ValueError("encryption key is empty")
+    try:
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception as e:
+        raise ValueError(f"invalid Fernet key: {e}") from e
+
+
+def encrypt_with_key(plaintext: str, key: str) -> str:
+    """Encrypt using an explicit key. Returns prefixed ciphertext. Idempotent:
+    if input is already encrypted, returns as-is."""
+    if not plaintext or is_encrypted(plaintext):
+        return plaintext
+    f = _fernet_from_key(key)
+    return f"{_PREFIX}{f.encrypt(plaintext.encode()).decode()}"
+
+
+def decrypt_with_key(ciphertext: str, key: str) -> str:
+    """Decrypt using an explicit key. Raises InvalidToken on failure (unlike
+    decrypt_value() which swallows the error and returns '')."""
+    if not ciphertext or not is_encrypted(ciphertext):
+        return ciphertext
+    raw = ciphertext[len(_PREFIX):]
+    f = _fernet_from_key(key)
+    return f.decrypt(raw.encode()).decode()
+
+
+def fingerprint_of_key(key: str) -> str:
+    """SHA-256 first 8 hex chars of an arbitrary key string."""
+    if not key:
+        return "no-key"
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
+```
+
+---
+
+## Change 2 — scripts/rotate_encryption_key.py — NEW FILE
+
+```python
+#!/usr/bin/env python3
+"""Rotate the Fernet encryption key used for secrets in the DEATHSTAR database.
+
+USAGE (run inside the container, or via `docker run` against the image):
+
+  # 1. Generate a new key
+  docker exec hp1_agent python -c \\
+      "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+  # 2. Stop the agent container so nothing reads/writes during rotation.
+  cd /opt/hp1-agent/docker && docker compose stop hp1_agent
+
+  # 3. Dry-run first (no writes):
+  docker run --rm --network=docker_default \\
+    --env-file /opt/hp1-agent/docker/.env \\
+    ghcr.io/kbreivik/hp1-ai-agent:latest \\
+    python -m scripts.rotate_encryption_key \\
+      --old "$OLD_KEY" --new "$NEW_KEY" --dry-run --yes
+
+  # 4. Real rotation:
+  docker run --rm --network=docker_default \\
+    --env-file /opt/hp1-agent/docker/.env \\
+    ghcr.io/kbreivik/hp1-ai-agent:latest \\
+    python -m scripts.rotate_encryption_key \\
+      --old "$OLD_KEY" --new "$NEW_KEY" --yes
+
+  # 5. Update SETTINGS_ENCRYPTION_KEY in docker/.env to the new key.
+  # 6. Start hp1_agent. Verify /api/status/health/crypto returns status=ok
+  #    with the NEW fingerprint.
+
+SAFETY:
+  * Requires --old to successfully decrypt the crypto_canary row BEFORE any
+    re-encryption. Aborts with exit 3 if the old key is wrong.
+  * Single transaction. Any failure rolls back. No partial state.
+  * After re-encrypting, reseeds the canary under --new and verifies round-trip
+    BEFORE COMMIT. If that fails, the transaction rolls back.
+  * --dry-run rolls back the transaction after the full in-memory plan runs.
+"""
+
+from __future__ import annotations
+import argparse
+import logging
+import os
+import sys
+from typing import Iterable
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from api.crypto import (  # noqa: E402
+    decrypt_with_key,
+    encrypt_with_key,
+    fingerprint_of_key,
+    is_encrypted,
+    _PREFIX,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("rotate_encryption_key")
+
+KNOWN_TARGETS: list[tuple[str, str, str]] = [
+    ("connections",         "id", "credentials"),
+    ("credential_profiles", "id", "credentials"),
+    ("crypto_canary",       "id", "encrypted_value"),
+]
+
+
+def _connect():
+    dsn = os.environ.get("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+    if not dsn:
+        log.error("DATABASE_URL not set. This script requires Postgres.")
+        sys.exit(2)
+    import psycopg2
+    return psycopg2.connect(dsn)
+
+
+def _discover_targets(cur) -> list[tuple[str, str, str]]:
+    """Scan information_schema for public TEXT columns holding enc::-prefixed rows."""
+    cur.execute("""
+        SELECT c.table_name, c.column_name
+          FROM information_schema.columns c
+         WHERE c.table_schema = 'public'
+           AND c.data_type IN ('text', 'character varying')
+    """)
+    known = {(t, col) for t, _, col in KNOWN_TARGETS}
+    out: list[tuple[str, str, str]] = []
+    for table, column in cur.fetchall():
+        if (table, column) in known:
+            continue
+        try:
+            cur.execute(
+                f"SELECT 1 FROM {table} WHERE {column} LIKE %s LIMIT 1",
+                (f"{_PREFIX}%",),
+            )
+            if not cur.fetchone():
+                continue
+        except Exception:
+            continue
+        cur.execute("""
+            SELECT kcu.column_name
+              FROM information_schema.table_constraints tc
+              JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+             WHERE tc.table_name = %s
+               AND tc.constraint_type = 'PRIMARY KEY'
+             ORDER BY kcu.ordinal_position
+             LIMIT 1
+        """, (table,))
+        row = cur.fetchone()
+        pk = row[0] if row else "id"
+        log.info("Discovered extra target: %s.%s (pk=%s)", table, column, pk)
+        out.append((table, pk, column))
+    return out
+
+
+def _verify_canary(cur, old_key: str) -> bool:
+    cur.execute("SELECT encrypted_value FROM crypto_canary WHERE id = 1")
+    row = cur.fetchone()
+    if not row or not row[0]:
+        log.error("crypto_canary row not found. Refusing to rotate without a "
+                  "canary. Start the service once with the current key (seeds "
+                  "the canary), then retry.")
+        return False
+    try:
+        plaintext = decrypt_with_key(row[0], old_key)
+    except Exception as e:
+        log.error("Old key could not decrypt crypto_canary: %s", e)
+        return False
+    if plaintext != "DEATHSTAR_CRYPTO_CANARY_v1":
+        log.error("Canary plaintext mismatch — old key is wrong.")
+        return False
+    log.info("Old key validated (fingerprint=%s).", fingerprint_of_key(old_key))
+    return True
+
+
+def _plan(cur, old_key: str, targets: Iterable[tuple[str, str, str]]):
+    plan: list = []
+    failures: list[str] = []
+    for table, pk, col in targets:
+        cur.execute(f"SELECT {pk}, {col} FROM {table} WHERE {col} LIKE %s",
+                    (f"{_PREFIX}%",))
+        rows = cur.fetchall()
+        log.info("  %s.%s: %d encrypted row(s)", table, col, len(rows))
+        for pk_val, ciphertext in rows:
+            if not is_encrypted(ciphertext):
+                continue
+            try:
+                plan.append((table, pk, col, pk_val, decrypt_with_key(ciphertext, old_key)))
+            except Exception as e:
+                failures.append(f"{table}.{col} pk={pk_val}: {e}")
+    return plan, failures
+
+
+def _apply(cur, plan, new_key: str) -> int:
+    for table, pk, col, pk_val, plaintext in plan:
+        cur.execute(
+            f"UPDATE {table} SET {col} = %s WHERE {pk} = %s",
+            (encrypt_with_key(plaintext, new_key), pk_val),
+        )
+    return len(plan)
+
+
+def _reseed_canary(cur, new_key: str) -> None:
+    fresh = encrypt_with_key("DEATHSTAR_CRYPTO_CANARY_v1", new_key)
+    cur.execute("UPDATE crypto_canary SET encrypted_value = %s WHERE id = 1", (fresh,))
+    cur.execute("SELECT encrypted_value FROM crypto_canary WHERE id = 1")
+    stored = cur.fetchone()[0]
+    if decrypt_with_key(stored, new_key) != "DEATHSTAR_CRYPTO_CANARY_v1":
+        raise RuntimeError("Canary round-trip failed — aborting.")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--old", required=True)
+    ap.add_argument("--new", required=True)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="Skip interactive confirm.")
+    args = ap.parse_args()
+
+    if args.old == args.new:
+        log.error("--old and --new are identical.")
+        return 2
+
+    log.info("Old key fingerprint: %s", fingerprint_of_key(args.old))
+    log.info("New key fingerprint: %s", fingerprint_of_key(args.new))
+    log.info("Mode: %s", "DRY-RUN" if args.dry_run else "APPLY")
+
+    conn = _connect()
+    conn.autocommit = False
+    cur = conn.cursor()
+    try:
+        if not _verify_canary(cur, args.old):
+            return 3
+        targets = list(KNOWN_TARGETS) + _discover_targets(cur)
+        log.info("Targets (%d):", len(targets))
+        for t, pk, c in targets:
+            log.info("  - %s.%s (pk=%s)", t, c, pk)
+
+        plan, failures = _plan(cur, args.old, targets)
+        if failures:
+            log.error("Old key failed to decrypt %d row(s):", len(failures))
+            for f in failures[:10]:
+                log.error("  %s", f)
+            conn.rollback()
+            return 4
+        log.info("Planned %d re-encryption(s).", len(plan))
+
+        if not args.yes and not args.dry_run:
+            answer = input(f"Re-encrypt {len(plan)} row(s) under "
+                           f"{fingerprint_of_key(args.new)}? [ROTATE to proceed]: ").strip()
+            if answer != "ROTATE":
+                log.info("Not confirmed. Rolling back.")
+                conn.rollback()
+                return 0
+
+        written = _apply(cur, plan, args.new)
+        log.info("Re-encrypted %d row(s).", written)
+
+        _reseed_canary(cur, args.new)
+        log.info("Canary reseeded under new key (fingerprint=%s).",
+                 fingerprint_of_key(args.new))
+
+        if args.dry_run:
+            conn.rollback()
+            log.info("DRY-RUN complete. Transaction rolled back.")
+            return 0
+
+        conn.commit()
+        log.info("COMMIT complete. %d row(s) under %s.",
+                 written, fingerprint_of_key(args.new))
+        log.info("Next: update SETTINGS_ENCRYPTION_KEY in docker/.env and restart.")
+        return 0
+
+    except Exception as e:
+        log.exception("Rotation failed: %s", e)
+        conn.rollback()
+        return 1
+    finally:
+        try:
+            cur.close(); conn.close()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+---
+
+## Commit
+```
+git add -A
+git commit -m "feat(security): v2.31.5 encryption key rotation CLI"
+git push origin main
+```
+
+---
+
+## How to test
+
+1. **Script loads**: `docker exec hp1_agent python -m scripts.rotate_encryption_key --help`
+2. **Dry-run with correct old key**: Expect `Old key validated`, target count, `DRY-RUN complete`.
+3. **Negative test — wrong old key**: Generate a random Fernet key, pass it as `--old`. Expect `Old key could not decrypt crypto_canary`, exit 3.
+4. **Real rotation** (after stopping hp1_agent): Rotate, update `.env`, restart. `/api/status/health/crypto` should return new fingerprint.
+5. **Old key now rejected**: Put old key back in `.env`, restart. Canary should return `status: mismatch`.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 13:30:46
+========================================================================
+PROMPT COMPLETE: v2.31.5
+[STATUS] 1m49s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m49s
+========================================================================
