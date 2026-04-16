@@ -144,7 +144,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.31.20.md | v2.31.20 | fix(windows): WindowsSection reads from DashboardDataContext | DONE (ed65266) |
 | CC_PROMPT_v2.31.21.md | v2.31.21 | fix(windows): OS name Win11, uptime fallback, WinRM false-positive | DONE (22f7c73) |
 | CC_PROMPT_v2.31.22.md | v2.31.22 | fix(auth): profile-first credential resolution + passphrase kwarg | DONE (11684c9) |
-| CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | DONE (bbc0862) |
+| CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | RUNNING |
+| CC_PROMPT_v2.32.1.md  | v2.32.1  | refactor(agents): structured system prompts for execute + build | RUNNING |
 
 ---
 
@@ -347,6 +348,15 @@ format improves model parsing reliability. Deduplicates rules that were stated 2
 across scattered paragraphs. Groups related content (all Kafka chains together, all
 constraints together, exit code rules consolidated). Next: v2.32.1 applies same pattern
 to ACTION_PROMPT and BUILD_PROMPT.
+
+**v2.32.1** — refactor(agents): structured system prompts for execute + build.
+Completes the Harness Tightening prompt restructuring. ACTION_PROMPT restructured into
+labeled sections: Role, Environment, Constraints (11 rules consolidated), Clarification
+Rules, Destructive Tools (mandatory workflow with examples), Tool Chains (Kafka/Swarm
+recovery, runbook check, propose subtask), Blocked Command/Tool Rules, Escalate Blocked
+Rule, Tool Budget, Completion Conditions, Response Style. BUILD_PROMPT restructured into
+Role, Constraints, Tool Budget, Tool Usage (workflow), Completion Conditions. All 4 agent
+prompts now use consistent ═══ SECTION ═══ separators. No logic changes.
 
 ---
 
