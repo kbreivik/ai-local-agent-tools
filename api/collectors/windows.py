@@ -23,7 +23,7 @@ _DEFAULT_HTTP_PORT  = 5985
 _DEFAULT_HTTPS_PORT = 5986
 
 # Services we care about by default. Add more via settings later if needed.
-_DEFAULT_WATCHED_SERVICES = ["WinRM", "Spooler", "W32Time", "LanmanServer", "Dnscache"]
+_DEFAULT_WATCHED_SERVICES = ["Spooler", "W32Time", "LanmanServer", "Dnscache"]
 
 # WMI-free poll script.
 # Works for a non-admin Windows user who is in:
@@ -44,8 +44,21 @@ Emit HOSTNAME   $env:COMPUTERNAME
 
 # TickCount64 is milliseconds since boot; available on all Windows versions
 # since 2008 R2. No WMI, no admin.
-try { $uptimeMs = [Environment]::TickCount64 } catch { $uptimeMs = 0 }
-Emit UPTIME_S   ([int]([int64]$uptimeMs / 1000))
+# Primary: [Environment]::TickCount64 (works locally, may return 0 in PSRP)
+# Fallback: parse net stats workstation for "Statistics since" date
+$uptimeMs = 0
+try { $uptimeMs = [int64][Environment]::TickCount64 } catch {}
+if ($uptimeMs -le 0) {
+    try {
+        $bootLine = (net stats workstation 2>$null | Select-String 'Statistics since')
+        if ($bootLine) {
+            $bootStr = ($bootLine -replace 'Statistics since\s*', '').Trim()
+            $bootDt  = [datetime]::Parse($bootStr)
+            $uptimeMs = [int64](([datetime]::Now - $bootDt).TotalMilliseconds)
+        }
+    } catch {}
+}
+Emit UPTIME_S   ([int]([math]::Max(0, [int64]$uptimeMs / 1000)))
 
 # Registry read — no admin needed, any authenticated user can read.
 $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -53,6 +66,11 @@ $prod = (Get-ItemProperty -Path $regPath -Name 'ProductName'        -ErrorAction
 $dver = (Get-ItemProperty -Path $regPath -Name 'DisplayVersion'     -ErrorAction SilentlyContinue).DisplayVersion
 $curr = (Get-ItemProperty -Path $regPath -Name 'CurrentBuildNumber' -ErrorAction SilentlyContinue).CurrentBuildNumber
 $ubr  = (Get-ItemProperty -Path $regPath -Name 'UBR'                -ErrorAction SilentlyContinue).UBR
+# Microsoft never updated ProductName for Win11 — still says "Windows 10".
+# Build 22000+ is Windows 11. Correct the display name.
+if ($curr -and [int]$curr -ge 22000 -and $prod -match 'Windows 10') {
+    $prod = $prod -replace 'Windows 10', 'Windows 11'
+}
 Emit OS_CAPTION ($prod)
 Emit OS_VERSION ("$curr.$ubr" + $(if ($dver) { " ($dver)" } else { "" }))
 
@@ -100,7 +118,7 @@ Emit DISKS_END ''
 
 # --- Watched services (Get-Service, no WMI) --------------------------------
 Emit SERVICES_BEGIN ''
-$watched = 'WinRM','Spooler','W32Time','LanmanServer','Dnscache'
+$watched = 'Spooler','W32Time','LanmanServer','Dnscache'
 foreach ($s in $watched) {
     $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
     if ($svc) { Write-Output ("{0}:{1}" -f $svc.Name, $svc.Status) }
@@ -285,8 +303,11 @@ def _parse_poll_output(output, label, host):
         dot = "red"; problems.append(f"memory {mem_pct}%")
     elif mem_pct >= 80 and dot == "green":
         dot = "amber"; problems.append(f"memory {mem_pct}%")
-    if services.get("WinRM", "").lower() != "running":
-        dot = "red"; problems.append("WinRM not running")
+    # NOTE: Do NOT check WinRM service status here. The collector already
+    # proved WinRM is running by successfully connecting via PSRP to execute
+    # this poll script. Get-Service -Name WinRM returns "missing" inside
+    # PSRP sessions on some Windows 11 builds — a false positive.
+    # WinRM health is implicitly "running" if we reached this parser.
 
     return {
         "id": label, "label": label, "host": host,

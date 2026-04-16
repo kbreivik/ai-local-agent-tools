@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T17:41:12",
+  "updated_at": "2026-04-16T18:53:09",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1477,10 +1477,26 @@
       "filename": "CC_PROMPT_v2.31.20.md",
       "version": "v2.31.20",
       "theme": "fix(windows): WindowsSection reads from DashboardDataContext",
+      "runner_status": "DONE",
+      "commit_sha": "6a15a72",
+      "error": "",
+      "started_at": "2026-04-16T17:41:12",
+      "finished_at": "2026-04-16T17:42:53",
+      "duration_s": 100.7615885999985,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_174112_CC_PROMPT_v2.31.20.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.31.21.md",
+      "version": "v2.31.21",
+      "theme": "fix(windows): OS name Win11, uptime fallback, WinRM false-positive",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T17:41:12",
+      "started_at": "2026-04-16T18:53:09",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
