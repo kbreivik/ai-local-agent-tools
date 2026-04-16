@@ -1596,6 +1596,53 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
     except Exception:
         pass
 
+    # ── Attempt history context injection (v2.32.3) ───────────────────────────
+    # If task mentions a known entity, inject previous agent attempts as context
+    try:
+        from api.db.agent_attempts import get_recent_attempts
+        from api.db.infra_inventory import resolve_host
+        from api.agents.router import detect_domain
+
+        _attempt_entity = None
+        _attempt_lines = []
+
+        for word in task.split():
+            if len(word) < 4:
+                continue
+            entry = resolve_host(word)
+            if entry:
+                _attempt_entity = entry.get("label", word)
+                break
+
+        if not _attempt_entity:
+            domain = detect_domain(task)
+            if domain == "kafka":
+                _attempt_entity = "kafka_cluster"
+            elif domain == "swarm":
+                _attempt_entity = "swarm_cluster"
+
+        if _attempt_entity:
+            attempts = get_recent_attempts(_attempt_entity, limit=3)
+            if attempts:
+                _attempt_lines.append(
+                    f"PREVIOUS AGENT ATTEMPTS on {_attempt_entity} (last {len(attempts)}):"
+                )
+                for i, a in enumerate(attempts, 1):
+                    tools_str = ", ".join(a["tools"][:4]) if a["tools"] else "none"
+                    _attempt_lines.append(
+                        f"  [{i}] {a['when'][:16]} | {a['outcome']} | tools: {tools_str}"
+                        f"{' | ' + a['summary'][:80] if a['summary'] else ''}"
+                    )
+                _attempt_lines.append(
+                    "If previous attempts failed with the same approach, try a different strategy.\n"
+                )
+                attempt_hint = "\n".join(_attempt_lines) + "\n"
+                from api.security.prompt_sanitiser import sanitise
+                attempt_hint, _ = sanitise(attempt_hint, max_chars=1000, source_hint="attempt_history")
+                system_prompt = attempt_hint + system_prompt
+    except Exception:
+        pass
+
     # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
     boost_tools: list[str] = []  # populated from successful past outcomes below
     try:
@@ -1888,6 +1935,52 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             )
         except Exception as _oe:
             log.debug("record_outcome error: %s", _oe)
+
+        # v2.32.3: Record attempt history for the detected entity
+        try:
+            from api.db.agent_attempts import record_attempt
+            from api.db.infra_inventory import resolve_host
+            from api.agents.router import detect_domain
+
+            _rec_entity = None
+            for word in task.split():
+                if len(word) < 4:
+                    continue
+                entry = resolve_host(word)
+                if entry:
+                    _rec_entity = entry.get("label", word)
+                    break
+            if not _rec_entity:
+                domain = detect_domain(task)
+                if domain == "kafka":
+                    _rec_entity = "kafka_cluster"
+                elif domain == "swarm":
+                    _rec_entity = "swarm_cluster"
+
+            if _rec_entity:
+                _seen = set()
+                _dedup_tools = []
+                for t in all_tools_used:
+                    if t not in _seen:
+                        _seen.add(t)
+                        _dedup_tools.append(t)
+
+                _summary = ""
+                if isinstance(last_reasoning, str):
+                    _summary = last_reasoning[:500]
+
+                record_attempt(
+                    entity_id=_rec_entity,
+                    task_type=first_intent,
+                    task_text=task[:500],
+                    tools_used=_dedup_tools[:10],
+                    outcome=final_status,
+                    summary=_summary,
+                    session_id=session_id,
+                    operation_id=operation_id or "",
+                )
+        except Exception as _ae:
+            log.debug("record_attempt failed: %s", _ae)
 
         last_reasoning = prior_verdict["summary"] if prior_verdict else ""
 

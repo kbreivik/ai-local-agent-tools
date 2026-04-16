@@ -146,8 +146,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.31.22.md | v2.31.22 | fix(auth): profile-first credential resolution + passphrase kwarg | DONE (11684c9) |
 | CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | RUNNING |
 | CC_PROMPT_v2.32.1.md  | v2.32.1  | refactor(agents): structured system prompts for execute + build | DONE (cf60ded) |
-| CC_PROMPT_v2.32.2.md  | v2.32.2  | feat(agents): post-action verify step | RUNNING |
-| CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | PENDING |
+| CC_PROMPT_v2.32.2.md  | v2.32.2  | feat(agents): post-action verify step | DONE (c580c48) |
+| CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | RUNNING |
 
 ---
 

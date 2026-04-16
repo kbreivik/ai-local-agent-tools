@@ -186,6 +186,12 @@ async def lifespan(app: FastAPI):
         init_agent_actions()
     except Exception as e:
         _log.debug("agent_actions init skipped: %s", e)
+    # Initialize agent_attempts history table (v2.32.3)
+    try:
+        from api.db.agent_attempts import init_agent_attempts
+        init_agent_attempts()
+    except Exception as e:
+        _log.debug("agent_attempts init skipped: %s", e)
     try:
         from api.db.agent_blackouts import init_agent_blackouts
         init_agent_blackouts()
