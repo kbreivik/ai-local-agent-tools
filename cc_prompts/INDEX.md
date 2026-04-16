@@ -147,7 +147,9 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.32.0.md  | v2.32.0  | refactor(agents): structured system prompts for observe + investigate | RUNNING |
 | CC_PROMPT_v2.32.1.md  | v2.32.1  | refactor(agents): structured system prompts for execute + build | DONE (cf60ded) |
 | CC_PROMPT_v2.32.2.md  | v2.32.2  | feat(agents): post-action verify step | DONE (c580c48) |
-| CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | RUNNING |
+| CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | DONE (4a71334) |
+| CC_PROMPT_v2.32.4.md  | v2.32.4  | fix(agents): final_answer truncation at 300 chars | RUNNING |
+| CC_PROMPT_v2.32.5.md  | v2.32.5  | feat(agents): enforced tool call budgets per agent type | PENDING |
 
 ---
 
@@ -162,215 +164,35 @@ bash cc_prompts/run_queue.sh             # run all
 
 ## Phase summaries
 
-**v2.26.0** — Universal entity_id on all collector card types.
-Adds entity_id to every card dict (containers, swarm services, external services, UniFi
-devices, PBS datastores, TrueNAS pools, FortiGate interfaces). Adds custom to_entities()
-to DockerAgent01Collector and SwarmCollector.
-
-**v2.26.1** — InfraCard universal ⌘/› entity buttons + VM entity ID fix.
-Moves entity detail (›) and agent ask (⌘) buttons into InfraCard itself. All 8 card types
-get both buttons when entity_id is present. Fixes VM entity ID bug (qemu→vm). Optimistic
-maintenance toggle.
-
-**v2.26.2** — Agent routing correctness fixes.
-EXECUTE_PROXMOX_TOOLS was nearly empty — adds proxmox_vm_power, vm_exec, swarm_node_status,
-service_list/health, service_placement, entity_history, entity_events, resolve_entity,
-result_fetch/query, propose_subtask. EXECUTE_KAFKA_TOOLS adds vm_exec, infra_lookup,
-service_list, entity_history, result_fetch, propose_subtask. EXECUTE_SWARM_TOOLS and
-EXECUTE_GENERAL_TOOLS add node_activate (was missing — agents could drain but not un-drain).
-All execute allowlists get propose_subtask. Ambiguous classifier result now routes to
-Observe agent + STATUS_PROMPT instead of Execute agent (was wrong default).
-
-**v2.26.3** — Prompt quality improvements.
-RESEARCH_PROMPT: adds early propose_subtask reminder right after rule 8 (propose was
-buried at bottom, model consistently missed it). Adds NON-KAFKA INVESTIGATION PATHS section
-covering storage (TrueNAS/PBS), network (FortiGate/UniFi), and compute (Proxmox) paths
-with specific tool chains and root cause formats. STATUS_PROMPT: adds REQUIRED SUMMARY FORMAT
-template (STATUS / FINDINGS / ACTION NEEDED) — observe agent had no output format guide,
-results were inconsistent across runs.
-
-**v2.26.4** — Seed 4 base runbooks.
-Adds BASE_RUNBOOKS constant and seed_base_runbooks() to api/db/runbooks.py, called from
-init_runbooks() on startup. Seeds: kafka broker missing + worker node recovery (8 steps),
-docker disk cleanup (6 steps), swarm service not converging + force update (6 steps),
-worker node reintegration after reboot (7 steps). Runbooks are idempotent on title.
-
-**v2.26.5** — EntityDrawer Ask improvements.
-Increases max_tokens from 300 to 600 in /api/agent/ask. Rewrites /api/agent/ask/suggestions
-to be platform-aware: accepts platform + entity_id query params, returns suggestions per
-platform (proxmox/docker/kafka/unifi/truenas/pbs/fortigate) and per status.
-
-**v2.26.9** — DB foundations for credential profiles overhaul.
-Adds seq_id BIGSERIAL + discoverable to credential_profiles (migration-safe ALTER + fresh DDL). Seeds
-sec_id=0 dummy profile '__no_credential__' on init. Adds username_cache TEXT to connections table.
-New api/db/audit_log.py: connection_audit_log table + write_audit_event() + list_audit_events().
-Updates list_profiles() to return seq_id, has_private_key, has_passphrase, has_password, discoverable,
-linked_connections_count. Adds get_profile_safe(), get_profile_by_seq_id().
-
-**v2.26.10** — Backend credential profiles API overhaul.
-Full rewrite of api/routers/credential_profiles.py: adds GET /{id}/safe, POST /{id}/test-rotation
-(tests new credentials without saving), POST /{id}/confirm-rotation (saves + audit log), GET /{id}/audit.
-Renames auth types ssh_key→ssh, api_key→api; adds windows, token_pair, basic. Removes shared_credentials
-fallback from resolve_credentials_for_connection(). update_profile() replaces credentials entirely on
-rotation (no merge) + accepts discoverable param. create_profile() accepts discoverable.
-
-**v2.27.0** — Connections API + Windows platform.
-list_connections() returns credential_state per connection (source, profile_name, profile_seq_id,
-username, has_private_key, has_passphrase, has_password). New GET /api/connections/export (CSV, no
-secrets, profile by seq_id). New POST /api/connections/import (CSV, matches profile by seq_id, creates
-connections with profile_not_found flag if seq_id missing, all input sanitised). Windows platform entry
-added to PLATFORM_AUTH in OptionsModal.jsx (username/password/winrm_auth_method/account_type/use_ssl).
-New api/collectors/windows.py stub collector registered in manager.
-
-**v2.27.1** — Discovery harvest backend.
-New api/routers/discovery.py: POST /harvest (Proxmox VMs + UniFi clients + Swarm nodes, passive only,
-cross-referenced vs existing connections, stored in status_snapshots component=discovery_harvest).
-GET /devices (last harvest, unlinked_only filter). POST /test (test IP with profile, auth-type-aware).
-POST /link (create connection from discovered device). All IP/CIDR validated with ipaddress module —
-no raw user strings in SQL. Discovery scopes applied from settings key discoveryScopes.
-
-**v2.27.2** — Frontend: Credential Profiles tab overhaul.
-ProfileForm rewritten: all auth types (ssh, windows, api, token_pair, basic) with appropriate fields.
-SSH: private_key + passphrase + password + username; passphrase security hint. Windows: username format
-detector, winrm_auth_method, account_type with lockout warning for domain/service. API: api_key +
-header_name + prefix. Token pair: token_id + secret. discoverable toggle in form. Profiles section
-replaces collapsible accordion with always-visible prominent block: seq_id badge, linked_connections_count,
-has_private_key/has_passphrase indicators, delete warning if linked.
-
-**v2.27.3** — Frontend: Connections form overhaul + import/export.
-Profile picker added for SSH-capable platforms (vm_host, windows, fortiswitch, cisco, juniper, aruba).
-When profile active: credential fields show "from profile" in cyan/greyed; username override allowed
-with amber warning; private key field disabled (no override). Badge per connection list item:
-⊕ CRED PROFILE, ⚠ INLINE CREDS, ⚠ PROFILE MISSING. Import CSV button (file picker, base64 encoded,
-result display). Export CSV button (downloads file). vm_host fields reordered: SSH User → Private Key →
-Passphrase → Password. shared_credentials removed from advancedConfigFields.
-
-**v2.27.4** — Frontend: RotationTestModal component.
-New gui/src/components/RotationTestModal.jsx: triggered when saving profile credential changes.
-Calls POST /api/credential-profiles/{id}/test-rotation, shows animated per-connection results.
-All pass → auto-confirms save. Failures → shows list + Save anyway button (sith_lord: one-click;
-imperial_officer: requires override_reason textarea; stormtrooper: not available). Override logged
-via POST /confirm-rotation. Connected to ProfileForm onSave in ConnectionsTab via rotationModal state.
-OptionsModal gets userRole prop, passed down to ConnectionsTab and RotationTestModal.
-
-**v2.27.5** — Frontend: Discovered view.
-Adds 'Discovered' nav item under MONITOR in Sidebar.jsx. New gui/src/components/DiscoveredView.jsx:
-harvest button + manual IP entry (add/remove list). Table: source badge (PROXMOX/UNIFI/SWARM/MANUAL),
-host, platform_guess, linked indicator. Per-row: profile dropdown (discoverable profiles only) + Test
-button → inline result. Create connection button appears on successful test → pre-filled modal (label,
-platform, role). Filter by source + linked/unlinked. App.jsx routes 'Discovered' to DiscoveredView.
-
-**v2.27.6** — Settings: discovery scope + rotation concurrency.
-New DiscoveryScopeList component: CIDR/subnet list with add/remove, client-side validation accepting
-both CIDR (192.168.0.0/24) and subnet mask notation (192.168.0.0 255.255.255.0), injection-safe.
-Added to InfrastructureTab as Discovery section with discoveryEnabled toggle + discoveryScopes list.
-Added to GeneralTab as Rotation Test section: rotationTestMode select, rotationTestDelayMs,
-rotationWindowsDelayMs, rotationMaxParallel inputs with AD lockout warning. Six new settings keys
-seeded with defaults in api/routers/settings.py.
-
-**v2.26.6** — Entity detail performance.
-Adds GET /api/entities/find/{entity_id:path} endpoint. Loads only the relevant collector's
-snapshot (1 DB query, prefix-mapped). 30s in-memory cache. Falls back to full scan for
-bare labels (vm_host). EntityDrawer switches to this endpoint: ~5ms vs ~300ms.
-
-**v2.26.7** — VM Hosts entity detail + naming.
-vm_hosts.py: stamps entity_id=label on every VM card; adds to_entities() to VMHostsCollector.
-VMHostsSection.jsx: adds onEntityDetail prop to VMCard; adds ⌘ and › buttons in header.
-App.jsx: passes onEntityDetail to VMHostsSection. DashboardLayout.jsx: adds
-TILE_DISPLAY_NAMES — "VM_HOSTS" tile renders as "VM Hosts", all others cleaned up too.
-
-**v2.29.5** — fix(ui): filter bar vertical centering + revert wrong ProxmoxCard centering.
-ServiceCards.jsx Section Row 2: adds `display:flex; alignItems:center` to filterBar wrapper
-so chips sit vertically centred in the row (was top-aligned). ProxmoxCardCollapsed: removes
-`textAlign:center` from vCPU/RAM line and reverts `justify-center` to `justify-start` on
-badges row — restores left-aligned card content consistent with all other card types.
-
-**v2.30.0** — fix(proxmox): multi-connection support in Proxmox action paths.
-`_do_proxmox_action` in api/routers/dashboard.py: loads proxmox_vms snapshot, matches the
-target `node` to the cluster that contains it, uses that cluster's connection_id for
-credentials — eliminates always-first-connection bug in multi-cluster setups. Falls back
-to first connection when snapshot match fails. `proxmox_vm_power` in mcp_server/tools/vm.py:
-iterates all Proxmox connections via get_all_connections_for_platform, tries each until the
-VM matching vm_label is found — same fix for agent-driven power actions.
-
-**v2.30.1** — fix(auth): remove token from localStorage, cookie-first auth.
-AuthContext.jsx: token held in React state (memory) only — no longer written to
-localStorage. Mount validates session via httpOnly cookie (credentials: include). Logout
-calls POST /api/auth/logout to clear server-side cookie. api.js: authHeaders() returns {}
-(cookie handles same-origin auth automatically); SSE URL builders drop ?token= param.
-api/routers/dashboard.py: three SSE stream endpoints (containers, unified, vm-hosts) gain
-`request: Request` param and fall back to httpOnly cookie when no ?token= supplied —
-EventSource sends same-origin cookies automatically.
-
-**v2.31.0** — feat(docs): Bookstack sync — periodic harvest into RAG doc_chunks.
-New api/rag/bookstack_sync.py: fetches all pages from Bookstack API with pagination,
-strips HTML to plain text (stdlib HTMLParser, no deps), chunks via chunk_document(),
-upserts via ingest_chunks() with platform=bookstack. Incremental mode skips pages not
-updated since last sync (state stored in status_snapshots). Connection resolved from
-connections DB (platform=bookstack) then env vars. Background threading.Timer scheduler.
-api/routers/docs.py: POST /api/docs/bookstack/sync (manual trigger, runs in background
-thread) + GET /api/docs/bookstack/status. api/main.py: scheduler wired to lifespan.
-api/routers/settings.py: seeds bookstackSyncEnabled (false) + bookstackSyncIntervalHours (6).
-
-**v2.31.1** — fix(security): crypto boot-safety + key fingerprint + canary.
-Prevents silent data corruption when SETTINGS_ENCRYPTION_KEY goes missing on restart.
-api/crypto.py gains key_fingerprint() (SHA-256 first 8 chars, safe to log),
-_has_encrypted_data_in_db() (scans connections/credential_profiles/crypto_canary for
-enc:: prefix), check_encryption_key_safe() (raises RuntimeError in lifespan if env key
-is missing but DB already has encrypted rows), and a new crypto_canary table seeded
-with a canonical encrypted string on first boot. New /api/health/crypto endpoint
-returns {status: ok|unseeded|mismatch|error, fingerprint, message}. api/main.py wires
-check_encryption_key_safe() right after init_db() (before any encrypted reads) and
-ensure_crypto_canary() after migrate_plaintext_secrets().
-
-**v2.31.2** — feat(security): agent_actions audit table for destructive tool calls.
-Immutable forensic record of every audited tool invocation the agent makes. New
-api/db/agent_actions.py: agent_actions table (id, timestamp, session_id, operation_id,
-tool_name, args_redacted, result_status, result_summary, duration_ms, owner_user,
-was_planned, blast_radius), write_action() (never raises — audit failures never block
-the agent loop), list_actions() with session/tool/user/since filters, redact_args()
-walking nested dicts and replacing values under keys matching pass/password/secret/token/
-key/credential/auth/bearer/api_key, BLAST_RADIUS map (node/service/cluster/fleet) and
-AUDITED_TOOLS frozenset covering destructive tools plus vm_exec and kafka_exec (any
-command) for complete remote-exec forensics. New api/routers/agent_actions_api.py:
-GET /api/agent/actions with query filters (session_id, tool_name, user, since, limit
-1-500), role-gated to sith_lord + imperial_officer (403 otherwise). api/routers/agent.py
-adds one try-except block right after log_tool_call() in _run_single_agent_step,
-calling write_action() with owner_user + plan_action_called flag. api/main.py wires
-init_agent_actions() in lifespan and mounts the router. No UI this version — Recent
-Actions tab comes in v2.31.3.
+**v2.32.0–v2.32.3** — Harness Tightening phase (representation + runtime).
+See individual entries below.
 
 **v2.32.0** — refactor(agents): structured system prompts for observe + investigate.
-Restructures STATUS_PROMPT and RESEARCH_PROMPT from flat prose into explicitly labeled
-sections using ═══ SECTION ═══ separators: Role, Environment, Constraints, Tool Budget,
-Tool Chains, Completion Conditions, Failure Taxonomy, Output Format, Response Style.
-No logic changes — every rule, tool chain, and edge case preserved. Representation-only
-change based on harness engineering research (Tsinghua NLH paper): structured prompt
-format improves model parsing reliability. Deduplicates rules that were stated 2-3 times
-across scattered paragraphs. Groups related content (all Kafka chains together, all
-constraints together, exit code rules consolidated). Next: v2.32.1 applies same pattern
-to ACTION_PROMPT and BUILD_PROMPT.
+Restructures STATUS_PROMPT and RESEARCH_PROMPT into labeled ═══ SECTION ═══ sections.
+No logic changes. Representation-only, based on Tsinghua NLH research.
 
 **v2.32.1** — refactor(agents): structured system prompts for execute + build.
-Completes the Harness Tightening prompt restructuring. ACTION_PROMPT restructured into
-labeled sections: Role, Environment, Constraints (11 rules consolidated), Clarification
-Rules, Destructive Tools (mandatory workflow with examples), Tool Chains (Kafka/Swarm
-recovery, runbook check, propose subtask), Blocked Command/Tool Rules, Escalate Blocked
-Rule, Tool Budget, Completion Conditions, Response Style. BUILD_PROMPT restructured into
-Role, Constraints, Tool Budget, Tool Usage (workflow), Completion Conditions. All 4 agent
-prompts now use consistent ═══ SECTION ═══ separators. No logic changes.
+Completes prompt restructuring for all 4 agent types. Same ═══ SECTION ═══ pattern.
 
 **v2.32.2** — feat(agents): post-action verify step.
-After a destructive tool returns status=ok, the harness automatically calls a read-only
-verification tool to confirm state changed (swarm_service_force_update → service_health,
-proxmox_vm_power → swarm_node_status, service_upgrade → post_upgrade_verify, etc).
-Verification is harness-driven, not model-decided. Results streamed as [verify] steps
-and appended to tool result so model sees pass/fail. Catches premature completion.
+Harness auto-calls verification tool after destructive ops succeed (force-update →
+service_health, proxmox_power → swarm_node_status, upgrade → post_upgrade_verify).
 
 **v2.32.3** — feat(agents): attempt history table + context injection.
-New agent_attempts table records entity_id, task_type, tools_used, outcome, summary after
-every agent run. Before each new run, harness queries last 3 attempts for the detected
-entity and injects into system prompt. Prevents repeated failures with same approach.
+New agent_attempts table. Injects last 3 attempts per entity into system prompt.
+
+**v2.32.4** — fix(agents): final_answer truncation at 300 chars.
+verdict_from_text() truncated summary to text[:300], and _stream_agent used
+prior_verdict["summary"] as last_reasoning → final_answer always cut to 300 chars.
+Fix: preserve full step output in verdict dict via "full_output" key, use it for
+final_answer. Also increases verdict summary from 300→1500 chars for better
+coordinator context.
+
+**v2.32.5** — feat(agents): enforced tool call budgets per agent type.
+Adds _MAX_TOOL_CALLS_BY_TYPE: observe=8, investigate=16, execute=14, build=12.
+Checked at start of each LLM step — when exhausted, harness forces a summary with
+no further tool calls. Previously only max_steps (LLM rounds) was enforced but one
+step can fire multiple tool calls.
 
 ---
 
@@ -383,8 +205,10 @@ api/collectors/vm_hosts.py                — entity_id + to_entities() (v2.26.7
 gui/src/components/VMHostsSection.jsx     — ask/detail buttons + onEntityDetail (v2.26.7)
 gui/src/App.jsx                           — onEntityDetail passed to VMHostsSection (v2.26.7)
 gui/src/components/DashboardLayout.jsx    — TILE_DISPLAY_NAMES, "VM Hosts" label (v2.26.7)
-api/agents/router.py                      — allowlists, prompts, classifier (v2.26.2, v2.26.3)
-api/routers/agent.py                      — loop, plan gate, ambiguous label (v2.26.2, v2.26.5)
+api/agents/router.py                      — allowlists, prompts, classifier (v2.26.2, v2.26.3, v2.32.0, v2.32.1)
+api/agents/orchestrator.py                — verdict_from_text, coordinator (v2.10.0, v2.32.4)
+api/routers/agent.py                      — loop, plan gate, verify, budgets (v2.32.2, v2.32.3, v2.32.4, v2.32.5)
+api/db/agent_attempts.py                  — attempt history table (v2.32.3)
 api/db/runbooks.py                        — BASE_RUNBOOKS + seed_base_runbooks() (v2.26.4)
 api/db/vm_exec_allowlist.py               — allowlist table + cache + session purge (v2.23.3)
 api/routers/vm_exec_allowlist.py          — REST API for allowlist management (v2.23.3)

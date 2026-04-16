@@ -1843,6 +1843,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
         # ── Coordinator decision ───────────────────────────────────────────────
         prior_verdict = extract_structured_verdict(step_result["output"], step_info)
+        prior_verdict["full_output"] = step_result.get("output", "")  # preserve for final_answer
 
         if use_coordinator and coordinator_step < MAX_COORDINATOR_STEPS:
             coordinator_step += 1
@@ -1982,7 +1983,11 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         except Exception as _ae:
             log.debug("record_attempt failed: %s", _ae)
 
-        last_reasoning = prior_verdict["summary"] if prior_verdict else ""
+        # Use the full step output for final_answer, not the 300-char verdict summary
+        last_reasoning = ""
+        if prior_verdict:
+            # Try to get the full output from the last step result first
+            last_reasoning = prior_verdict.get("full_output") or prior_verdict.get("summary", "")
 
         # Detect truncated reasoning: ends without sentence-ending punctuation
         # and is shorter than a full summary would be

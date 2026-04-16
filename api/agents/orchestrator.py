@@ -118,19 +118,19 @@ def verdict_from_text(text: str) -> dict:
         matches_in_text = halt_signals & words
         negated = {m for m in matches_in_text if _negation_re.search(lower)}
         if matches_in_text - negated:
-            return {"verdict": "HALT", "summary": text[:300]}
+            return {"verdict": "HALT", "summary": text[:1500]}
 
     # "error" checked with stricter context
     if re.search(r'\b(error|errors)\b', lower) and not _negation_re.search(lower):
         if re.search(r'\b(tool error|status.*error|error.*status|failed with error|error occurred)\b', lower):
-            return {"verdict": "HALT", "summary": text[:300]}
+            return {"verdict": "HALT", "summary": text[:1500]}
 
     # Ambiguous / warning keywords → ASK
     ask_signals = {"warning", "caution", "unknown", "uncertain", "partial"}
     if ask_signals & words:
-        return {"verdict": "ASK", "summary": text[:300]}
+        return {"verdict": "ASK", "summary": text[:1500]}
 
-    result = {"verdict": "GO", "summary": text[:300]}
+    result = {"verdict": "GO", "summary": text[:1500]}
 
     # Extract structured state for passing between steps (observe → execute → verify)
     state = {}
