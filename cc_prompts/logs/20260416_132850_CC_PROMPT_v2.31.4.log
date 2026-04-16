@@ -1,0 +1,521 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.31.4.md (v2.31.4)
+Theme: feat(ops): deathstar-backup.sh + verify-bundle.sh with key fingerprint
+
+Prompt content:
+
+# CC PROMPT — v2.31.4 — feat(ops): deathstar-backup.sh — atomic backup with key fingerprint
+
+## What this does
+A one-shot backup helper that always captures the three things needed to restore
+DEATHSTAR from scratch:
+
+1. Full Postgres dump (`pg_dump -Fc`)
+2. `/opt/hp1-agent/docker/.env` (contains `SETTINGS_ENCRYPTION_KEY`)
+3. The current key fingerprint (verified against `/api/status/health/crypto`),
+   written next to the dump so a restorer can prove the `.env` matches the dump
+   BEFORE attempting a restart.
+
+All three go into a single timestamped bundle. If `age` is installed, the bundle
+is encrypted at rest with a recipient pubkey; otherwise the `.env` inside the
+bundle is left in plaintext and the bundle tar is chmod 600.
+
+Also adds a companion `deathstar-verify-bundle.sh` that validates a bundle
+without restoring — reads the stored fingerprint, re-derives the one from the
+bundled `.env`, and reports match/mismatch. Cheap insurance.
+
+Two new files under `scripts/`. No API changes. No container restart needed.
+
+Version bump: v2.31.3 → v2.31.4
+
+---
+
+## Change 1 — scripts/deathstar-backup.sh — NEW FILE
+
+Create this file and mark it executable (CC should `chmod +x` after writing,
+or commit with `git update-index --chmod=+x` — do whichever is idiomatic for
+the repo).
+
+```bash
+#!/usr/bin/env bash
+# DEATHSTAR backup — dumps Postgres, captures .env, records key fingerprint.
+#
+# USAGE
+#   Run on the agent-01 host (NOT inside the container — we need access to
+#   /opt/hp1-agent/docker/.env and the Docker socket):
+#
+#     sudo bash scripts/deathstar-backup.sh [--out /var/backups/deathstar]
+#                                           [--age-recipient age1xxx...]
+#                                           [--retain 14]
+#
+#   Env var overrides:
+#     DEATHSTAR_BACKUP_DIR        (default: /var/backups/deathstar)
+#     DEATHSTAR_AGE_RECIPIENT     (default: empty — no encryption)
+#     DEATHSTAR_RETAIN_DAYS       (default: 14)
+#     DEATHSTAR_COMPOSE_DIR       (default: /opt/hp1-agent/docker)
+#     DEATHSTAR_API_URL           (default: http://127.0.0.1:8000)
+#     DEATHSTAR_AUTH_COOKIE_FILE  (default: /root/.deathstar-cookies)
+#
+#   For the fingerprint check to succeed, DEATHSTAR_AUTH_COOKIE_FILE must hold
+#   a valid login cookie obtained via POST /api/auth/login. See the README
+#   section "Preparing the backup cookie" below the script for the one-time
+#   setup.
+#
+# BUNDLE LAYOUT  (inside deathstar-<host>-<ts>.tar.gz)
+#   db.dump                 — pg_dump -Fc output
+#   env.backup              — copy of docker/.env (plaintext unless --age-recipient)
+#   env.backup.age          — present only if age encryption enabled
+#   fingerprint.txt         — {"fingerprint":"XXXXXXXX","verified_via_api":true,
+#                             "api_status":"ok","backup_at":"ISO8601","host":"..."}
+#   VERSION                 — the API version string at backup time
+#   manifest.json           — list of files + sha256 per file
+
+set -euo pipefail
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+BACKUP_DIR="${DEATHSTAR_BACKUP_DIR:-/var/backups/deathstar}"
+COMPOSE_DIR="${DEATHSTAR_COMPOSE_DIR:-/opt/hp1-agent/docker}"
+API_URL="${DEATHSTAR_API_URL:-http://127.0.0.1:8000}"
+COOKIE_FILE="${DEATHSTAR_AUTH_COOKIE_FILE:-/root/.deathstar-cookies}"
+AGE_RECIPIENT="${DEATHSTAR_AGE_RECIPIENT:-}"
+RETAIN_DAYS="${DEATHSTAR_RETAIN_DAYS:-14}"
+
+# ── Args ─────────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --out)            BACKUP_DIR="$2"; shift 2 ;;
+    --age-recipient)  AGE_RECIPIENT="$2"; shift 2 ;;
+    --retain)         RETAIN_DAYS="$2"; shift 2 ;;
+    --compose-dir)    COMPOSE_DIR="$2"; shift 2 ;;
+    --api-url)        API_URL="$2"; shift 2 ;;
+    --cookie-file)    COOKIE_FILE="$2"; shift 2 ;;
+    -h|--help)        sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname)"
+TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
+BUNDLE_NAME="deathstar-${HOSTNAME_SHORT}-${TS}"
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+log() { printf '%s [backup] %s\n' "$(date -Is)" "$*"; }
+die() { log "FATAL: $*" >&2; exit 1; }
+
+mkdir -p "$BACKUP_DIR"
+[[ -w "$BACKUP_DIR" ]] || die "Backup dir not writable: $BACKUP_DIR"
+
+# ── 1. Sanity checks ─────────────────────────────────────────────────────────
+ENV_FILE="$COMPOSE_DIR/.env"
+[[ -f "$ENV_FILE" ]] || die ".env not found at $ENV_FILE"
+
+if ! command -v pg_dump >/dev/null 2>&1; then
+  log "pg_dump not on host — will run it inside the hp1_agent container."
+  PG_DUMP_MODE="container"
+else
+  PG_DUMP_MODE="host"
+fi
+
+# Load DATABASE_URL from .env (strip any surrounding quotes). Kept local; never
+# exported so child processes don't accidentally inherit it.
+DB_URL="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | sed -E 's/^DATABASE_URL=//; s/^"//; s/"$//')"
+[[ -n "$DB_URL" ]] || die "DATABASE_URL missing from $ENV_FILE"
+# pg_dump wants postgresql://, not postgresql+asyncpg://
+DB_URL_PG="$(echo "$DB_URL" | sed 's|postgresql+asyncpg://|postgresql://|')"
+
+# ── 2. pg_dump ───────────────────────────────────────────────────────────────
+DUMP_FILE="$WORK_DIR/db.dump"
+log "Dumping Postgres → $DUMP_FILE"
+if [[ "$PG_DUMP_MODE" == "host" ]]; then
+  PGPASSWORD="" pg_dump -Fc "$DB_URL_PG" -f "$DUMP_FILE"
+else
+  # Run inside the container; write to stdout, capture on host.
+  docker exec -i hp1_agent pg_dump -Fc "$DB_URL_PG" > "$DUMP_FILE"
+fi
+[[ -s "$DUMP_FILE" ]] || die "pg_dump produced an empty file"
+log "pg_dump complete: $(stat -c%s "$DUMP_FILE") bytes"
+
+# ── 3. Snapshot .env ─────────────────────────────────────────────────────────
+ENV_COPY="$WORK_DIR/env.backup"
+cp "$ENV_FILE" "$ENV_COPY"
+chmod 600 "$ENV_COPY"
+
+# ── 4. Derive & verify fingerprint ───────────────────────────────────────────
+# Fingerprint = first 8 hex chars of SHA-256 of the raw SETTINGS_ENCRYPTION_KEY.
+KEY_VALUE="$(grep -E '^SETTINGS_ENCRYPTION_KEY=' "$ENV_FILE" | sed -E 's/^SETTINGS_ENCRYPTION_KEY=//; s/^"//; s/"$//')"
+[[ -n "$KEY_VALUE" ]] || die "SETTINGS_ENCRYPTION_KEY missing from $ENV_FILE"
+LOCAL_FP="$(printf '%s' "$KEY_VALUE" | sha256sum | cut -c1-8)"
+
+API_STATUS="unavailable"
+API_FP=""
+if [[ -f "$COOKIE_FILE" ]]; then
+  RESP="$(curl -s --max-time 6 -b "$COOKIE_FILE" "$API_URL/api/status/health/crypto" || true)"
+  if [[ -n "$RESP" ]] && echo "$RESP" | grep -q '"fingerprint"'; then
+    API_STATUS="$(echo "$RESP" | sed -E 's/.*"status":"([^"]+)".*/\1/')"
+    API_FP="$(echo "$RESP" | sed -E 's/.*"fingerprint":"([^"]+)".*/\1/')"
+  fi
+fi
+
+if [[ -n "$API_FP" && "$API_FP" != "$LOCAL_FP" ]]; then
+  die "Fingerprint mismatch — API says '$API_FP', .env-derived is '$LOCAL_FP'. Refusing to write a bundle that can't be verified on restore."
+fi
+
+# ── 5. Version ───────────────────────────────────────────────────────────────
+VERSION="unknown"
+V_RESP="$(curl -s --max-time 4 "$API_URL/api/health" || true)"
+if [[ -n "$V_RESP" ]]; then
+  VERSION="$(echo "$V_RESP" | sed -E 's/.*"version":"([^"]+)".*/\1/')"
+fi
+echo "$VERSION" > "$WORK_DIR/VERSION"
+
+# ── 6. fingerprint.txt ───────────────────────────────────────────────────────
+cat > "$WORK_DIR/fingerprint.txt" <<EOF
+{"fingerprint":"$LOCAL_FP","verified_via_api":$( [[ -n "$API_FP" ]] && echo true || echo false ),"api_status":"$API_STATUS","backup_at":"$(date -Is)","host":"$HOSTNAME_SHORT","version":"$VERSION"}
+EOF
+
+# ── 7. Optional age encryption of env.backup ─────────────────────────────────
+if [[ -n "$AGE_RECIPIENT" ]]; then
+  command -v age >/dev/null 2>&1 || die "--age-recipient set but 'age' is not installed on this host"
+  log "Encrypting env.backup with age recipient $AGE_RECIPIENT"
+  age -r "$AGE_RECIPIENT" -o "$WORK_DIR/env.backup.age" "$ENV_COPY"
+  shred -u "$ENV_COPY" 2>/dev/null || rm -f "$ENV_COPY"
+fi
+
+# ── 8. manifest.json ─────────────────────────────────────────────────────────
+(
+  cd "$WORK_DIR"
+  {
+    printf '{\n  "files": ['
+    first=1
+    for f in *; do
+      [[ "$f" == "manifest.json" ]] && continue
+      sha="$(sha256sum "$f" | awk '{print $1}')"
+      size="$(stat -c%s "$f")"
+      [[ $first -eq 0 ]] && printf ','
+      printf '\n    {"name":"%s","sha256":"%s","size":%d}' "$f" "$sha" "$size"
+      first=0
+    done
+    printf '\n  ],\n  "fingerprint": "%s",\n  "version": "%s",\n  "backup_at": "%s"\n}\n' \
+      "$LOCAL_FP" "$VERSION" "$(date -Is)"
+  } > manifest.json
+)
+
+# ── 9. Tar + move into place ─────────────────────────────────────────────────
+OUT="$BACKUP_DIR/${BUNDLE_NAME}.tar.gz"
+tar -C "$WORK_DIR" -czf "$OUT" .
+chmod 600 "$OUT"
+log "Wrote $OUT ($(stat -c%s "$OUT") bytes)"
+
+# ── 10. Retention ────────────────────────────────────────────────────────────
+if [[ "$RETAIN_DAYS" =~ ^[0-9]+$ && "$RETAIN_DAYS" -gt 0 ]]; then
+  log "Pruning bundles older than ${RETAIN_DAYS}d in $BACKUP_DIR"
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name 'deathstar-*.tar.gz' \
+    -mtime +"$RETAIN_DAYS" -print -delete || true
+fi
+
+log "Backup complete."
+echo "$OUT"
+```
+
+### One-time cookie setup (documented in-line at top of the script)
+
+Append a brief README section to the script comments is already covered in the
+usage block; no separate doc file needed.
+
+---
+
+## Change 2 — scripts/deathstar-verify-bundle.sh — NEW FILE
+
+```bash
+#!/usr/bin/env bash
+# Verify a DEATHSTAR backup bundle WITHOUT restoring.
+#
+# Checks:
+#   1. Bundle extracts cleanly.
+#   2. manifest.json matches actual sha256 of every file.
+#   3. Fingerprint stored in fingerprint.txt matches the fingerprint derived
+#      from env.backup (or env.backup.age after the operator decrypts it).
+#   4. db.dump is a valid pg_dump custom-format file (pg_restore --list).
+#
+# USAGE
+#   bash scripts/deathstar-verify-bundle.sh /path/to/deathstar-host-TS.tar.gz
+#   bash scripts/deathstar-verify-bundle.sh /path/to/bundle.tar.gz --age-key ~/.age/key.txt
+
+set -euo pipefail
+
+BUNDLE="${1:-}"
+[[ -f "$BUNDLE" ]] || { echo "Usage: $0 <bundle.tar.gz> [--age-key FILE]" >&2; exit 2; }
+shift || true
+
+AGE_KEY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --age-key) AGE_KEY="$2"; shift 2 ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+log() { printf '%s [verify] %s\n' "$(date -Is)" "$*"; }
+die() { log "FAIL: $*" >&2; exit 1; }
+
+log "Extracting $BUNDLE"
+tar -C "$WORK" -xzf "$BUNDLE"
+
+cd "$WORK"
+[[ -f manifest.json ]] || die "manifest.json missing"
+[[ -f fingerprint.txt ]] || die "fingerprint.txt missing"
+[[ -f db.dump ]] || die "db.dump missing"
+
+# Re-check every sha in manifest
+python3 - <<'PY'
+import json, hashlib, sys
+m = json.load(open("manifest.json"))
+for f in m["files"]:
+    h = hashlib.sha256(open(f["name"], "rb").read()).hexdigest()
+    assert h == f["sha256"], f"sha mismatch for {f['name']}: manifest={f['sha256']} actual={h}"
+    assert sum(1 for _ in open(f["name"], "rb")) >= 0  # just proves readable
+print("manifest sha OK (%d files)" % len(m["files"]))
+PY
+
+STORED_FP="$(grep -oE '"fingerprint":"[^"]+"' fingerprint.txt | head -1 | sed 's/.*:"//; s/"$//')"
+[[ -n "$STORED_FP" ]] || die "stored fingerprint missing"
+log "Stored fingerprint: $STORED_FP"
+
+# Derive fingerprint from env.backup (decrypting age if needed)
+ENV_PLAIN=""
+if [[ -f env.backup ]]; then
+  ENV_PLAIN="env.backup"
+elif [[ -f env.backup.age ]]; then
+  [[ -n "$AGE_KEY" && -f "$AGE_KEY" ]] || die "env.backup.age present but --age-key not given"
+  age -d -i "$AGE_KEY" -o env.backup env.backup.age
+  ENV_PLAIN="env.backup"
+else
+  die "no env.backup{,.age} in bundle"
+fi
+
+KEY_VALUE="$(grep -E '^SETTINGS_ENCRYPTION_KEY=' "$ENV_PLAIN" | sed -E 's/^SETTINGS_ENCRYPTION_KEY=//; s/^"//; s/"$//')"
+[[ -n "$KEY_VALUE" ]] || die "SETTINGS_ENCRYPTION_KEY missing from env.backup"
+DERIVED_FP="$(printf '%s' "$KEY_VALUE" | sha256sum | cut -c1-8)"
+
+if [[ "$STORED_FP" != "$DERIVED_FP" ]]; then
+  die "FINGERPRINT MISMATCH — stored=$STORED_FP derived=$DERIVED_FP. This bundle's .env does not match its db.dump."
+fi
+log "Fingerprint match: $STORED_FP"
+
+# pg_dump format sanity
+if command -v pg_restore >/dev/null 2>&1; then
+  if pg_restore --list db.dump >/dev/null 2>&1; then
+    log "db.dump is a valid Postgres custom-format dump."
+  else
+    die "db.dump failed pg_restore --list (file may be truncated or corrupt)."
+  fi
+else
+  log "pg_restore not installed on this host — skipping dump format check."
+fi
+
+log "Bundle verified OK."
+```
+
+---
+
+## Version bump
+- Update `VERSION` in `api/constants.py`: `v2.31.3` → `v2.31.4`
+- Update root `/VERSION` file: `2.31.3` → `2.31.4`
+
+## Commit
+```
+git add -A
+git chmod +x scripts/deathstar-backup.sh scripts/deathstar-verify-bundle.sh 2>/dev/null || chmod +x scripts/deathstar-backup.sh scripts/deathstar-verify-bundle.sh
+git add -A
+git commit -m "feat(ops): v2.31.4 deathstar-backup.sh + verify-bundle.sh with key fingerprint"
+git push origin main
+```
+
+---
+
+## How to test after deploy
+
+This is a scripts-only change — no container rebuild is strictly required to
+use the scripts (they live in the repo, not the image). But since the queue
+runner commits and pushes, a normal image rebuild will still happen. Testing
+is done on the agent-01 host.
+
+1. **One-time cookie setup** on agent-01:
+   ```bash
+   sudo bash -c '
+     curl -sc /root/.deathstar-cookies -X POST http://127.0.0.1:8000/api/auth/login \
+       -H "Content-Type: application/json" \
+       -d "{\"username\":\"admin\",\"password\":\"YOUR_PASSWORD\"}" >/dev/null
+     chmod 600 /root/.deathstar-cookies
+     ls -la /root/.deathstar-cookies
+   '
+   ```
+
+2. **Dry-ish run** — write to a temp dir, no age encryption, 1-day retention:
+   ```bash
+   cd /opt/hp1-agent
+   git pull
+   sudo bash scripts/deathstar-backup.sh --out /tmp/deathstar-bk-test --retain 1
+   ls -la /tmp/deathstar-bk-test/
+   ```
+   Expect: one `deathstar-<host>-<ts>.tar.gz` file, chmod 600, non-zero size.
+
+3. **Inspect bundle contents**:
+   ```bash
+   BUNDLE=$(ls /tmp/deathstar-bk-test/*.tar.gz | tail -1)
+   tar -tzf "$BUNDLE"
+   # expect: db.dump, env.backup, fingerprint.txt, VERSION, manifest.json
+   tar -xzOf "$BUNDLE" fingerprint.txt
+   # expect: JSON with fingerprint, verified_via_api: true, api_status: ok
+   ```
+
+4. **Verify bundle**:
+   ```bash
+   bash scripts/deathstar-verify-bundle.sh "$BUNDLE"
+   # expect: manifest sha OK, fingerprint match, db.dump valid.
+   ```
+
+5. **Tamper test** — make sure verify detects mismatch:
+   ```bash
+   cp "$BUNDLE" /tmp/tampered.tar.gz
+   mkdir -p /tmp/tamper && cd /tmp/tamper
+   tar -xzf /tmp/tampered.tar.gz
+   echo "SETTINGS_ENCRYPTION_KEY=notTheRealKey" > env.backup
+   tar -czf /tmp/tampered.tar.gz .
+   bash /opt/hp1-agent/scripts/deathstar-verify-bundle.sh /tmp/tampered.tar.gz
+   # expect: exits non-zero with "FINGERPRINT MISMATCH".
+   ```
+
+6. **Cron-ready hook** (optional — do not install until happy):
+   ```bash
+   # /etc/cron.d/deathstar-backup
+   0 3 * * *  root  /opt/hp1-agent/scripts/deathstar-backup.sh --out /mnt/truenas/backups/deathstar --retain 30 >> /var/log/deathstar-backup.log 2>&1
+   ```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 13:28:50
+========================================================================
+PROMPT COMPLETE: v2.31.4
+[STATUS] 1m52s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m52s
+========================================================================

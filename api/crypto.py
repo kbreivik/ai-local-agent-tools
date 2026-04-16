@@ -344,3 +344,41 @@ def verify_crypto_canary() -> dict:
             "data is likely unrecoverable with the current key."
         ),
     }
+
+
+# ─── Key-parameterised helpers (for rotation tooling) ────────────────────────
+
+def _fernet_from_key(key: str) -> Fernet:
+    """Build a Fernet instance from a raw base64 key string."""
+    if not key:
+        raise ValueError("encryption key is empty")
+    try:
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception as e:
+        raise ValueError(f"invalid Fernet key: {e}") from e
+
+
+def encrypt_with_key(plaintext: str, key: str) -> str:
+    """Encrypt using an explicit key. Returns prefixed ciphertext. Idempotent:
+    if input is already encrypted, returns as-is."""
+    if not plaintext or is_encrypted(plaintext):
+        return plaintext
+    f = _fernet_from_key(key)
+    return f"{_PREFIX}{f.encrypt(plaintext.encode()).decode()}"
+
+
+def decrypt_with_key(ciphertext: str, key: str) -> str:
+    """Decrypt using an explicit key. Raises InvalidToken on failure (unlike
+    decrypt_value() which swallows the error and returns '')."""
+    if not ciphertext or not is_encrypted(ciphertext):
+        return ciphertext
+    raw = ciphertext[len(_PREFIX):]
+    f = _fernet_from_key(key)
+    return f.decrypt(raw.encode()).decode()
+
+
+def fingerprint_of_key(key: str) -> str:
+    """SHA-256 first 8 hex chars of an arbitrary key string."""
+    if not key:
+        return "no-key"
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
