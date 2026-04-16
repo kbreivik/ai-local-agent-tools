@@ -17,6 +17,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 let _ws             = null
 let _wsUrl          = null
 let _pingTimer      = null
+let _authRetried    = false
 let _msgListeners   = new Set()
 let _stateListeners = new Set()
 let _replayListeners = new Set()
@@ -44,37 +45,35 @@ function _ensureWS(url) {
       if (ws.readyState === WebSocket.OPEN) ws.send('ping')
     }, 20_000)
     // Fetch replay for the most recent active session
-    const token = localStorage.getItem('hp1_auth_token')
-    if (token) {
-      fetch(`${API_BASE}/api/agent/sessions/active`, {
-        headers: { Authorization: `Bearer ${token}` },
+    // v2.31.3: cookie-based auth — no localStorage token to check
+    fetch(`${API_BASE}/api/agent/sessions/active`, {
+      credentials: 'include',
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const sessions = data?.sessions || []
+        if (sessions.length > 0) {
+          const latestSession = sessions[0]
+          return fetch(`${API_BASE}/api/agent/session/${latestSession.session_id}/replay`, {
+            credentials: 'include',
+          })
+        }
+        return null
       })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          const sessions = data?.sessions || []
-          if (sessions.length > 0) {
-            const latestSession = sessions[0]
-            return fetch(`${API_BASE}/api/agent/session/${latestSession.session_id}/replay`, {
-              headers: { Authorization: `Bearer ${token}` },
-            })
-          }
-          return null
-        })
-        .then(r => r?.ok ? r.json() : null)
-        .then(data => {
-          if (data?.lines?.length) {
-            const replayLines = data.lines.map((l, i) => ({
-              id: `replay-${i}`,
-              type: l.type || 'step',
-              content: l.content || '',
-              timestamp: l.timestamp,
-              replayed: true,
-            }))
-            _replayListeners.forEach(fn => fn(replayLines))
-          }
-        })
-        .catch(() => {})
-    }
+      .then(r => r?.ok ? r.json() : null)
+      .then(data => {
+        if (data?.lines?.length) {
+          const replayLines = data.lines.map((l, i) => ({
+            id: `replay-${i}`,
+            type: l.type || 'step',
+            content: l.content || '',
+            timestamp: l.timestamp,
+            replayed: true,
+          }))
+          _replayListeners.forEach(fn => fn(replayLines))
+        }
+      })
+      .catch(() => {})
   }
 
   ws.onmessage = (e) => {
@@ -103,10 +102,19 @@ function _ensureWS(url) {
     _pingTimer = null
     _notifyState('disconnected')
     if (event.code === 1008) {
-      // Auth rejection — token expired or invalid. Stop retrying and signal re-login.
+      // Auth rejection. Under cookie-based auth (v2.31.3) this can fire on
+      // a transient backend restart before the cookie is re-validated. Try
+      // one retry after a longer delay; if it fails again the onclose will
+      // re-enter this branch and settle on auth_error.
+      if (!_authRetried) {
+        _authRetried = true
+        setTimeout(() => _ensureWS(_wsUrl), 6000)
+        return
+      }
       _notifyState('auth_error')
       return
     }
+    _authRetried = false  // successful connection clears the one-shot flag
     if (_ws === ws) _scheduleReconnect()
   }
 
@@ -132,9 +140,11 @@ export function AgentOutputProvider({ children }) {
   const feedStartRef    = useRef(null)  // timestamp when current run started
 
   useEffect(() => {
-    const token = localStorage.getItem('hp1_auth_token')
+    // v2.31.3: cookie-based auth. The WS handshake automatically sends same-origin
+    // cookies, so no ?token= param is needed. Keeps the URL clean of secrets in
+    // server logs and browser history.
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${wsProto}://${location.host}/ws/output${token ? `?token=${token}` : ''}`
+    const url = `${wsProto}://${location.host}/ws/output`
     _ensureWS(url)
 
     if (_ws) {

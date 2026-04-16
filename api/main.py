@@ -482,8 +482,18 @@ async def health():
 @app.websocket("/ws/output")
 async def websocket_output(ws: WebSocket, token: Optional[str] = Query(default=None)):
     """WebSocket endpoint — streams agent output to GUI in real time.
-    Pass ?token=<jwt> to authenticate. Invalid token closes with code 1008.
+
+    Auth priority:
+      1. ?token=<jwt> query param (legacy)
+      2. httpOnly auth cookie (preferred since v2.30.1 / v2.31.3)
+
+    Invalid or missing token closes with code 1008.
     """
+    if not token:
+        # Browsers send same-origin cookies on the WS handshake. Read the
+        # same cookie name used by the HTTP auth path so both flows validate
+        # via the exact same manager.connect(token=...) path.
+        token = ws.cookies.get("hp1_auth") or ""
     await manager.connect(ws, token=token)
     # If connect rejected the ws (invalid token), it's closed; the ws won't be in connections.
     # We still need to guard the receive loop.
