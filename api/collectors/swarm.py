@@ -35,22 +35,16 @@ def _build_docker_client_for_conn(conn):
         return docker.DockerClient(base_url=host, timeout=10)
 
     if mode == "ssh":
-        ssh_user = creds.get("username", "ubuntu")
-        pkey = creds.get("private_key")
-        # Try vm_host reference for SSH creds
-        if not pkey:
-            ssh_ref = cfg.get("_ssh_source")
-            if ssh_ref:
-                try:
-                    from api.connections import get_all_connections_for_platform
-                    vmc = next((c for c in get_all_connections_for_platform("vm_host")
-                                if str(c.get("id")) == ssh_ref), None)
-                    if vmc:
-                        vc = vmc.get("credentials") or {}
-                        ssh_user = vc.get("username", ssh_user)
-                        pkey = vc.get("private_key")
-                except Exception:
-                    pass
+        # Profile-first credential resolution (v2.33.17). Profile is authoritative
+        # when linked via config.credential_profile_id; inline creds are override-only.
+        try:
+            from api.db.credential_profiles import resolve_credentials_for_connection
+            resolved = resolve_credentials_for_connection(conn, []) or {}
+        except Exception as _re:
+            log.debug("profile resolve failed for docker_host %s: %s", conn.get("label"), _re)
+            resolved = creds
+        ssh_user = creds.get("username") or resolved.get("username") or "ubuntu"
+        pkey     = resolved.get("private_key") or creds.get("private_key")
         if pkey:
             tf = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
             tf.write(pkey); tf.flush(); tf.close()

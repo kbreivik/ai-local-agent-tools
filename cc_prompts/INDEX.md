@@ -167,7 +167,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.13.md | v2.33.13 | feat(agents): contradiction detection in synthesis | DONE (f0e84b4) |
 | CC_PROMPT_v2.33.14.md | v2.33.14 | feat(tools): elastic_search_logs rich query metadata + hint | DONE (cba6198) |
 | CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | DONE (d575a1a) |
-| CC_PROMPT_v2.33.16.md | v2.33.16 | fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition | RUNNING |
+| CC_PROMPT_v2.33.16.md | v2.33.16 | fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition | DONE (59ee72c) |
+| CC_PROMPT_v2.33.17.md | v2.33.17 | fix(security): docker_host SSH credentials from profiles, not other connections | RUNNING |
 
 ---
 
@@ -285,6 +286,9 @@ New `AgentDiagnostics` component rendered at top of OutputPanel during investiga
 
 **v2.33.16** — fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition.
 Follow-up to v2.33.10. Observed in live use: percent text advanced but the bar appeared bumpy — stalling or stepping backward. Three root causes in `api/routers/dashboard.py::_update_pull_job`: (1) `bytes_total` was recomputed as the sum of all discovered layers, so as Docker streamed new layer headers the denominator grew faster than `bytes_done`, making raw `int(done/total*100)` *decrease* between polls; (2) the `done` callsite passed `percent=100` via kwargs but the function applied kwargs first and then overwrote percent with the layer recomputation; (3) CSS `transition: 0.3s ease` with a 600 ms poll interval left the bar idle for 300 ms per cycle. Fix replaces raw byte math with fixed phase bands (starting 0–5%, downloading 5–70%, extracting 70–92%, recreating 92–98%, done 100%), scales within each band by bytes (download) or layer completions (extract), and enforces `max(prev, pct)` monotonicity per job. Explicit percent only raises, never lowers. `error` freezes at last-seen percent rather than resetting. Frontend transition bumped to `650ms linear` so the bar interpolates continuously across poll boundaries instead of finishing early and pausing.
+
+**v2.33.17** — fix(security): docker_host SSH credentials from profiles, not other connections.
+The docker_host platform form was the last holdout using a different credential source pattern from every other SSH-capable platform. Its SSH-tunnel mode exposed a "Credentials from" dropdown (`_ssh_source`) that let the user inherit credentials from another vm_host connection, creating invisible cross-connection dependencies, breaking rotation test coverage (profile rotation tests don't follow `_ssh_source` chains), and making the `credential_state` audit field inaccurate. Fix removes `_ssh_source` entirely and wires docker_host into the same `credential_profile_id` picker used by vm_host/windows/fortiswitch/cisco/juniper/aruba, filtered to SSH-typed profiles. Backend credential resolution switches to the standard profile-first resolver from v2.31.22. Alembic migration rewrites existing `_ssh_source` values — if the source vm_host had a profile, the docker_host inherits its `credential_profile_id`; otherwise `_ssh_source` is stripped and a warning is logged. New `credential_state.source = needs_profile` plus a red ⚠ NEEDS PROFILE badge surface rows that require manual relinking. Establishes credential profiles as the single source of truth for all connection credentials.
 
 ---
 

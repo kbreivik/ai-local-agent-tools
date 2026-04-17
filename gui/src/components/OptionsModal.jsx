@@ -1375,7 +1375,6 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
   const [templateEditId, setTemplateEditId] = useState(null)       // connection id being edited
   const [connectionTemplates, setConnectionTemplates] = useState({}) // {conn_id: {has_override, template}}
   const [jumpHosts, setJumpHosts] = useState([])
-  const [vmHostConns, setVmHostConns] = useState([])
   const [profiles, setProfiles] = useState([])
   const [showProfileForm, setShowProfileForm] = useState(false)
   const [editingProfileId, setEditingProfileId] = useState(null)
@@ -1403,12 +1402,18 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
       { key: 'client_cert', label: 'Client Certificate', type: 'textarea', placeholder: '-----BEGIN CERTIFICATE-----', hint: 'cert.pem — your client certificate' },
       { key: 'client_key', label: 'Client Key', type: 'textarea', placeholder: '-----BEGIN RSA PRIVATE KEY-----', hint: 'key.pem — your client private key. Stored encrypted at rest.' },
     ]},
-    { value: 'ssh', label: 'SSH tunnel', port: 22, hint: 'Connects via SSH and forwards the remote Docker socket. No daemon reconfiguration needed.', fields: [
-      { key: '_ssh_source', label: 'Credentials from', type: 'ssh_source_select', hint: 'Pick an existing vm_host connection or enter creds below' },
-      { key: 'username', label: 'SSH User', placeholder: 'ubuntu', hint: 'Leave blank to inherit from vm_host' },
-      { key: 'private_key', label: 'Private Key', type: 'textarea', placeholder: '-----BEGIN RSA PRIVATE KEY-----', hint: 'PEM key. Leave blank to inherit from vm_host.' },
-      { key: 'password', label: 'Password', type: 'password', hint: 'Note: Docker SDK SSH transport does not support password auth — key preferred.' },
-    ]},
+    { value: 'ssh', label: 'SSH tunnel', port: 22,
+      hint: 'Connects via SSH and forwards the remote Docker socket. No daemon reconfiguration needed. Link a credential profile — do not enter creds inline.',
+      fields: [
+        { key: 'username',    label: 'SSH User',   placeholder: 'ubuntu',
+          hint: 'Override only — normally comes from the linked credential profile.' },
+        { key: 'private_key', label: 'Private Key', type: 'textarea',
+          placeholder: '-----BEGIN RSA PRIVATE KEY-----',
+          hint: 'Override only — normally comes from the linked credential profile.' },
+        { key: 'password',    label: 'Password',    type: 'password',
+          hint: 'Fallback only. Docker SDK SSH transport does not support password auth; key is required.' },
+      ]
+    },
   ]
 
   const updateForm = (key, val) => setForm(f => ({ ...f, [key]: val }))
@@ -1463,7 +1468,6 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
         )
         setConns(all)
         setJumpHosts(all.filter(c => c.platform === 'vm_host' && c.config?.is_jump_host).map(c => ({ id: c.id, label: c.label, host: c.host })))
-        setVmHostConns(all.filter(c => c.platform === 'vm_host'))
         setLoading(false)
         return all
       })
@@ -1945,17 +1949,7 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
                   <option value="standalone">Standalone</option>
                 </select>
               </div>
-              {mode.fields.map(f => f.type === 'ssh_source_select' ? (
-                <div key={f.key}>
-                  {_FL(f.label)}
-                  {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
-                  <select className="input text-[10px] w-full" value={form.config?._ssh_source || ''} onChange={e => { updateConfig('_ssh_source', e.target.value); const vmc = vmHostConns.find(c => c.id === e.target.value); if (vmc && !form.host) updateForm('host', vmc.host) }}>
-                    <option value="">— enter credentials directly —</option>
-                    {vmHostConns.map(vmc => <option key={vmc.id} value={vmc.id}>{vmc.label} ({vmc.host})</option>)}
-                  </select>
-                  {vmHostConns.length === 0 && <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}>No vm_host connections found — add one first or enter SSH credentials directly</div>}
-                </div>
-              ) : f.type === 'textarea' ? (
+              {!(form.config?.credential_profile_id && form.auth_type === 'ssh') && mode.fields.map(f => f.type === 'textarea' ? (
                 <div key={f.key}>
                   {_FL(f.label)}
                   {f.hint && <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 3 }}>{f.hint}</div>}
@@ -1973,7 +1967,10 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
             </>)
           })()}
           {/* Credential profile picker for SSH-capable platforms */}
-          {['vm_host', 'windows', 'fortiswitch', 'cisco', 'juniper', 'aruba'].includes(form.platform) && (() => {
+          {(
+            ['vm_host', 'windows', 'fortiswitch', 'cisco', 'juniper', 'aruba'].includes(form.platform) ||
+            (form.platform === 'docker_host' && form.auth_type === 'ssh')
+          ) && (() => {
             const credState = form._credState || {}
             const activeProfileId = form.config?.credential_profile_id || ''
             const activeProfile = profiles.find(p => p.id === activeProfileId)
@@ -2023,11 +2020,14 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
                   className="input text-[10px] w-full"
                 >
                   <option value="">— no profile (enter credentials below) —</option>
-                  {profiles.filter(p => p.name !== '__no_credential__').map(p => (
-                    <option key={p.id} value={p.id}>
-                      #{p.seq_id ?? '?'} — {p.name} ({p.auth_type})
-                    </option>
-                  ))}
+                  {profiles
+                    .filter(p => p.name !== '__no_credential__')
+                    .filter(p => form.platform !== 'docker_host' || p.auth_type === 'ssh')
+                    .map(p => (
+                      <option key={p.id} value={p.id}>
+                        #{p.seq_id ?? '?'} — {p.name} ({p.auth_type})
+                      </option>
+                    ))}
                 </select>
 
                 {/* When a profile is active — show derived safe fields greyed out */}
@@ -2094,7 +2094,7 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
           })()}
           {/* Standard platform fields — hidden for profile-linked SSH platforms when profile active */}
           {form.platform !== 'docker_host' &&
-           !(form.config?.credential_profile_id && ['vm_host','windows','fortiswitch','cisco','juniper','aruba'].includes(form.platform)) &&
+           !(form.config?.credential_profile_id && ['vm_host','windows','fortiswitch','cisco','juniper','aruba','docker_host'].includes(form.platform)) &&
            platAuth.fields.map(f => (
             <div key={f.key}>
               {_FL(f.label + (f.hint ? ' ↓' : ''))}
@@ -2222,6 +2222,12 @@ function ConnectionsTab({ userRole = 'stormtrooper' }) {
                 {c.credential_state?.source === 'inline' && ['vm_host','windows'].includes(c.platform) && (
                   <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'rgba(204,136,0,0.12)', color: 'var(--amber)' }}>
                     ⚠ INLINE CREDS
+                  </span>
+                )}
+                {c.credential_state?.source === 'needs_profile' && (
+                  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2,
+                    background: 'rgba(204,40,40,0.15)', color: 'var(--red)' }}>
+                    ⚠ NEEDS PROFILE
                   </span>
                 )}
                 {c.config?.os_type && <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2, background: 'var(--bg-3)', color: 'var(--text-3)' }}>{c.config.os_type}</span>}

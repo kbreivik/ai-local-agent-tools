@@ -1,0 +1,424 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.17.md (v2.33.17)
+Theme: fix(security): docker_host SSH credentials from profiles, not other connections
+
+Prompt content:
+
+# CC PROMPT — v2.33.17 — fix(security): docker_host SSH credentials from profiles, not other connections
+
+## What this does
+
+The `docker_host` platform form (Connections tab) currently offers a "Credentials from"
+dropdown in SSH-tunnel mode that lists **other vm_host connections** as a credential
+source (`_ssh_source`). This is inconsistent with every other SSH-capable platform
+(`vm_host`, `windows`, `fortiswitch`, `cisco`, `juniper`, `aruba`), all of which pull
+credentials exclusively from **credential profiles**.
+
+The inconsistency is a security and maintenance problem:
+
+- **Credential sprawl.** A docker_host inheriting from a vm_host creates an
+  invisible dependency — rotating the vm_host's creds silently rotates docker_host's
+  creds too, or breaks it if the source vm_host is deleted.
+- **Rotation is broken.** Profile rotation tests (v2.27.4) don't cover credentials
+  that live on vm_host connections directly instead of profiles.
+- **Audit gap.** `credential_state` can report `source=profile` / `inline` but has
+  no clean representation for "copied from another connection".
+- **One source of truth.** The architecture direction (v2.15.0 credential profiles
+  + v2.26.9 seq_id + v2.26.10 rotation test/confirm) is that credentials live in
+  profiles and connections reference them. This is the last holdout.
+
+Fix: make docker_host use the same `credential_profile_id` picker as the other
+SSH-capable platforms, restricted to `auth_type === 'ssh'` profiles. Migrate
+existing docker_host connections with `config._ssh_source` set.
+
+Version bump: 2.33.16 → 2.33.17
+
+---
+
+## Change 1 — gui/src/components/OptionsModal.jsx — remove `_ssh_source`, use profile picker
+
+Locate the `DOCKER_AUTH_MODES` constant inside `ConnectionsTab`. In the `ssh` mode
+entry, **remove** the `_ssh_source` field entirely:
+
+```jsx
+// BEFORE
+{ value: 'ssh', label: 'SSH tunnel', port: 22, hint: '...', fields: [
+  { key: '_ssh_source', label: 'Credentials from', type: 'ssh_source_select', hint: 'Pick an existing vm_host connection or enter creds below' },
+  { key: 'username', ... },
+  { key: 'private_key', ... },
+  { key: 'password', ... },
+]},
+
+// AFTER
+{ value: 'ssh', label: 'SSH tunnel', port: 22,
+  hint: 'Connects via SSH and forwards the remote Docker socket. No daemon reconfiguration needed. Link a credential profile — do not enter creds inline.',
+  fields: [
+    { key: 'username',    label: 'SSH User',   placeholder: 'ubuntu',
+      hint: 'Override only — normally comes from the linked credential profile.' },
+    { key: 'private_key', label: 'Private Key', type: 'textarea',
+      placeholder: '-----BEGIN RSA PRIVATE KEY-----',
+      hint: 'Override only — normally comes from the linked credential profile.' },
+    { key: 'password',    label: 'Password',    type: 'password',
+      hint: 'Fallback only. Docker SDK SSH transport does not support password auth; key is required.' },
+  ]
+},
+```
+
+Then in the platform list that renders the `credential_profile_id` picker, add
+`docker_host`:
+
+```jsx
+// BEFORE
+{['vm_host', 'windows', 'fortiswitch', 'cisco', 'juniper', 'aruba'].includes(form.platform) && (() => {
+
+// AFTER — docker_host added, AND filtered by mode
+{(
+  ['vm_host', 'windows', 'fortiswitch', 'cisco', 'juniper', 'aruba'].includes(form.platform) ||
+  (form.platform === 'docker_host' && form.auth_type === 'ssh')
+) && (() => {
+```
+
+For docker_host, the profile dropdown must only show SSH-typed profiles:
+
+```jsx
+{profiles
+  .filter(p => p.name !== '__no_credential__')
+  .filter(p => form.platform !== 'docker_host' || p.auth_type === 'ssh')
+  .map(p => (
+    <option key={p.id} value={p.id}>
+      #{p.seq_id ?? '?'} — {p.name} ({p.auth_type})
+    </option>
+  ))}
+```
+
+Also update the "standard platform fields" render guard so docker_host with a
+profile linked hides the inline SSH fields, same as other SSH platforms:
+
+```jsx
+// BEFORE
+{form.platform !== 'docker_host' &&
+ !(form.config?.credential_profile_id && ['vm_host','windows','fortiswitch','cisco','juniper','aruba'].includes(form.platform)) &&
+ platAuth.fields.map(f => (
+
+// AFTER
+{form.platform !== 'docker_host' &&
+ !(form.config?.credential_profile_id && ['vm_host','windows','fortiswitch','cisco','juniper','aruba','docker_host'].includes(form.platform)) &&
+ platAuth.fields.map(f => (
+```
+
+Inside the docker_host-specific render block that iterates `mode.fields`, remove
+the entire `f.type === 'ssh_source_select'` branch — that field type no longer
+exists in the schema.
+
+Finally, delete `vmHostConns` from `ConnectionsTab` if it's only used by
+`_ssh_source`. Grep first — if nothing else references it, also remove the line
+`setVmHostConns(all.filter(c => c.platform === 'vm_host'))` from `fetchConns`
+and the `useState` declaration. If BulkForm or anything else uses it, leave it.
+
+## Change 2 — backend docker_host credential resolution
+
+Search the backend for `_ssh_source` references. Expected callsites:
+
+- `api/connections.py` — credential loader for connection test + collector use
+- `api/collectors/docker_swarm.py` or `api/collectors/swarm.py` — wherever
+  docker_host SSH mode is used to build a paramiko/docker-py SSH client
+- `api/routers/dashboard.py` — possibly in `_vm_ssh_exec` or container action paths
+
+For each callsite, replace the `config._ssh_source` → source_connection lookup
+with the standard profile resolution path already used by vm_host:
+
+```python
+# BEFORE (pseudocode)
+src_id = conn.config.get("_ssh_source")
+if src_id:
+    src_conn = get_connection(src_id)
+    username, key, passphrase, password = extract_ssh_creds(src_conn)
+else:
+    username = conn.credentials.get("username")
+    ...
+
+# AFTER — reuse profile-first resolver (v2.31.22 path)
+from api.db.credential_profiles import get_profile_safe
+profile_id = conn.config.get("credential_profile_id")
+if profile_id:
+    profile = get_profile_safe(profile_id)  # returns decrypted creds
+    username   = conn.credentials.get("username") or profile.get("username")
+    key        = profile.get("private_key")
+    passphrase = profile.get("passphrase")
+    password   = profile.get("password")
+else:
+    # Inline fallback — kept for rare override cases
+    username   = conn.credentials.get("username")
+    key        = conn.credentials.get("private_key")
+    passphrase = conn.credentials.get("passphrase")
+    password   = conn.credentials.get("password")
+```
+
+If a shared resolver already exists (likely `_resolve_ssh_credentials` or similar
+from v2.31.22 profile-first work), use it — do NOT duplicate logic.
+
+## Change 3 — migration of existing `_ssh_source` connections
+
+Add a one-shot Alembic migration (or bump an existing init script) that rewrites
+docker_host connections with `config._ssh_source` set:
+
+```python
+"""Migrate docker_host _ssh_source → credential_profile_id
+
+Revision ID: v2_33_17_docker_host_profile
+"""
+import json
+from alembic import op
+
+def upgrade():
+    conn = op.get_bind()
+    # Find all docker_host connections referencing another connection as source
+    rows = conn.execute(
+        "SELECT id, config FROM connections WHERE platform = 'docker_host' AND auth_type = 'ssh'"
+    ).fetchall()
+    for row in rows:
+        cfg = row.config if isinstance(row.config, dict) else json.loads(row.config or "{}")
+        src_id = cfg.get("_ssh_source")
+        if not src_id:
+            continue
+        # Look up the source vm_host connection's profile
+        src = conn.execute(
+            "SELECT config FROM connections WHERE id = %s",
+            (src_id,),
+        ).fetchone()
+        if src:
+            src_cfg = src.config if isinstance(src.config, dict) else json.loads(src.config or "{}")
+            profile_id = src_cfg.get("credential_profile_id")
+            if profile_id:
+                cfg["credential_profile_id"] = profile_id
+        # In all cases strip _ssh_source so the schema is clean
+        cfg.pop("_ssh_source", None)
+        conn.execute(
+            "UPDATE connections SET config = %s WHERE id = %s",
+            (json.dumps(cfg), row.id),
+        )
+
+def downgrade():
+    # One-way migration — _ssh_source is deprecated and not reintroduced
+    pass
+```
+
+Docker_host connections whose source vm_host had inline creds (no profile)
+will end up with no `credential_profile_id` and no inline creds — they'll need
+manual relinking. Log a warning for each such row so the operator can fix them:
+
+```python
+log.warning("docker_host connection %s: _ssh_source pointed to vm_host %s which has no profile; manual fix needed", row.id, src_id)
+```
+
+## Change 4 — credential_state surfacing
+
+Extend the `credential_state` dict returned from `/api/connections` to distinguish
+docker_host SSH mode without a profile as `needs_profile` (currently shows
+`inline` which is correct but not actionable). In `api/connections.py` or
+wherever `credential_state` is assembled:
+
+```python
+def _credential_state(conn):
+    if conn.config.get("credential_profile_id"):
+        prof = get_profile_safe(conn.config["credential_profile_id"])
+        if prof:
+            return {"source": "profile", "profile_name": prof.get("name")}
+        return {"source": "profile_not_found"}
+    # NEW: docker_host SSH mode needs a profile
+    if conn.platform == "docker_host" and conn.auth_type == "ssh":
+        return {"source": "needs_profile"}
+    # Standard inline fallback
+    return {"source": "inline"}
+```
+
+Frontend: add a red badge for `source: needs_profile` next to the existing badge
+row in the connection list (same spot as the `INLINE CREDS` amber badge):
+
+```jsx
+{c.credential_state?.source === 'needs_profile' && (
+  <span style={{ fontSize: 8, padding: '1px 4px', borderRadius: 2,
+    background: 'rgba(204,40,40,0.15)', color: 'var(--red)' }}>
+    ⚠ NEEDS PROFILE
+  </span>
+)}
+```
+
+## Change 5 — tests
+
+`tests/test_docker_host_profile.py`:
+
+```python
+def test_docker_host_ssh_uses_profile():
+    """Regression: docker_host SSH credential resolution prefers profile."""
+    # Create an SSH profile
+    profile_id = create_profile({
+        "name": "test-docker-ssh",
+        "auth_type": "ssh",
+        "credentials": {"username": "ubuntu", "private_key": "FAKE_KEY", "passphrase": "pp"}
+    })
+    # Create a docker_host pointing at the profile
+    conn_id = create_connection({
+        "platform": "docker_host", "host": "10.0.0.1", "port": 22, "auth_type": "ssh",
+        "credentials": {}, "config": {"credential_profile_id": profile_id},
+    })
+    creds = resolve_docker_host_creds(conn_id)
+    assert creds["username"] == "ubuntu"
+    assert creds["private_key"] == "FAKE_KEY"
+    assert creds["passphrase"] == "pp"
+
+
+def test_docker_host_ssh_source_rejected():
+    """Regression: _ssh_source is no longer accepted in config."""
+    # Migration should have stripped _ssh_source; new writes shouldn't add it back
+    with pytest.raises(ValueError, match="_ssh_source"):
+        validate_connection_config({"_ssh_source": "some-id"}, platform="docker_host")
+
+
+def test_migration_strips_ssh_source():
+    """Alembic migration upgrade() removes _ssh_source from all docker_host rows."""
+    # Seed a connection with _ssh_source
+    # Run migration
+    # Assert config no longer contains _ssh_source
+    pass  # concrete implementation in test file
+```
+
+## Version bump
+Update `VERSION`: 2.33.16 → 2.33.17
+
+## Commit
+```
+git add -A
+git commit -m "fix(security): v2.33.17 docker_host SSH credentials from profiles, not other connections"
+git push origin main
+```
+
+## How to test after push
+1. Open Connections tab.
+2. Click + Add Connection, pick `docker_host`, select SSH tunnel.
+3. Verify the "Credentials from" dropdown is **gone**.
+4. Verify the credential profile picker appears and lists only SSH-typed profiles
+   (check — if you have a Windows profile, it should not appear in the dropdown).
+5. Link an SSH profile, save, and confirm the connection tests green.
+6. Existing docker_host connections: if any previously used `_ssh_source`, check
+   they now show either the ⊕ profile badge or the red ⚠ NEEDS PROFILE badge.
+7. Run Python tests — all pass.
+8. Regression: vm_host, windows, fortiswitch, cisco, juniper, aruba still work
+   as before (should be untouched).
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 11:22:53
+========================================================================

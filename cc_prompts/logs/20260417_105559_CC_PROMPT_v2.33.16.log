@@ -1,0 +1,401 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.16.md (v2.33.16)
+Theme: fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition
+
+Prompt content:
+
+# CC PROMPT — v2.33.16 — fix(ui): smoother pull progress bar — phase-weighted, monotonic, matched transition
+
+## What this does
+The progress bar in the container pull UI (v2.33.10) appears "bumpy" — the percent
+text advances but the bar visibly stalls or jumps back. Three root causes:
+
+1. **Denominator grows.** `bytes_total` is recomputed as Docker discovers
+   new layers, so `percent = int(done / total * 100)` can *decrease* between
+   polls.
+
+2. **Final `percent=100` is overwritten.** `_update_pull_job` applies kwargs
+   first, then recomputes percent from layers, clobbering the explicit 100.
+
+3. **Animation mismatch.** CSS `transition: width 0.3s ease` with 600 ms poll
+   means the bar finishes animating and sits idle for 300 ms before the next
+   jump — feels stuttered.
+
+Fix all three in one pass.
+
+Version bump: 2.33.15 → 2.33.16
+
+---
+
+## Change 1 — api/routers/dashboard.py — phase-weighted monotonic percent
+
+Replace the entire `_update_pull_job` function (currently around lines 88–108)
+with this version:
+
+```python
+def _update_pull_job(job_id: str, **kwargs) -> None:
+    """
+    Update a pull job's live state.
+
+    Percent progression is phase-weighted so it always moves forward:
+      starting   → 0–5%     (connecting to registry)
+      downloading→ 5–70%    (byte progress within this band)
+      extracting → 70–92%   (layer completion within this band)
+      recreating → 92–98%   (container recreate)
+      done       → 100%
+      error      → keep last seen %
+
+    Percent is monotonic within a job — it never decreases.
+    """
+    j = _PULL_JOBS.get(job_id)
+    if not j:
+        return
+
+    # Apply caller-provided fields first (status, phase, message, completed_at, ...)
+    # Explicitly NOT letting the caller overwrite percent here — we compute it below.
+    explicit_percent = kwargs.pop("percent", None)
+    j.update(kwargs)
+    j["updated_at"] = _time.time()
+
+    # Aggregate bytes + layer completion from streaming events
+    bytes_total = 0
+    bytes_done = 0
+    layers_total = 0
+    layers_extracted = 0
+    for layer in j["layers"].values():
+        lt = layer.get("total") or 0
+        lc = layer.get("current") or 0
+        status_txt = (layer.get("status") or "").lower()
+        if lt > 0:
+            bytes_total += lt
+            bytes_done += min(lc, lt)
+        layers_total += 1
+        if "pull complete" in status_txt or status_txt == "already exists":
+            layers_extracted += 1
+    j["bytes_total"] = bytes_total
+    j["bytes_done"] = bytes_done
+    j["layers_extracted"] = layers_extracted
+
+    # Phase-weighted percent
+    status = j.get("status", "starting")
+    if status == "done":
+        pct = 100
+    elif status == "error":
+        pct = j.get("percent", 0)  # freeze at last value
+    elif status == "starting":
+        pct = 2
+    elif status == "recreating":
+        pct = 94
+    elif status == "extracting":
+        # 70–92% band, scale on layers extracted
+        if layers_total > 0:
+            pct = 70 + int((layers_extracted / layers_total) * 22)
+        else:
+            pct = 72
+    else:  # downloading (default)
+        # 5–70% band, scale on bytes
+        if bytes_total > 0:
+            pct = 5 + int((bytes_done / bytes_total) * 65)
+        else:
+            pct = 6
+
+    # Allow explicit caller-provided percent to raise (e.g. done=100) but
+    # never decrease and never exceed 100.
+    if explicit_percent is not None:
+        pct = max(pct, int(explicit_percent))
+    pct = min(100, pct)
+
+    # Monotonic: never decrease within a job
+    prev = j.get("percent", 0)
+    j["percent"] = max(prev, pct)
+```
+
+Key invariants:
+- Percent is computed from phase, not from raw byte aggregate alone.
+- Phase boundaries (5%, 70%, 92%, 94%, 100%) are fixed, so new layer discovery
+  during downloading doesn't pull the bar backward.
+- `max(prev, pct)` guarantees monotonic progress within a job.
+- `error` freezes the bar rather than resetting.
+- Explicit `percent=100` from the `done` callsite still wins.
+
+## Change 2 — gui/src/components/ServiceCards.jsx — matched transition + optional client interpolation
+
+Locate the progress bar div inside `ContainerCardExpanded` (currently around
+the `{pullJob && (` block). The current markup:
+
+```jsx
+<div style={{
+  height: 4, background: 'var(--bg-3)',
+  borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+}}>
+  <div style={{
+    height: '100%',
+    width: `${pullJob.percent ?? 0}%`,
+    background: pullJob.status === 'error' ? 'var(--red)'
+              : pullJob.status === 'done'  ? 'var(--green)'
+              : 'var(--cyan)',
+    transition: 'width 0.3s ease',
+  }} />
+</div>
+```
+
+Replace with:
+
+```jsx
+<div style={{
+  height: 4, background: 'var(--bg-3)',
+  borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+}}>
+  <div style={{
+    height: '100%',
+    width: `${pullJob.percent ?? 0}%`,
+    background: pullJob.status === 'error' ? 'var(--red)'
+              : pullJob.status === 'done'  ? 'var(--green)'
+              : 'var(--cyan)',
+    // 650ms linear matches the 600ms poll interval — bar interpolates
+    // continuously between server snapshots instead of jumping-then-stalling.
+    transition: 'width 650ms linear, background-color 300ms ease',
+    willChange: 'width',
+  }} />
+</div>
+```
+
+The linear 650 ms transition slightly overshoots the poll interval so the
+next React state update arrives while the bar is still animating toward the
+previous target — CSS seamlessly re-targets without a visible pause.
+
+## Change 3 — tests
+
+`tests/test_pull_job_phases.py`:
+
+```python
+def test_percent_monotonic_across_updates():
+    """Regression: phase-weighted percent never decreases within a job."""
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    jid = d._new_pull_job("c1", None)
+
+    # Simulate: downloading phase, one layer partial
+    d._PULL_JOBS[jid]["layers"]["L1"] = {"status": "Downloading", "current": 50, "total": 100}
+    d._update_pull_job(jid, status="downloading")
+    p1 = d._PULL_JOBS[jid]["percent"]
+
+    # Simulate: new layer discovered mid-stream, much larger
+    d._PULL_JOBS[jid]["layers"]["L2"] = {"status": "Downloading", "current": 10, "total": 10_000}
+    d._update_pull_job(jid, status="downloading")
+    p2 = d._PULL_JOBS[jid]["percent"]
+
+    assert p2 >= p1, f"percent went backward: {p1} -> {p2} (new layer discovery)"
+
+
+def test_phase_boundaries():
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    jid = d._new_pull_job("c2", None)
+
+    d._update_pull_job(jid, status="starting")
+    assert d._PULL_JOBS[jid]["percent"] == 2
+
+    # Downloading with no bytes known yet
+    d._update_pull_job(jid, status="downloading")
+    assert 5 <= d._PULL_JOBS[jid]["percent"] < 70
+
+    # Extracting with half the layers pulled
+    d._PULL_JOBS[jid]["layers"] = {
+        "L1": {"status": "Pull complete", "current": 100, "total": 100},
+        "L2": {"status": "Extracting",    "current": 30,  "total": 100},
+    }
+    d._update_pull_job(jid, status="extracting")
+    pct = d._PULL_JOBS[jid]["percent"]
+    assert 70 <= pct <= 92
+
+    d._update_pull_job(jid, status="recreating")
+    assert d._PULL_JOBS[jid]["percent"] >= 92
+
+    d._update_pull_job(jid, status="done", percent=100)
+    assert d._PULL_JOBS[jid]["percent"] == 100
+
+
+def test_error_freezes_bar():
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    jid = d._new_pull_job("c3", None)
+
+    d._PULL_JOBS[jid]["layers"]["L1"] = {"status": "Downloading", "current": 400, "total": 1000}
+    d._update_pull_job(jid, status="downloading")
+    pct_before = d._PULL_JOBS[jid]["percent"]
+
+    d._update_pull_job(jid, status="error", error="registry unauthorized")
+    pct_after = d._PULL_JOBS[jid]["percent"]
+
+    # Error should freeze at the downloading percent, not drop to 0
+    assert pct_after == pct_before
+
+
+def test_done_always_100():
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    jid = d._new_pull_job("c4", None)
+    d._update_pull_job(jid, status="done", percent=100)
+    assert d._PULL_JOBS[jid]["percent"] == 100
+
+
+def test_explicit_percent_only_raises():
+    """Explicit percent should not be able to drag the bar backwards."""
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    jid = d._new_pull_job("c5", None)
+    d._PULL_JOBS[jid]["percent"] = 40
+    d._update_pull_job(jid, status="downloading", percent=10)
+    # Monotonic rule wins over explicit lower value
+    assert d._PULL_JOBS[jid]["percent"] >= 40
+```
+
+## Version bump
+Update `VERSION`: 2.33.15 → 2.33.16
+
+## Commit
+```
+git add -A
+git commit -m "fix(ui): v2.33.16 smoother pull bar — phase-weighted monotonic percent + matched transition"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Trigger a container pull with at least 3 layers to pull (not cached).
+3. Watch the bar progress:
+   - Early: quickly snaps to ~5% (starting → downloading).
+   - Downloading: smoothly climbs through 5–70% as bytes arrive.
+   - Extracting: steps forward as each layer completes (70–92%).
+   - Recreating: jumps to ~94%.
+   - Done: smoothly arrives at 100%.
+4. Percent and bar width should stay in lockstep — no visible lag, no backward motion.
+5. Regression: small pulls (1 layer, cached) still complete cleanly.
+6. Error path: intentionally break GHCR_TOKEN and pull — bar should freeze at whatever percent was reached, then show ✕ ERROR without resetting width to 0.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 10:55:59
+========================================================================
+Pushed successfully as `59ee72c`. The runner handles INDEX.md updates per the instructions in this invocation.
+[STATUS] 1m54s
+
+PROMPT COMPLETE: v2.33.16
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m54s
+========================================================================

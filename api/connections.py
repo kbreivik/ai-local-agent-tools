@@ -68,6 +68,132 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate_docker_host_ssh_source() -> None:
+    """One-shot data migration (v2.33.17):
+    Rewrite docker_host connections whose config._ssh_source pointed at a vm_host
+    connection. When that vm_host has a credential_profile_id, copy it onto the
+    docker_host. In all cases drop the _ssh_source key.
+
+    Docker_host rows whose source vm_host had inline creds (no profile) end up
+    with neither a profile nor inline creds — a WARNING is logged per row so the
+    operator can relink them manually.
+
+    Idempotent — safe to run on every startup.
+    """
+    conn = _get_conn()
+    if conn:
+        try:
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, config FROM connections "
+                "WHERE platform = 'docker_host' AND auth_type = 'ssh'"
+            )
+            rows = cur.fetchall()
+            for row_id, row_cfg in rows:
+                cfg = row_cfg if isinstance(row_cfg, dict) else (
+                    json.loads(row_cfg) if row_cfg else {}
+                )
+                src_id = cfg.get("_ssh_source")
+                if src_id is None and "_ssh_source" not in cfg:
+                    continue
+                # Look up source vm_host's linked profile
+                profile_id = None
+                if src_id:
+                    try:
+                        cur.execute(
+                            "SELECT config FROM connections WHERE id::text = %s",
+                            (str(src_id),),
+                        )
+                        src_row = cur.fetchone()
+                        if src_row:
+                            src_cfg = src_row[0] if isinstance(src_row[0], dict) else (
+                                json.loads(src_row[0]) if src_row[0] else {}
+                            )
+                            profile_id = src_cfg.get("credential_profile_id")
+                    except Exception as _se:
+                        log.warning(
+                            "docker_host %s: could not look up _ssh_source %s: %s",
+                            row_id, src_id, _se,
+                        )
+                if profile_id:
+                    cfg["credential_profile_id"] = profile_id
+                elif src_id:
+                    log.warning(
+                        "docker_host %s: _ssh_source pointed to vm_host %s which has "
+                        "no profile; manual relink needed",
+                        row_id, src_id,
+                    )
+                cfg.pop("_ssh_source", None)
+                cur.execute(
+                    "UPDATE connections SET config = %s::jsonb WHERE id = %s",
+                    (json.dumps(cfg), row_id),
+                )
+            cur.close()
+            conn.close()
+        except Exception as e:
+            log.warning("_migrate_docker_host_ssh_source (PG) failed: %s", e)
+            try: conn.close()
+            except Exception: pass
+        return
+
+    sa = _get_sa_conn()
+    if not sa:
+        return
+    try:
+        from sqlalchemy import text as _text
+        rows = sa.execute(_text(
+            "SELECT id, config FROM connections "
+            "WHERE platform = 'docker_host' AND auth_type = 'ssh'"
+        )).fetchall()
+        for r in rows:
+            row_id = r[0]
+            row_cfg = r[1]
+            cfg = row_cfg if isinstance(row_cfg, dict) else (
+                json.loads(row_cfg) if row_cfg else {}
+            )
+            src_id = cfg.get("_ssh_source")
+            if src_id is None and "_ssh_source" not in cfg:
+                continue
+            profile_id = None
+            if src_id:
+                try:
+                    src_row = sa.execute(
+                        _text("SELECT config FROM connections WHERE id = :i"),
+                        {"i": str(src_id)},
+                    ).fetchone()
+                    if src_row:
+                        src_cfg_raw = src_row[0]
+                        src_cfg = src_cfg_raw if isinstance(src_cfg_raw, dict) else (
+                            json.loads(src_cfg_raw) if src_cfg_raw else {}
+                        )
+                        profile_id = src_cfg.get("credential_profile_id")
+                except Exception as _se:
+                    log.warning(
+                        "docker_host %s: could not look up _ssh_source %s: %s",
+                        row_id, src_id, _se,
+                    )
+            if profile_id:
+                cfg["credential_profile_id"] = profile_id
+            elif src_id:
+                log.warning(
+                    "docker_host %s: _ssh_source pointed to vm_host %s which has "
+                    "no profile; manual relink needed",
+                    row_id, src_id,
+                )
+            cfg.pop("_ssh_source", None)
+            sa.execute(
+                _text("UPDATE connections SET config = :c WHERE id = :i"),
+                {"c": json.dumps(cfg), "i": row_id},
+            )
+        sa.commit()
+        sa.close()
+    except Exception as e:
+        log.warning("_migrate_docker_host_ssh_source (SQLite) failed: %s", e)
+        try: sa.close()
+        except Exception: pass
+
+
 def _is_postgres() -> bool:
     return bool(os.environ.get("DATABASE_URL", ""))
 
@@ -121,6 +247,10 @@ def init_connections() -> bool:
             conn.close()
             _initialized = True
             log.info("Connections table ready (PostgreSQL)")
+            try:
+                _migrate_docker_host_ssh_source()
+            except Exception as _me:
+                log.warning("docker_host _ssh_source migration failed (non-fatal): %s", _me)
             return True
         except Exception as e:
             log.warning("Connections table init failed (PG): %s", e)
@@ -145,6 +275,10 @@ def init_connections() -> bool:
         sa_conn.close()
         _initialized = True
         log.info("Connections table ready (SQLite)")
+        try:
+            _migrate_docker_host_ssh_source()
+        except Exception as _me:
+            log.warning("docker_host _ssh_source migration failed (non-fatal): %s", _me)
         # Also ensure audit log table exists
         try:
             from api.db.audit_log import init_audit_log
@@ -247,6 +381,14 @@ def list_connections(platform: str = "") -> list[dict]:
                 "has_private_key": False,
                 "has_password":    bool(raw_enc),
             }
+        else:
+            # No profile, no inline creds — flag docker_host SSH mode as needs_profile.
+            # Other platforms keep the default {"source": "none"}.
+            if r.get("platform") == "docker_host" and r.get("auth_type") == "ssh":
+                cred_state = {
+                    "source":   "needs_profile",
+                    "username": r.get("username_cache", ""),
+                }
         r["credential_state"] = cred_state
 
     return rows

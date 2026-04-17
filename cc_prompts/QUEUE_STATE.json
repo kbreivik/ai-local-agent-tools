@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-17T10:55:59",
+  "updated_at": "2026-04-17T11:22:53",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1893,10 +1893,26 @@
       "filename": "CC_PROMPT_v2.33.16.md",
       "version": "v2.33.16",
       "theme": "fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition",
+      "runner_status": "DONE",
+      "commit_sha": "59ee72c",
+      "error": "",
+      "started_at": "2026-04-17T10:55:59",
+      "finished_at": "2026-04-17T10:57:54",
+      "duration_s": 114.63988589998917,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260417_105559_CC_PROMPT_v2.33.16.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.33.17.md",
+      "version": "v2.33.17",
+      "theme": "fix(security): docker_host SSH credentials from profiles, not other connections",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-17T10:55:59",
+      "started_at": "2026-04-17T11:22:53",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
