@@ -1,0 +1,271 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.32.5.md (v2.32.5)
+Theme: feat(agents): enforced tool call budgets per agent type
+
+Prompt content:
+
+# CC PROMPT — v2.32.5 — Enforced tool call budgets per agent type
+
+## What this does
+Adds code-level enforcement of tool call budgets per agent type. Currently, only the
+observe prompt mentions "6 tool calls" as a text instruction — the code only enforces
+max_steps (LLM inference rounds), not total tool calls. One step can fire multiple tool
+calls, so the actual tool usage can far exceed the intended budget (e.g. investigate
+used 21 tool calls in testing).
+
+This adds a `_tool_call_count` check inside the tool execution loop. When the budget
+is exhausted, the harness injects a "tool budget reached — summarize now" user message
+and the model produces its final answer without further tool calls.
+
+Version bump: 2.32.4 → 2.32.5
+
+## Change 1 — api/routers/agent.py — Add tool call budget constants
+
+Find the line:
+
+```python
+_MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, ...}
+```
+
+Add immediately after it:
+
+```python
+# ─── Tool call budgets per agent type (v2.32.5) ──────────────────────────────
+# Unlike max_steps (LLM inference rounds), this counts actual tool invocations.
+# When exhausted, the harness forces a summary — no more tool calls allowed.
+_MAX_TOOL_CALLS_BY_TYPE = {
+    "status": 8, "observe": 8,
+    "research": 16, "investigate": 16,
+    "action": 14, "execute": 14,
+    "build": 12,
+}
+```
+
+## Change 2 — api/routers/agent.py — Check tool call budget in the loop
+
+In `_run_single_agent_step`, inside the main `while step < max_steps:` loop, find the
+section right AFTER the cancellation check and the cap_exceeded check (which checks
+wall-clock, tokens, destructive calls, and tool failures). There should be a line:
+
+```python
+            step += 1
+```
+
+Right AFTER `step += 1` and AFTER the `_cap_exceeded` check block, add a new check:
+
+```python
+            # v2.32.5: Tool call budget enforcement
+            _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            if len(tools_used_names) >= _tool_budget:
+                await manager.send_line(
+                    "step",
+                    f"[budget] Tool call budget reached ({len(tools_used_names)}/{_tool_budget}) "
+                    f"— forcing summary",
+                    status="ok", session_id=session_id,
+                )
+                # Inject force-summary message and let the model produce final text
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"TOOL BUDGET REACHED ({len(tools_used_names)}/{_tool_budget}). "
+                        "You have used all available tool calls. "
+                        "Write your final summary NOW as plain text — no more tool calls allowed. "
+                        "Use the data you have already gathered."
+                    ),
+                })
+                try:
+                    force_response = client.chat.completions.create(
+                        model=_lm_model(),
+                        messages=messages,
+                        tools=None,
+                        tool_choice=None,
+                        temperature=0.3,
+                        max_tokens=800,
+                        extra_body={"min_p": 0.1},
+                    )
+                    forced_text = force_response.choices[0].message.content or ""
+                    if forced_text:
+                        last_reasoning = forced_text
+                        await manager.send_line("reasoning", forced_text, session_id=session_id)
+                except Exception as _fe:
+                    log.debug("Tool budget force summary failed: %s", _fe)
+
+                if is_final_step:
+                    choices = _extract_choices(last_reasoning) if last_reasoning else None
+                    await manager.broadcast({
+                        "type": "done", "session_id": session_id, "agent_type": agent_type,
+                        "content": last_reasoning or f"Agent reached tool budget ({_tool_budget}).",
+                        "status": "ok", "choices": choices or [],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                break
+```
+
+## Change 3 — api/routers/agent.py — Stream budget status
+
+In the tool execution inner loop (`for tc in msg.tool_calls:`), right before each tool
+is invoked, add a budget warning when approaching the limit. Find the line where
+`tools_used_names.append(fn_name)` is called and add after it:
+
+```python
+                tools_used_names.append(fn_name)
+                # v2.32.5: Warn when approaching tool budget
+                _tb = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                if len(tools_used_names) == _tb - 2:
+                    messages_budget_warning = True  # flag checked below
+```
+
+Actually, this is unnecessary complexity. The budget check at the top of the loop is
+sufficient — it checks before each new LLM call, which is the right granularity. If the
+model fires 3 tool calls in one batch that pushes it over budget, the next iteration
+will catch it and force the summary. This is acceptable since the overshoot is at most
+one batch (typically 1-3 calls).
+
+DELETE this Change 3 — the budget check in Change 2 is sufficient.
+
+## Version bump
+
+Update VERSION file: 2.32.4 → 2.32.5
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(agents): v2.32.5 enforced tool call budgets per agent type
+
+Adds _MAX_TOOL_CALLS_BY_TYPE: observe=8, investigate=16, execute=14,
+build=12. Checked at the start of each LLM inference step — when the
+budget is exhausted, the harness forces a summary with no further tool
+calls.
+
+Previously only max_steps (LLM rounds) was enforced, but one step can
+fire multiple tool calls. Investigate agent used 21 calls in testing;
+budget of 16 would have stopped it earlier with the same findings."
+git push origin main
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-16 22:16:12
+========================================================================
+Pushed as `e3ce56c`. The runner handles INDEX.md updates.
+[STATUS] 1m01s
+
+PROMPT COMPLETE: v2.32.5
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m02s
+========================================================================

@@ -384,7 +384,7 @@ function InfrastructureTab({ draft, update }) {
         <Field label="GHCR Token" hint="GitHub PAT with read:packages scope — enables version checking">
           <TextInput type="password" value={draft.ghcrToken} onChange={v => update('ghcrToken', v)} placeholder="ghp_..." />
         </Field>
-        <Field label="Auto-Update" hint="Check GHCR every 5 min and auto-pull + restart when a newer version is available">
+        <Field label="Auto-Update" hint="Auto-pull + restart when a newer version is available">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -395,6 +395,22 @@ function InfrastructureTab({ draft, update }) {
             <span className="text-xs text-gray-300">Enable automatic updates</span>
           </label>
           <UpdateStatus />
+        </Field>
+        <Field label="Auto-Update Interval (s)" hint="How often the auto-update task checks GHCR. Default: 300 (5 min).">
+          <TextInput
+            type="number"
+            value={draft.autoUpdateInterval ?? 300}
+            onChange={v => update('autoUpdateInterval', v === '' ? '' : Number(v))}
+            placeholder="300"
+          />
+        </Field>
+        <Field label="Version-Check Cache TTL (s)" hint="How long GHCR tag results are cached in memory. Lower = faster pickup of new pushes, more API calls. Default: 600 (10 min).">
+          <TextInput
+            type="number"
+            value={draft.ghcrTagCacheTTL ?? 600}
+            onChange={v => update('ghcrTagCacheTTL', v === '' ? '' : Number(v))}
+            placeholder="600"
+          />
         </Field>
         <Field label="Agent Docker Host">
           <TextInput value={draft.agentDockerHost} onChange={v => update('agentDockerHost', v)} placeholder="unix:///var/run/docker.sock" />

@@ -52,6 +52,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     "truenasApiKey":         {"env": "TRUENAS_API_KEY",         "sens": True,  "default": ""},
     # Auto-update
     "autoUpdate":               {"env": None,                   "sens": False, "default": False},
+    "autoUpdateInterval":       {"env": None,                   "sens": False, "default": 300},
+    "ghcrTagCacheTTL":          {"env": None,                   "sens": False, "default": 600},
     # UI (stored server-side so they survive browser clears)
     "dashboardRefreshInterval": {"env": None,                   "sens": False, "default": 15000},
     # Data retention

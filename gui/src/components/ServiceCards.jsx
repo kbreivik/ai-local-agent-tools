@@ -574,10 +574,10 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
       .catch(() => {})
   }, [c.image])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
+  const loadTags = useCallback((force = false) => {
     if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
     setTagsLoading(true)
-    fetchContainerTags(c.id)
+    fetchContainerTags(c.id, { force })
       .then(data => {
         if (!mounted.current) return
         setTagsLoading(false)
@@ -593,7 +593,7 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
             if ((parts[i] || 0) < MIN_SAFE[i]) return false
             if ((parts[i] || 0) > MIN_SAFE[i]) return true
           }
-          return true  // equal is ok
+          return true
         })
         setTags(t)
         setTagsError(null)
@@ -607,9 +607,10 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
         setTagsLoading(false)
         setTagsError(err?.message || 'fetch failed')
       })
-  // onTagsLoaded intentionally excluded — it's a stable useCallback from the parent;
-  // including it would cause re-fetching on every render without behavior change.
+  // onTagsLoaded intentionally excluded — stable useCallback from parent.
   }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadTags(false) }, [loadTags])
 
   const act = async (key, path, body, msg) => {
     if (msg) {
@@ -719,6 +720,16 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                   : <span className="text-gray-700">—</span>}
               </div>
             )}
+            <div className="flex justify-end mb-1">
+              <button
+                onClick={() => loadTags(true)}
+                disabled={tagsLoading}
+                className="text-[9px] px-1.5 py-0.5 rounded border border-[#2a2a4a] text-gray-500 hover:text-gray-300 hover:border-[#3a3a5a] disabled:opacity-50"
+                title="Force re-check GHCR for new versions (bypass cache)"
+              >
+                {tagsLoading ? '⟳ …' : '↻ Refresh versions'}
+              </button>
+            </div>
             {c.name?.includes('hp1_agent') && <AutoUpdateToggle />}
             {hasUpdate && !tagsError && (
               <>

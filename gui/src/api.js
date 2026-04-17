@@ -306,8 +306,9 @@ export async function fetchCollectorData(component) {
   return r.json()
 }
 
-export async function fetchContainerTags(containerId) {
-  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags`, {
+export async function fetchContainerTags(containerId, { force = false } = {}) {
+  const qs = force ? '?force=1' : ''
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/tags${qs}`, {
     headers: { ...authHeaders() },
   })
   if (!r.ok) return { tags: [], error: `HTTP ${r.status}` }

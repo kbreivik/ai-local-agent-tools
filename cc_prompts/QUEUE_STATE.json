@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-16T22:16:12",
+  "updated_at": "2026-04-17T07:15:47",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1605,10 +1605,26 @@
       "filename": "CC_PROMPT_v2.32.5.md",
       "version": "v2.32.5",
       "theme": "feat(agents): enforced tool call budgets per agent type",
+      "runner_status": "DONE",
+      "commit_sha": "e3ce56c",
+      "error": "",
+      "started_at": "2026-04-16T22:16:12",
+      "finished_at": "2026-04-16T22:17:15",
+      "duration_s": 62.18647580000106,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260416_221612_CC_PROMPT_v2.32.5.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.32.6.md",
+      "version": "v2.32.6",
+      "theme": "feat(infra): version-check refresh button + configurable timers",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-16T22:16:12",
+      "started_at": "2026-04-17T07:15:47",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

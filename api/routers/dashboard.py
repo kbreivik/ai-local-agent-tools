@@ -29,11 +29,37 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 log = logging.getLogger(__name__)
 
 _GHCR_TAG_CACHE: dict = {}   # { image_bare: (tags, fetched_at) }
-_GHCR_TAG_TTL = 600          # 10 minutes
+_GHCR_TAG_TTL_DEFAULT = 600  # 10 minutes (fallback when setting missing / invalid)
+
+
+def _get_ghcr_tag_ttl() -> int:
+    """Read GHCR tag cache TTL from settings DB, fall back to default."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        raw = get_backend().get_setting("ghcrTagCacheTTL")
+        if raw is None or raw == "":
+            return _GHCR_TAG_TTL_DEFAULT
+        ttl = int(raw)
+        return ttl if ttl > 0 else _GHCR_TAG_TTL_DEFAULT
+    except Exception:
+        return _GHCR_TAG_TTL_DEFAULT
 
 # ── Auto-update state ────────────────────────────────────────────────────────
 
-_AUTO_UPDATE_INTERVAL = 300   # 5 minutes
+_AUTO_UPDATE_INTERVAL_DEFAULT = 300   # 5 minutes (fallback when setting missing / invalid)
+
+
+def _get_auto_update_interval() -> int:
+    """Read auto-update interval (seconds) from settings DB, fall back to default."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        raw = get_backend().get_setting("autoUpdateInterval")
+        if raw is None or raw == "":
+            return _AUTO_UPDATE_INTERVAL_DEFAULT
+        val = int(raw)
+        return val if val > 0 else _AUTO_UPDATE_INTERVAL_DEFAULT
+    except Exception:
+        return _AUTO_UPDATE_INTERVAL_DEFAULT
 _auto_update_timer: "threading.Timer | None" = None
 # Versions before 1.12.2 have broken self-update (no sidecar recreate)
 MIN_SAFE_VERSION = (1, 12, 2)
@@ -387,12 +413,12 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
     """Fetch semver tags from GHCR for a bare image name (e.g. ghcr.io/user/repo).
     Returns sorted-descending list of strict semver tags, up to 20.
     Raises RuntimeError on auth failure, IOError on network failure.
-    Results cached for _GHCR_TAG_TTL seconds.
+    Results cached for _get_ghcr_tag_ttl() seconds.
     """
     import httpx
 
     cached = _GHCR_TAG_CACHE.get(image_bare)
-    if cached and (_time.monotonic() - cached[1]) < _GHCR_TAG_TTL:
+    if cached and (_time.monotonic() - cached[1]) < _get_ghcr_tag_ttl():
         return cached[0]
 
     token = os.environ.get("GHCR_TOKEN", "")
@@ -483,7 +509,7 @@ def _fetch_ghcr_tags(image_bare: str) -> list[str]:
 
 
 @router.get("/containers/{container_id}/tags")
-async def get_container_tags(container_id: str, user: str = Depends(get_current_user)):
+async def get_container_tags(container_id: str, force: bool = False, user: str = Depends(get_current_user)):
     """Available GHCR semver tags for a GHCR-hosted container image.
 
     Returns { tags: [...] } sorted descending. Cached 10 min on the backend.
@@ -504,6 +530,9 @@ async def get_container_tags(container_id: str, user: str = Depends(get_current_
         return {"tags": [], "error": "not a ghcr image"}
 
     bare = image.split("@")[0].split(":")[0]   # ghcr.io/kbreivik/hp1-ai-agent
+
+    if force:
+        _GHCR_TAG_CACHE.pop(bare, None)
 
     try:
         tags = await asyncio.to_thread(_fetch_ghcr_tags, bare)
@@ -1587,7 +1616,7 @@ def _schedule_next_check() -> None:
     global _auto_update_timer
     if _auto_update_timer is not None:
         _auto_update_timer.cancel()
-    _auto_update_timer = threading.Timer(_AUTO_UPDATE_INTERVAL, _check_and_update)
+    _auto_update_timer = threading.Timer(_get_auto_update_interval(), _check_and_update)
     _auto_update_timer.daemon = True
     _auto_update_timer.start()
 
