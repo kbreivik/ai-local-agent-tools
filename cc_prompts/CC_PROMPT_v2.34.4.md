@@ -1,0 +1,318 @@
+# CC PROMPT — v2.34.4 — fix(agents): v2.34.0 sub-agent spawn did not wire through — pop-up still proposes, does not execute
+
+## Critical bug report — v2.34.0 shipped incomplete
+
+Live trace from 2026-04-17 14:51–14:55 shows the sub-agent machinery from
+v2.34.0 is **not intercepting `propose_subtask` calls**. The old v2.24.0
+proposal path still runs, the frontend still renders the manual-run pop-up,
+and the sub-task URL 404s.
+
+### What we saw
+
+```
+14:53:25 [subtask] Proposal recorded — 'Deep-dive Logstash-ES connectivity'
+                   (high confidence). User notified.
+14:53:34 (parent task ends with final verdict — no sub-agent ran)
+14:53:47 Agent started — task: Deep-dive Logstash-ES connectivity
+                                   ← fresh top-level Execute task, not child
+```
+
+Browser navigation: `/subtask/08fe1686-8b97-471b-96f1-3b0eef925b69`
+→ `{"detail": "Not Found"}`
+
+### Expected per v2.34.0
+
+- `propose_subtask` should be intercepted by `_handle_propose_subtask` and
+  synchronously await a spawned sub-agent
+- A `subagent_spawned` WebSocket event should fire with parent/sub task ids
+- `SubAgentPanel` should render indented under the parent's OutputPanel
+- Parent's loop should resume with the sub-agent's final_answer + diagnosis
+  injected as the `propose_subtask` tool_result
+- A row in `subagent_runs` should link parent → sub
+- Parent should then produce a final_answer that cites the sub-agent's finding
+
+### Actual
+
+None of the above happened. Parent emitted its own final_answer at step 9
+and ended. The operator manually clicked the "Run as new task" button, which
+spawned a parallel top-level Execute task with no linkage.
+
+This is a regression against the v2.34.0 spec. Investigate and fix.
+
+Version bump: 2.34.3 → 2.34.4
+
+---
+
+## Investigation checklist (CC must run these before writing the fix)
+
+1. **Confirm the spawn handler is wired in.** Grep `api/routers/agent.py` and
+   `api/agents/` for `_handle_propose_subtask`. If the function exists but is
+   never called from the tool-dispatch switch, the plumbing is broken — the
+   harness still falls through to the old proposal-recording path.
+
+2. **Confirm the old proposal-recording path is guarded.** Grep for
+   `Proposal recorded` — that log line comes from the v2.24.0 code. In v2.34.0
+   it should only fire when `_handle_propose_subtask` returns an error (e.g.
+   depth cap reached) or when the feature is disabled via settings. If it's
+   firing unconditionally, the old path is still primary.
+
+3. **Confirm frontend routes.** Grep `gui/src/` for `/subtask/` — that route
+   came from the pre-v2.34.0 UI that let you open a proposal in a new tab.
+   v2.34.0 replaces this with in-place `SubAgentPanel` rendering. If the old
+   route still exists and the pop-up links to it, the backend doesn't serve
+   it (confirmed — 404 in the screenshot).
+
+4. **Check `SubAgentPanel` mount.** Grep `gui/src/` for `SubAgentPanel`. If
+   it's defined but never rendered from OutputPanel, the WS events may be
+   firing but nothing is listening.
+
+5. **Check the `subagent_runs` table.** Run:
+   ```sql
+   SELECT COUNT(*), MIN(spawned_at), MAX(spawned_at) FROM subagent_runs;
+   ```
+   If zero rows after v2.34.0 shipped, confirms the spawn path never ran.
+
+Report findings in the commit message.
+
+## Likely root causes (pick the one that matches the investigation)
+
+### Hypothesis A — handler defined but not wired into tool dispatch
+
+Most likely. v2.34.0 added `_handle_propose_subtask` but the existing tool
+dispatch block in `_stream_agent` (or `drive_agent`) still routes
+`propose_subtask` to the old v2.24.0 proposal-recording helper. Fix: add an
+explicit branch *before* the generic tool dispatch:
+
+```python
+# Inside the tool-call dispatch inside drive_agent (was _stream_agent):
+if tool_call["name"] == "propose_subtask":
+    result = await _handle_propose_subtask(
+        parent_task=task,
+        tool_call=tool_call,
+        ws_manager=ws_manager,
+        settings=await _get_settings(),
+    )
+    # Inject result as tool_result into conversation so LLM sees sub-agent outcome
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call["id"],
+        "name": "propose_subtask",
+        "content": json.dumps(result),
+    })
+    continue  # proceed to next LLM step; do NOT fall through to old proposal path
+```
+
+If the v2.24.0 `Proposal recorded` log line is what's firing, delete or
+conditional-skip its call site so it only runs on the error-return branches
+(depth cap, budget cap, destructive rejected).
+
+### Hypothesis B — handler wired but sub-agent task never started
+
+Next most likely. `_handle_propose_subtask` calls `_run_subagent` but that
+function either doesn't exist or it returns without actually running the
+driver. Verify `_run_subagent` exists and:
+
+1. Creates a new `AgentTask` with `parent_task_id` set
+2. Calls `drive_agent(sub_task)` and awaits it
+3. Returns `{terminal_status, final_answer, diagnosis, tools_used}`
+
+If it's a stub or returns immediately with a placeholder, implement it per
+v2.34.0 Change 3 spec.
+
+### Hypothesis C — frontend WS handler missing
+
+If the backend spawns correctly but the UI doesn't render the sub-agent,
+OutputPanel is not listening for `subagent_spawned` / `subagent_step` /
+`subagent_done` events. Add handlers in `OutputPanel.jsx`:
+
+```jsx
+useEffect(() => {
+  const handleSubSpawn = (ev) => {
+    const { sub_task_id, parent_task_id, objective, depth, budget_tools } = ev.detail
+    if (parent_task_id !== task.id) return  // not ours
+    setSubAgents(prev => [...prev, {
+      sub_task_id, parent_task_id, objective, depth, budget_tools,
+      status: 'starting', steps: [],
+    }])
+  }
+  const handleSubStep = (ev) => {
+    const { sub_task_id, step } = ev.detail
+    setSubAgents(prev => prev.map(sa =>
+      sa.sub_task_id === sub_task_id
+        ? { ...sa, steps: [...sa.steps, step] }
+        : sa
+    ))
+  }
+  const handleSubDone = (ev) => {
+    const { sub_task_id, final_answer, diagnosis, terminal_status } = ev.detail
+    setSubAgents(prev => prev.map(sa =>
+      sa.sub_task_id === sub_task_id
+        ? { ...sa, status: terminal_status, final_answer, diagnosis }
+        : sa
+    ))
+  }
+  window.addEventListener('ds:subagent_spawned', handleSubSpawn)
+  window.addEventListener('ds:subagent_step',    handleSubStep)
+  window.addEventListener('ds:subagent_done',    handleSubDone)
+  return () => {
+    window.removeEventListener('ds:subagent_spawned', handleSubSpawn)
+    window.removeEventListener('ds:subagent_step',    handleSubStep)
+    window.removeEventListener('ds:subagent_done',    handleSubDone)
+  }
+}, [task.id])
+```
+
+And the WS router in `gui/src/context/WebsocketContext.jsx` (or wherever WS
+messages dispatch to custom events) must translate `type=subagent_spawned`
+etc into `ds:subagent_spawned` browser events — check that the translation
+exists.
+
+### Hypothesis D — `/subtask/{id}` route still in use from old UI
+
+The screenshot shows the browser on `http://192.168.199.10:8000/subtask/...`
+which 404s. This route came from a pre-v2.34.0 pop-up or "open in new tab"
+button. v2.34.0 removes the need for it entirely (sub-agents render inline).
+Remove the button / menu item that generates this URL.
+
+Grep `gui/src/components/` for `/subtask/` and for the string used to render
+the proposal pop-up. Likely in `SubtaskOfferCard.jsx` or similar from
+v2.24.4. Delete the pop-up — or, if we want a fallback for cases where
+auto-spawn fails (depth cap, budget exhaustion), keep it but point it at a
+route that works: `/api/agent/run` with the sub-task's objective prefilled.
+
+## Change 1 — fix the primary wiring
+
+Apply whichever of A/B/C/D hypotheses are actually present. Commit message
+must list which ones were wrong and what was fixed.
+
+## Change 2 — backfill visibility
+
+Add a Prometheus counter so this class of regression is noisy next time:
+
+```python
+# api/metrics.py
+SUBAGENT_SPAWN_COUNTER = Counter(
+    "deathstar_subagent_spawns_total",
+    "Sub-agent spawn attempts by outcome",
+    ["outcome"],  # spawned | rejected_depth | rejected_budget | rejected_destructive | proposal_only
+)
+```
+
+Increment `proposal_only` on every call to the v2.24.0 proposal-recording
+path — if this counter is ever > 0 after v2.34.0, it indicates the wiring
+regressed.
+
+## Change 3 — regression test
+
+`tests/test_subagent_e2e_wiring.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_propose_subtask_spawns_sub_agent_not_just_proposal(fake_llm, db):
+    """
+    Regression lock for v2.34.4: propose_subtask MUST intercept at the harness
+    level and produce a subagent_runs row, not just log a proposal and
+    continue. The old v2.24.0 proposal-only behaviour is a regression.
+    """
+    fake_llm.set_parent_script([
+        {"tool_call": "swarm_node_status", "result": {"ok": True}},
+        {"tool_call": "propose_subtask", "arguments": {
+            "objective": "Deep-dive X",
+            "agent_type": "investigate",
+            "budget_tools": 4,
+        }},
+        # Parent must receive sub-agent result as tool_result before emitting final_answer
+        {"final_answer": "Parent synthesises from sub-agent"},
+    ])
+    fake_llm.set_sub_script([
+        {"tool_call": "elastic_search_logs", "result": {"hits": 5}},
+        {"final_answer": "sub-agent finding"},
+    ])
+
+    task_id = await run_task("test", agent_type="investigate")
+
+    # HARD CHECK: subagent_runs row must exist
+    rows = await db.fetch_all(
+        "SELECT * FROM subagent_runs WHERE parent_task_id = :tid",
+        {"tid": task_id},
+    )
+    assert len(rows) == 1, (
+        f"Expected 1 subagent_runs row, got {len(rows)}. "
+        "If 0, v2.34.0 wiring regressed — the old v2.24.0 proposal-only "
+        "path is still running."
+    )
+    assert rows[0]["terminal_status"] == "done"
+    assert "sub-agent finding" in rows[0]["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_subtask_url_route_returns_200_or_gone():
+    """
+    The /subtask/{id} URL must either serve content or return a clean 410 Gone,
+    never 404 (which confuses operators).
+    """
+    import httpx
+    async with httpx.AsyncClient(app=app) as client:
+        r = await client.get("/subtask/abc123")
+        # Either the route is gone (410) or redirects to the parent task
+        assert r.status_code in (200, 301, 302, 410), \
+            f"/subtask/ returned {r.status_code} — update the UI or serve the route"
+
+
+def test_proposal_only_counter_exists():
+    """Regression-canary counter: if this fires, wiring is broken."""
+    from api.metrics import SUBAGENT_SPAWN_COUNTER
+    # Counter should exist with all four labels
+    for outcome in ["spawned", "rejected_depth", "rejected_budget",
+                    "rejected_destructive", "proposal_only"]:
+        SUBAGENT_SPAWN_COUNTER.labels(outcome=outcome).inc(0)  # no-op but validates label
+```
+
+## Version bump
+Update `VERSION`: 2.34.3 → 2.34.4
+
+## Commit
+Commit message must explicitly list which hypotheses (A/B/C/D) were true and
+what was fixed. Example:
+
+```
+git add -A
+git commit -m "fix(agents): v2.34.4 complete v2.34.0 sub-agent wiring
+
+Root causes (v2.34.0 shipped incomplete):
+- A: _handle_propose_subtask was defined but propose_subtask tool calls
+     still routed to v2.24.0 proposal-recording helper (primary bug)
+- C: OutputPanel.jsx had no listener for ds:subagent_spawned events
+- D: /subtask/{id} frontend route still rendered a pop-up but 404'd server-side
+
+Fixes:
+- Add explicit propose_subtask branch in drive_agent tool dispatch, before
+  generic tool handler
+- Wire ds:subagent_spawned/_step/_done event listeners in OutputPanel
+- Remove pop-up link that pointed at /subtask/{id} — sub-agents now render
+  inline per v2.34.0 design
+- Add SUBAGENT_SPAWN_COUNTER Prometheus counter with proposal_only label
+  as a canary for future regressions
+- Add regression test locking subagent_runs row presence
+"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy, run Alembic upgrade (if any).
+2. Re-run the investigate task that triggered the original bug: the Logstash
+   connectivity check. When it hits ~70% budget and proposes a subtask, verify:
+   - **Backend**: `SELECT * FROM subagent_runs` shows a new row with
+     `parent_task_id` matching the original task
+   - **Frontend**: the OutputPanel shows an indented `SubAgentPanel` that
+     runs live, not a pop-up
+   - **Parent resumption**: after the sub-agent reaches `final_answer`, the
+     parent's loop continues for at least one more step and emits a final
+     answer that cites the sub-agent's finding
+   - **No /subtask/ URL navigation**: nothing should direct the browser to
+     `/subtask/{id}`
+3. Check Prometheus: `deathstar_subagent_spawns_total{outcome="spawned"}`
+   should increment. `proposal_only` label stays at 0 unless a hard cap is hit.
+4. Negative case: cap depth at 0 temporarily and verify the
+   `proposal_only` counter fires (old behaviour as explicit fallback) and a
+   clear message is shown to the operator.

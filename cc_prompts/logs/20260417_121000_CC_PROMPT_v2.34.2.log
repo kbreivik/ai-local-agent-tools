@@ -1,0 +1,553 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.34.2.md (v2.34.2)
+Theme: feat(skills): execution observability + adoption metrics
+
+Prompt content:
+
+# CC PROMPT — v2.34.2 — feat(skills): execution observability + adoption metrics
+
+## What this does
+
+Three pieces of skill infrastructure shipped in prior versions:
+- **v2.13.0–13.1** — skill system: spec-first generation, three-layer validation,
+  `skill_execute` dispatcher.
+- **v2.33.4** — auto-promoter: weekly scan of `agent_actions`, creates
+  `skill_candidates` for repeated `(tool, args_shape)` patterns.
+
+We have no visibility into whether any of it is doing useful work. Open
+questions with no answer today:
+- Is the auto-promoter actually running? When was the last scan?
+- Have any candidates been promoted? Approved by whom?
+- When a skill runs, does it save time vs. the raw tool chain it replaced?
+- Which skills are used, and which are dead code?
+
+This change adds execution tracking, an observable promoter audit trail, and a
+Metrics subtab in the Skills view.
+
+Version bump: 2.34.1 → 2.34.2
+
+---
+
+## Change 1 — new table: skill_executions
+
+```sql
+CREATE TABLE skill_executions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    task_id         TEXT NOT NULL,
+    agent_type      TEXT NOT NULL,
+    invoked_by      TEXT,                     -- user_id or 'agent'
+    args            JSONB DEFAULT '{}'::jsonb,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ,
+    duration_ms     INTEGER,
+    outcome         TEXT,                     -- success | error | cancelled
+    error           TEXT,
+    result_summary  TEXT,                     -- first 500 chars of result
+    replaced_tool_chain JSONB                 -- optional: tool sequence this skill replaced
+);
+
+CREATE INDEX skill_executions_skill_id_idx ON skill_executions (skill_id, started_at DESC);
+CREATE INDEX skill_executions_task_id_idx  ON skill_executions (task_id);
+```
+
+Alembic migration under `alembic/versions/`.
+
+## Change 2 — instrument skill_execute dispatcher
+
+In whichever file contains the skill dispatch path (likely
+`mcp_server/tools/skills/execute.py` or `api/skills/dispatcher.py`), wrap
+every invocation:
+
+```python
+import datetime as _dt
+import uuid as _uuid
+from api.db.base import get_engine
+
+async def _record_skill_start(skill_id, task_id, agent_type, invoked_by, args):
+    exec_id = _uuid.uuid4().hex[:16]
+    eng = get_engine()
+    async with eng.begin() as c:
+        await c.execute("""
+            INSERT INTO skill_executions
+                (id, skill_id, task_id, agent_type, invoked_by, args, started_at)
+            VALUES (:id, :sid, :tid, :at, :iby, :args, NOW())
+        """, {"id": exec_id, "sid": skill_id, "tid": task_id,
+              "at": agent_type, "iby": invoked_by, "args": args})
+    return exec_id
+
+async def _record_skill_end(exec_id, outcome, result_summary=None, error=None):
+    eng = get_engine()
+    async with eng.begin() as c:
+        await c.execute("""
+            UPDATE skill_executions
+            SET completed_at = NOW(),
+                duration_ms = EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000,
+                outcome = :oc,
+                error = :err,
+                result_summary = :rs
+            WHERE id = :id
+        """, {"id": exec_id, "oc": outcome, "err": error,
+              "rs": (result_summary or "")[:500]})
+
+
+async def skill_execute(skill_id: str, args: dict, *, task_id: str,
+                         agent_type: str, invoked_by: str = "agent"):
+    exec_id = await _record_skill_start(skill_id, task_id, agent_type,
+                                         invoked_by, args)
+    try:
+        result = await _run_skill_body(skill_id, args)  # existing logic
+        await _record_skill_end(exec_id, "success",
+                                  result_summary=str(result)[:500])
+        return result
+    except Exception as e:
+        await _record_skill_end(exec_id, "error", error=str(e)[:500])
+        raise
+```
+
+If Prometheus is wired (v2.33.5), add a counter:
+
+```python
+from api.metrics import SKILL_EXEC_COUNTER, SKILL_DURATION
+SKILL_EXEC_COUNTER.labels(skill_id=skill_id, outcome=outcome).inc()
+SKILL_DURATION.labels(skill_id=skill_id).observe(duration_ms / 1000)
+```
+
+Register the new metrics in `api/metrics.py`.
+
+## Change 3 — auto-promoter audit
+
+v2.33.4 runs the auto-promoter weekly but doesn't persist the scan history.
+Add:
+
+```sql
+CREATE TABLE auto_promoter_scans (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scanned_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    window_days     INTEGER NOT NULL,
+    actions_scanned INTEGER NOT NULL,
+    candidates_found INTEGER NOT NULL,
+    candidates_new   INTEGER NOT NULL,    -- new this scan (not already in DB)
+    duration_ms     INTEGER,
+    triggered_by    TEXT NOT NULL         -- 'cron' | 'manual' | user_id
+);
+```
+
+Instrument the existing auto-promoter worker to insert one row per scan.
+If a manual "Scan now" button exists (Skills → Candidates tab), make it pass
+`triggered_by=<user_id>`.
+
+## Change 4 — API endpoints
+
+```python
+# api/routers/skills.py (extend)
+
+@router.get("/executions")
+async def list_skill_executions(
+    skill_id: str | None = None,
+    limit: int = 50,
+    user = Depends(get_current_user),
+):
+    eng = get_engine()
+    async with eng.connect() as c:
+        if skill_id:
+            r = await c.execute("""
+                SELECT * FROM skill_executions
+                WHERE skill_id = :sid
+                ORDER BY started_at DESC LIMIT :limit
+            """, {"sid": skill_id, "limit": limit})
+        else:
+            r = await c.execute("""
+                SELECT * FROM skill_executions
+                ORDER BY started_at DESC LIMIT :limit
+            """, {"limit": limit})
+        return {"executions": [dict(row) for row in r.mappings().all()]}
+
+
+@router.get("/metrics")
+async def skill_metrics(window_days: int = 7, user = Depends(get_current_user)):
+    """Aggregate skill execution + promoter metrics."""
+    window_days = min(max(1, window_days), 90)
+    since = _dt.datetime.utcnow() - _dt.timedelta(days=window_days)
+    eng = get_engine()
+
+    async with eng.connect() as c:
+        # Per-skill execution stats
+        r = await c.execute("""
+            SELECT s.id, s.name, s.created_at,
+                   COUNT(e.id)                                     AS execution_count,
+                   SUM(CASE WHEN e.outcome='success' THEN 1 ELSE 0 END) AS successes,
+                   SUM(CASE WHEN e.outcome='error'   THEN 1 ELSE 0 END) AS errors,
+                   AVG(e.duration_ms)                              AS avg_duration_ms,
+                   MAX(e.started_at)                               AS last_run
+            FROM skills s
+            LEFT JOIN skill_executions e ON e.skill_id = s.id AND e.started_at >= :since
+            GROUP BY s.id, s.name, s.created_at
+            ORDER BY execution_count DESC NULLS LAST, s.name
+        """, {"since": since})
+        per_skill = [dict(row) for row in r.mappings().all()]
+
+        # Promoter activity
+        r = await c.execute("""
+            SELECT COUNT(*) AS scans,
+                   MAX(scanned_at) AS last_scan,
+                   SUM(candidates_new) AS total_new_candidates,
+                   SUM(candidates_found) AS total_candidates_seen
+            FROM auto_promoter_scans
+            WHERE scanned_at >= :since
+        """, {"since": since})
+        promoter = dict(r.mappings().one())
+
+        # Candidate pipeline state
+        r = await c.execute("""
+            SELECT status, COUNT(*) AS n
+            FROM skill_candidates
+            GROUP BY status
+        """)
+        pipeline = {row["status"]: row["n"] for row in r.mappings().all()}
+
+    return {
+        "window_days": window_days,
+        "per_skill": per_skill,
+        "promoter": promoter,
+        "pipeline": pipeline,
+    }
+```
+
+## Change 5 — Skills tab: new Metrics subtab
+
+In `gui/src/components/SkillsView.jsx` (or wherever the skills UI lives),
+add a new subtab tab alongside existing `Active | Candidates`.
+
+```jsx
+{subTab === 'metrics' && <SkillMetrics />}
+```
+
+Minimal `SkillMetrics` component:
+
+```jsx
+function SkillMetrics() {
+  const [data, setData]       = useState(null)
+  const [windowDays, setWindow] = useState(7)
+
+  useEffect(() => {
+    fetch(`${BASE}/api/skills/metrics?window_days=${windowDays}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(setData)
+      .catch(() => {})
+  }, [windowDays])
+
+  if (!data) return <div style={{ fontSize: 10, color: 'var(--text-3)' }}>Loading metrics…</div>
+
+  const promoterHealthy = data.promoter.scans > 0 &&
+    data.promoter.last_scan &&
+    (Date.now() - new Date(data.promoter.last_scan).getTime()) < 8 * 24 * 3600 * 1000
+
+  return (
+    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Window selector */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>WINDOW</span>
+        {[7, 30, 90].map(d => (
+          <button key={d} onClick={() => setWindow(d)}
+            style={{ fontSize: 9, padding: '3px 8px', borderRadius: 2,
+              background: windowDays === d ? 'var(--accent-dim)' : 'var(--bg-2)',
+              color:      windowDays === d ? 'var(--accent)'     : 'var(--text-3)',
+              border: `1px solid ${windowDays === d ? 'var(--accent)' : 'var(--border)'}`,
+              cursor: 'pointer', fontFamily: 'var(--font-mono)' }}>
+            {d}d
+          </button>
+        ))}
+      </div>
+
+      {/* Promoter status banner */}
+      <div style={{ padding: 8, borderRadius: 2,
+        background: promoterHealthy ? 'rgba(0,170,68,0.06)' : 'rgba(204,136,0,0.06)',
+        border: `1px solid ${promoterHealthy ? 'var(--green)' : 'var(--amber)'}` }}>
+        <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)',
+          color: promoterHealthy ? 'var(--green)' : 'var(--amber)' }}>
+          {promoterHealthy ? '● AUTO-PROMOTER HEALTHY' : '⚠ AUTO-PROMOTER STALE'}
+        </div>
+        <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 3 }}>
+          Scans: {data.promoter.scans || 0} ·
+          Last scan: {data.promoter.last_scan
+            ? new Date(data.promoter.last_scan).toLocaleString()
+            : 'never'} ·
+          New candidates: {data.promoter.total_new_candidates || 0}
+        </div>
+      </div>
+
+      {/* Candidate pipeline */}
+      <Panel title="CANDIDATE PIPELINE">
+        <div style={{ display: 'flex', gap: 20 }}>
+          {['detected', 'pending_review', 'approved', 'rejected', 'promoted'].map(s => (
+            <Stat key={s} label={s.replace('_', ' ')} value={data.pipeline[s] || 0} />
+          ))}
+        </div>
+      </Panel>
+
+      {/* Per-skill table */}
+      <Panel title="SKILL EXECUTION ACTIVITY">
+        {data.per_skill.length === 0 ? (
+          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>No skills yet.</div>
+        ) : (
+          <table style={{ width: '100%', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-3)' }}>
+                <th align="left">Skill</th>
+                <th align="right">Runs</th>
+                <th align="right">Success</th>
+                <th align="right">Errors</th>
+                <th align="right">Avg duration</th>
+                <th align="right">Last run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.per_skill.map(s => {
+                const dead = (s.execution_count || 0) === 0
+                return (
+                  <tr key={s.id} style={{ color: dead ? 'var(--text-3)' : 'var(--text-1)' }}>
+                    <td>{s.name}{dead && ' · (unused)'}</td>
+                    <td align="right">{s.execution_count || 0}</td>
+                    <td align="right" style={{ color: 'var(--green)' }}>{s.successes || 0}</td>
+                    <td align="right" style={{ color: (s.errors || 0) > 0 ? 'var(--red)' : undefined }}>{s.errors || 0}</td>
+                    <td align="right">{s.avg_duration_ms ? `${Math.round(s.avg_duration_ms)} ms` : '—'}</td>
+                    <td align="right" style={{ color: 'var(--text-3)' }}>
+                      {s.last_run ? new Date(s.last_run).toLocaleString() : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+    </div>
+  )
+}
+```
+
+Reuse `Panel` and `Stat` helpers from v2.33.20's GatesView (extract to a
+shared `gui/src/components/SharedPanels.jsx` module if not already done —
+same pattern repeats).
+
+## Change 6 — Prometheus metrics registration
+
+If v2.33.5's `api/metrics.py` exists, add:
+
+```python
+SKILL_EXEC_COUNTER = Counter(
+    "deathstar_skill_executions_total",
+    "Total skill executions by skill and outcome",
+    ["skill_id", "outcome"],
+)
+SKILL_DURATION = Histogram(
+    "deathstar_skill_duration_seconds",
+    "Skill execution duration",
+    ["skill_id"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
+)
+AUTO_PROMOTER_SCANS = Counter(
+    "deathstar_auto_promoter_scans_total",
+    "Auto-promoter scan invocations",
+    ["triggered_by"],
+)
+```
+
+## Change 7 — tests
+
+`tests/test_skill_observability.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_execution_recorded(seeded_skill):
+    """Running a skill writes a row to skill_executions."""
+    await skill_execute(seeded_skill.id, {"arg": 1},
+                        task_id="t1", agent_type="execute")
+    rows = await list_skill_executions(skill_id=seeded_skill.id)
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "success"
+    assert rows[0]["duration_ms"] > 0
+
+@pytest.mark.asyncio
+async def test_error_recorded(failing_skill):
+    """Skill that raises → outcome=error, error field populated."""
+    with pytest.raises(Exception):
+        await skill_execute(failing_skill.id, {}, task_id="t2", agent_type="execute")
+    rows = await list_skill_executions(skill_id=failing_skill.id)
+    assert rows[0]["outcome"] == "error"
+    assert rows[0]["error"]
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_shape(authed_client, seeded_skill):
+    r = authed_client.get("/api/skills/metrics?window_days=7")
+    assert r.status_code == 200
+    d = r.json()
+    assert "per_skill" in d
+    assert "promoter" in d
+    assert "pipeline" in d
+
+def test_window_capped_at_90(authed_client):
+    r = authed_client.get("/api/skills/metrics?window_days=9999")
+    assert r.json()["window_days"] == 90
+
+def test_promoter_stale_detection(authed_client):
+    # With no scans in last 8 days → UI banner is "STALE"
+    # Tested at component level; backend just returns accurate last_scan.
+    pass
+```
+
+## Version bump
+Update `VERSION`: 2.34.1 → 2.34.2
+
+## Commit
+```
+git add -A
+git commit -m "feat(skills): v2.34.2 execution observability + adoption metrics"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy + Alembic upgrade.
+2. Skills → Metrics subtab: should render even with zero executions.
+3. Trigger an existing skill (either from Candidates approval path or from
+   an agent task that uses it). Confirm a row appears in skill_executions
+   and the Metrics tab per-skill table updates within the next refresh.
+4. Check Skills → Candidates → "Scan now" button: after clicking, confirm
+   a new row in auto_promoter_scans with triggered_by=<user>.
+5. Verify Prometheus endpoint exposes `deathstar_skill_executions_total`
+   and `deathstar_auto_promoter_scans_total` if v2.33.5 is enabled.
+6. Regression: existing skill_execute callsites still return the same values
+   as before — observability is purely additive.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 12:10:00
+========================================================================
+Full suite result: 379 passed, 19 failed, 12 skipped. All 19 failures are in unrelated areas (collectors, dashboard routers, pull jobs, auth) — none touch skills, dispatcher, or metrics. The skills test suite (42 tests) is clean:
+[STATUS] 38m00s
+
+- `test_skill_observability.py` — 9/9 pass (new)
+- `test_skills_router.py` — 6/6
+- `test_skill_lifecycle.py` — 4/4
+- `test_skill_persistence.py` — 1/1
+- `test_skill_validator.py` — 22/22
+
+v2.34.2 shipped cleanly at `03e1149`.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  38m00s
+========================================================================

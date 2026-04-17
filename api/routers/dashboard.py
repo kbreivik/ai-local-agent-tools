@@ -230,7 +230,11 @@ def _do_pull_streaming(job_id: str, container_id: str, tag: str | None) -> None:
             _restart_self_container()
             _update_pull_job(
                 job_id, status="done", phase="done",
-                message="Agent recreation triggered — it will be back shortly",
+                message=(
+                    "Agent recreation triggered. Wait ~30s, then "
+                    "hard-refresh this page (Ctrl+Shift+R) and log in again."
+                ),
+                is_self_recreate=True,
                 completed_at=_time.time(), percent=100,
             )
         else:

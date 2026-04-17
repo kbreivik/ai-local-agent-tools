@@ -793,12 +793,12 @@ function ContainerCardExpanded({
                   letterSpacing: '0.1em', fontSize: 9, marginBottom: 4,
                 }}>
                   <span>
-                    {pullJob.status === 'starting'    && '◐ STARTING'}
-                    {pullJob.status === 'downloading' && '↓ DOWNLOADING'}
-                    {pullJob.status === 'extracting'  && '⊡ EXTRACTING'}
-                    {pullJob.status === 'recreating'  && '⟳ RECREATING'}
-                    {pullJob.status === 'done'        && '✓ DONE'}
-                    {pullJob.status === 'error'       && '✕ ERROR'}
+                    {(pullJob.status === 'starting' ||
+                      pullJob.status === 'downloading' ||
+                      pullJob.status === 'extracting' ||
+                      pullJob.status === 'recreating') && '⟳ UPDATING'}
+                    {pullJob.status === 'done'  && '✓ DONE'}
+                    {pullJob.status === 'error' && '✕ ERROR'}
                   </span>
                   <span>{pullJob.percent ?? 0}%</span>
                 </div>
@@ -821,6 +821,18 @@ function ContainerCardExpanded({
                 <div style={{ color: 'var(--text-2)', fontSize: 9, lineHeight: 1.4 }}>
                   {pullJob.message || pullJob.phase || '…'}
                 </div>
+                {pullJob.is_self_recreate && pullJob.status === 'done' && (
+                  <div style={{
+                    marginTop: 6, padding: '5px 8px',
+                    background: 'var(--amber-dim)',
+                    border: '1px solid var(--amber)',
+                    borderRadius: 2,
+                    fontFamily: 'var(--font-mono)', fontSize: 9,
+                    color: 'var(--amber)', lineHeight: 1.35,
+                  }}>
+                    ⚠ Hard-refresh now: <b>Ctrl+Shift+R</b> (macOS: <b>⌘+Shift+R</b>) then log in again.
+                  </div>
+                )}
                 {pullJob.bytes_total > 0 && (
                   <div style={{ color: 'var(--text-3)', fontSize: 9, marginTop: 2 }}>
                     {_fmtBytes(pullJob.bytes_done)} / {_fmtBytes(pullJob.bytes_total)}
