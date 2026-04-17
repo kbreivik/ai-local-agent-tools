@@ -502,6 +502,7 @@ async def _run_single_agent_step(
 
     # ── Per-run feedback accumulators ─────────────────────────────────────────
     tools_used_names: list = []
+    tool_history: list = []  # v2.33.13: full per-call log for contradiction detection
     positive_signals = 0
     negative_signals = 0
     total_prompt_tokens = 0
@@ -1364,6 +1365,16 @@ async def _run_single_agent_step(
                         _zero_streaks[fn_name] = 0
                         _nonzero_seen[fn_name] = max(_nonzero_seen.get(fn_name, 0), _count)
 
+                # v2.33.13: record a compact tool_history entry for contradiction
+                # detection. Store only the count in `result` so we don't retain
+                # large tool payloads across the whole run.
+                tool_history.append({
+                    "tool":   fn_name,
+                    "args":   fn_args if isinstance(fn_args, dict) else {},
+                    "result": {"total": _count if _count is not None else 0},
+                    "step":   step,
+                })
+
                 if (
                     _zero_streaks.get(fn_name, 0) >= 3
                     and _nonzero_seen.get(fn_name, 0) > 0
@@ -1707,6 +1718,7 @@ async def _run_single_agent_step(
     return {
         "output":              last_reasoning,
         "tools_used":          tools_used_names,
+        "tool_history":        tool_history,  # v2.33.13: for contradiction detection
         "final_status":        final_status,
         "positive_signals":    positive_signals,
         "negative_signals":    negative_signals,
@@ -1997,6 +2009,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
     # Aggregate feedback across all steps
     all_tools_used: list = []
+    all_tool_history: list = []  # v2.33.13: cross-step tool call log
     agg_positive = 0
     agg_negative = 0
     agg_steps = 0
@@ -2068,6 +2081,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             plan_approved_this_session = True
 
         all_tools_used.extend(step_result["tools_used"])
+        all_tool_history.extend(step_result.get("tool_history", []))
         agg_positive += step_result["positive_signals"]
         agg_negative += step_result["negative_signals"]
         agg_steps    += step_result["steps_taken"]
@@ -2251,6 +2265,95 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                     last_reasoning = _sum_text.strip()
             except Exception as _se:
                 log.debug("Force summary for truncated answer failed: %s", _se)
+
+        # ── v2.33.13: contradiction detection ────────────────────────────────
+        # Compare the draft final answer against the aggregated tool history.
+        # If the agent is about to assert "nothing found" while a prior tool
+        # call returned non-zero results, give it one more chance to reconcile.
+        try:
+            from api.agents.orchestrator import detect_contradictions
+            contradictions = detect_contradictions(last_reasoning or "", all_tool_history)
+        except Exception as _ce:
+            log.debug("detect_contradictions failed: %s", _ce)
+            contradictions = []
+
+        if contradictions:
+            _contra_summary = "\n".join(
+                f"  - Step {c['step']}: {c['tool']}({c['args']}) returned "
+                f"{c['nonzero_count']} results"
+                for c in contradictions
+            )
+            try:
+                await manager.broadcast({
+                    "type":           "contradiction_detected",
+                    "session_id":     session_id,
+                    "contradictions": contradictions,
+                    "timestamp":      datetime.now(timezone.utc).isoformat(),
+                })
+                await manager.send_line(
+                    "step",
+                    f"[contradiction] Draft conclusion negates "
+                    f"{len(contradictions)} prior non-zero result(s) — reconciling",
+                    status="warning", session_id=session_id,
+                )
+            except Exception as _be:
+                log.debug("contradiction broadcast failed: %s", _be)
+
+            # One reconciliation turn with the same LLM.
+            _neg_snip = contradictions[0]["negative_claim_snippets"][0] \
+                if contradictions[0].get("negative_claim_snippets") else ""
+            _reconcile_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are revising an infrastructure assistant's draft answer. "
+                        "The draft contains a negative claim that contradicts earlier "
+                        "tool results in the same task. Revise to match the evidence."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Original task: {task}\n\n"
+                        f"Draft answer:\n{last_reasoning}\n\n"
+                        f"HARNESS: Your draft claims '{_neg_snip}' but your tool "
+                        f"history contradicts it:\n{_contra_summary}\n\n"
+                        "Revise the answer. Either:\n"
+                        "  (a) Acknowledge the earlier non-zero result and explain "
+                        "why the final claim still holds (different window / filter).\n"
+                        "  (b) Revise the conclusion to match the evidence.\n"
+                        "Do not silently drop the earlier data. Plain text, "
+                        "2-4 sentences."
+                    ),
+                },
+            ]
+            try:
+                _rec_resp = client.chat.completions.create(
+                    model=_lm_model(),
+                    messages=_reconcile_messages,
+                    tools=None,
+                    temperature=0.3,
+                    max_tokens=300,
+                )
+                _rec_text = (_rec_resp.choices[0].message.content or "").strip()
+                if _rec_text:
+                    last_reasoning = _rec_text
+            except Exception as _re:
+                log.debug("reconciliation synthesis failed: %s", _re)
+
+            # Re-check after reconciliation; if unresolved, prepend a warning.
+            try:
+                contradictions_after = detect_contradictions(
+                    last_reasoning or "", all_tool_history
+                )
+            except Exception:
+                contradictions_after = []
+            if contradictions_after:
+                last_reasoning = (
+                    f"[HARNESS WARNING: {len(contradictions_after)} unresolved "
+                    "evidence contradiction(s). See step history.]\n\n"
+                    + (last_reasoning or "")
+                )
 
         if last_reasoning:
             try:

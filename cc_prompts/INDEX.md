@@ -162,9 +162,9 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.8.md  | v2.33.8  | feat(templates): verify_backup_job + PBS last-success tracking | DONE (21a7a0b) |
 | CC_PROMPT_v2.33.9.md  | v2.33.9  | feat(security): drift detection — config_hash reconciliation + badge | DONE (636cf2f) |
 | CC_PROMPT_v2.33.10.md | v2.33.10 | feat(ui): container pull — in-card progress + eager version controls | DONE (0b3255b) |
-| CC_PROMPT_v2.33.11.md | v2.33.11 | fix(tools): elastic_search_logs level kwarg + aliases | RUNNING |
-| CC_PROMPT_v2.33.12.md | v2.33.12 | feat(agents): zero-result pivot detection — 3-in-a-row nudge | PENDING |
-| CC_PROMPT_v2.33.13.md | v2.33.13 | feat(agents): contradiction detection in synthesis | PENDING |
+| CC_PROMPT_v2.33.11.md | v2.33.11 | fix(tools): elastic_search_logs level kwarg + aliases | DONE (5808505) |
+| CC_PROMPT_v2.33.12.md | v2.33.12 | feat(agents): zero-result pivot detection — 3-in-a-row nudge | DONE (41398f2) |
+| CC_PROMPT_v2.33.13.md | v2.33.13 | feat(agents): contradiction detection in synthesis | RUNNING |
 | CC_PROMPT_v2.33.14.md | v2.33.14 | feat(tools): elastic_search_logs rich query metadata + hint | PENDING |
 | CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | PENDING |
 

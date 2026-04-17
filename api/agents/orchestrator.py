@@ -95,6 +95,74 @@ def format_step_header(step_num: int, total_steps: int, intent: str, domain) -> 
     return f"━━ Step {step_num}/{total_steps} · {intent}{domain_part} ━━━━━━━━━━━━━━━━━━━━━━"
 
 
+# ── v2.33.13: contradiction detection in synthesis ─────────────────────────────
+# Catch agents concluding "no X were found" when their own tool history
+# contains a non-zero result for X earlier in the same task.
+
+_NEGATIVE_CLAIM_PATTERNS = [
+    r"\bno\s+(?:error|warning|critical|log|entries?|events?|issues?|problems?)",
+    r"\b(?:zero|0)\s+(?:error|warning|critical|log|entries?|events?|issues?)",
+    r"\bnot?\s+found",
+    r"\bno\s+\w+\s+(?:were|was)?\s*found",
+    r"\bnothing\s+(?:found|detected|returned)",
+    r"\bno\s+results?",
+]
+
+
+def detect_negative_claim(text: str) -> list:
+    """Return list of negative-claim phrases found in the text (case-insensitive)."""
+    if not text:
+        return []
+    found = []
+    low = text.lower()
+    for pat in _NEGATIVE_CLAIM_PATTERNS:
+        for m in re.finditer(pat, low):
+            found.append(m.group(0))
+    return found
+
+
+def detect_contradictions(final_text: str, tool_history: list) -> list:
+    """
+    Check if final_text asserts 'nothing found' while tool_history shows > 0
+    results from earlier calls. Returns list of contradictions found.
+
+    tool_history entry shape (from agent loop):
+      {"tool": "elastic_search_logs", "args": {...}, "result": {...}, "step": N}
+    """
+    negatives = detect_negative_claim(final_text)
+    if not negatives:
+        return []
+
+    # _result_count lives in api.routers.agent — import lazily to avoid cycle
+    from api.routers.agent import _result_count
+
+    nonzero_by_tool = {}
+    for call in tool_history or []:
+        if not isinstance(call, dict):
+            continue
+        count = _result_count(call.get("result"))
+        if count and count > 0:
+            tool = call.get("tool", "")
+            prev = nonzero_by_tool.get(tool)
+            if not prev or count > prev["count"]:
+                nonzero_by_tool[tool] = {
+                    "count": count,
+                    "step": call.get("step"),
+                    "args": call.get("args", {}),
+                }
+
+    contradictions = []
+    for tool, info in nonzero_by_tool.items():
+        contradictions.append({
+            "tool": tool,
+            "step": info["step"],
+            "nonzero_count": info["count"],
+            "args": info["args"],
+            "negative_claim_snippets": negatives[:2],
+        })
+    return contradictions
+
+
 def verdict_from_text(text: str) -> dict:
     """
     Extract a minimal verdict from an agent's final output text.

@@ -54,7 +54,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -124,6 +124,22 @@ export default function OutputPanel({ onTab }) {
           }}>
             ⚠ PIVOT NUDGE — {zeroPivot.tool} returned 0 · {zeroPivot.consecutive_zeros}× in a row
             {zeroPivot.prior_nonzero > 0 && <> (earlier: {zeroPivot.prior_nonzero})</>}
+          </div>
+        )}
+        {contradictions && contradictions.length > 0 && (
+          <div className="mono" style={{
+            margin: '8px 0', padding: '8px 10px',
+            background: 'var(--red-dim)', color: 'var(--red)',
+            border: '1px solid var(--red)', borderRadius: 2, fontSize: 10,
+          }}>
+            <div style={{ letterSpacing: '0.15em', marginBottom: 4 }}>
+              ⚠ EVIDENCE CONTRADICTION — AGENT RECONCILING
+            </div>
+            {contradictions.map((c, i) => (
+              <div key={i} style={{ opacity: 0.9 }}>
+                Step {c.step}: {c.tool} → {c.nonzero_count} results (ignored in draft conclusion)
+              </div>
+            ))}
           </div>
         )}
         {outputLines.length === 0 && (
