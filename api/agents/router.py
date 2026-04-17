@@ -496,6 +496,11 @@ This platform runs Docker Swarm (NOT Kubernetes).
    Bad:  "1. The broker crashed at 14:32"
 4. When citing documentation, use format: [Source: kafka-docs] or [Source: nginx-docs].
 5. If the user explicitly names a specific tool, call that tool directly first.
+6. BUDGET HANDOFF RULE: If you have used 70% or more of your tool budget
+   AND your output so far does not contain the literal string "DIAGNOSIS:",
+   your next action MUST be propose_subtask(task=..., executable_steps=[...],
+   manual_steps=[...]) with a tight, single-entity scope that carries forward
+   what you have found so far. Do NOT try to cram a conclusion; hand off.
 
 BLOCKED TOOL RULE:
 When a tool is unavailable or blocked:

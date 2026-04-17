@@ -228,3 +228,19 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 08:54:01
 ========================================================================
+PROMPT COMPLETE: v2.33.2
+[STATUS] 3m37s
+
+Implemented the 4-step fixed RCA template:
+- New `api/agents/task_templates/diagnose_kafka_under_replicated.py` registered via `__init__.py`
+- `router.py` gained `build_system_prompt()` + `_extract_sections()` to honor `prompt_override` while preserving ROLE+ENVIRONMENT
+- Added KAFKA group entry to `gui/src/components/TaskTemplates.jsx`
+- Added `test_diagnose_kafka_unrepl_chain_shape` to `tests/test_task_templates.py`
+- VERSION bumped 2.33.1 → 2.33.2
+- py_compile + registry + build_system_prompt smoke tests all pass
+- Pushed as 47638f1 (runner will mark INDEX.md DONE)
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m38s
+========================================================================

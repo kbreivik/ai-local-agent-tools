@@ -484,6 +484,7 @@ async def _run_single_agent_step(
     plan_action_called = plan_already_approved   # pre-set if already approved
     _last_blocked_tool = None    # name of most recently blocked tool
     _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
+    _budget_nudge_fired = False  # v2.33.3: ensure 70% handoff nudge fires at most once
 
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
@@ -559,6 +560,44 @@ async def _run_single_agent_step(
 
             # v2.32.5: Tool call budget enforcement
             _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+
+            # v2.33.3: Budget handoff nudge — fire at 70% if investigate agent
+            # has not emitted DIAGNOSIS: and has not yet proposed a subtask
+            if agent_type in ("research", "investigate"):
+                _budget_threshold = int(0.7 * _tool_budget)
+                _tools_used_count = len(tools_used_names)
+                _subtask_proposed = "propose_subtask" in tools_used_names
+                _diagnosis_emitted = "DIAGNOSIS:" in (last_reasoning or "")
+                if (_tools_used_count >= _budget_threshold
+                        and not _subtask_proposed
+                        and not _diagnosis_emitted
+                        and not _budget_nudge_fired):
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"HARNESS NUDGE: You have used {_tools_used_count}/{_tool_budget} "
+                            "tool calls. No DIAGNOSIS: section emitted yet. Per BUDGET "
+                            "HANDOFF RULE, your next action must be propose_subtask("
+                            "task=..., executable_steps=[...], manual_steps=[...]) with "
+                            "a tight, single-entity scope carrying forward what you have "
+                            "found so far. Do NOT produce a shallow conclusion."
+                        ),
+                    })
+                    await manager.broadcast({
+                        "type":       "budget_nudge",
+                        "session_id": session_id,
+                        "tools_used": _tools_used_count,
+                        "budget":     _tool_budget,
+                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                    })
+                    await manager.send_line(
+                        "step",
+                        f"[budget] 70% threshold reached ({_tools_used_count}/{_tool_budget}) "
+                        f"without DIAGNOSIS — nudging agent toward propose_subtask",
+                        status="ok", session_id=session_id,
+                    )
+                    _budget_nudge_fired = True
+
             if len(tools_used_names) >= _tool_budget:
                 await manager.send_line(
                     "step",

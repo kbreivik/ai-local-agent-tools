@@ -17,33 +17,37 @@ _TABLE = "agent_attempts"
 
 _DDL_PG = """
 CREATE TABLE IF NOT EXISTS agent_attempts (
-    id           BIGSERIAL PRIMARY KEY,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    entity_id    TEXT NOT NULL,
-    task_type    TEXT NOT NULL DEFAULT 'general',
-    task_text    TEXT NOT NULL DEFAULT '',
-    tools_used   JSONB NOT NULL DEFAULT '[]'::jsonb,
-    outcome      TEXT NOT NULL DEFAULT 'unknown',
-    summary      TEXT NOT NULL DEFAULT '',
-    session_id   TEXT NOT NULL DEFAULT '',
-    operation_id TEXT NOT NULL DEFAULT ''
+    id            BIGSERIAL PRIMARY KEY,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    entity_id     TEXT NOT NULL,
+    task_type     TEXT NOT NULL DEFAULT 'general',
+    task_text     TEXT NOT NULL DEFAULT '',
+    tools_used    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    outcome       TEXT NOT NULL DEFAULT 'unknown',
+    summary       TEXT NOT NULL DEFAULT '',
+    session_id    TEXT NOT NULL DEFAULT '',
+    operation_id  TEXT NOT NULL DEFAULT '',
+    was_proposal  BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_entity
     ON agent_attempts (entity_id, created_at DESC);
+ALTER TABLE agent_attempts
+    ADD COLUMN IF NOT EXISTS was_proposal BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 _DDL_SQLITE = """
 CREATE TABLE IF NOT EXISTS agent_attempts (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    entity_id    TEXT NOT NULL,
-    task_type    TEXT NOT NULL DEFAULT 'general',
-    task_text    TEXT NOT NULL DEFAULT '',
-    tools_used   TEXT NOT NULL DEFAULT '[]',
-    outcome      TEXT NOT NULL DEFAULT 'unknown',
-    summary      TEXT NOT NULL DEFAULT '',
-    session_id   TEXT NOT NULL DEFAULT '',
-    operation_id TEXT NOT NULL DEFAULT ''
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    entity_id     TEXT NOT NULL,
+    task_type     TEXT NOT NULL DEFAULT 'general',
+    task_text     TEXT NOT NULL DEFAULT '',
+    tools_used    TEXT NOT NULL DEFAULT '[]',
+    outcome       TEXT NOT NULL DEFAULT 'unknown',
+    summary       TEXT NOT NULL DEFAULT '',
+    session_id    TEXT NOT NULL DEFAULT '',
+    operation_id  TEXT NOT NULL DEFAULT '',
+    was_proposal  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_entity
     ON agent_attempts (entity_id, created_at DESC);
@@ -107,6 +111,15 @@ def init_agent_attempts() -> bool:
             s = stmt.strip()
             if s:
                 sa.execute(_t(s))
+        # v2.33.3: migrate pre-existing SQLite tables to add was_proposal.
+        # SQLite ignores 'IF NOT EXISTS' on ADD COLUMN (< 3.35), so tolerate
+        # "duplicate column" errors.
+        try:
+            sa.execute(_t(
+                "ALTER TABLE agent_attempts ADD COLUMN was_proposal INTEGER NOT NULL DEFAULT 0"
+            ))
+        except Exception:
+            pass  # column already exists
         sa.commit(); sa.close()
         _initialized = True
         log.info("agent_attempts table ready (SQLite)")
@@ -128,8 +141,14 @@ def record_attempt(
     summary: str = "",
     session_id: str = "",
     operation_id: str = "",
+    was_proposal: bool = False,
 ):
-    """Record an agent attempt on an entity. Never raises."""
+    """Record an agent attempt on an entity. Never raises.
+
+    was_proposal (v2.33.3): True when this attempt originated from an accepted
+    propose_subtask — lets downstream analysis distinguish fresh investigations
+    from harness-triggered handoffs.
+    """
     tools_json = json.dumps(tools_used or [])
     entity_id = (entity_id or "")[:200]
     task_type = (task_type or "")[:50]
@@ -138,6 +157,7 @@ def record_attempt(
     summary = (summary or "")[:500]
     session_id = (session_id or "")[:128]
     operation_id = (operation_id or "")[:128]
+    was_proposal_bool = bool(was_proposal)
 
     conn = _get_pg_conn()
     if conn:
@@ -146,10 +166,10 @@ def record_attempt(
             cur.execute(
                 """INSERT INTO agent_attempts
                    (entity_id, task_type, task_text, tools_used, outcome,
-                    summary, session_id, operation_id)
-                   VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s)""",
+                    summary, session_id, operation_id, was_proposal)
+                   VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)""",
                 (entity_id, task_type, task_text, tools_json,
-                 outcome, summary, session_id, operation_id),
+                 outcome, summary, session_id, operation_id, was_proposal_bool),
             )
             conn.commit(); cur.close(); conn.close()
             return
@@ -166,12 +186,13 @@ def record_attempt(
         sa.execute(_t(
             """INSERT INTO agent_attempts
                (entity_id, task_type, task_text, tools_used, outcome,
-                summary, session_id, operation_id)
-               VALUES (:eid, :tt, :tx, :tu, :oc, :sm, :sid, :oid)"""
+                summary, session_id, operation_id, was_proposal)
+               VALUES (:eid, :tt, :tx, :tu, :oc, :sm, :sid, :oid, :wp)"""
         ), {
             "eid": entity_id, "tt": task_type, "tx": task_text,
             "tu": tools_json, "oc": outcome, "sm": summary,
             "sid": session_id, "oid": operation_id,
+            "wp": 1 if was_proposal_bool else 0,
         })
         sa.commit(); sa.close()
     except Exception as e:
