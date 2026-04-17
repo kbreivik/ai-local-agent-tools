@@ -1525,6 +1525,17 @@ async def _run_single_agent_step(
                     err_str = str(e)
                     result = {"status": "error", "message": err_str, "data": None,
                               "timestamp": datetime.now(timezone.utc).isoformat()}
+                    # v2.34.9: track kwarg hallucination via TypeError fingerprints
+                    if isinstance(e, TypeError) or (
+                        "unexpected keyword argument" in err_str
+                        or "missing 1 required positional argument" in err_str
+                        or "missing" in err_str and "required positional" in err_str
+                    ):
+                        try:
+                            from api.metrics import TOOL_SIGNATURE_ERROR_COUNTER
+                            TOOL_SIGNATURE_ERROR_COUNTER.labels(tool_name=fn_name).inc()
+                        except Exception:
+                            pass
                     if "401" in err_str or "403" in err_str or "Unauthorized" in err_str:
                         await manager.send_line(
                             "step",
@@ -2278,6 +2289,15 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
     system_prompt = get_prompt(first_intent)
 
+    # v2.34.9: inject MCP tool signatures so the agent calls tools with exact kwargs
+    try:
+        from api.agents.router import allowlist_for as _aw, format_tool_signatures_section as _fsig
+        _sig_block = _fsig(_aw(first_intent, detect_domain(task)))
+        if _sig_block:
+            system_prompt = system_prompt + "\n\n" + _sig_block + "\n"
+    except Exception as _sig_e:
+        log.debug("tool signatures injection skipped: %s", _sig_e)
+
     # Inject parent investigation context for sub-agent tasks
     if parent_context:
         _parent_prefix = (
@@ -2568,6 +2588,15 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             step_agent_type = "execute"
 
         step_system_prompt = get_prompt(step_agent_type)
+
+        # v2.34.9: inject MCP tool signatures for this step's allowlist
+        try:
+            from api.agents.router import allowlist_for as _aw, format_tool_signatures_section as _fsig
+            _step_sig = _fsig(_aw(step_agent_type, step_domain or "general"))
+            if _step_sig:
+                step_system_prompt = step_system_prompt + "\n\n" + _step_sig + "\n"
+        except Exception:
+            pass
 
         # Prepend prior step verdict as context (minimal — no prose)
         if prior_verdict:

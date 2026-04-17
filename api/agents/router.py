@@ -1294,6 +1294,123 @@ def get_prompt(agent_type: str) -> str:
     }.get(agent_type, STATUS_PROMPT)
 
 
+# ── Tool signature injection (v2.34.9) ────────────────────────────────────────
+# The LLM sees the OpenAI tools_spec but still guesses parameter names under
+# pressure (since_minutes vs minutes_ago, service_name vs name, pattern vs
+# query). Materialise the real signatures into the system prompt so exact
+# kwargs are in-context at every step.
+
+_TOOL_SIGNATURES_CACHE: dict[str, str] | None = None
+
+
+def allowlist_for(agent_type: str, domain: str = "general") -> list[str]:
+    """Return the tool allowlist (as a sorted list) for an agent type + domain."""
+    if agent_type in ('action', 'execute'):
+        domain_map = {
+            "kafka":   EXECUTE_KAFKA_TOOLS,
+            "swarm":   EXECUTE_SWARM_TOOLS,
+            "proxmox": EXECUTE_PROXMOX_TOOLS,
+        }
+        return sorted(domain_map.get(domain, EXECUTE_GENERAL_TOOLS))
+
+    allowlist_map = {
+        'observe':     OBSERVE_AGENT_TOOLS,
+        'status':      OBSERVE_AGENT_TOOLS,
+        'investigate': INVESTIGATE_AGENT_TOOLS,
+        'research':    INVESTIGATE_AGENT_TOOLS,
+        'build':       BUILD_AGENT_TOOLS,
+        'ambiguous':   OBSERVE_AGENT_TOOLS,
+    }
+    return sorted(allowlist_map.get(agent_type, OBSERVE_AGENT_TOOLS))
+
+
+def _format_default(default_repr: str | None) -> str:
+    """Normalise AST-unparsed default value into a short display form."""
+    if default_repr is None:
+        return "None"
+    return default_repr.strip()[:40]
+
+
+def build_tool_signatures() -> dict[str, str]:
+    """Return {tool_name: one_line_signature} for every registered core tool.
+
+    Signatures are derived from AST inspection of mcp_server/tools/*.py via
+    the tool_registry — the same source that feeds the LLM's tools_spec.
+    This guarantees injected signatures agree with what invoke_tool() calls.
+
+    Cache lives in a module-global. The process rebuilds on restart, which is
+    sufficient since there's no MCP hot-reload today. If hot-reload is wired,
+    clear `_TOOL_SIGNATURES_CACHE` at reload time.
+    """
+    global _TOOL_SIGNATURES_CACHE
+    if _TOOL_SIGNATURES_CACHE is not None:
+        return _TOOL_SIGNATURES_CACHE
+
+    sigs: dict[str, str] = {}
+    try:
+        from api.tool_registry import get_registry
+        registry = get_registry()
+    except Exception as e:  # pragma: no cover - defensive
+        _TOOL_SIGNATURES_CACHE = {}
+        import sys as _sys
+        print(f"[router] build_tool_signatures: registry unavailable: {e}", file=_sys.stderr)
+        return _TOOL_SIGNATURES_CACHE
+
+    for entry in registry:
+        name = entry.get("name", "")
+        if not name:
+            continue
+        try:
+            parts = []
+            for p in entry.get("params", []):
+                pname = p.get("name", "")
+                if pname in ("self", "ctx", "context"):
+                    continue
+                ann = (p.get("type") or "Any").strip() or "Any"
+                if len(ann) > 60:
+                    ann = ann[:57] + "..."
+                if p.get("required", False):
+                    parts.append(f"{pname}: {ann}")
+                else:
+                    parts.append(f"{pname}: {ann} = {_format_default(p.get('default'))}")
+            sigs[name] = f"{name}({', '.join(parts)})"
+        except Exception as e:  # pragma: no cover
+            sigs[name] = f"{name}(...)  # signature unavailable: {e}"
+
+    _TOOL_SIGNATURES_CACHE = sigs
+    return sigs
+
+
+def format_tool_signatures_section(allowlist: list[str]) -> str:
+    """Render a ═══ TOOL SIGNATURES ═══ block for the given allowlist.
+
+    Empty allowlist returns empty string. If the block grows past 3000 tokens
+    (~12000 chars as a conservative proxy) a warning is logged — at that point
+    we should switch to a deferred `list_tools` path.
+    """
+    if not allowlist:
+        return ""
+    sigs = build_tool_signatures()
+    lines = [
+        "═══ TOOL SIGNATURES ═══",
+        "Call each tool with EXACTLY these parameter names. Do not invent",
+        "kwargs — guessing will fail with TypeError and waste your budget.",
+        "",
+    ]
+    for tool_name in sorted(set(allowlist)):
+        sig = sigs.get(tool_name, f"{tool_name}(...)  # signature unknown")
+        lines.append(f"  {sig}")
+    block = "\n".join(lines)
+    if len(block) > 12000:
+        import logging as _lg
+        _lg.getLogger(__name__).warning(
+            "tool signatures section is %d chars (>12000) for %d tools — "
+            "consider deferred list_tools path",
+            len(block), len(allowlist),
+        )
+    return block
+
+
 # ── Prompt override support ───────────────────────────────────────────────────
 
 def _extract_sections(prompt: str, section_names: list[str]) -> str:

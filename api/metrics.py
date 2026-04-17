@@ -80,6 +80,13 @@ HALLUCINATION_GUARD_COUNTER = Counter(
     ["agent_type", "outcome"],
 )
 
+# --- tool signature errors (v2.34.9) ---
+TOOL_SIGNATURE_ERROR_COUNTER = Counter(
+    "deathstar_tool_signature_errors_total",
+    "Tool call TypeError / signature mismatch failures",
+    ["tool_name"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",
