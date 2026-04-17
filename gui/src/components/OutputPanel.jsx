@@ -5,6 +5,7 @@ import ChoiceBar from './ChoiceBar'
 import ClarificationWidget from './ClarificationWidget'
 import SubtaskOfferCard from './SubtaskOfferCard'
 import AgentDiagnostics from './AgentDiagnostics'
+import SubAgentPanel from './SubAgentPanel'
 
 const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
@@ -55,7 +56,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, agentDiag } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, agentDiag, subAgents } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -154,6 +155,13 @@ export default function OutputPanel({ onTab }) {
           .filter(m => m && m.type !== 'pong' && m.content)
           .map((m, i) => <Line key={i} msg={m} />)
         }
+        {subAgents && subAgents.length > 0 && (
+          <div className="mt-2">
+            {subAgents.map(sa => (
+              <SubAgentPanel key={sa.sub_task_id} sub={sa} />
+            ))}
+          </div>
+        )}
         <div ref={bottomRef} />
         {/* View in logs — shown after run completes */}
         {runState !== 'running' && pendingProposals?.length > 0 && (

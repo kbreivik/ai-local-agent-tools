@@ -229,6 +229,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.debug("subtask_proposals init skipped: %s", e)
     try:
+        from api.db.subagent_runs import init_subagent_runs
+        init_subagent_runs()
+    except Exception as e:
+        _log.debug("subagent_runs init skipped: %s", e)
+    try:
         from api.db.runbooks import init_runbooks
         init_runbooks()
     except Exception as e:

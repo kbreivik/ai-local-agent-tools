@@ -426,25 +426,43 @@ def escalate(reason: str) -> dict:
     }
 
 
-def propose_subtask(task: str, executable_steps: list, manual_steps: list = None) -> dict:
-    """Propose a follow-up sub-task after completing an investigation.
+def propose_subtask(task: str = "", executable_steps: list = None,
+                    manual_steps: list = None,
+                    objective: str = "", agent_type: str = "",
+                    scope_entity: str = "", budget_tools: int = 0,
+                    allow_destructive: bool = False) -> dict:
+    """Delegate a sub-problem to a fresh sub-agent that runs to completion in-band.
 
-    Call this when you have identified specific, actionable fix steps.
-    The system will offer the user two options:
-      (a) Run as an automated sub-agent in a separate window.
-      (b) Open as a manual runbook checklist the user can follow step-by-step.
+    The harness intercepts this call:
+      - If `objective` (v2.34.0+ in-band mode) is provided, a sub-agent is
+        spawned immediately with its own context, budget, and depth counter.
+        The parent blocks until the sub-agent returns a final_answer, which
+        is injected as the tool_result here.
+      - If only `task`/`executable_steps` are provided (legacy mode), the
+        call is recorded as a subtask proposal card for the operator.
+
+    Use sub-agents when:
+      - A diagnostic chain would consume >5 of your remaining tool budget
+      - The sub-problem is out-of-scope for your agent_type
+      - You hit an unfamiliar entity that needs focused attention
+
+    Constraints (enforced by harness):
+      - Sub-agent budget cannot exceed your remaining budget - 2
+      - Sub-agents cannot perform destructive actions unless you are
+        execute-type AND you pass allow_destructive=true AND you are the
+        top-level (depth 1) parent
+      - Depth cap (default 2) stops runaway delegation chains
 
     Args:
-        task:             Concise description of what needs to be fixed.
-                          This becomes the sub-agent's task label.
-        executable_steps: List of steps the agent can execute autonomously.
-                          Each entry should be a specific action string.
-        manual_steps:     Steps requiring human physical access or credentials
-                          (shown in the manual runbook). Optional.
-
-    Only call this after a completed investigation with clear remediation steps.
-    Do not call for informational findings with no actionable path.
-    After calling this, write your final investigation summary.
+        objective:         One-sentence description of the sub-agent's task.
+                           REQUIRED for in-band spawn. Replaces `task` in new mode.
+        agent_type:        "observe" | "investigate" | "execute"  (not "build")
+        scope_entity:      Optional "platform:name:id" to focus the sub-agent.
+        budget_tools:      Tool-call budget for the sub-agent (2-8 typical).
+        allow_destructive: Set true only when you are execute-type AND the
+                           sub-task requires destructive ops.
+        task, executable_steps, manual_steps:
+                           Legacy proposal-card fields. Preserved for back-compat.
     """
     # Body is intercepted by the agent loop — never executed directly
     return {"status": "proposed", "message": "propose_subtask not intercepted"}

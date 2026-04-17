@@ -210,6 +210,12 @@ _AGENT_MAX_TOTAL_TOKENS   = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS",   "1200
 _AGENT_MAX_DESTRUCTIVE    = int(os.environ.get("AGENT_MAX_DESTRUCTIVE",    "3"))
 _AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
 
+# ─── Sub-agent runtime caps (v2.34.0) ─────────────────────────────────────────
+# Configurable via env var — operator-tunable without a redeploy.
+_SUBAGENT_MAX_DEPTH             = int(os.environ.get("SUBAGENT_MAX_DEPTH",          "2"))
+_SUBAGENT_MIN_PARENT_RESERVE    = int(os.environ.get("SUBAGENT_MIN_PARENT_RESERVE", "2"))
+_SUBAGENT_TREE_WALL_CLOCK_S     = int(os.environ.get("SUBAGENT_TREE_WALL_CLOCK_S",  "1800"))
+
 
 def _cap_exceeded(
     *,
@@ -1165,64 +1171,153 @@ async def _run_single_agent_step(
                         except Exception:
                             _pst_args = {}
 
-                        _pst_task        = _pst_args.get("task", task)[:500]
-                        _pst_exec_steps  = _pst_args.get("executable_steps", [])
+                        _pst_task        = (_pst_args.get("task") or "")[:500]
+                        _pst_exec_steps  = _pst_args.get("executable_steps", []) or []
                         _pst_manual_steps = _pst_args.get("manual_steps", []) or []
-                        _proposal_id     = str(uuid.uuid4())
 
-                        # Feasibility: check available connections
-                        _confidence = "medium"
-                        try:
-                            from api.connections import list_connections
-                            if list_connections("vm_host"):
-                                _confidence = "high"
-                        except Exception:
-                            pass
+                        # v2.34.0 in-band spawn fields
+                        _pst_objective   = (_pst_args.get("objective") or "").strip()
+                        _pst_sub_type    = (_pst_args.get("agent_type") or "").strip().lower()
+                        _pst_scope       = (_pst_args.get("scope_entity") or "").strip() or None
+                        _pst_sub_budget  = int(_pst_args.get("budget_tools") or 0)
+                        _pst_allow_dest  = bool(_pst_args.get("allow_destructive", False))
 
-                        # Save to DB
-                        try:
-                            from api.db.subtask_proposals import save_proposal
-                            save_proposal(
-                                proposal_id=_proposal_id,
-                                parent_session_id=session_id,
-                                parent_op_id=operation_id,
-                                task=_pst_task,
-                                executable_steps=_pst_exec_steps,
-                                manual_steps=_pst_manual_steps,
-                                confidence=_confidence,
-                            )
-                        except Exception as _spe:
-                            log.debug("save_proposal failed: %s", _spe)
-
-                        # Broadcast
-                        await manager.broadcast({
-                            "type": "subtask_proposed",
-                            "session_id": session_id,
-                            "proposal_id": _proposal_id,
-                            "task": _pst_task,
-                            "executable_steps": _pst_exec_steps,
-                            "manual_steps": _pst_manual_steps,
-                            "confidence": _confidence,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        })
-                        await manager.send_line(
-                            "step",
-                            f"[subtask] Proposal recorded — '{_pst_task[:70]}' "
-                            f"({_confidence} confidence). User notified.",
-                            status="ok", session_id=session_id,
+                        # Prefer in-band spawn when an objective + agent_type pair is
+                        # provided. Fall back to legacy proposal card otherwise.
+                        _inband_ok = bool(_pst_objective) and _pst_sub_type in (
+                            "observe", "investigate", "execute"
                         )
+                        _pst_result = None
 
-                        # Return result to model (no waiting — model can finish with summary)
-                        _pst_result = {
-                            "status": "proposed",
-                            "proposal_id": _proposal_id,
-                            "confidence": _confidence,
-                            "message": (
-                                "Proposal recorded. User will see an offer to run this as an automated "
-                                "sub-agent or as a manual runbook checklist. "
-                                "Please provide your final investigation summary now."
-                            ),
-                        }
+                        if _inband_ok:
+                            # Compute parent's remaining tool budget at this moment
+                            _parent_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                            _parent_remaining = max(
+                                0, _parent_budget - len(tools_used_names)
+                            )
+                            # Pull any partial DIAGNOSIS text from the assistant's
+                            # prior reasoning so the sub-agent has situational context
+                            _parent_diag = ""
+                            for _m in reversed(messages[-6:]):
+                                _c = _m.get("content") or ""
+                                if isinstance(_c, str) and "DIAGNOSIS:" in _c:
+                                    _parent_diag = _c.split("DIAGNOSIS:", 1)[1][:500]
+                                    break
+
+                            # Sub-budget defaults to min(8, remaining-reserve) if agent
+                            # didn't specify
+                            if _pst_sub_budget <= 0:
+                                _pst_sub_budget = min(
+                                    8,
+                                    max(0, _parent_remaining - _SUBAGENT_MIN_PARENT_RESERVE),
+                                )
+
+                            try:
+                                _spawn = await _spawn_and_wait_subagent(
+                                    parent_session_id=session_id,
+                                    parent_operation_id=operation_id,
+                                    owner_user=owner_user,
+                                    objective=_pst_objective,
+                                    agent_type=_pst_sub_type,
+                                    scope_entity=_pst_scope,
+                                    budget_tools=_pst_sub_budget,
+                                    allow_destructive=_pst_allow_dest,
+                                    parent_remaining_budget=_parent_remaining,
+                                    parent_agent_type=agent_type,
+                                    parent_diagnosis=_parent_diag,
+                                )
+                            except Exception as _se:
+                                log.warning("sub-agent spawn crashed: %s", _se)
+                                _spawn = {"ok": False, "error": f"spawn crashed: {_se}"}
+
+                            if _spawn.get("ok"):
+                                _pst_result = {
+                                    "status":          "sub_agent_done",
+                                    "sub_task_id":     _spawn.get("sub_task_id"),
+                                    "terminal_status": _spawn.get("terminal_status"),
+                                    "final_answer":    _spawn.get("final_answer", ""),
+                                    "diagnosis":       _spawn.get("diagnosis", ""),
+                                    "tools_used":      _spawn.get("tools_used", 0),
+                                    "message": (
+                                        "Sub-agent completed. Synthesize using its "
+                                        "final_answer above — do NOT re-verify its "
+                                        "findings. Write your final summary now."
+                                    ),
+                                }
+                                await manager.send_line(
+                                    "step",
+                                    f"[subagent] done — {_spawn.get('terminal_status')} "
+                                    f"(tools={_spawn.get('tools_used', 0)})",
+                                    status="ok", session_id=session_id,
+                                )
+                            else:
+                                # Spawn refused by guardrails — surface to the model
+                                _pst_result = {
+                                    "status": "error",
+                                    "message": _spawn.get(
+                                        "error", "sub-agent spawn refused"),
+                                }
+                                await manager.send_line(
+                                    "step",
+                                    f"[subagent] refused — {_pst_result['message']}",
+                                    status="error", session_id=session_id,
+                                )
+
+                        else:
+                            # ── Legacy proposal-card path ────────────────────
+                            _proposal_id = str(uuid.uuid4())
+                            _card_task = _pst_task or _pst_objective or task[:500]
+
+                            _confidence = "medium"
+                            try:
+                                from api.connections import list_connections
+                                if list_connections("vm_host"):
+                                    _confidence = "high"
+                            except Exception:
+                                pass
+
+                            try:
+                                from api.db.subtask_proposals import save_proposal
+                                save_proposal(
+                                    proposal_id=_proposal_id,
+                                    parent_session_id=session_id,
+                                    parent_op_id=operation_id,
+                                    task=_card_task,
+                                    executable_steps=_pst_exec_steps,
+                                    manual_steps=_pst_manual_steps,
+                                    confidence=_confidence,
+                                )
+                            except Exception as _spe:
+                                log.debug("save_proposal failed: %s", _spe)
+
+                            await manager.broadcast({
+                                "type": "subtask_proposed",
+                                "session_id": session_id,
+                                "proposal_id": _proposal_id,
+                                "task": _card_task,
+                                "executable_steps": _pst_exec_steps,
+                                "manual_steps": _pst_manual_steps,
+                                "confidence": _confidence,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
+                            await manager.send_line(
+                                "step",
+                                f"[subtask] Proposal recorded — '{_card_task[:70]}' "
+                                f"({_confidence} confidence). User notified.",
+                                status="ok", session_id=session_id,
+                            )
+                            _pst_result = {
+                                "status": "proposed",
+                                "proposal_id": _proposal_id,
+                                "confidence": _confidence,
+                                "message": (
+                                    "Proposal recorded. User will see an offer to run "
+                                    "this as an automated sub-agent or as a manual "
+                                    "runbook checklist. Please provide your final "
+                                    "investigation summary now."
+                                ),
+                            }
+
                         messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                         messages.append({
                             "role": "tool",
@@ -1235,6 +1330,12 @@ async def _run_single_agent_step(
                             duration_ms=0, status="ok",
                         )
                         tools_used_names.append("propose_subtask")
+                        try:
+                            AGENT_TOOL_CALLS.labels(
+                                agent_type=agent_type, tool="propose_subtask"
+                            ).inc()
+                        except Exception:
+                            pass
                         continue  # let model write final answer
 
                     elif fn_name == "escalate" and agent_type in ("action", "execute") and not plan_action_called:
@@ -1754,6 +1855,220 @@ async def _run_single_agent_step(
         "steps_taken":         step,
         "prompt_tokens":       total_prompt_tokens,
         "completion_tokens":   total_completion_tokens,
+    }
+
+
+def _build_subagent_context(parent_diagnosis: str, scope_entity: str,
+                            parent_session_id: str) -> str:
+    """Compact 3-line parent summary injected into a sub-agent's system prompt.
+
+    Sub-agents deliberately do NOT inherit the parent's full tool history —
+    that's the point of isolation. They get:
+      - parent's last DIAGNOSIS (if any)
+      - entity scope (if given)
+      - parent task id for traceability
+    """
+    lines = []
+    if parent_diagnosis:
+        lines.append(f"PARENT DIAGNOSIS SO FAR: {parent_diagnosis[:500]}")
+    if scope_entity:
+        lines.append(f"SCOPE: {scope_entity}")
+    lines.append(f"PARENT_TASK_ID: {parent_session_id}")
+    lines.append(
+        "You are a sub-agent. Your parent delegated this task to you. "
+        "Be focused. Return a DIAGNOSIS section in your final answer."
+    )
+    return "\n".join(lines)
+
+
+async def _spawn_and_wait_subagent(
+    *,
+    parent_session_id: str,
+    parent_operation_id: str,
+    owner_user: str,
+    objective: str,
+    agent_type: str,
+    scope_entity: str | None,
+    budget_tools: int,
+    allow_destructive: bool,
+    parent_remaining_budget: int,
+    parent_agent_type: str,
+    parent_diagnosis: str = "",
+) -> dict:
+    """Spawn a sub-agent in-band, block until it completes, return its result.
+
+    Enforces: depth cap, budget reservation, destructive permission rules.
+    Emits subagent_spawned / subagent_done WS events for GUI rendering.
+    """
+    import asyncio as _asyncio
+    from api.db.subagent_runs import (
+        record_spawn, record_completion, get_ancestry,
+    )
+
+    # ── Depth enforcement ─────────────────────────────────────────────────────
+    ancestry = get_ancestry(parent_session_id)
+    depth = len(ancestry) + 1
+    if depth > _SUBAGENT_MAX_DEPTH:
+        return {
+            "ok": False,
+            "error": (
+                f"sub-agent depth cap reached ({depth} > {_SUBAGENT_MAX_DEPTH}). "
+                "Complete this task yourself — no further delegation."
+            ),
+        }
+
+    # ── Destructive permission ────────────────────────────────────────────────
+    if allow_destructive and agent_type != "execute":
+        return {"ok": False,
+                "error": "allow_destructive requires agent_type=execute"}
+    if allow_destructive and parent_agent_type not in ("execute", "action"):
+        return {"ok": False,
+                "error": "destructive sub-agents only when parent is execute-type"}
+    if allow_destructive and depth > 1:
+        return {"ok": False,
+                "error": "destructive sub-agents only at depth 1"}
+
+    # ── Budget reservation ────────────────────────────────────────────────────
+    reserve = _SUBAGENT_MIN_PARENT_RESERVE
+    max_sub_budget = max(0, parent_remaining_budget - reserve)
+    sub_budget = min(max(budget_tools, 2), max_sub_budget) if max_sub_budget > 0 else 0
+    if sub_budget < 2:
+        return {
+            "ok": False,
+            "error": (
+                f"insufficient parent budget for sub-agent "
+                f"(remaining={parent_remaining_budget}, reserve={reserve}). "
+                "Complete this task yourself — do not delegate."
+            ),
+        }
+
+    # ── Allocate sub-agent identity ───────────────────────────────────────────
+    sub_session_id = str(uuid.uuid4())
+    try:
+        sub_operation_id = await logger_mod.log_operation(
+            sub_session_id, objective, owner_user=owner_user,
+        )
+    except Exception as _le:
+        log.warning("sub-agent log_operation failed: %s", _le)
+        sub_operation_id = ""
+
+    record_spawn(
+        parent_task_id=parent_session_id,
+        sub_task_id=sub_session_id,
+        depth=depth,
+        objective=objective,
+        agent_type=agent_type,
+        scope_entity=scope_entity,
+        budget_tools=sub_budget,
+        allow_destructive=allow_destructive,
+    )
+
+    # ── Broadcast spawn so GUI can render sub-panel ───────────────────────────
+    try:
+        await manager.broadcast({
+            "type":             "subagent_spawned",
+            "session_id":       sub_session_id,
+            "parent_session_id": parent_session_id,
+            "parent_task_id":   parent_session_id,
+            "sub_task_id":      sub_session_id,
+            "depth":            depth,
+            "objective":        objective,
+            "agent_type":       agent_type,
+            "scope_entity":     scope_entity or "",
+            "budget_tools":     sub_budget,
+            "timestamp":        datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as _be:
+        log.debug("subagent_spawned broadcast failed: %s", _be)
+
+    # ── Build isolated context + run the sub-agent to completion ─────────────
+    sub_system_prefix = _build_subagent_context(
+        parent_diagnosis=parent_diagnosis,
+        scope_entity=scope_entity or "",
+        parent_session_id=parent_session_id,
+    )
+
+    terminal_status = "done"
+    err_msg: str | None = None
+    try:
+        await _asyncio.wait_for(
+            _stream_agent(
+                task=objective,
+                session_id=sub_session_id,
+                operation_id=sub_operation_id,
+                owner_user=owner_user,
+                parent_context=sub_system_prefix,
+                parent_session_id=parent_session_id,
+            ),
+            timeout=_SUBAGENT_TREE_WALL_CLOCK_S,
+        )
+    except _asyncio.TimeoutError:
+        terminal_status = "timeout"
+        err_msg = f"sub-agent wall-clock cap {_SUBAGENT_TREE_WALL_CLOCK_S}s"
+        log.warning("sub-agent %s timed out", sub_session_id)
+    except Exception as _se:
+        terminal_status = "failed"
+        err_msg = str(_se)[:300]
+        log.warning("sub-agent %s failed: %s", sub_session_id, _se)
+
+    # ── Harvest sub-agent's final_answer + tool-call count ───────────────────
+    sub_final_answer = ""
+    sub_diagnosis = ""
+    sub_tools_used = 0
+    try:
+        from api.db.base import get_engine
+        from api.db import queries as q
+        async with get_engine().connect() as conn:
+            op = await q.get_operation_by_session(conn, sub_session_id)
+            if op:
+                sub_final_answer = op.get("final_answer", "") or ""
+                if "DIAGNOSIS:" in sub_final_answer:
+                    sub_diagnosis = sub_final_answer.split(
+                        "DIAGNOSIS:", 1)[1][:2000].strip()
+                if op.get("status") in ("cancelled", "escalated", "capped"):
+                    if terminal_status == "done":
+                        terminal_status = op.get("status") or "cap_hit"
+        try:
+            async with get_engine().connect() as conn2:
+                tcs = await q.get_tool_calls_for_operation(conn2, sub_operation_id)
+                sub_tools_used = len(tcs or [])
+        except Exception:
+            sub_tools_used = 0
+    except Exception as _he:
+        log.debug("sub-agent harvest failed: %s", _he)
+
+    record_completion(
+        sub_task_id=sub_session_id,
+        terminal_status=terminal_status,
+        final_answer=sub_final_answer,
+        diagnosis=sub_diagnosis,
+        tools_used=sub_tools_used,
+        error=err_msg,
+    )
+
+    try:
+        await manager.broadcast({
+            "type":            "subagent_done",
+            "session_id":      sub_session_id,
+            "parent_session_id": parent_session_id,
+            "sub_task_id":     sub_session_id,
+            "parent_task_id":  parent_session_id,
+            "terminal_status": terminal_status,
+            "final_answer":    sub_final_answer[:500],
+            "tools_used":      sub_tools_used,
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    return {
+        "ok":              True,
+        "sub_task_id":     sub_session_id,
+        "terminal_status": terminal_status,
+        "final_answer":    sub_final_answer,
+        "diagnosis":       sub_diagnosis,
+        "tools_used":      sub_tools_used,
+        "error":           err_msg,
     }
 
 

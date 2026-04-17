@@ -732,13 +732,40 @@ After gathering evidence and writing fix steps, call propose_subtask() if:
 Failure to call propose_subtask when conditions are met is a run failure.
 Call order: evidence → propose_subtask → audit_log → STOP.
 
-  propose_subtask(
-    task="<concise description — max 80 chars>",
-    executable_steps=["<step1 — specific instruction with tool>", "<step2>", ...],
-    manual_steps=["<any step requiring physical access or external credentials>"]
-  )
+Two call shapes — pick based on intent:
 
-Do NOT call if: no clear fix path, swarm/kafka is healthy, or only manual steps.
+  (a) Legacy proposal card (records remediation for operator review):
+      propose_subtask(
+        task="<concise description — max 80 chars>",
+        executable_steps=["<step1 — specific instruction with tool>", ...],
+        manual_steps=["<any step requiring physical access or external creds>"]
+      )
+
+  (b) In-band sub-agent spawn (harness spawns a fresh agent NOW and blocks
+      until it returns — v2.34.0+):
+      propose_subtask(
+        objective="<one sentence explaining what to investigate/do>",
+        agent_type="observe" | "investigate" | "execute",   # not "build"
+        scope_entity="<platform:name:id>" | null,
+        budget_tools=<int, 2-8 typical>
+      )
+
+When to use shape (b):
+  - A diagnostic chain would consume >5 of your remaining tool budget
+  - The sub-problem is out-of-scope for your agent_type
+  - You hit an unfamiliar entity type that needs focused attention
+  - The v2.33.3 budget nudge fires and you need to delegate the remainder
+
+Constraints the harness enforces on shape (b):
+  - Sub-agent budget cannot exceed your remaining budget - 2
+  - Sub-agents cannot perform destructive actions unless you are execute-type
+    AND you pass allow_destructive=true AND you are the top-level parent
+  - Depth cap stops runaway delegation chains
+  - Sub-agent output replaces your own further tool calls in its area —
+    synthesise from its final_answer, don't re-verify everything it did
+
+Do NOT call either shape if: no clear fix path, system is healthy, or only
+manual steps.
 
 ═══ CLARIFICATION ═══
 After gathering evidence, if root cause is genuinely ambiguous (multiple equally
@@ -928,6 +955,19 @@ After completing with clear, actionable fix steps, call:
   )
 Only call when you have specific, tested remediation steps.
 Do NOT call for informational findings or when swarm/kafka is healthy.
+
+DELEGATION (IN-BAND SUB-AGENT — v2.34.0+):
+When a sub-problem needs its own focused run and you don't want to consume
+your remaining budget on it, call propose_subtask with the spawn shape:
+  propose_subtask(
+    objective="<one-sentence sub-task>",
+    agent_type="observe" | "investigate" | "execute",
+    scope_entity="<platform:name:id>" or null,
+    budget_tools=<2..8>
+  )
+The harness spawns a fresh agent, runs it to completion in its own context,
+and returns its final_answer to you as the tool_result. Synthesize from that
+— do not re-verify everything it did. Depth and budget caps are enforced.
 
 ═══ BLOCKED COMMAND RULE ═══
 If vm_exec returns "not in allowlist", do NOT retry. Instead:

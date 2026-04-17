@@ -138,6 +138,7 @@ export function AgentOutputProvider({ children }) {
   const [zeroPivot,            setZeroPivot]            = useState(null)
   const [contradictions,       setContradictions]       = useState([])
   const [agentDiag,            setAgentDiag]            = useState(null)
+  const [subAgents,            setSubAgents]            = useState([])
   const agentTypeRef    = useRef(null)
   const sessionIdRef    = useRef(null)
   const feedStartRef    = useRef(null)  // timestamp when current run started
@@ -172,6 +173,7 @@ export function AgentOutputProvider({ children }) {
         setZeroPivot(null)                // ← clear pivot banner on new run
         setContradictions([])             // ← clear contradiction banner on new run
         setAgentDiag(null)                // ← clear diagnostics overlay on new run
+        setSubAgents([])                  // ← clear sub-agent list on new run (v2.34.0)
         // Add to raw log stream
         setOutputLines(prev => [...prev.slice(-500), msg])
         // Reset inline feed
@@ -214,6 +216,37 @@ export function AgentOutputProvider({ children }) {
       // ── agent_diagnostics (v2.33.15) ───────────────────────────────────────
       if (t === 'agent_diagnostics') {
         setAgentDiag(msg)
+        return
+      }
+
+      // ── sub-agent spawn/done (v2.34.0) ─────────────────────────────────────
+      if (t === 'subagent_spawned') {
+        setSubAgents(prev => {
+          if (prev.some(s => s.sub_task_id === msg.sub_task_id)) return prev
+          return [...prev, {
+            sub_task_id:       msg.sub_task_id       || '',
+            parent_session_id: msg.parent_session_id || '',
+            depth:             msg.depth             || 1,
+            objective:         msg.objective         || '',
+            agent_type:        msg.agent_type        || 'investigate',
+            scope_entity:      msg.scope_entity      || '',
+            budget_tools:      msg.budget_tools      || 0,
+            status:            'running',
+            spawned_at:        msg.timestamp         || '',
+          }]
+        })
+        return
+      }
+      if (t === 'subagent_done') {
+        setSubAgents(prev => prev.map(s =>
+          s.sub_task_id === msg.sub_task_id
+            ? { ...s,
+                status:          msg.terminal_status || 'done',
+                final_answer:    msg.final_answer    || '',
+                tools_used:      msg.tools_used      || 0,
+                completed_at:    msg.timestamp       || '' }
+            : s
+        ))
         return
       }
 
@@ -376,6 +409,7 @@ export function AgentOutputProvider({ children }) {
       zeroPivot,
       contradictions,
       agentDiag,
+      subAgents,
     }}>
       {children}
     </AgentOutputContext.Provider>
