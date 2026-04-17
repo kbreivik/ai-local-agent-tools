@@ -215,6 +215,18 @@ _AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
 _SUBAGENT_MAX_DEPTH             = int(os.environ.get("SUBAGENT_MAX_DEPTH",          "2"))
 _SUBAGENT_MIN_PARENT_RESERVE    = int(os.environ.get("SUBAGENT_MIN_PARENT_RESERVE", "2"))
 _SUBAGENT_TREE_WALL_CLOCK_S     = int(os.environ.get("SUBAGENT_TREE_WALL_CLOCK_S",  "1800"))
+# v2.34.5: budget-nudge threshold (fraction of tool budget). Floor of 0.40,
+# ceiling of 0.90 enforced by _resolve_nudge_threshold. Dropped from 0.70 to
+# 0.60 so propose_subtask math is still reachable when it fires.
+_SUBAGENT_NUDGE_THRESHOLD       = os.environ.get("SUBAGENT_NUDGE_THRESHOLD", "0.60")
+
+
+def _agent_settings() -> dict:
+    """Build the settings dict consumed by orchestrator helpers."""
+    return {
+        "subagentNudgeThreshold":   _SUBAGENT_NUDGE_THRESHOLD,
+        "subagentMinParentReserve": _SUBAGENT_MIN_PARENT_RESERVE,
+    }
 
 
 def _cap_exceeded(
@@ -599,10 +611,17 @@ async def _run_single_agent_step(
             # v2.32.5: Tool call budget enforcement
             _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
 
-            # v2.33.3: Budget handoff nudge — fire at 70% if investigate agent
-            # has not emitted DIAGNOSIS: and has not yet proposed a subtask
+            # v2.33.3: Budget handoff nudge — fires when investigate agent has
+            # not emitted DIAGNOSIS: and has not yet proposed a subtask.
+            # v2.34.5: threshold dropped from 0.70 to 0.60 (configurable via
+            # SUBAGENT_NUDGE_THRESHOLD env / subagentNudgeThreshold setting) so
+            # the propose_subtask spawn math is actually reachable when it
+            # fires. At budget=16, reserve=2, min_sub=2 we need used<=11; 0.60
+            # gives us fire at used=10.
             if agent_type in ("research", "investigate"):
-                _budget_threshold = int(0.7 * _tool_budget)
+                from api.agents.orchestrator import _resolve_nudge_threshold
+                _nudge_threshold = _resolve_nudge_threshold(_agent_settings())
+                _budget_threshold = int(_nudge_threshold * _tool_budget)
                 _tools_used_count = len(tools_used_names)
                 _subtask_proposed = "propose_subtask" in tools_used_names
                 _diagnosis_emitted = "DIAGNOSIS:" in (last_reasoning or "")
@@ -626,12 +645,14 @@ async def _run_single_agent_step(
                         "session_id": session_id,
                         "tools_used": _tools_used_count,
                         "budget":     _tool_budget,
+                        "threshold":  _nudge_threshold,
                         "timestamp":  datetime.now(timezone.utc).isoformat(),
                     })
                     await manager.send_line(
                         "step",
-                        f"[budget] 70% threshold reached ({_tools_used_count}/{_tool_budget}) "
-                        f"without DIAGNOSIS — nudging agent toward propose_subtask",
+                        f"[budget] {int(_nudge_threshold*100)}% threshold reached "
+                        f"({_tools_used_count}/{_tool_budget}) without DIAGNOSIS — "
+                        f"nudging agent toward propose_subtask",
                         status="ok", session_id=session_id,
                     )
                     _budget_nudge_fired = True
@@ -1244,6 +1265,8 @@ async def _run_single_agent_step(
                                     parent_remaining_budget=_parent_remaining,
                                     parent_agent_type=agent_type,
                                     parent_diagnosis=_parent_diag,
+                                    parent_budget_tools=_parent_budget,
+                                    parent_tools_used=len(tools_used_names),
                                 )
                             except Exception as _se:
                                 log.warning("sub-agent spawn crashed: %s", _se)
@@ -1270,8 +1293,13 @@ async def _run_single_agent_step(
                                     status="ok", session_id=session_id,
                                 )
                                 try:
-                                    from api.metrics import SUBAGENT_SPAWN_COUNTER
+                                    from api.metrics import (
+                                        SUBAGENT_SPAWN_COUNTER, BUDGET_NUDGE_COUNTER,
+                                    )
                                     SUBAGENT_SPAWN_COUNTER.labels(outcome="spawned").inc()
+                                    if _budget_nudge_fired:
+                                        BUDGET_NUDGE_COUNTER.labels(
+                                            outcome="proposed_and_spawned").inc()
                                 except Exception:
                                     pass
                             else:
@@ -1287,7 +1315,9 @@ async def _run_single_agent_step(
                                     status="error", session_id=session_id,
                                 )
                                 try:
-                                    from api.metrics import SUBAGENT_SPAWN_COUNTER
+                                    from api.metrics import (
+                                        SUBAGENT_SPAWN_COUNTER, BUDGET_NUDGE_COUNTER,
+                                    )
                                     _err = (_pst_result.get("message") or "").lower()
                                     if "depth" in _err:
                                         _outcome = "rejected_depth"
@@ -1298,6 +1328,9 @@ async def _run_single_agent_step(
                                     else:
                                         _outcome = "rejected_budget"
                                     SUBAGENT_SPAWN_COUNTER.labels(outcome=_outcome).inc()
+                                    if _budget_nudge_fired:
+                                        BUDGET_NUDGE_COUNTER.labels(
+                                            outcome="proposed_and_refused").inc()
                                 except Exception:
                                     pass
 
@@ -1941,6 +1974,8 @@ async def _spawn_and_wait_subagent(
     parent_remaining_budget: int,
     parent_agent_type: str,
     parent_diagnosis: str = "",
+    parent_budget_tools: int = 0,
+    parent_tools_used: int = 0,
 ) -> dict:
     """Spawn a sub-agent in-band, block until it completes, return its result.
 
@@ -1976,15 +2011,30 @@ async def _spawn_and_wait_subagent(
                 "error": "destructive sub-agents only at depth 1"}
 
     # ── Budget reservation ────────────────────────────────────────────────────
-    reserve = _SUBAGENT_MIN_PARENT_RESERVE
+    # v2.34.5: dynamic reserve — relax when parent has no DIAGNOSIS and is
+    # late-game, since the reserve exists so parent can synthesise after the
+    # sub-agent returns. If parent has nothing to synthesise, reserving is
+    # counter-productive and blocks the spawn that would otherwise rescue the
+    # run.
+    from api.agents.orchestrator import _dynamic_reserve
+    _settings = _agent_settings()
+    default_reserve = int(_settings.get("subagentMinParentReserve", 2))
+    _diagnosis_seen = bool(parent_diagnosis and parent_diagnosis.strip())
+    reserve = _dynamic_reserve(
+        tools_used=parent_tools_used or max(0, parent_budget_tools - parent_remaining_budget),
+        budget_tools=parent_budget_tools or (parent_remaining_budget + default_reserve),
+        diagnosis_seen=_diagnosis_seen,
+        settings=_settings,
+    )
     max_sub_budget = max(0, parent_remaining_budget - reserve)
     sub_budget = min(max(budget_tools, 2), max_sub_budget) if max_sub_budget > 0 else 0
     if sub_budget < 2:
+        _relaxed = "relaxed" if reserve < default_reserve else "default"
         return {
             "ok": False,
             "error": (
-                f"insufficient parent budget for sub-agent "
-                f"(remaining={parent_remaining_budget}, reserve={reserve}). "
+                f"sub-agent insufficient budget: parent remaining={parent_remaining_budget}, "
+                f"reserve={reserve} ({_relaxed}), max_sub={max_sub_budget}, min=2. "
                 "Complete this task yourself — do not delegate."
             ),
         }

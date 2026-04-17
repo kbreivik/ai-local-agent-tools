@@ -9,6 +9,58 @@ Context between steps is a minimal verdict object (~50 tokens), not prose.
 import re
 
 
+# ─── Budget-nudge / sub-agent reserve math (v2.34.5) ──────────────────────────
+_NUDGE_THRESHOLD_FLOOR   = 0.40
+_NUDGE_THRESHOLD_CEILING = 0.90
+_NUDGE_THRESHOLD_DEFAULT = 0.60
+
+
+def _resolve_nudge_threshold(settings: dict) -> float:
+    """Return the budget-nudge threshold clamped to [0.40, 0.90].
+
+    Reads `subagentNudgeThreshold` from the provided settings dict. Accepts
+    int / float / numeric-string values. Any garbage returns the default.
+    The clamp prevents operator misuse: too low fires on every task, too
+    high makes the spawn math unreachable (the bug v2.34.5 fixes).
+    """
+    raw = (settings or {}).get("subagentNudgeThreshold", _NUDGE_THRESHOLD_DEFAULT)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return _NUDGE_THRESHOLD_DEFAULT
+    if val < _NUDGE_THRESHOLD_FLOOR:
+        return _NUDGE_THRESHOLD_FLOOR
+    if val > _NUDGE_THRESHOLD_CEILING:
+        return _NUDGE_THRESHOLD_CEILING
+    return val
+
+
+def _dynamic_reserve(
+    *,
+    tools_used: int,
+    budget_tools: int,
+    diagnosis_seen: bool,
+    settings: dict | None = None,
+) -> int:
+    """Compute the parent-budget reserve for sub-agent spawn decisions.
+
+    Rules (v2.34.5):
+      - diagnosis_seen=True  → reserve = default (parent has work to do post-spawn)
+      - diagnosis_seen=False and usage_frac >= 0.60 → reserve = 0
+        (parent has nothing to synthesise from; reserving is backwards)
+      - otherwise → reserve = min(default, remaining // 3)
+    """
+    settings = settings or {}
+    default_reserve = int(settings.get("subagentMinParentReserve", 2))
+    if diagnosis_seen:
+        return default_reserve
+    usage_frac = tools_used / max(1, budget_tools)
+    if usage_frac >= 0.60:
+        return 0
+    remaining = max(0, budget_tools - tools_used)
+    return min(default_reserve, remaining // 3)
+
+
 # Words that suggest the task wants a pre-check before executing
 _CHECK_PREFIXES = frozenset({
     "verify", "check", "ensure", "confirm", "validate", "first",

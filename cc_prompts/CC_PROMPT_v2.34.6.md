@@ -1,0 +1,296 @@
+# CC PROMPT — v2.34.6 — feat(tools): elastic_search_logs auto-samples schema when filters miss
+
+## Evidence
+
+Live trace 2026-04-17 15:17–15:19. Agent issued these queries in order against
+an ES index with ~100 entries per minute:
+
+```
+step 2: service='logstash'             → 0 hits, 102 in window
+step 2: service='elasticsearch'        → 0 hits, 102 in window
+step 3: level=[err,error], service=ls  → 0 hits, 103 in window
+step 3: level=[err,error], service=es  → 0 hits, 103 in window
+step 4: level=[warn,warning]           → 0 hits,  99 in window
+step 5: (no filter)                    → 99 hits
+step 6: level=[crit,critical,fatal]    → 0 hits, 101 in window
+```
+
+Step 5 — **99 hits with no filter** — is the key observation. The agent saw
+those 99 entries and still went back to narrowing filters in step 6.
+
+The reason: the agent has no idea what the `service` field is actually called
+in the index. Could be `service.name`, `container.name`, `kubernetes.pod_name`,
+`log.source`, `fields.service`, `beat.name` — depends on the shipper. With no
+visibility into the schema, narrowing `service='logstash'` was guaranteed to
+miss because logstash's filebeat probably populates `container.name` instead.
+
+v2.33.14's `hint` says "Try dropping one filter". That's not enough — the agent
+needs to **see the schema** to pick the right filter.
+
+## Fix — auto-include a sample when the filter misses
+
+When `total == 0` in query response **AND** `total_in_window > 0`, include in
+the response envelope:
+
+1. A `sample_docs` array of 2-3 real docs from the same window (filters
+   stripped except time)
+2. A `available_fields` dict listing top 20 field names seen across those
+   samples, with cardinality and one example value each
+3. A `suggested_filters` list naming the fields most likely to be used for
+   service/host/level filtering, based on presence in the samples
+
+This turns a dead-end 0-hit response into an actionable schema discovery.
+
+Version bump: 2.34.5 → 2.34.6
+
+---
+
+## Change 1 — mcp_server/tools/elastic.py (or wherever elastic_search_logs lives)
+
+Find the response-envelope assembly for `elastic_search_logs` (the place that
+populates `applied_filters`, `total_in_window`, `index`, `hint` per v2.33.11
++ v2.33.14). Add a branch:
+
+```python
+if total == 0 and total_in_window > 0:
+    # Filter-miss case — enrich response with schema discovery
+    envelope.update(await _enrich_with_schema_sample(
+        es_client=es_client,
+        time_window=time_window,
+        indices=indices,
+        stripped_query=query_lucene_without_filters,
+    ))
+```
+
+Implementation:
+
+```python
+async def _enrich_with_schema_sample(es_client, time_window, indices, stripped_query):
+    """Run a no-filter sample and extract schema metadata."""
+    sample_body = {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"range": {"@timestamp": {
+                        "gte": time_window["gte"],
+                        "lte": time_window["lte"],
+                    }}},
+                ],
+            },
+        },
+        "size": 3,
+        "sort": [{"@timestamp": "desc"}],
+    }
+    try:
+        resp = await es_client.search(index=indices, body=sample_body, request_timeout=10)
+    except Exception as e:
+        return {"schema_sample_error": str(e)}
+
+    hits = resp.get("hits", {}).get("hits", []) or []
+    if not hits:
+        return {"schema_sample": None}
+
+    # Compact the sample docs — drop huge fields, trim long strings
+    compact_hits = [_compact_doc(h["_source"]) for h in hits]
+
+    # Aggregate field presence across the samples
+    field_counts = {}
+    field_examples = {}
+    for doc in compact_hits:
+        for key, val in _flatten_dict(doc).items():
+            field_counts[key] = field_counts.get(key, 0) + 1
+            if key not in field_examples and val is not None:
+                field_examples[key] = _truncate_value(val)
+
+    # Rank by presence; cap top 20
+    top_fields = sorted(field_counts.items(), key=lambda x: (-x[1], x[0]))[:20]
+    available_fields = {
+        k: {"count": c, "example": field_examples.get(k)}
+        for k, c in top_fields
+    }
+
+    # Heuristic suggestions — match common shipper field patterns
+    suggested_filters = _suggest_filter_fields(available_fields)
+
+    return {
+        "sample_docs": compact_hits,
+        "available_fields": available_fields,
+        "suggested_filters": suggested_filters,
+        "schema_discovery_hint": (
+            "Your previous filter returned 0 hits. Here are 2-3 real docs "
+            "from the same window without filters. Pick a field from "
+            "suggested_filters that matches what you want to filter on, "
+            "then retry."
+        ),
+    }
+
+
+def _compact_doc(source: dict, max_string_len: int = 160) -> dict:
+    """Return a shallow-trimmed version of the doc. Truncate long strings,
+    drop message bodies > 500 chars."""
+    out = {}
+    for k, v in source.items():
+        if isinstance(v, str):
+            out[k] = v[:max_string_len] + ("…" if len(v) > max_string_len else "")
+        elif isinstance(v, dict):
+            out[k] = _compact_doc(v, max_string_len)
+        elif isinstance(v, list) and v and isinstance(v[0], (str, int, float)):
+            out[k] = v[:5]
+        else:
+            out[k] = v
+    return out
+
+
+def _flatten_dict(d: dict, parent: str = "", sep: str = ".") -> dict:
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent}{sep}{k}" if parent else k
+        if isinstance(v, dict):
+            items.update(_flatten_dict(v, new_key, sep))
+        else:
+            items[new_key] = v
+    return items
+
+
+def _truncate_value(v):
+    if isinstance(v, str):
+        return v[:60] + ("…" if len(v) > 60 else "")
+    return v
+
+
+def _suggest_filter_fields(available_fields: dict) -> list[dict]:
+    """Heuristic match: name known filter patterns."""
+    SERVICE_PATTERNS = ("service.name", "container.name", "kubernetes.labels.app",
+                         "docker.container.name", "fields.service", "beat.name")
+    HOST_PATTERNS    = ("host.name", "host.hostname", "agent.hostname",
+                         "kubernetes.node.name", "beat.hostname")
+    LEVEL_PATTERNS   = ("log.level", "level", "severity", "log_level",
+                         "fields.level", "loglevel")
+
+    def match(pattern_list, category):
+        matches = [f for f in available_fields if f in pattern_list]
+        if matches:
+            return {"category": category, "field": matches[0],
+                    "example": available_fields[matches[0]]["example"]}
+        return None
+
+    return [r for r in [
+        match(SERVICE_PATTERNS, "service"),
+        match(HOST_PATTERNS, "host"),
+        match(LEVEL_PATTERNS, "level"),
+    ] if r]
+```
+
+## Change 2 — update the RESEARCH_PROMPT ELK section
+
+In `api/agents/router.py` — the section that tells investigate agents how to
+use `elastic_search_logs`:
+
+```
+═══ ELK FILTER DISCOVERY ═══
+When elastic_search_logs returns `total == 0` but `total_in_window > 0`, the
+response now includes:
+  - sample_docs: 2-3 real docs from the window with no filters applied
+  - available_fields: top 20 field names with example values
+  - suggested_filters: pre-mapped candidates for {service, host, level}
+
+**On filter miss, do NOT retry the same narrowing strategy.** Instead:
+  1. Read sample_docs to see what a real document looks like
+  2. Pick a service/host/level filter field from suggested_filters
+  3. Use the exact field name and example value format from the sample
+
+Do not invent field names. If suggested_filters is empty or does not cover
+your need, you may fall back to a keyword match via the `query=` parameter.
+```
+
+## Change 3 — same discovery applied to elastic_log_pattern
+
+v2.33.14 applied the envelope changes to `elastic_log_pattern` as well. Do the
+same enrichment there.
+
+## Change 4 — settings flag
+
+Some queries will be genuinely empty (e.g. looking for errors during a quiet
+period). Add a setting to disable this enrichment:
+
+- `elasticSchemaDiscoveryOnMiss` (bool, default true)
+
+Register in settings + expose in AI Services tab.
+
+## Change 5 — response size
+
+The envelope grows by a few KB on miss. Cap sample_docs at 3 and available_fields
+at 20 keys to bound it. Document the new shape in the MCP manifest.
+
+## Change 6 — tests
+
+`tests/test_elastic_schema_discovery.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_enrichment_fires_on_zero_hit_with_window(mock_es):
+    """0 hits + nonzero window → sample_docs + available_fields + suggested_filters."""
+    mock_es.reply_to("size=1").with_hits([{"_source": {"service": {"name": "ls"}, "log": {"level": "info"}, "message": "hi"}}])
+    mock_es.reply_to("size=3").with_hits([
+        {"_source": {"service": {"name": "logstash"}, "log": {"level": "info"}, "message": "hi"}},
+        {"_source": {"service": {"name": "elasticsearch"}, "log": {"level": "warn"}, "message": "yo"}},
+    ])
+
+    resp = await elastic_search_logs(service="nonexistent", minutes_ago=60)
+
+    assert resp["total"] == 0
+    assert resp["total_in_window"] > 0
+    assert "sample_docs" in resp
+    assert len(resp["sample_docs"]) >= 1
+    assert "available_fields" in resp
+    assert "service.name" in resp["available_fields"]
+    assert any(s["category"] == "service" for s in resp["suggested_filters"])
+
+
+@pytest.mark.asyncio
+async def test_no_enrichment_when_window_is_empty(mock_es):
+    """0 hits AND 0 in window → no sample_docs."""
+    mock_es.reply_empty()
+    resp = await elastic_search_logs(service="logstash")
+    assert "sample_docs" not in resp
+
+
+@pytest.mark.asyncio
+async def test_enrichment_disabled_by_setting(mock_es, set_setting):
+    set_setting("elasticSchemaDiscoveryOnMiss", "false")
+    resp = await elastic_search_logs(service="logstash")
+    assert "sample_docs" not in resp
+
+
+@pytest.mark.asyncio
+async def test_suggested_filters_identify_common_shippers():
+    """filebeat/Docker pattern: container.name."""
+    # Seed docs with container.name but no service.name
+    # Verify suggested_filters includes {"category": "service", "field": "container.name"}
+    ...
+```
+
+## Version bump
+Update `VERSION`: 2.34.5 → 2.34.6
+
+## Commit
+```
+git add -A
+git commit -m "feat(tools): v2.34.6 elastic_search_logs auto-samples schema on filter miss"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Re-run the exact 15:17 trace: "Check if Logstash is successfully writing to
+   Elasticsearch. Look for bulk request errors, connection failures, or 429
+   responses in logstash logs and ES error logs."
+3. When the agent calls `elastic_search_logs(service='logstash')` and gets 0,
+   the response should now include sample_docs + available_fields +
+   suggested_filters.
+4. The agent's next call should use one of the suggested_filters fields —
+   NOT another narrowing attempt with the same wrong field.
+5. If the index actually uses `container.name` for service routing, the agent
+   should retry with `container.name='logstash'` (or use the query= fallback).
+6. Regression: when the query legitimately has 0 hits in an empty window, no
+   sample_docs appear (verified by test_no_enrichment_when_window_is_empty).

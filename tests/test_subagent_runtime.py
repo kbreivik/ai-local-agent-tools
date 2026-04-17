@@ -69,7 +69,10 @@ async def test_spawn_refuses_when_parent_remaining_below_reserve(monkeypatch):
         parent_diagnosis="",
     )
     assert result["ok"] is False
-    assert "insufficient parent budget" in result["error"].lower()
+    # v2.34.5: refuse message format now emits reserve value for observability
+    err = result["error"].lower()
+    assert "insufficient" in err and "budget" in err
+    assert "reserve=" in err
 
 
 @pytest.mark.asyncio

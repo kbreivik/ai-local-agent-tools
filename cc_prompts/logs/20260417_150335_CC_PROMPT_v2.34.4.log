@@ -439,3 +439,21 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 15:03:35
 ========================================================================
+PROMPT COMPLETE: v2.34.4
+[STATUS] 5m26s
+
+Root causes:
+- **A (modified)**: handler was wired, but in-band branch required both `objective=` and `agent_type=` — LLM kept using legacy `task=` shape, fell through to v2.24.0 proposal path
+- **D**: `/subtask/{id}` 404'd (no SPA fallback route)
+- **C**: already working in v2.34.0 (listeners + SubAgentPanel present)
+
+Fixes applied:
+- Auto-promote `task=` → `objective=`, inherit `agent_type` from parent (api/routers/agent.py:1185-1210)
+- SPA fallback routes for `/subtask/{id}` + `/runbook/{id}` (api/main.py:570-583)
+- `SUBAGENT_SPAWN_COUNTER` with `proposal_only` canary label (api/metrics.py:59-64) wired at every outcome branch
+- Regression test (tests/test_subagent_e2e_wiring.py) locks counter labels, auto-promotion code, and SPA routes
+
+========================================================================
+EXIT CODE: 0
+DURATION:  5m27s
+========================================================================

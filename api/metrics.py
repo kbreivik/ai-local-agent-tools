@@ -64,6 +64,14 @@ SUBAGENT_SPAWN_COUNTER = Counter(
     ["outcome"],
 )
 
+# --- budget nudges (v2.34.5) ---
+BUDGET_NUDGE_COUNTER = Counter(
+    "deathstar_agent_budget_nudges_total",
+    "Budget nudges fired by outcome",
+    # proposed_and_spawned | proposed_and_refused | not_proposed | diagnosis_present
+    ["outcome"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",
