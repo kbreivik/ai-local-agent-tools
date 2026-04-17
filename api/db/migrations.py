@@ -64,6 +64,36 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             updated_at  TEXT NOT NULL
         )""",
     ]),
+    (8, "v2.34.2 — skill_executions + auto_promoter_scans (observability)", [
+        """CREATE TABLE IF NOT EXISTS skill_executions (
+            id                 TEXT PRIMARY KEY,
+            skill_id           TEXT NOT NULL,
+            task_id            TEXT NOT NULL,
+            agent_type         TEXT NOT NULL,
+            invoked_by         TEXT,
+            args               TEXT,
+            started_at         TEXT NOT NULL,
+            completed_at       TEXT,
+            duration_ms        INTEGER,
+            outcome            TEXT,
+            error              TEXT,
+            result_summary     TEXT,
+            replaced_tool_chain TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_skill_exec_skill ON skill_executions (skill_id, started_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_skill_exec_task  ON skill_executions (task_id)",
+        """CREATE TABLE IF NOT EXISTS auto_promoter_scans (
+            id                TEXT PRIMARY KEY,
+            scanned_at        TEXT NOT NULL,
+            window_days       INTEGER NOT NULL,
+            actions_scanned   INTEGER NOT NULL,
+            candidates_found  INTEGER NOT NULL,
+            candidates_new    INTEGER NOT NULL,
+            duration_ms       INTEGER,
+            triggered_by      TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_promoter_scans_ts ON auto_promoter_scans (scanned_at DESC)",
+    ]),
 ]
 
 

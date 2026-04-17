@@ -56,6 +56,24 @@ KAFKA_BROKERS_UP = Gauge(
     "Reachable brokers in cluster",
 )
 
+# --- skills (v2.34.2) ---
+SKILL_EXEC_COUNTER = Counter(
+    "deathstar_skill_executions_total",
+    "Total skill executions by skill and outcome",
+    ["skill_id", "outcome"],
+)
+SKILL_DURATION = Histogram(
+    "deathstar_skill_duration_seconds",
+    "Skill execution duration",
+    ["skill_id"],
+    buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60),
+)
+AUTO_PROMOTER_SCANS = Counter(
+    "deathstar_auto_promoter_scans_total",
+    "Auto-promoter scan invocations",
+    ["triggered_by"],
+)
+
 # --- build info ---
 BUILD = Info("deathstar_build", "Build metadata")
 

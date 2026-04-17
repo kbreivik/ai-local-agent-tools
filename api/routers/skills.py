@@ -85,6 +85,38 @@ def execute_skill(skill_name: str, params: dict = {}, _: str = Depends(get_curre
         raise HTTPException(500, str(e))
 
 
+# ── Skill execution observability (v2.34.2) ─ register BEFORE /{skill_name} ──
+
+from api.db import skill_executions as _skill_exec
+
+
+@router.get("/executions")
+def list_skill_executions(
+    skill_id: str = Query("", description="Filter by skill id/name"),
+    limit: int = Query(50, ge=1, le=500),
+    _: str = Depends(get_current_user),
+):
+    """Return most recent skill execution rows, newest first."""
+    rows = _skill_exec.list_executions(skill_id=skill_id, limit=limit)
+    return {"executions": rows, "count": len(rows)}
+
+
+@router.get("/metrics")
+def skill_metrics(
+    window_days: int = Query(7, description="Aggregation window, capped at 90"),
+    _: str = Depends(get_current_user),
+):
+    """Aggregate skill execution + auto-promoter metrics for the Metrics subtab."""
+    window_days = max(1, min(int(window_days or 7), 90))
+    since = _skill_exec.since_iso(window_days)
+    return {
+        "window_days": window_days,
+        "per_skill": _skill_exec.per_skill_metrics(since_iso=since),
+        "promoter": _skill_exec.promoter_summary(since_iso=since),
+        "pipeline": _skill_exec.candidate_pipeline(),
+    }
+
+
 @router.get("/generation-log")
 def list_generation_log(
     skill_name: str = Query("", description="Filter by skill name"),
@@ -251,5 +283,8 @@ async def reject_candidate(cid: int, request: Request, user=Depends(require_role
 
 @router.post("/candidates/scan-now")
 async def scan_now(request: Request, user=Depends(require_role("sith_lord"))):
-    n = await detect_candidates(request.app.state.pool)
+    n = await detect_candidates(
+        request.app.state.pool,
+        triggered_by=user.get("username") or "manual",
+    )
     return {"candidates_detected_or_updated": n}

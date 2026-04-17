@@ -1,11 +1,13 @@
 /**
- * SkillsTab — Skills view with two subtabs:
- *   - Skills: the existing SkillsPanel
- *   - Candidates: auto-promoted vm_exec / tool patterns awaiting approval
+ * SkillsTab — Skills view with subtabs:
+ *   - Skills:      the existing SkillsPanel
+ *   - Candidates:  auto-promoted vm_exec / tool patterns awaiting approval
+ *   - Metrics:     execution observability + promoter activity (v2.34.2)
  */
 import { useEffect, useState, useCallback } from 'react'
 import { authHeaders } from '../api'
 import SkillsPanel from './SkillsPanel'
+import { Panel, Stat } from './SharedPanels'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -204,6 +206,116 @@ function CandidatesPanel() {
   )
 }
 
+function SkillMetrics() {
+  const [data, setData] = useState(null)
+  const [windowDays, setWindow] = useState(7)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setErr('')
+    fetch(`${BASE}/api/skills/metrics?window_days=${windowDays}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { if (!cancelled) setData(d) })
+      .catch(e => { if (!cancelled) setErr(e.message) })
+    return () => { cancelled = true }
+  }, [windowDays])
+
+  if (err) return <div style={{ fontSize: 10, color: 'var(--red)', padding: 12 }}>Metrics failed: {err}</div>
+  if (!data) return <div style={{ fontSize: 10, color: 'var(--text-3)', padding: 12 }}>Loading metrics…</div>
+
+  const last = data.promoter?.last_scan
+  const promoterHealthy = (data.promoter?.scans || 0) > 0 &&
+    !!last &&
+    (Date.now() - new Date(last).getTime()) < 8 * 24 * 3600 * 1000
+
+  const pipelineKeys = ['pending', 'approved', 'rejected', 'promoted']
+
+  return (
+    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>WINDOW</span>
+        {[7, 30, 90].map(d => (
+          <button key={d} onClick={() => setWindow(d)}
+            style={{
+              fontSize: 9, padding: '3px 8px', borderRadius: 2,
+              background: windowDays === d ? 'var(--accent-dim)' : 'var(--bg-2)',
+              color:      windowDays === d ? 'var(--accent)'     : 'var(--text-3)',
+              border: `1px solid ${windowDays === d ? 'var(--accent)' : 'var(--border)'}`,
+              cursor: 'pointer', fontFamily: 'var(--font-mono)',
+            }}>
+            {d}d
+          </button>
+        ))}
+      </div>
+
+      <div style={{
+        padding: 8, borderRadius: 2,
+        background: promoterHealthy ? 'rgba(0,170,68,0.06)' : 'rgba(204,136,0,0.06)',
+        border: `1px solid ${promoterHealthy ? 'var(--green)' : 'var(--amber)'}`,
+      }}>
+        <div style={{
+          fontSize: 10, fontFamily: 'var(--font-mono)',
+          color: promoterHealthy ? 'var(--green)' : 'var(--amber)',
+        }}>
+          {promoterHealthy ? 'AUTO-PROMOTER HEALTHY' : 'AUTO-PROMOTER STALE'}
+        </div>
+        <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 3 }}>
+          Scans: {data.promoter?.scans || 0} ·
+          Last scan: {last ? new Date(last).toLocaleString() : 'never'} ·
+          New candidates: {data.promoter?.total_new_candidates || 0}
+        </div>
+      </div>
+
+      <Panel title="CANDIDATE PIPELINE">
+        <div style={{ display: 'flex', gap: 20 }}>
+          {pipelineKeys.map(s => (
+            <Stat key={s} label={s.replace('_', ' ')} value={data.pipeline?.[s] ?? 0} />
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="SKILL EXECUTION ACTIVITY">
+        {(data.per_skill || []).length === 0 ? (
+          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>No skills yet.</div>
+        ) : (
+          <table style={{ width: '100%', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-3)' }}>
+                <th align="left">Skill</th>
+                <th align="right">Runs</th>
+                <th align="right">Success</th>
+                <th align="right">Errors</th>
+                <th align="right">Avg duration</th>
+                <th align="right">Last run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.per_skill.map(s => {
+                const runs = Number(s.execution_count || 0)
+                const dead = runs === 0
+                const errs = Number(s.errors || 0)
+                return (
+                  <tr key={s.id || s.name} style={{ color: dead ? 'var(--text-3)' : 'var(--text-1)' }}>
+                    <td>{s.name}{dead && ' · (unused)'}</td>
+                    <td align="right">{runs}</td>
+                    <td align="right" style={{ color: 'var(--green)' }}>{Number(s.successes || 0)}</td>
+                    <td align="right" style={{ color: errs > 0 ? 'var(--red)' : undefined }}>{errs}</td>
+                    <td align="right">{s.avg_duration_ms ? `${Math.round(Number(s.avg_duration_ms))} ms` : '—'}</td>
+                    <td align="right" style={{ color: 'var(--text-3)' }}>
+                      {s.last_run ? new Date(s.last_run).toLocaleString() : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+    </div>
+  )
+}
+
 export default function SkillsTab() {
   const [sub, setSub] = useState('skills')
 
@@ -218,13 +330,18 @@ export default function SkillsTab() {
     marginRight: '0.35rem',
   })
 
+  let body = <SkillsPanel />
+  if (sub === 'candidates') body = <CandidatesPanel />
+  else if (sub === 'metrics') body = <SkillMetrics />
+
   return (
     <div>
       <div style={{ padding: '0.5rem 0.75rem 0', display: 'flex' }}>
         <button style={tabStyle(sub === 'skills')} onClick={() => setSub('skills')}>Skills</button>
         <button style={tabStyle(sub === 'candidates')} onClick={() => setSub('candidates')}>Candidates</button>
+        <button style={tabStyle(sub === 'metrics')} onClick={() => setSub('metrics')}>Metrics</button>
       </div>
-      {sub === 'skills' ? <SkillsPanel /> : <CandidatesPanel />}
+      {body}
     </div>
   )
 }

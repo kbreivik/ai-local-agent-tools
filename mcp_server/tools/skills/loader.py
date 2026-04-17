@@ -156,7 +156,11 @@ def load_single_skill(mcp_server, name: str) -> dict:
 
 
 def dispatch_skill(name: str, **kwargs) -> dict:
-    """Execute a loaded skill by name. Called by the skill_execute MCP tool."""
+    """Execute a loaded skill by name. Called by the skill_execute MCP tool.
+
+    Writes one row to skill_executions per invocation (v2.34.2 — observability).
+    DB writes are best-effort and never alter the skill result or raise.
+    """
     handler = _SKILL_HANDLERS.get(name)
     if not handler:
         # Skill not in memory — check DB for state and try lazy load from disk
@@ -183,7 +187,98 @@ def dispatch_skill(name: str, **kwargs) -> dict:
                     "or skill_create() to generate a new one."
                 ),
             }
-    return handler(**kwargs)
+
+    # ── v2.34.2: record skill execution for adoption metrics ────────────────
+    try:
+        from api.db import skill_executions as _se
+    except Exception:
+        _se = None
+
+    exec_id = ""
+    started_iso = datetime.now(timezone.utc).isoformat()
+    ctx = kwargs.pop("_exec_context", {}) if isinstance(kwargs.get("_exec_context"), dict) else {}
+    task_id = str(ctx.get("task_id", ""))
+    agent_type = str(ctx.get("agent_type", "unknown"))
+    invoked_by = str(ctx.get("invoked_by", "agent"))
+
+    if _se is not None:
+        try:
+            exec_id = _se.record_start(
+                skill_id=name,
+                task_id=task_id,
+                agent_type=agent_type,
+                invoked_by=invoked_by,
+                args=kwargs,
+            )
+        except Exception as e:
+            log.debug("skill_executions record_start failed: %s", e)
+
+    # Optional Prometheus instrumentation
+    try:
+        from api import metrics as _m
+        _prom = _m
+    except Exception:
+        _prom = None
+
+    try:
+        result = handler(**kwargs)
+    except Exception as e:
+        if _se is not None and exec_id:
+            try:
+                _se.record_end(exec_id, outcome="error",
+                               error=str(e), started_at_iso=started_iso)
+            except Exception:
+                pass
+        if _prom is not None and hasattr(_prom, "SKILL_EXEC_COUNTER"):
+            try:
+                _prom.SKILL_EXEC_COUNTER.labels(skill_id=name, outcome="error").inc()
+            except Exception:
+                pass
+        raise
+
+    # Derive outcome from result envelope (status key), default to success
+    outcome = "success"
+    try:
+        status = (result or {}).get("status") if isinstance(result, dict) else None
+        if status == "error":
+            outcome = "error"
+        elif status == "degraded":
+            outcome = "degraded"
+    except Exception:
+        pass
+
+    summary = ""
+    try:
+        summary = str(result)[:500]
+    except Exception:
+        summary = ""
+
+    if _se is not None and exec_id:
+        try:
+            _se.record_end(
+                exec_id,
+                outcome=outcome,
+                result_summary=summary,
+                error=(result.get("message") if (outcome == "error" and isinstance(result, dict)) else None),
+                started_at_iso=started_iso,
+            )
+        except Exception as e:
+            log.debug("skill_executions record_end failed: %s", e)
+
+    if _prom is not None and hasattr(_prom, "SKILL_EXEC_COUNTER"):
+        try:
+            _prom.SKILL_EXEC_COUNTER.labels(skill_id=name, outcome=outcome).inc()
+        except Exception:
+            pass
+    if _prom is not None and hasattr(_prom, "SKILL_DURATION"):
+        try:
+            _dur = (datetime.now(timezone.utc) -
+                    datetime.fromisoformat(started_iso)).total_seconds()
+            _prom.SKILL_DURATION.labels(skill_id=name).observe(_dur)
+        except Exception:
+            pass
+
+    return result
 
 
 def list_loaded_skills() -> list:
