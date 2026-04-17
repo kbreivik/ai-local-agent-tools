@@ -417,3 +417,18 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 15:32:08
 ========================================================================
+PROMPT COMPLETE: v2.34.6
+[STATUS] 4m43s
+
+Summary:
+- Added schema-discovery helpers (`_compact_doc`, `_flatten_dict`, `_suggest_filter_fields`, `_enrich_with_schema_sample`) to `mcp_server/tools/elastic.py` and wired them into `elastic_search_logs` + `elastic_log_pattern` on filter miss (sync — no async, per project rules)
+- Gated enrichment behind new `elasticSchemaDiscoveryOnMiss` setting (default True)
+- Added UI toggle under new "Elasticsearch" section in AIServicesTab
+- Updated RESEARCH_PROMPT with the new ELK filter-discovery guidance
+- New test file with 13 tests covering helpers, setting gate, and integration
+- All 23 elastic-related tests pass; VERSION bumped to 2.34.6; pushed as 41b55c8
+
+========================================================================
+EXIT CODE: 0
+DURATION:  4m44s
+========================================================================

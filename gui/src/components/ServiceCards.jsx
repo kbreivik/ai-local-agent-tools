@@ -64,6 +64,47 @@ const FG_FILTER_FIELDS = [
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
+// ── Version dropdown helpers ───────────────────────────────────────────────────
+// v2.34.7 — restore ▶ prefix + "running" suffix on the currently-running tag.
+// Regression from v2.33.10 lifted tags but dropped these markers.
+
+export function _normalizeVersion(v) {
+  return (v || '').toString().replace(/^v/i, '').trim()
+}
+
+export function isRunningVersion(tag, runningTag) {
+  if (!tag || !runningTag) return false
+  return _normalizeVersion(tag) === _normalizeVersion(runningTag)
+}
+
+export function VersionSelect({ tags, value, onChange, runningTag, className }) {
+  return (
+    <select
+      className={className || 'w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5'}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+    >
+      {tags.map(t => {
+        const running = isRunningVersion(t, runningTag)
+        return (
+          <option
+            key={t}
+            value={t}
+            className="version-row"
+            style={{
+              fontWeight: running ? 'bold' : 'normal',
+              color: running ? 'var(--accent)' : undefined,
+              background: running ? 'var(--accent-dim)' : undefined,
+            }}
+          >
+            {running ? '▶ ' : ''}{t}{running ? ' (running)' : ''}
+          </option>
+        )
+      })}
+    </select>
+  )
+}
+
 // Platform slug → connection test helper
 async function testConnectionByPlatform(platformSlug) {
   // Map external service slugs to connection platform names
@@ -866,10 +907,12 @@ function ContainerCardExpanded({
                 {drawerOpen && (
                   <div className="mt-1 mb-2 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
                     <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
-                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
-                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
-                      {tags.map(t => <option key={t} value={t}>{t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}</option>)}
-                    </select>
+                    <VersionSelect
+                      tags={tags}
+                      value={selectedTag}
+                      onChange={setSelectedTag}
+                      runningTag={c.running_version}
+                    />
                     <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary"
                       loading={pullActive} disabled={pullActive}
                       onClick={() => { doAsyncPull(selectedTag); setDrawerOpen(false) }} />
@@ -895,10 +938,12 @@ function ContainerCardExpanded({
                 {versionPickerOpen && (
                   <div className="mt-1 mb-1 bg-[#0a0a15] border border-[#2a2440] rounded-md p-2">
                     <div className="text-[9px] text-gray-700 mb-1.5">Select version to pull:</div>
-                    <select className="w-full bg-[#0d0d1a] border border-[#2a2a4a] text-gray-300 rounded text-[10px] px-1.5 py-1 mb-1.5"
-                      value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
-                      {tags.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
+                    <VersionSelect
+                      tags={tags}
+                      value={selectedTag}
+                      onChange={setSelectedTag}
+                      runningTag={c.running_version}
+                    />
                     <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary"
                       loading={pullActive} disabled={pullActive}
                       onClick={() => { doAsyncPull(selectedTag); setVersionPickerOpen(false) }} />
