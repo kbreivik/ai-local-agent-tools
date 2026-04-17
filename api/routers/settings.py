@@ -77,6 +77,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     "bookstackSyncIntervalHours": {"env": None, "sens": False, "default": 6},
     # Kafka overview cache TTL (seconds)
     "kafkaOverviewCacheTTL":      {"env": None, "sens": False, "default": 30},
+    # Elasticsearch: sample schema on filter-miss (0 hits but window has data)
+    "elasticSchemaDiscoveryOnMiss": {"env": None, "sens": False, "default": True},
 }
 
 

@@ -13,6 +13,159 @@ from typing import Any, Sequence, Union
 
 _LEVEL_FIELDS = ("log.level", "level", "severity")
 
+# Heuristic patterns for schema discovery when filters miss.
+_SCHEMA_SERVICE_PATTERNS = (
+    "service.name",
+    "container.name",
+    "kubernetes.labels.app",
+    "docker.container.name",
+    "fields.service",
+    "beat.name",
+    "docker.container.labels.com.docker.swarm.service.name",
+)
+_SCHEMA_HOST_PATTERNS = (
+    "host.name",
+    "host.hostname",
+    "agent.hostname",
+    "kubernetes.node.name",
+    "beat.hostname",
+)
+_SCHEMA_LEVEL_PATTERNS = (
+    "log.level",
+    "level",
+    "severity",
+    "log_level",
+    "fields.level",
+    "loglevel",
+)
+
+
+def _compact_doc(source: dict, max_string_len: int = 160) -> dict:
+    """Shallow-trim a doc: truncate long strings, cap list preview at 5 items."""
+    out: dict = {}
+    if not isinstance(source, dict):
+        return source
+    for k, v in source.items():
+        if isinstance(v, str):
+            out[k] = v[:max_string_len] + ("…" if len(v) > max_string_len else "")
+        elif isinstance(v, dict):
+            out[k] = _compact_doc(v, max_string_len)
+        elif isinstance(v, list) and v and isinstance(v[0], (str, int, float)):
+            out[k] = v[:5]
+        else:
+            out[k] = v
+    return out
+
+
+def _flatten_dict(d: dict, parent: str = "", sep: str = ".") -> dict:
+    items: dict = {}
+    if not isinstance(d, dict):
+        return items
+    for k, v in d.items():
+        new_key = f"{parent}{sep}{k}" if parent else k
+        if isinstance(v, dict):
+            items.update(_flatten_dict(v, new_key, sep))
+        else:
+            items[new_key] = v
+    return items
+
+
+def _truncate_value(v):
+    if isinstance(v, str):
+        return v[:60] + ("…" if len(v) > 60 else "")
+    if isinstance(v, (list, dict)):
+        s = str(v)
+        return s[:60] + ("…" if len(s) > 60 else "")
+    return v
+
+
+def _suggest_filter_fields(available_fields: dict) -> list:
+    """Match known shipper field patterns against discovered fields."""
+    def match(patterns, category):
+        hits = [f for f in available_fields if f in patterns]
+        if hits:
+            first = hits[0]
+            return {
+                "category": category,
+                "field": first,
+                "example": available_fields[first].get("example"),
+            }
+        return None
+    return [r for r in [
+        match(_SCHEMA_SERVICE_PATTERNS, "service"),
+        match(_SCHEMA_HOST_PATTERNS, "host"),
+        match(_SCHEMA_LEVEL_PATTERNS, "level"),
+    ] if r]
+
+
+def _schema_discovery_enabled() -> bool:
+    """Check the elasticSchemaDiscoveryOnMiss setting. Defaults True on any error."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        v = get_backend().get_setting("elasticSchemaDiscoveryOnMiss")
+    except Exception:
+        return True
+    if v is None:
+        return True
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() not in ("false", "0", "no", "off")
+
+
+def _enrich_with_schema_sample(time_filter: dict) -> dict:
+    """Run an unfiltered sample over the same time window and extract schema metadata.
+
+    Returns a dict to merge into the response envelope:
+      - sample_docs: up to 3 compacted real docs
+      - available_fields: top 20 flattened field names, with count + example
+      - suggested_filters: heuristic mapping to {service, host, level}
+      - schema_discovery_hint: human-readable explanation
+    On error, returns {"schema_sample_error": str}.
+    On empty window, returns {"schema_sample": None}.
+    """
+    try:
+        sample_body = {
+            "query": {"bool": {"filter": [time_filter]}},
+            "size": 3,
+            "sort": [{"@timestamp": {"order": "desc"}}],
+        }
+        resp = _post(f"/{_index()}/_search", sample_body)
+    except Exception as e:
+        return {"schema_sample_error": str(e)}
+
+    hits = resp.get("hits", {}).get("hits", []) or []
+    if not hits:
+        return {"schema_sample": None}
+
+    compact_hits = [_compact_doc(h.get("_source", {}) or {}) for h in hits]
+
+    field_counts: dict = {}
+    field_examples: dict = {}
+    for doc in compact_hits:
+        for key, val in _flatten_dict(doc).items():
+            field_counts[key] = field_counts.get(key, 0) + 1
+            if key not in field_examples and val is not None:
+                field_examples[key] = _truncate_value(val)
+
+    top_fields = sorted(field_counts.items(), key=lambda x: (-x[1], x[0]))[:20]
+    available_fields = {
+        k: {"count": c, "example": field_examples.get(k)}
+        for k, c in top_fields
+    }
+    suggested_filters = _suggest_filter_fields(available_fields)
+
+    return {
+        "sample_docs": compact_hits,
+        "available_fields": available_fields,
+        "suggested_filters": suggested_filters,
+        "schema_discovery_hint": (
+            "Your previous filter returned 0 hits. Here are up to 3 real docs "
+            "from the same window without filters. Pick a field from "
+            "suggested_filters that matches what you want to filter on, "
+            "then retry."
+        ),
+    }
+
 
 def _compute_hint(
     total: int,
@@ -303,6 +456,18 @@ def elastic_search_logs(
         if hint:
             data["hint"] = hint
 
+        # Schema discovery on filter miss: 0 hits but window has data → sample.
+        if (
+            total == 0
+            and total_in_window is not None
+            and total_in_window > 0
+            and _schema_discovery_enabled()
+        ):
+            try:
+                data.update(_enrich_with_schema_sample(time_filter))
+            except Exception as _e:
+                data["schema_sample_error"] = str(_e)
+
         msg = f"Found {total} log entries (window: {total_in_window})"
         if hint:
             msg = f"{msg} — {hint}"
@@ -523,7 +688,7 @@ def elastic_log_pattern(service: str, hours: int = 24) -> dict:
             "hours":   int(hours),
         }
 
-        return _ok({
+        pattern_data = {
             "service": service,
             "hours": hours,
             "hourly": hourly,
@@ -535,7 +700,23 @@ def elastic_log_pattern(service: str, hours: int = 24) -> dict:
             "anomaly": anomaly,
             "anomaly_reason": anomaly_reason,
             "top_error_messages": top_errors,
-        }, f"{'ANOMALY DETECTED: ' + anomaly_reason if anomaly else 'Log pattern normal'}")
+        }
+
+        # Schema discovery on filter miss: service filter set but no docs matched.
+        if (
+            service
+            and total_in_window == 0
+            and _schema_discovery_enabled()
+        ):
+            try:
+                pattern_data.update(_enrich_with_schema_sample(time_filter))
+            except Exception as _e:
+                pattern_data["schema_sample_error"] = str(_e)
+
+        return _ok(
+            pattern_data,
+            f"{'ANOMALY DETECTED: ' + anomaly_reason if anomaly else 'Log pattern normal'}",
+        )
     except Exception as e:
         return _err(str(e))
 

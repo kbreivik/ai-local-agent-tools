@@ -653,7 +653,7 @@ function AIServicesTab({ draft, update }) {
       </div>
 
       {/* Coordinator */}
-      <div>
+      <div className="mb-5">
         <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           Coordinator
         </h3>
@@ -662,6 +662,21 @@ function AIServicesTab({ draft, update }) {
           <Toggle
             value={draft.coordinatorPriorAttemptsEnabled !== false}
             onChange={v => update('coordinatorPriorAttemptsEnabled', v)}
+            label="Enabled"
+          />
+        </Field>
+      </div>
+
+      {/* Elasticsearch */}
+      <div>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Elasticsearch
+        </h3>
+        <Field label="Schema discovery on filter miss"
+          hint="When elastic_search_logs returns 0 hits but the time window has data, sample 2-3 real docs and attach available fields + suggested filters to the response. Helps the agent discover correct field names (service.name vs container.name, etc.) instead of narrowing further.">
+          <Toggle
+            value={draft.elasticSchemaDiscoveryOnMiss !== false}
+            onChange={v => update('elasticSchemaDiscoveryOnMiss', v)}
             label="Enabled"
           />
         </Field>

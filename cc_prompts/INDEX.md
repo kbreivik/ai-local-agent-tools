@@ -177,8 +177,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.2.md  | v2.34.2  | feat(skills): execution observability + adoption metrics | DONE (03e1149) |
 | CC_PROMPT_v2.34.3.md  | v2.34.3  | fix(ui): pull-bar UPDATING label + self-recreate hard-refresh instructions | DONE (3258866) |
 | CC_PROMPT_v2.34.4.md  | v2.34.4  | fix(agents): complete v2.34.0 sub-agent wiring — pop-up still proposes, does not execute | PENDING · CRITICAL |
-| CC_PROMPT_v2.34.5.md  | v2.34.5  | fix(agents): propose_subtask math unreachable — earlier nudge + dynamic reserve | RUNNING |
-| CC_PROMPT_v2.34.6.md  | v2.34.6  | feat(tools): elastic_search_logs auto-samples schema on filter miss | PENDING |
+| CC_PROMPT_v2.34.5.md  | v2.34.5  | fix(agents): propose_subtask math unreachable — earlier nudge + dynamic reserve | DONE (6fe25b5) |
+| CC_PROMPT_v2.34.6.md  | v2.34.6  | feat(tools): elastic_search_logs auto-samples schema on filter miss | RUNNING |
 
 ---
 

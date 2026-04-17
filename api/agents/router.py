@@ -685,6 +685,21 @@ that log_timeline does not support (regex, specific field filters, etc.).
 - If total == 0 and total_in_window > 0, your filter is too narrow.
   Drop the most specific field first (host → service → level → query).
 
+═══ ELK FILTER DISCOVERY (v2.34.6) ═══
+When elastic_search_logs (or elastic_log_pattern) returns total == 0 but
+total_in_window > 0, the response now includes:
+  - sample_docs: up to 3 real docs from the window with NO filters applied
+  - available_fields: top 20 flattened field names + example values
+  - suggested_filters: pre-mapped candidates for {service, host, level}
+
+**On filter miss, do NOT retry the same narrowing strategy.** Instead:
+  1. Read sample_docs to see what a real document looks like
+  2. Pick a service/host/level field from suggested_filters
+  3. Use the exact field name and example value format from the sample
+
+Do not invent field names. If suggested_filters is empty or does not cover
+your need, fall back to a keyword match via the `query=` parameter.
+
 ═══ EXIT CODE RULES ═══
 
 EXIT CODE 137 — MANDATORY VERIFICATION:
