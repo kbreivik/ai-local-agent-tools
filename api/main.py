@@ -368,7 +368,20 @@ async def lifespan(app: FastAPI):
             except Exception as _ole:
                 _log.debug("operation_log cleanup failed: %s", _ole)
     _aio.create_task(_operation_log_cleanup_loop())
+    # Auto-promoter: weekly scan of agent_actions for repeated tool patterns
+    try:
+        from api.skills.auto_promoter import schedule_weekly
+        pool = getattr(app.state, "pool", None)
+        app.state.auto_promoter_task = _aio.create_task(schedule_weekly(pool))
+    except Exception as _ape:
+        _log.warning("auto_promoter start skipped: %s", _ape)
     yield
+    try:
+        t = getattr(app.state, "auto_promoter_task", None)
+        if t:
+            t.cancel()
+    except Exception:
+        pass
     try:
         stop_auto_update()
     except Exception:

@@ -1,0 +1,341 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.4.md (v2.33.4)
+Theme: feat(skills): auto-promoter for repeated vm_exec patterns
+
+Prompt content:
+
+# CC PROMPT — v2.33.4 — Auto-skill promotion from repeated vm_exec patterns
+
+## What this does
+Adds a background worker that scans `agent_actions` weekly for repeated
+`(tool, args_shape)` patterns and proposes new skills via `skill_create`
+(v2.13.0 skill system). Operator approves each candidate before promotion.
+
+Version bump: 2.33.3 → 2.33.4
+
+## Change 1 — api/db/skill_candidates.py — new table
+
+```python
+"""
+skill_candidates — auto-detected patterns awaiting operator approval for promotion.
+"""
+import json
+
+CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS skill_candidates (
+    id SERIAL PRIMARY KEY,
+    tool TEXT NOT NULL,
+    args_shape_hash TEXT NOT NULL,
+    sample_args JSONB NOT NULL,
+    occurrences INT NOT NULL,
+    distinct_tasks INT NOT NULL,
+    suggested_name TEXT NOT NULL,
+    suggested_description TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | promoted
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at TIMESTAMPTZ,
+    decided_by TEXT,
+    promoted_skill_id INT,
+    UNIQUE (tool, args_shape_hash)
+);
+"""
+
+async def ensure_schema(pool):
+    async with pool.acquire() as c:
+        await c.execute(CREATE_SQL)
+
+async def list_candidates(pool, status='pending'):
+    async with pool.acquire() as c:
+        rows = await c.fetch(
+            "SELECT * FROM skill_candidates WHERE status = $1 ORDER BY occurrences DESC LIMIT 50",
+            status
+        )
+        return [dict(r) for r in rows]
+
+async def upsert_candidate(pool, tool, shape_hash, sample_args, occ, tasks, name, desc):
+    async with pool.acquire() as c:
+        await c.execute("""
+            INSERT INTO skill_candidates (tool, args_shape_hash, sample_args,
+                occurrences, distinct_tasks, suggested_name, suggested_description)
+            VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+            ON CONFLICT (tool, args_shape_hash) DO UPDATE
+              SET occurrences = EXCLUDED.occurrences,
+                  distinct_tasks = EXCLUDED.distinct_tasks,
+                  suggested_description = EXCLUDED.suggested_description
+        """, tool, shape_hash, json.dumps(sample_args), occ, tasks, name, desc)
+```
+
+## Change 2 — api/skills/auto_promoter.py — new module
+
+```python
+"""
+Weekly scan of agent_actions for repeated tool-invocation patterns.
+Writes candidates to skill_candidates table.
+"""
+import asyncio, hashlib, json, logging
+from api.db.skill_candidates import upsert_candidate, ensure_schema
+
+log = logging.getLogger(__name__)
+
+# Normalize args -> a "shape" (argnames + value-type, not value).
+# For vm_exec specifically, we keep the *host* in the shape because
+# per-host skills are more useful than per-command-per-host.
+SHAPE_RULES = {
+    "vm_exec": lambda args: {"host": args.get("host"), "command_first_token": (args.get("command") or "").split()[0:1]},
+    # default: just argnames + types
+}
+
+def shape_hash_of(tool: str, args: dict) -> tuple[str, dict]:
+    rule = SHAPE_RULES.get(tool)
+    if rule:
+        shape = rule(args)
+    else:
+        shape = {k: type(v).__name__ for k, v in (args or {}).items()}
+    serialized = json.dumps(shape, sort_keys=True, default=str)
+    return hashlib.md5(serialized.encode()).hexdigest(), shape
+
+async def detect_candidates(pool, min_occ=5, min_tasks=2, window_days=7):
+    await ensure_schema(pool)
+    sql = """
+      SELECT tool, args, task_id FROM agent_actions
+      WHERE created_at > NOW() - ($1 || ' days')::interval
+    """
+    async with pool.acquire() as c:
+        rows = await c.fetch(sql, str(window_days))
+    buckets = {}
+    for r in rows:
+        args = r["args"] if isinstance(r["args"], dict) else json.loads(r["args"] or "{}")
+        h, shape = shape_hash_of(r["tool"], args)
+        key = (r["tool"], h)
+        b = buckets.setdefault(key, {"count": 0, "tasks": set(), "sample": args, "shape": shape})
+        b["count"] += 1
+        b["tasks"].add(r["task_id"])
+    promoted = 0
+    for (tool, h), b in buckets.items():
+        if b["count"] >= min_occ and len(b["tasks"]) >= min_tasks:
+            name, desc = _suggest_name(tool, b["shape"], b["sample"])
+            await upsert_candidate(pool, tool, h, b["sample"], b["count"],
+                                   len(b["tasks"]), name, desc)
+            promoted += 1
+    log.info("auto_promoter: scanned %d actions, %d candidates", len(rows), promoted)
+    return promoted
+
+def _suggest_name(tool, shape, sample):
+    if tool == "vm_exec" and shape.get("host"):
+        first = " ".join(shape.get("command_first_token") or [])
+        safe = first.replace("/", "_").replace("-", "_")[:20] or "run"
+        name = f"vm_{safe}_on_{shape['host'].replace('-', '_').replace('.', '_')}"
+        desc = f"Auto-promoted vm_exec pattern: `{first}` on host {shape['host']}"
+    else:
+        name = f"auto_{tool}_{hash(str(shape)) & 0xffff:04x}"
+        desc = f"Auto-promoted {tool} with shape {shape}"
+    return name, desc
+
+async def schedule_weekly(pool):
+    while True:
+        try:
+            await detect_candidates(pool)
+        except Exception as e:
+            log.exception("auto_promoter loop error: %s", e)
+        await asyncio.sleep(7 * 24 * 3600)
+```
+
+## Change 3 — api/main.py — lifespan scheduler
+
+In the lifespan startup section, kick off the auto-promoter:
+
+```python
+from api.skills.auto_promoter import schedule_weekly
+# inside lifespan():
+task = asyncio.create_task(schedule_weekly(pool))
+app.state.auto_promoter_task = task
+# on shutdown: task.cancel()
+```
+
+## Change 4 — api/routers/skills.py — candidate endpoints
+
+Add routes:
+
+```python
+from api.db.skill_candidates import list_candidates
+from api.skills.auto_promoter import detect_candidates
+
+@router.get("/candidates")
+async def get_candidates(request: Request):
+    return await list_candidates(request.app.state.pool)
+
+@router.post("/candidates/{cid}/approve")
+async def approve_candidate(cid: int, request: Request, user=Depends(require_role("sith_lord","imperial_officer"))):
+    pool = request.app.state.pool
+    async with pool.acquire() as c:
+        row = await c.fetchrow("SELECT * FROM skill_candidates WHERE id=$1", cid)
+        if not row:
+            raise HTTPException(404)
+        # call existing skill_create to materialize
+        from api.skills.generator import skill_create  # v2.13.0 entry
+        new_skill_id = await skill_create(
+            name=row["suggested_name"],
+            description=row["suggested_description"],
+            seed_tool=row["tool"],
+            seed_args=row["sample_args"],
+        )
+        await c.execute("""
+            UPDATE skill_candidates SET status='promoted', decided_at=NOW(),
+              decided_by=$2, promoted_skill_id=$3 WHERE id=$1
+        """, cid, user["username"], new_skill_id)
+    return {"ok": True, "skill_id": new_skill_id}
+
+@router.post("/candidates/{cid}/reject")
+async def reject_candidate(cid: int, request: Request, user=Depends(require_role("sith_lord","imperial_officer"))):
+    async with request.app.state.pool.acquire() as c:
+        await c.execute("""
+            UPDATE skill_candidates SET status='rejected', decided_at=NOW(),
+              decided_by=$2 WHERE id=$1
+        """, cid, user["username"])
+    return {"ok": True}
+
+@router.post("/candidates/scan-now")
+async def scan_now(request: Request, user=Depends(require_role("sith_lord"))):
+    n = await detect_candidates(request.app.state.pool)
+    return {"candidates_detected_or_updated": n}
+```
+
+## Change 5 — gui/src/components/SkillsTab.jsx — Candidates subtab
+
+Add a "Candidates" subtab next to existing Skills view. Table columns:
+tool, suggested_name, occurrences, distinct_tasks, sample_args (collapsible),
+[Approve] [Reject] buttons. Include a "Scan now" button wired to
+`/api/skills/candidates/scan-now`.
+
+## Version bump
+Update `VERSION`: 2.33.3 → 2.33.4
+
+## Commit
+```
+git add -A
+git commit -m "feat(skills): v2.33.4 auto-promoter for repeated vm_exec patterns"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Use agent to run `vm_exec(host=ds-docker-worker-01, command="df -h")` 5+ times across 2+ tasks (or run the same observation template 5 times).
+3. Skills tab → Candidates → Scan now → expect a `vm_df_on_ds_docker_worker_01`-style proposal.
+4. Approve → verify skill appears in the main Skills list and is callable via `skill_execute`.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 09:01:17
+========================================================================

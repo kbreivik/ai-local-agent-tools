@@ -1,0 +1,263 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.3.md (v2.33.3)
+Theme: feat(agents): mandatory sub-agent proposal near budget exhaustion
+
+Prompt content:
+
+# CC PROMPT — v2.33.3 — Sub-agent proposal mandatory near budget exhaustion
+
+## What this does
+Strengthens the existing `propose_subtask` pathway (v2.24.0) so it actually fires
+on investigations that are about to exceed their tool budget without a conclusion.
+When an investigate task reaches 70% of its tool budget without emitting a
+`DIAGNOSIS:` section, the harness injects a nudge and the agent is instructed
+(and constrained) to propose a sub-task instead of producing a shallow summary.
+
+Version bump: 2.33.2 → 2.33.3
+
+## Change 1 — api/agents/router.py — RESEARCH_PROMPT constraint
+
+Find the `RESEARCH_PROMPT` (the investigate agent's system prompt, restructured
+in v2.32.0 into ═══ SECTION ═══ blocks). Locate the `═══ CONSTRAINTS ═══` section
+and add a new rule:
+
+```
+═══ CONSTRAINTS ═══
+...existing rules...
+
+N. BUDGET HANDOFF RULE: If you have used 70% or more of your tool budget
+   AND your output so far does not contain the literal string "DIAGNOSIS:",
+   your next action MUST be propose_subtask(scope=..., reason=...) with a
+   tight, single-entity scope that carries forward what you've found so far.
+   Do NOT try to cram a conclusion; hand off.
+```
+
+## Change 2 — api/routers/agent.py — runtime nudge + enforcement
+
+In the agent loop (`_stream_agent` or equivalent), after each tool call:
+
+```python
+budget = _MAX_TOOL_CALLS_BY_TYPE[agent_type]  # v2.32.5 constant
+threshold = int(0.7 * budget)
+combined_text = "\n".join(step_outputs)
+
+if tools_used >= threshold and "DIAGNOSIS:" not in combined_text and not subtask_proposed:
+    # Inject a system nudge as an assistant-facing message
+    messages.append({
+        "role": "system",
+        "content": (
+            f"HARNESS NUDGE: You have used {tools_used}/{budget} tool calls. "
+            "No DIAGNOSIS: section emitted yet. Per BUDGET HANDOFF RULE, your "
+            "next action must be propose_subtask(scope, reason). Do not produce "
+            "a shallow conclusion."
+        ),
+    })
+    # Broadcast to WS so the UI shows the nudge happened
+    await ws.send_json({"event": "budget_nudge", "tools_used": tools_used, "budget": budget})
+```
+
+Track `subtask_proposed` by watching the tool-call stream for any call to
+`propose_subtask`.
+
+## Change 3 — api/routers/agent.py — emit subtask_proposed event
+
+When `propose_subtask` is invoked, emit a WS event with the full payload:
+
+```python
+await ws.send_json({
+    "event": "subtask_proposed",
+    "parent_task_id": task_id,
+    "scope": args.get("scope"),
+    "reason": args.get("reason"),
+    "id": proposal_id,  # from agent_attempts row
+})
+```
+
+## Change 4 — api/db/agent_attempts.py — track outcome
+
+Extend the attempts log so sub-task proposals are distinguishable. Add column
+`was_proposal BOOLEAN DEFAULT FALSE` and set `TRUE` when the attempt originated
+from an accepted `propose_subtask`. Migration block at module top:
+
+```python
+async def ensure_schema(pool):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            ALTER TABLE agent_attempts
+            ADD COLUMN IF NOT EXISTS was_proposal BOOLEAN DEFAULT FALSE;
+        """)
+```
+
+## Change 5 — gui/src/components/OutputPanel.jsx — inline subtask offer card
+
+When a `subtask_proposed` event arrives, render an inline card at the bottom of
+the output stream:
+
+```jsx
+{subtaskOffer && (
+  <div className="subtask-offer" style={{
+    border: '1px solid var(--accent)', background: 'var(--accent-dim)',
+    padding: 10, margin: '10px 0', borderRadius: 2
+  }}>
+    <div className="mono" style={{ fontSize: 10, color: 'var(--accent-hi)', letterSpacing: '0.15em' }}>
+      ◢ SUB-TASK PROPOSED
+    </div>
+    <div style={{ margin: '6px 0', fontSize: 13 }}>{subtaskOffer.scope}</div>
+    <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 8 }}>
+      {subtaskOffer.reason}
+    </div>
+    <button className="btn" onClick={() => acceptSubtask(subtaskOffer)}>
+      ACCEPT — start fresh investigate
+    </button>
+  </div>
+)}
+```
+
+## Version bump
+Update `VERSION`: 2.33.2 → 2.33.3
+
+## Commit
+```
+git add -A
+git commit -m "feat(agents): v2.33.3 mandatory sub-agent proposal near budget exhaustion"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Run investigate "kafka hp1-logs AND elasticsearch both degraded, correlate and trace common cause" — a deliberately broad multi-surface task.
+3. Expect: at tool call ~12 (70% of 16), harness emits budget_nudge, agent fires propose_subtask.
+4. Run investigate "status of kafka_broker-1" — narrow task — expect no proposal (no false positive).
+5. Accept a proposal → verify a fresh investigate task spawns with its own budget.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 08:57:43
+========================================================================
+PROMPT COMPLETE: v2.33.3
+[STATUS] 3m31s
+
+Changes landed (commit `363a774`):
+- `api/agents/router.py` — added rule 6 (BUDGET HANDOFF RULE) to RESEARCH_PROMPT constraints.
+- `api/routers/agent.py` — at 70% of tool budget without `DIAGNOSIS:` emitted and no `propose_subtask` yet, injects a harness nudge message + broadcasts `budget_nudge` WS event (fires at most once per session via `_budget_nudge_fired` flag).
+- `api/db/agent_attempts.py` — added `was_proposal` column to both PG and SQLite DDL with migration, extended `record_attempt()` with `was_proposal=False` kwarg.
+- `VERSION` — 2.33.2 → 2.33.3.
+
+Changes 3 (subtask_proposed WS event) and 5 (inline subtask card) were already implemented in prior versions — `api/routers/agent.py:1095` broadcasts the event, and `gui/src/components/SubtaskOfferCard.jsx` is already rendered inline by `OutputPanel.jsx`.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m31s
+========================================================================

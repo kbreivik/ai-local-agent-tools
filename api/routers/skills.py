@@ -1,9 +1,40 @@
 """GET /api/skills — skill registry endpoints for the GUI Skills tab."""
 import json
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from pydantic import BaseModel
 from api.tool_registry import invoke_tool
 from api.auth import get_current_user
+
+
+_PRIVILEGED = frozenset({"sith_lord", "imperial_officer"})
+
+
+def _resolve_role(username: str) -> str:
+    """Resolve the role for a username; matches api.routers.agent_actions_api."""
+    try:
+        from api.users import get_user_by_username
+        row = get_user_by_username(username)
+        if row and row.get("role"):
+            return row["role"]
+    except Exception:
+        pass
+    import os
+    if username == os.environ.get("ADMIN_USER", "admin"):
+        return "sith_lord"
+    return "stormtrooper"
+
+
+def require_role(*roles):
+    """Dependency factory: require caller to have one of the given roles."""
+    allowed = frozenset(roles)
+
+    def _dep(username: str = Depends(get_current_user)) -> dict:
+        role = _resolve_role(username)
+        if role not in allowed:
+            raise HTTPException(403, f"requires one of: {sorted(allowed)}")
+        return {"username": username, "role": role}
+
+    return _dep
 from mcp_server.tools.skills.promoter import (
     promote_skill as _promote_skill,
     demote_skill as _demote_skill,
@@ -173,3 +204,52 @@ def restore_skill(skill_name: str, _: str = Depends(get_current_user)):
             code = 400
         raise HTTPException(code, msg)
     return result
+
+
+# ── Auto-promoter: skill candidate endpoints (v2.33.4) ────────────────────────
+
+from api.db.skill_candidates import list_candidates
+from api.skills.auto_promoter import detect_candidates
+
+
+@router.get("/candidates")
+async def get_candidates(request: Request):
+    return await list_candidates(request.app.state.pool)
+
+
+@router.post("/candidates/{cid}/approve")
+async def approve_candidate(cid: int, request: Request, user=Depends(require_role("sith_lord", "imperial_officer"))):
+    pool = request.app.state.pool
+    async with pool.acquire() as c:
+        row = await c.fetchrow("SELECT * FROM skill_candidates WHERE id=$1", cid)
+        if not row:
+            raise HTTPException(404)
+        # call existing skill_create to materialize
+        from api.skills.generator import skill_create  # v2.13.0 entry
+        new_skill_id = await skill_create(
+            name=row["suggested_name"],
+            description=row["suggested_description"],
+            seed_tool=row["tool"],
+            seed_args=row["sample_args"],
+        )
+        await c.execute("""
+            UPDATE skill_candidates SET status='promoted', decided_at=NOW(),
+              decided_by=$2, promoted_skill_id=$3 WHERE id=$1
+        """, cid, user["username"], new_skill_id)
+    return {"ok": True, "skill_id": new_skill_id}
+
+
+@router.post("/candidates/{cid}/reject")
+async def reject_candidate(cid: int, request: Request, user=Depends(require_role("sith_lord", "imperial_officer"))):
+    async with request.app.state.pool.acquire() as c:
+        await c.execute("""
+            UPDATE skill_candidates SET status='rejected', decided_at=NOW(),
+              decided_by=$2 WHERE id=$1
+        """, cid, user["username"])
+    return {"ok": True}
+
+
+@router.post("/candidates/scan-now")
+async def scan_now(request: Request, user=Depends(require_role("sith_lord"))):
+    n = await detect_candidates(request.app.state.pool)
+    return {"candidates_detected_or_updated": n}
