@@ -15,6 +15,26 @@ const RISK_STYLE = {
   high:   { border: 'border-red-500',    badge: 'bg-red-900 text-red-300',       label: 'HIGH',   btnBg: 'bg-red-700 hover:bg-red-600' },
 }
 
+// v2.33.6 — blast-radius taxonomy: visual pill per step + extra confirm for cluster/fleet
+const RADIUS_STYLE = {
+  none:    { bg: 'bg-slate-800',   text: 'text-slate-400',  border: 'border-slate-600' },
+  node:    { bg: 'bg-green-900',   text: 'text-green-300',  border: 'border-green-500' },
+  service: { bg: 'bg-yellow-900',  text: 'text-yellow-300', border: 'border-yellow-500' },
+  cluster: { bg: 'bg-red-900',     text: 'text-red-300',    border: 'border-red-500' },
+  fleet:   { bg: 'bg-purple-900',  text: 'text-purple-300', border: 'border-purple-500' },
+}
+
+const EXTRA_CONFIRM_RADII = new Set(['cluster', 'fleet'])
+
+function RadiusPill({ radius }) {
+  const c = RADIUS_STYLE[radius] || RADIUS_STYLE.none
+  return (
+    <span className={`text-[9px] font-mono tracking-widest px-1.5 py-0.5 rounded border ${c.bg} ${c.text} ${c.border}`}>
+      {String(radius || 'none').toUpperCase()}
+    </span>
+  )
+}
+
 function Countdown({ seconds, onExpire }) {
   const [remaining, setRemaining] = useState(seconds)
 
@@ -40,10 +60,11 @@ export default function PlanConfirmModal() {
   const [sending,   setSending]   = useState(false)
   const [retryable, setRetryable] = useState(false)
   const [confirmed, setConfirmed] = useState(false)  // required checkbox for HIGH risk
+  const [extraConfirmed, setExtraConfirmed] = useState({})  // v2.33.6 per-step cluster/fleet confirms
 
   // Reset state whenever a new plan arrives
   useEffect(() => {
-    if (pendingPlan) { setConfirmed(false); setSending(false); setRetryable(false) }
+    if (pendingPlan) { setConfirmed(false); setSending(false); setRetryable(false); setExtraConfirmed({}) }
   }, [pendingPlan?.summary])
 
   const handleConfirm = useCallback(async () => {
@@ -83,6 +104,13 @@ export default function PlanConfirmModal() {
   const onTimeout = useCallback(() => handleCancel(), [handleCancel])
 
   if (!pendingPlan) return null
+
+  // v2.33.6 — compute whether every cluster/fleet step has been acknowledged
+  const allExtraConfirmed = (pendingPlan.steps || []).every((s, i) => {
+    if (typeof s === 'string') return true
+    const needsExtra = s.extra_confirm_required ?? EXTRA_CONFIRM_RADII.has(s.radius || 'none')
+    return !needsExtra || !!extraConfirmed[i]
+  })
 
   const riskLevel = pendingPlan.risk_level || 'medium'
   // Irreversible plans always use red styling regardless of risk_level
@@ -150,11 +178,13 @@ export default function PlanConfirmModal() {
                     </div>
                   )
                 }
-                // Structured object format {tool, risk, args_preview, description}
+                // Structured object format {tool, risk, args_preview, description, radius, extra_confirm_required}
                 const stepRisk = RISK_STYLE[s.risk] || RISK_STYLE.medium
                 const argsStr  = typeof s.args_preview === 'object'
                   ? Object.entries(s.args_preview || {}).map(([k, v]) => `${k}: ${v}`).join(', ')
                   : (s.args_preview || '')
+                const stepRadius = s.radius || 'none'
+                const needsExtra = s.extra_confirm_required ?? EXTRA_CONFIRM_RADII.has(stepRadius)
                 return (
                   <div key={i} className="flex items-start gap-2 bg-slate-800 rounded px-3 py-2">
                     <span className="text-slate-500 text-xs font-mono shrink-0 w-5">{i + 1}.</span>
@@ -164,10 +194,24 @@ export default function PlanConfirmModal() {
                         <span className={`text-xs px-1.5 py-0.5 rounded ${stepRisk.badge}`}>
                           {(s.risk || 'medium').toLowerCase()}
                         </span>
+                        <RadiusPill radius={stepRadius} />
                         {s.description && <span className="text-slate-200 text-xs">{s.description}</span>}
                       </div>
                       {argsStr && (
                         <p className="text-slate-400 text-xs mt-0.5 truncate">{argsStr}</p>
+                      )}
+                      {needsExtra && (
+                        <label className="flex items-center gap-1.5 mt-1.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={!!extraConfirmed[i]}
+                            onChange={e => setExtraConfirmed({ ...extraConfirmed, [i]: e.target.checked })}
+                            className="w-3.5 h-3.5 accent-red-500"
+                          />
+                          <span className="text-red-300 text-[11px] font-semibold font-mono">
+                            I acknowledge this step has <span className="uppercase">{stepRadius}</span>-level blast radius
+                          </span>
+                        </label>
                       )}
                     </div>
                   </div>
@@ -205,8 +249,14 @@ export default function PlanConfirmModal() {
           </button>
           <button
             onClick={handleConfirm}
-            disabled={(sending && !retryable) || (effectiveRisk === 'high' && !confirmed)}
-            title={effectiveRisk === 'high' && !confirmed ? 'Check the confirmation box first' : ''}
+            disabled={(sending && !retryable) || (effectiveRisk === 'high' && !confirmed) || !allExtraConfirmed}
+            title={
+              effectiveRisk === 'high' && !confirmed
+                ? 'Check the confirmation box first'
+                : !allExtraConfirmed
+                ? 'Acknowledge all cluster/fleet-radius steps first'
+                : ''
+            }
             className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${risk.btnBg} text-white`}
           >
             {sending && !retryable ? '⏳ Sending…' : retryable ? '↺ Retry confirm' : '✓ Confirm & Run'}

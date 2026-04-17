@@ -1025,47 +1025,79 @@ async def _run_single_agent_step(
                                 # will carry this error back to the model, which
                                 # will re-plan on the next loop iteration.
                             else:
-                                await manager.broadcast({
-                                    "type":       "plan_pending",
-                                    "plan":       plan,
-                                    "session_id": session_id,
-                                    "timestamp":  datetime.now(timezone.utc).isoformat(),
-                                })
-                                await manager.send_line(
-                                    "step",
-                                    f"[plan] Waiting for user approval: {plan['summary']}",
-                                    status="ok", session_id=session_id,
-                                )
-                                from api.confirmation import wait_for_confirmation
-                                from api.memory.feedback import record_feedback_signal as _rfs
-                                approved = await wait_for_confirmation(session_id)
-                                if approved:
-                                    positive_signals += 1
-                                    asyncio.create_task(_rfs(
-                                        task, "plan_approved", plan["summary"][:120]
-                                    ))
-                                    result = {
-                                        "status":   "ok",
-                                        "approved": True,
-                                        "message":  "User confirmed. Proceed with plan.",
-                                        "data":     {"approved": True},
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    }
-                                    await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
-                                else:
+                                # v2.33.6 — enrich each step with blast-radius
+                                # metadata so the GUI can render pills + require
+                                # extra confirmation for cluster/fleet radii.
+                                from api.agents.tool_metadata import enrich_plan_steps
+                                enriched_steps, plan_radius = enrich_plan_steps(plan["steps"])
+
+                                # Refuse any plan with more than one fleet-radius
+                                # step — force caller to split into separate tasks.
+                                _n_fleet = sum(1 for s in enriched_steps if s.get("radius") == "fleet")
+                                if _n_fleet > 1:
+                                    await plan_lock.release(session_id)
+                                    plan_action_called = False
                                     negative_signals += 1
-                                    asyncio.create_task(_rfs(
-                                        task, "plan_cancelled", plan["summary"][:120]
-                                    ))
                                     result = {
-                                        "status":   "ok",
+                                        "status":   "error",
                                         "approved": False,
-                                        "message":  "User cancelled. Do not proceed.",
-                                        "data":     {"approved": False},
+                                        "message": (
+                                            "plan_action() rejected: plan has multiple "
+                                            "fleet-radius steps. Split into separate tasks."
+                                        ),
+                                        "data": {"approved": False, "reason": "multiple_fleet_radius"},
                                         "timestamp": datetime.now(timezone.utc).isoformat(),
                                     }
-                                    await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
-                                await plan_lock.release(session_id)
+                                    await manager.send_line(
+                                        "step",
+                                        "[plan] Rejected — multiple fleet-radius steps; asking model to split",
+                                        status="warning", session_id=session_id,
+                                    )
+                                    # Fall through — result is appended by the common tool-result handler below
+                                else:
+                                    plan["steps"] = enriched_steps
+                                    plan["plan_radius"] = plan_radius
+                                    await manager.broadcast({
+                                        "type":       "plan_pending",
+                                        "plan":       plan,
+                                        "session_id": session_id,
+                                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                                    })
+                                    await manager.send_line(
+                                        "step",
+                                        f"[plan] Waiting for user approval: {plan['summary']}",
+                                        status="ok", session_id=session_id,
+                                    )
+                                    from api.confirmation import wait_for_confirmation
+                                    from api.memory.feedback import record_feedback_signal as _rfs
+                                    approved = await wait_for_confirmation(session_id)
+                                    if approved:
+                                        positive_signals += 1
+                                        asyncio.create_task(_rfs(
+                                            task, "plan_approved", plan["summary"][:120]
+                                        ))
+                                        result = {
+                                            "status":   "ok",
+                                            "approved": True,
+                                            "message":  "User confirmed. Proceed with plan.",
+                                            "data":     {"approved": True},
+                                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        }
+                                        await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
+                                    else:
+                                        negative_signals += 1
+                                        asyncio.create_task(_rfs(
+                                            task, "plan_cancelled", plan["summary"][:120]
+                                        ))
+                                        result = {
+                                            "status":   "ok",
+                                            "approved": False,
+                                            "message":  "User cancelled. Do not proceed.",
+                                            "data":     {"approved": False},
+                                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        }
+                                        await manager.send_line("step", "[plan] Cancelled by user — stopping.", status="ok", session_id=session_id)
+                                    await plan_lock.release(session_id)
 
                     elif fn_name == "clarifying_question":
                         # Intercept: broadcast question to GUI, suspend until answered
