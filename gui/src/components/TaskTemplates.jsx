@@ -30,6 +30,7 @@ const TEMPLATES = [
       { label: 'Force-update logstash', task: 'Force-update the logstash_logstash Swarm service to recover from any stale network or scheduling issues.' },
       { label: 'Force-update kafka_broker-3', task: 'Force-update the kafka_broker-3 Swarm service to clear any network or scheduling issues on worker-03.' },
       { label: 'Swarm cluster health', task: 'Give me a full Swarm cluster health report: nodes, managers, workers, services, tasks. Flag anything not in desired state.' },
+      { label: 'Drain Swarm node', task: 'Drain Swarm node {node_name} cleanly.\n\nSTEP 1: Call swarm_node_status to confirm the node exists and is currently Active. If it\'s already Drain or Down, report and stop.\nSTEP 2: Propose a plan_action with these commands (must run from a manager node): `docker node update --availability drain {node_name}`.\nSTEP 3: After plan is approved and executed, poll `docker node ps {node_name} --filter desired-state=running` every 10 seconds up to {timeout_s} seconds until the running task count is 0.\nSTEP 4: Return a structured summary:\n  NODE: <name>\n  AVAILABILITY: drain\n  TASKS_SHED: <count>\n  ELAPSED_S: <seconds>\n  STATUS: DRAINED | TIMEOUT' },
     ],
   },
   {

@@ -9,10 +9,17 @@ the backend can use them to pre-fill agent runs.
 """
 
 from api.agents.task_templates import reboot_proxmox_vm
+from api.agents.task_templates import drain_swarm_node
 
 TEMPLATES: dict[str, dict] = {}
 
 TEMPLATES[reboot_proxmox_vm.TEMPLATE["id"]] = reboot_proxmox_vm.TEMPLATE
+TEMPLATES[drain_swarm_node.TEMPLATE["id"]] = drain_swarm_node.TEMPLATE
+
+
+TASK_TEMPLATES: list[dict] = [
+    {**t, "name": t.get("name", t.get("id"))} for t in TEMPLATES.values()
+]
 
 
 def get_all_templates() -> dict[str, dict]:

@@ -1,0 +1,270 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.0.md (v2.33.0)
+Theme: feat(tools): kafka_topic_inspect — structured cluster state in one call
+
+Prompt content:
+
+# CC PROMPT — v2.33.0 — kafka_topic_inspect MCP tool
+
+## What this does
+Adds a single read-only MCP tool `kafka_topic_inspect(topic: str | None = None)` that
+returns structured broker/topic/partition/ISR data in one call, so the investigate
+agent can reason about replication without chaining 4-5 `kafka_exec` calls.
+
+Version bump: 2.32.6 → 2.33.0
+
+## Change 1 — mcp_server/tools/kafka_inspect.py — new file
+
+Create a new tool module. Use `kafka-python` (already in requirements) — if not,
+fall back to `confluent-kafka` or add `kafka-python>=2.0` to `requirements.txt`.
+
+```python
+"""
+kafka_topic_inspect — read-only structured view of Kafka cluster state.
+
+Returns:
+  {
+    "brokers": [{"id": int, "host": str, "port": int, "rack": str|None}],
+    "topics":  [{
+      "name": str,
+      "partitions": [{
+        "id": int, "leader": int, "replicas": [int], "isr": [int],
+        "under_replicated": bool
+      }],
+    }],
+    "summary": {
+      "broker_count": int, "topic_count": int,
+      "total_partitions": int, "under_replicated_partitions": int
+    }
+  }
+
+Size caps: first 50 topics / first 200 partitions per call. `topic` param
+filters to a single topic (no cap in that case).
+"""
+from typing import Optional
+from api.connections import get_connection_for_platform
+from api.decrypt import decrypt  # or wherever Fernet helper lives
+from kafka import KafkaAdminClient
+from kafka.admin import ConfigResource, ConfigResourceType
+
+def kafka_topic_inspect(topic: Optional[str] = None) -> dict:
+    conn = get_connection_for_platform("kafka")
+    if not conn:
+        return {"error": "no kafka connection configured"}
+    bootstrap = f"{conn['host']}:{conn['port']}"
+    admin = KafkaAdminClient(bootstrap_servers=bootstrap, request_timeout_ms=10000)
+    try:
+        cluster = admin.describe_cluster()
+        brokers = [
+            {"id": b.nodeId, "host": b.host, "port": b.port, "rack": b.rack}
+            for b in cluster.get("brokers", [])
+        ]
+        topic_names = [topic] if topic else list(admin.list_topics())[:50]
+        descs = admin.describe_topics(topic_names)
+        topics_out, total_p, unreplicated = [], 0, 0
+        for d in descs:
+            parts = []
+            for p in d["partitions"]:
+                ur = sorted(p["isr"]) != sorted(p["replicas"])
+                parts.append({
+                    "id": p["partition"],
+                    "leader": p["leader"],
+                    "replicas": p["replicas"],
+                    "isr": p["isr"],
+                    "under_replicated": ur,
+                })
+                total_p += 1
+                if ur: unreplicated += 1
+            topics_out.append({"name": d["topic"], "partitions": parts[:200]})
+        return {
+            "brokers": brokers,
+            "topics": topics_out,
+            "summary": {
+                "broker_count": len(brokers),
+                "topic_count": len(topics_out),
+                "total_partitions": total_p,
+                "under_replicated_partitions": unreplicated,
+            },
+        }
+    finally:
+        admin.close()
+```
+
+## Change 2 — mcp_server/tools/__init__.py — register
+
+Add the tool to the exported registry where other kafka tools register:
+
+```python
+from .kafka_inspect import kafka_topic_inspect
+# ... in TOOLS dict / @mcp.tool() registration, add:
+mcp.tool()(kafka_topic_inspect)
+```
+
+Follow the same registration pattern as `kafka_broker_status` / `kafka_consumer_lag`
+in `mcp_server/tools/kafka.py` (or wherever those are already registered).
+
+## Change 3 — api/agents/router.py — allowlists + triage prompt
+
+Add `kafka_topic_inspect` to both `OBSERVE_AGENT_TOOLS` and `INVESTIGATE_AGENT_TOOLS`
+frozensets. Do NOT add to `EXECUTE_AGENT_TOOLS` — it's read-only and execute agents
+shouldn't be distracted.
+
+In the investigation prompt (RESEARCH_PROMPT or KAFKA section), prepend to the
+Kafka triage guidance:
+
+```
+═══ KAFKA TRIAGE ORDER ═══
+1. kafka_topic_inspect (no args, or topic=X for focused) — FIRST call for any
+   kafka issue. Returns structured broker/partition/ISR state in one call.
+2. kafka_consumer_lag — ONLY after step 1, if lag is suspected.
+3. service_placement(kafka_broker-N) — map broker id to Swarm node.
+4. kafka_exec — last resort for deep-dives beyond what the above provide.
+```
+
+## Change 4 — requirements.txt
+
+Ensure `kafka-python>=2.0.2` is listed. If it already is (we have collectors),
+do nothing.
+
+## Version bump
+Update `VERSION` file: 2.32.6 → 2.33.0
+
+## Commit
+```
+git add -A
+git commit -m "feat(tools): v2.33.0 kafka_topic_inspect — structured cluster state in one call"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy:
+   `docker compose -f /opt/hp1-agent/docker/docker-compose.yml --env-file /opt/hp1-agent/docker/.env up -d hp1_agent`
+2. In the agent panel, run observe: "kafka hp1-logs state" — expect 1-2 tool calls.
+3. Check the tool manifest call — `kafka_topic_inspect` should appear first in
+   the investigate agent's preferred order for any kafka prompt.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 08:48:43
+========================================================================
+Push succeeded. Per the final instruction ("Do NOT modify INDEX.md or any queue status files — the runner handles that"), I'm skipping Step 6.
+[STATUS] 2m13s
+
+PROMPT COMPLETE: v2.33.0
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m13s
+========================================================================
