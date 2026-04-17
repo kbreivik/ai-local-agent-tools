@@ -148,7 +148,8 @@ def container_config_read(
     path: str,
     max_lines: int = 200,
 ) -> dict:
-    """Read a config or log file from inside a running container.
+    """Read a config file from inside a container — use instead of blocked
+    'docker exec <id> cat <path>' (validated path allowlist, no shell).
 
     Safe: path must match the read-only allowlist. No shell expansion; the
     path is shlex-quoted into a fixed command template. Output is truncated
@@ -190,7 +191,8 @@ def container_env(
     container_id: str,
     grep_pattern: str | None = None,
 ) -> dict:
-    """Return container environment variables with secrets redacted.
+    """Dump environment variables from inside a container — use instead of
+    'docker exec <id> env' (secrets redacted automatically).
 
     Secrets matched by _ENV_SECRET_KEYS are replaced with '<redacted>'.
     Optional grep_pattern is applied case-insensitively against key names.
@@ -238,7 +240,8 @@ def container_env(
 
 
 def container_networks(host: str, container_id: str) -> dict:
-    """Return overlay networks, IPs, and published ports for a container.
+    """List overlay networks and published ports for a container — use
+    instead of 'docker inspect --format' to diagnose overlay mismatch.
 
     Parses `docker inspect` with a format template into structured data.
     """
@@ -306,7 +309,9 @@ def container_tcp_probe(
     target_port: int,
     timeout_s: int = 5,
 ) -> dict:
-    """Probe TCP reachability from INSIDE the container's network namespace.
+    """Probe TCP reachability from INSIDE the container netns — definitive
+    for overlay-layer routing questions. Uses bash </dev/tcp/>, so it works
+    even when nc, ncat, curl are not installed in the image.
 
     Uses bash's built-in `</dev/tcp/host/port` rather than nc — works
     regardless of whether nc/netcat/ncat/curl is installed in the container.
@@ -366,7 +371,8 @@ def container_tcp_probe(
 
 
 def container_discover_by_service(service_name: str) -> dict:
-    """Map a Swarm service name to its running container IDs per node."""
+    """Swarm service name → [{node, vm_host_label, container_id,
+    container_name}]. Replaces service_placement + docker ps chain."""
     if not _SERVICE_NAME_RE.match(service_name or ""):
         return _err("container_discover_by_service", "invalid service_name")
 

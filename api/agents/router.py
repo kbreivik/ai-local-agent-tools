@@ -428,10 +428,12 @@ NETWORK QUERIES:
 For IP addresses, hostnames, ports, or connectivity: call get_host_network() first.
 
 CONTAINER INTROSPECTION (v2.34.12):
-Five read-only tools exist for in-container config/env/network/reachability
-checks: container_config_read, container_env, container_networks,
-container_tcp_probe, container_discover_by_service. See investigate-agent
-prompt for the full overlay-diagnosis pattern.
+For "is X running inside container Y" or "can container A reach container B"
+questions, call container_discover_by_service (get IDs), then
+container_tcp_probe (in-netns reachability) or container_config_read
+(read config file). These return structured data in one call and avoid
+the vm_exec allowlist/metachar filter. See investigate-agent prompt for
+the full overlay-diagnosis pattern.
 
 DYNAMIC SKILLS:
 Skills are not listed in the tool manifest individually.
@@ -608,6 +610,102 @@ RUNBOOK CHECK (ALWAYS DO FIRST):
 At the START of any investigation, call runbook_search("<problem keyword>") to check
 if a proven procedure exists. If found, cite it in evidence and follow its steps.
 
+═══ CONTAINER INTROSPECT FIRST — BEFORE RAW docker exec ═══
+Whenever an investigation would lead you to call vm_exec with a
+"docker exec <id> <something>" body, STOP and check which of these
+tools does the same job with typed arguments and no metachar filter:
+
+  docker exec <id> cat <path>              → container_config_read(host, id, path)
+  docker exec <id> env                     → container_env(host, id)
+  docker exec <id> nc -zv H P              → container_tcp_probe(host, id, H, P)
+  docker exec <id> bash -c '</dev/tcp/H/P' → container_tcp_probe(host, id, H, P)
+  docker inspect <id> --format '{{...}}'   → container_networks(host, id)
+  docker ps --filter name=X --format ...   → container_discover_by_service(X)
+
+Reasons to prefer them:
+- Arguments are validated per-tool, so none of these hit the vm_exec
+  allowlist / metachar filter (no '&&', '|', '>', '<', '$()' surprises).
+- Return is structured JSON, not raw stdout — easier to cite in
+  EVIDENCE and feed to the next step.
+- container_tcp_probe uses `</dev/tcp/>` in bash — it works even when
+  nc, ncat, curl are not installed in the target image.
+- container_discover_by_service does service_placement + docker ps in
+  ONE call, returning {node, vm_host_label, container_id, container_name}
+  per running replica. It replaces the "service_placement → vm_exec
+  docker ps → parse ID" sequence that currently eats 2-3 tool calls
+  before you can look inside a container.
+
+Use vm_exec for what it is good at: arbitrary host-level commands
+(ss, netstat, dmesg, journalctl, docker logs --tail, `docker system df`)
+that have no container-introspect equivalent.
+
+OVERLAY-LAYER DIAGNOSIS (canonical sequence for "client inside
+container A cannot reach service on container B"):
+
+  1. container_discover_by_service("<client-service>")
+  2. container_discover_by_service("<server-service>")
+  3. container_networks(host, <client_id>) AND container_networks(host, <server_id>)
+     → compare overlay network names; shared overlay = fast path
+  4. container_tcp_probe(host, <client_id>, <target_host_or_ip>, <port>)
+     → DEFINITIVE answer about reachability from client's netns
+  5. If (4) FAILS but `nc -zv` from the worker host succeeds: host is
+     reachable but the overlay-to-host hairpin (published-port NAT on
+     the same node) is broken. Workaround: reschedule the client to
+     a different node; proper fix: attach client to server's overlay
+     and use internal listener names.
+
+CONCRETE TRIGGER — "consumer lag growing + brokers report healthy +
+container logs show `Disconnecting from node N due to socket connection
+setup timeout`" = RUN THE OVERLAY-LAYER DIAGNOSIS. Do not burn your
+budget on `docker exec nc/curl/cat` shells. Do not accept
+`nc -zv from host` as evidence that the CLIENT can reach the server —
+only container_tcp_probe from inside the client's netns answers that.
+
+═══ CONTAINER INTROSPECTION (v2.34.12) ═══
+When investigating a problem inside a running container (config mismatch,
+overlay routing, env-driven bootstrap), use these tools BEFORE raw
+docker exec. They return structured data in one call and bypass the
+vm_exec metachar/allowlist filters by validating arguments up front:
+
+  container_config_read(host, container_id, path)
+      Read /etc/hosts, /etc/resolv.conf, /etc/*.conf, /opt/*/config/*,
+      /usr/share/*/pipeline/*.conf, /var/log/*.log. Path allowlist enforced.
+
+  container_env(host, container_id, grep_pattern=None)
+      Returns env vars (secrets redacted). Use to see KAFKA_BOOTSTRAP_SERVERS,
+      KAFKA_ADVERTISED_LISTENERS, ELASTICSEARCH_HOSTS, etc.
+
+  container_networks(host, container_id)
+      Returns {networks: [{name, ip}], published_ports: [...]}. Single call
+      to find overlay-network mismatch between two containers.
+
+  container_tcp_probe(host, container_id, target_host, target_port)
+      TCP reachability from INSIDE the container netns. Uses bash
+      </dev/tcp/...> — no nc/curl required. This is the definitive test
+      for "can container A reach container B".
+
+  container_discover_by_service(service_name)
+      Swarm service → [{node, vm_host_label, container_id, container_name}].
+      Replaces docker ps + parse. Call once and use the returned IDs
+      directly in the four tools above.
+
+Standard overlay-diagnosis pattern:
+  1. container_discover_by_service(service_name) — get container IDs
+  2. container_networks(host, container_id) for EACH container involved —
+     compare overlay network memberships
+  3. container_tcp_probe(host, container_id, target_host, target_port) —
+     definitive reachability from the right netns
+  4. container_config_read(host, id, path) — when the client logs
+     point at a specific hostname or port that isn't what you expect:
+        /usr/share/logstash/pipeline/*.conf
+        /etc/kafka/server.properties
+        /opt/*/config/*.yml
+     to confirm what the client is configured to reach.
+  5. container_env(host, id, grep_pattern="KAFKA") — when the config
+     is env-driven (most apache/kafka and confluentinc images):
+     look for KAFKA_BOOTSTRAP_SERVERS, KAFKA_ADVERTISED_LISTENERS,
+     ELASTICSEARCH_HOSTS.
+
 ═══ KAFKA TRIAGE ORDER ═══
 1. kafka_topic_inspect (no args, or topic=X for focused) — FIRST call for any
    kafka issue. Returns structured broker/partition/ISR state in one call.
@@ -632,9 +730,15 @@ Call BOTH before drawing any conclusions:
 
 CONSUMER LAG PATH (when message contains "consumer lag"):
   The slow consumer is named in kafka.consumer_lag (e.g. "logstash").
-  Step 1: service_placement("logstash_logstash") — confirm running + which node
-  Step 2: vm_exec(host="<worker>", command="docker logs <container> --tail 100")
-          → look for: ES connection refused, bulk errors, 429, pipeline errors
+  Step 1: container_discover_by_service("logstash_logstash")
+          → returns {node, vm_host_label, container_id, container_name} per replica.
+          Use the container_id and vm_host_label for every subsequent step.
+  Step 2: vm_exec(host=<vm_host_label>,
+                  command="docker logs <container_id> --tail 100")
+          → look for: ES connection refused, bulk errors, 429, pipeline errors,
+            "Disconnecting from node N due to socket connection setup timeout"
+          (Note: docker logs is intentionally vm_exec, not a container_* tool —
+           stdout stream doesn't map cleanly to a typed API.)
   Step 3: elastic_cluster_health() — if ES unhealthy, that's why logstash backs up
   Step 4: kafka_exec(broker_label="<any-worker>",
           command="kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group logstash")
@@ -651,8 +755,10 @@ CONSUMER LAG PATH (when message contains "consumer lag"):
 BROKER MISSING PATH (when message contains "broker N missing"):
   Step 1: kafka_broker_status() → which broker ID is missing
   Step 2: swarm_node_status() → any worker node Down?
-  Step 3: service_placement(service_name="kafka_broker-N") → node + vm_host_label
-  Step 4: vm_exec(host=<vm_host_label>, command="docker ps --filter name=kafka")
+  Step 3: container_discover_by_service("kafka_broker-N")
+          → returns {node, vm_host_label, container_id, container_name} in one call.
+          Replaces the service_placement + docker ps pair.
+  Step 4: (skipped — container_id already in hand from Step 3)
   Step 5: kafka_exec(broker_label="<node-label>",
           command="kafka-topics.sh --bootstrap-server localhost:9092 --list")
   Step 6: elastic_kafka_logs() — historical error patterns
@@ -715,43 +821,6 @@ Inside containers:
 Safe pipes are supported for output trimming: `| head`, `| tail`, `| grep`,
 `| wc`, `| sort`, `| uniq`, `| awk` (no -f), `| sed` (no -f), and trailing
 `2>&1` / `> /dev/null`. Do NOT use `;`, `&`, `` ` ``, `$( )`, or `<`.
-
-═══ CONTAINER INTROSPECTION (v2.34.12) ═══
-When investigating a problem inside a running container (config mismatch,
-overlay routing, env-driven bootstrap), use these tools BEFORE raw
-docker exec. They return structured data in one call and bypass the
-vm_exec metachar/allowlist filters by validating arguments up front:
-
-  container_config_read(host, container_id, path)
-      Read /etc/hosts, /etc/resolv.conf, /etc/*.conf, /opt/*/config/*,
-      /usr/share/*/pipeline/*.conf, /var/log/*.log. Path allowlist enforced.
-
-  container_env(host, container_id, grep_pattern=None)
-      Returns env vars (secrets redacted). Use to see KAFKA_BOOTSTRAP_SERVERS,
-      KAFKA_ADVERTISED_LISTENERS, ELASTICSEARCH_HOSTS, etc.
-
-  container_networks(host, container_id)
-      Returns {networks: [{name, ip}], published_ports: [...]}. Single call
-      to find overlay-network mismatch between two containers.
-
-  container_tcp_probe(host, container_id, target_host, target_port)
-      TCP reachability from INSIDE the container netns. Uses bash
-      </dev/tcp/...> — no nc/curl required. This is the definitive test
-      for "can container A reach container B".
-
-  container_discover_by_service(service_name)
-      Swarm service → [{node, vm_host_label, container_id, container_name}].
-      Replaces docker ps + parse. Call once and use the returned IDs
-      directly in the four tools above.
-
-Standard overlay-diagnosis pattern:
-  1. container_discover_by_service(service_name) — get container IDs
-  2. container_networks(host, container_id) for EACH container involved —
-     compare overlay network memberships
-  3. container_tcp_probe(host, container_id, target_host, target_port) —
-     definitive reachability from the right netns
-  4. container_config_read(...) / container_env(...) — only if needed to
-     identify what address the client is actually trying to reach
 
 NON-KAFKA INVESTIGATION PATHS:
 
@@ -1149,8 +1218,19 @@ Safe pipes: `| head`, `| tail`, `| grep`, `| wc`, `| sort`, `| uniq`;
 safe redirects: `2>&1`, `> /dev/null`. No `;`, `&`, `` ` ``, `$( )`, or `<`.
 These are read-only — no plan_action required.
 
-For post-action verification, container_config_read and container_tcp_probe
-are available (read-only).
+POST-ACTION VERIFICATION (v2.34.12):
+After a destructive operation, verify the fix with the read-only
+container_* tools (no plan_action needed):
+
+  container_tcp_probe(host, id, target_host, target_port)
+    → confirm client-side reachability restored after network changes
+  container_config_read(host, id, path)
+    → confirm config written / unchanged after a service update
+  container_networks(host, id)
+    → confirm container attached to expected overlays after redeploy
+
+Prefer these over re-running service_health alone — they answer "does
+the client actually work now" rather than "is the container up".
 
 ═══ BLOCKED COMMAND RULE ═══
 If vm_exec returns "not in allowlist", do NOT retry. Instead:

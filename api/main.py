@@ -96,6 +96,25 @@ async def lifespan(app: FastAPI):
         BUILD.info({"version": _version_path.read_text().strip()})
     except Exception:
         pass
+    # v2.34.13: emit prompt-tool-mention smoke-test gauge once on startup.
+    # Lets us detect regressions where a prompt refactor drops container_*.
+    try:
+        from api.agents.router import OBSERVE_PROMPT, INVESTIGATE_PROMPT, ACTION_PROMPT
+        from api.metrics import PROMPT_TOOL_MENTION_COUNTER
+        for _agent_type, _prompt in [
+            ("observe", OBSERVE_PROMPT),
+            ("investigate", INVESTIGATE_PROMPT),
+            ("execute", ACTION_PROMPT),
+        ]:
+            for _tool in ("container_config_read", "container_env",
+                          "container_networks", "container_tcp_probe",
+                          "container_discover_by_service", "vm_exec"):
+                if _tool in _prompt:
+                    PROMPT_TOOL_MENTION_COUNTER.labels(
+                        agent_type=_agent_type, tool=_tool
+                    ).inc()
+    except Exception:
+        pass
     # Crypto boot-safety: refuse to start if env key is missing but encrypted data exists
     from api.crypto import check_encryption_key_safe
     check_encryption_key_safe()

@@ -110,6 +110,14 @@ CONTAINER_INTROSPECT_COUNTER = Counter(
     ["tool", "outcome"],   # outcome: 'ok' | 'error'
 )
 
+# --- prompt tool mentions (v2.34.13) ---
+PROMPT_TOOL_MENTION_COUNTER = Counter(
+    "deathstar_prompt_tool_mention_total",
+    "Tool names mentioned in system prompts per agent type — "
+    "a smoke test for prompt-retarget regressions",
+    ["agent_type", "tool"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

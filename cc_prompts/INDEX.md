@@ -184,7 +184,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.9.md  | v2.34.9  | feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination | DONE (00c6090) |
 | CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | DONE (70e6bcc) |
 | CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | DONE (b76839f) |
-| CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | RUNNING |
+| CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | DONE (8e7adaa) |
+| CC_PROMPT_v2.34.13.md | v2.34.13 | fix(agents): retarget prompts to prefer container_introspect over raw docker exec | RUNNING |
 
 ---
 
@@ -331,6 +332,9 @@ Sessions 2f2dae36 + 5107bfa7 (same Logstash investigate prompt, both runs) class
 
 **v2.34.12** — feat(tools): container-introspection read-only tools.
 Session 2bd88acb hit token cap (123k > 120k) after 16 tool calls with 5 blocked `docker exec … cat/curl/nc` attempts (container_id hash-check, /etc/resolv.conf, /etc/hosts, logstash.yml, in-container curl). Adds mcp_server/tools/container_introspect.py with 5 typed tools, all blast_radius=none: container_config_read (path regex safelist for /etc/*, /opt/*/config/*, /usr/share/*/pipeline/*, /var/log/*), container_env (env dump with PASSWORD/SECRET/TOKEN regex redaction), container_networks (structured docker inspect → {networks, published_ports}), container_tcp_probe (bash </dev/tcp/> — works without nc installed in-container), container_discover_by_service (Swarm service → [{node, vm_host_label, container_id, container_name}]). Added to observe/investigate/execute allowlists (NOT build). Prompt gets a CONTAINER INTROSPECTION block teaching the overlay-diagnosis pattern (discover → networks ×2 → tcp_probe → config_read). Seeds diagnose_container_overlay_reachability runbook. Tests cover arg validation, shell-injection rejection, secret redaction, and router allowlist presence.
+
+**v2.34.13** — fix(agents): retarget prompts to prefer container_introspect over raw docker exec.
+v2.34.12 shipped the five container_* tools correctly registered, allowlisted, and mentioned in RESEARCH_PROMPT, but session a69fd96d made 9 vm_exec calls and 0 container_* calls. Prometheus confirms: counter declared, zero series. Root cause: the KAFKA TRIAGE block at the top of RESEARCH_PROMPT is prescriptive with vm_exec/kafka_exec step lists, while the CONTAINER INTROSPECTION block sits 400 lines further down after STORAGE/NETWORK/COMPUTE/SECURITY branches — by the time the LLM reaches it the top-of-prompt playbook has committed it to vm_exec. Fix inserts a CONTAINER INTROSPECT FIRST block immediately before KAFKA TRIAGE ORDER with a `docker exec <x> → container_* tool` mapping table and the canonical overlay-diagnosis sequence (discover ×2 → networks ×2 → tcp_probe → config_read). Replaces the "vm_exec docker ps --filter name=" step in CONSUMER LAG PATH and BROKER MISSING PATH with container_discover_by_service. Tightens docstring first-lines for semantic-rank readiness. Adds PROMPT_TOOL_MENTION_COUNTER smoke-test Prometheus metric so prompt regressions are spottable. No new code, no new tools — pure prompt retargeting.
 
 ---
 
