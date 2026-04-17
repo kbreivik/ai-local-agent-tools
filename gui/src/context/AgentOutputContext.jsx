@@ -137,6 +137,7 @@ export function AgentOutputProvider({ children }) {
   const [pendingProposals,     setPendingProposals]     = useState([])
   const [zeroPivot,            setZeroPivot]            = useState(null)
   const [contradictions,       setContradictions]       = useState([])
+  const [agentDiag,            setAgentDiag]            = useState(null)
   const agentTypeRef    = useRef(null)
   const sessionIdRef    = useRef(null)
   const feedStartRef    = useRef(null)  // timestamp when current run started
@@ -170,6 +171,7 @@ export function AgentOutputProvider({ children }) {
         setPendingProposals([])           // ← clear proposals on new run
         setZeroPivot(null)                // ← clear pivot banner on new run
         setContradictions([])             // ← clear contradiction banner on new run
+        setAgentDiag(null)                // ← clear diagnostics overlay on new run
         // Add to raw log stream
         setOutputLines(prev => [...prev.slice(-500), msg])
         // Reset inline feed
@@ -206,6 +208,12 @@ export function AgentOutputProvider({ children }) {
       // ── contradiction_detected (v2.33.13) ─────────────────────────────────
       if (t === 'contradiction_detected') {
         setContradictions(Array.isArray(msg.contradictions) ? msg.contradictions : [])
+        return
+      }
+
+      // ── agent_diagnostics (v2.33.15) ───────────────────────────────────────
+      if (t === 'agent_diagnostics') {
+        setAgentDiag(msg)
         return
       }
 
@@ -367,6 +375,7 @@ export function AgentOutputProvider({ children }) {
       pendingProposals,
       zeroPivot,
       contradictions,
+      agentDiag,
     }}>
       {children}
     </AgentOutputContext.Provider>

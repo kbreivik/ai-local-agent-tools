@@ -1436,6 +1436,35 @@ async def _run_single_agent_step(
                         status="warning", session_id=session_id,
                     )
 
+                # ── v2.33.15: live diagnostics snapshot ──────────────────────
+                # Emit a compact state snapshot after each tool call so the GUI
+                # can surface budget/DIAGNOSIS/zero-streak state before the run
+                # exhausts budget and draws a shallow conclusion.
+                try:
+                    _diag_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                    _diag_used = len(tools_used_names)
+                    _diag_has_diagnosis = (
+                        "DIAGNOSIS:" in (last_reasoning or "")
+                        if agent_type in ("research", "investigate")
+                        else True
+                    )
+                    await manager.broadcast({
+                        "type":                 "agent_diagnostics",
+                        "session_id":           session_id,
+                        "agent_type":           agent_type,
+                        "tools_used":           _diag_used,
+                        "budget":               _diag_budget,
+                        "budget_pct":           int((_diag_used / max(_diag_budget, 1)) * 100),
+                        "has_diagnosis":        _diag_has_diagnosis,
+                        "zero_streaks":         {k: v for k, v in _zero_streaks.items() if v > 0},
+                        "max_nonzero_by_tool":  dict(_nonzero_seen),
+                        "pivot_nudges_fired":   list(_zero_pivot_fired),
+                        "subtask_proposed":     "propose_subtask" in tools_used_names,
+                        "timestamp":            datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception as _diag_e:
+                    log.debug("agent_diagnostics broadcast failed: %s", _diag_e)
+
                 _is_hard_failure = result_status in ("failed", "escalated") or (fn_name == "escalate" and result_status != "blocked")
                 _is_degraded = result_status == "degraded"
                 _is_investigate = agent_type in ("research", "investigate", "status", "observe")

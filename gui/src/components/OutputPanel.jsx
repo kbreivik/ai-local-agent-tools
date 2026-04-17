@@ -4,6 +4,7 @@ import { useTask } from '../context/TaskContext'
 import ChoiceBar from './ChoiceBar'
 import ClarificationWidget from './ClarificationWidget'
 import SubtaskOfferCard from './SubtaskOfferCard'
+import AgentDiagnostics from './AgentDiagnostics'
 
 const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
@@ -54,7 +55,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, agentDiag } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -115,6 +116,7 @@ export default function OutputPanel({ onTab }) {
 
       {/* Output stream */}
       <div className="flex-1 overflow-y-auto px-3 py-2 bg-slate-950">
+        <AgentDiagnostics diag={agentDiag} />
         {zeroPivot && (
           <div className="mono" style={{
             margin: '6px 0', padding: '6px 10px',
