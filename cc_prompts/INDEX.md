@@ -168,7 +168,11 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.14.md | v2.33.14 | feat(tools): elastic_search_logs rich query metadata + hint | DONE (cba6198) |
 | CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | DONE (d575a1a) |
 | CC_PROMPT_v2.33.16.md | v2.33.16 | fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition | DONE (59ee72c) |
-| CC_PROMPT_v2.33.17.md | v2.33.17 | fix(security): docker_host SSH credentials from profiles, not other connections | RUNNING |
+| CC_PROMPT_v2.33.17.md | v2.33.17 | fix(security): docker_host SSH credentials from profiles, not other connections | DONE (18c3ea4) |
+| CC_PROMPT_v2.33.18.md | v2.33.18 | feat(templates): recover_worker_node composite task template | RUNNING |
+| CC_PROMPT_v2.33.19.md | v2.33.19 | feat(tools): log_timeline — unified cross-source timeline per entity | PENDING |
+| CC_PROMPT_v2.33.20.md | v2.33.20 | feat(security): Gates dashboard + drift/maintenance-window suppression | PENDING |
+| CC_PROMPT_v2.34.0.md  | v2.34.0  | feat(agents): sub-agent execution in isolated sub-context | PENDING |
 
 ---
 
@@ -289,6 +293,24 @@ Follow-up to v2.33.10. Observed in live use: percent text advanced but the bar a
 
 **v2.33.17** — fix(security): docker_host SSH credentials from profiles, not other connections.
 The docker_host platform form was the last holdout using a different credential source pattern from every other SSH-capable platform. Its SSH-tunnel mode exposed a "Credentials from" dropdown (`_ssh_source`) that let the user inherit credentials from another vm_host connection, creating invisible cross-connection dependencies, breaking rotation test coverage (profile rotation tests don't follow `_ssh_source` chains), and making the `credential_state` audit field inaccurate. Fix removes `_ssh_source` entirely and wires docker_host into the same `credential_profile_id` picker used by vm_host/windows/fortiswitch/cisco/juniper/aruba, filtered to SSH-typed profiles. Backend credential resolution switches to the standard profile-first resolver from v2.31.22. Alembic migration rewrites existing `_ssh_source` values — if the source vm_host had a profile, the docker_host inherits its `credential_profile_id`; otherwise `_ssh_source` is stripped and a warning is logged. New `credential_state.source = needs_profile` plus a red ⚠ NEEDS PROFILE badge surface rows that require manual relinking. Establishes credential profiles as the single source of truth for all connection credentials.
+
+---
+
+## Phase: v2.33.18–v2.33.20 + v2.34.0 — Operations Maturity
+
+Four prompts that close the remaining gaps in the tasks/tools/gates/sub-agents stack. The first three stay within 2.33.x as iterative additions to existing subsystems. The fourth bumps to 2.34.0 because it introduces the sub-agent runtime — a new subsystem and multi-file architectural change. Rule: once v2.34.0 ships, no further 2.33.x prompts are written.
+
+**v2.33.18** — feat(templates): recover_worker_node composite task template.
+First composite task template that includes verification as part of its own chain rather than relying only on v2.32.2's post-action verify. Sequence: swarm_node_status (pre-check) → service_placement (inventory) → plan_action + proxmox_vm_power(reboot) → poll swarm_node_status until Ready or timeout → swarm_service_force_update for each service that didn't auto-reschedule → swarm_node_status + kafka_topic_inspect for verification. Closes the worker-03 manual loop that's been running the same sequence by hand for weeks. Execute-agent, blast_radius=node, destructive=True, always shows plan modal. Required inputs: node_name, proxmox_vm_label; optional ready_timeout_s (default 180).
+
+**v2.33.19** — feat(tools): log_timeline — unified cross-source timeline per entity.
+New MCP tool returning a chronologically merged timeline for an entity, drawing from operation_log (agent tool calls), agent_actions (destructive audit v2.31.2), entity_history (status transitions + drift v2.33.9), and Elasticsearch logs (filtered to entity's host/service in the window). Single call replaces the 4-5 separate lookups agents currently use to reconstruct "what happened to X". Normalised event schema: `{ts, source, kind, actor, summary, detail}`. Added to observe and investigate allowlists. RESEARCH_PROMPT updated so the agent reaches for log_timeline first on "what happened" questions and only falls back to raw elastic_search_logs for regex/field-specific needs.
+
+**v2.33.20** — feat(security): Gates dashboard + drift/maintenance-window suppression.
+Two coupled changes: (1) New Gates view under MONITOR aggregates plan-confirmation rate by blast radius, escalations (open vs acknowledged), drift events (open/acknowledged/suppressed), agent hard-cap triggers (wall-clock, token, failure, destructive from v2.31.8), top-20 tool refusals, and active maintenance windows. GET /api/gates/overview endpoint with configurable window_hours (6/24/72/168, capped at 168). 30s client poll. (2) Drift events fired on entities inside an active maintenance window auto-mark `suppressed_by_maintenance = true` and emit a different WS event (`drift_suppressed` vs `drift_detected`) so the card doesn't show amber DRIFT during planned work. drift_events gains the column via Alembic migration. Closes the gap where the safety machinery runs but has no single operator-visible health view.
+
+**v2.34.0** — feat(agents): sub-agent execution in isolated sub-context.
+Architectural completion of the sub-agent story. Since v2.24.0 the parent could propose a sub-task and v2.33.3 nudged it near budget exhaustion, but proposals only rendered as clickable cards the operator had to run manually. This change makes the harness intercept propose_subtask and spawn an actual sub-agent with its own context window, its own tool budget, and its own depth counter. Parent awaits completion, receives the sub-agent's final_answer + diagnosis as the tool_result of propose_subtask, and resumes with the summary in hand. Sub-agents can themselves spawn sub-sub-agents up to `subagentMaxDepth` (default 2). Budget cap: sub cannot exceed parent's remaining minus `subagentMinParentReserve` (default 2). Tree-wide wall-clock cap `subagentTreeWallClockS` (default 1800) prevents runaway chains. Destructive operations forbidden in sub-agents unless explicit `allow_destructive=true` AND parent is execute-type AND depth=1. Fresh context rule: sub-agent receives only the objective, a 3-line parent summary, and its scope entity — **not** the parent's full tool history. Refactor `_stream_agent` into a reusable `drive_agent(AgentTask) → AgentResult` driver so both top-level and sub-agents share the same loop. New `subagent_runs` table links parent and sub task IDs + terminal outcome. New `SubAgentPanel` React component renders indented under the parent's OutputPanel with its own collapsible WS stream. Closes the biggest remaining architectural gap in the agent design.
 
 ---
 

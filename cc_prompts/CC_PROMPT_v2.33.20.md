@@ -1,0 +1,430 @@
+# CC PROMPT — v2.33.20 — feat(security): Gates dashboard + drift/maintenance-window interaction
+
+## What this does
+
+The security and safety machinery now includes plan-confirm tiers (v2.33.6),
+blast radius tagging (v2.33.6), escalation records (v2.15.10), drift detection
+(v2.33.9), maintenance windows (v2.31.10), agent_actions audit (v2.31.2), and
+agent loop hard caps (v2.31.8). Each emits signals in isolation and there is no
+single place to see them together.
+
+Two coupled changes:
+
+1. **Gates dashboard** — new MONITOR sidebar entry showing the aggregate state
+   of every gate: plan confirmations, blast-radius distribution, escalations,
+   refused-tool attempts, drift events, maintenance coverage.
+
+2. **Drift ↔ maintenance integration** — drift events fired on entities that
+   are inside a declared maintenance window auto-acknowledge with a
+   `suppressed_by_maintenance` marker instead of alerting. This is the obvious
+   expected behaviour and its absence has been a minor irritant when doing
+   planned work.
+
+Version bump: 2.33.19 → 2.33.20
+
+---
+
+## Change 1 — api/routers/gates.py (new file)
+
+```python
+"""
+GET /api/gates/overview — aggregate state of every safety gate.
+
+Read-only aggregation over agent_actions, escalations, drift_events,
+maintenance_windows, and hard-cap counters.
+"""
+import datetime as _dt
+from fastapi import APIRouter, Depends
+
+from api.auth import get_current_user
+from api.db.base import get_engine
+
+router = APIRouter(prefix="/api/gates", tags=["gates"])
+
+
+@router.get("/overview")
+async def gates_overview(
+    window_hours: int = 24,
+    _user = Depends(get_current_user),
+):
+    since = _dt.datetime.utcnow() - _dt.timedelta(hours=min(max(1, window_hours), 168))
+    eng = get_engine()
+
+    result = {"window_hours": window_hours, "since": since.isoformat() + "Z"}
+
+    async with eng.connect() as c:
+        # Plan confirmations — from agent_actions (v2.31.2)
+        r = await c.execute("""
+            SELECT blast_radius,
+                   COUNT(*)                                          AS total,
+                   SUM(CASE WHEN status = 'approved'    THEN 1 ELSE 0 END) AS approved,
+                   SUM(CASE WHEN status = 'rejected'    THEN 1 ELSE 0 END) AS rejected,
+                   SUM(CASE WHEN status = 'executed'    THEN 1 ELSE 0 END) AS executed,
+                   SUM(CASE WHEN status = 'failed'      THEN 1 ELSE 0 END) AS failed
+            FROM agent_actions
+            WHERE created_at >= :since
+            GROUP BY blast_radius
+            ORDER BY blast_radius
+        """, {"since": since})
+        result["plan_confirmations"] = [dict(r) for r in r.mappings().all()]
+
+        # Escalations — from agent_escalations (v2.15.10)
+        r = await c.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN acknowledged_at IS NOT NULL THEN 1 ELSE 0 END) AS acknowledged,
+                   SUM(CASE WHEN acknowledged_at IS NULL     THEN 1 ELSE 0 END) AS open
+            FROM agent_escalations
+            WHERE created_at >= :since
+        """, {"since": since})
+        result["escalations"] = dict(r.mappings().one())
+
+        # Drift events — from drift_events view (v2.33.9)
+        r = await c.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN suppressed_by_maintenance THEN 1 ELSE 0 END) AS suppressed,
+                   SUM(CASE WHEN acknowledged              THEN 1 ELSE 0 END) AS acknowledged,
+                   SUM(CASE WHEN NOT acknowledged AND NOT suppressed_by_maintenance THEN 1 ELSE 0 END) AS open
+            FROM drift_events
+            WHERE recorded_at >= :since
+        """, {"since": since})
+        result["drift"] = dict(r.mappings().one())
+
+        # Maintenance coverage — from maintenance_windows (v2.31.10)
+        r = await c.execute("""
+            SELECT entity_id, starts_at, ends_at, reason, created_by
+            FROM maintenance_windows
+            WHERE ends_at > NOW()
+            ORDER BY starts_at
+        """)
+        result["maintenance_active"] = [dict(r) for r in r.mappings().all()]
+
+        # Hard caps — count terminated tasks from operation_log or stats table
+        r = await c.execute("""
+            SELECT COUNT(*) FILTER (WHERE terminated_reason = 'wall_clock') AS wall_clock,
+                   COUNT(*) FILTER (WHERE terminated_reason = 'token_cap')  AS token_cap,
+                   COUNT(*) FILTER (WHERE terminated_reason = 'failure_cap') AS failure_cap,
+                   COUNT(*) FILTER (WHERE terminated_reason = 'destructive_cap') AS destructive_cap
+            FROM agent_tasks
+            WHERE created_at >= :since AND terminated_reason IS NOT NULL
+        """, {"since": since})
+        result["hard_caps"] = dict(r.mappings().one())
+
+        # Tool refusals — from operation_log where outcome = 'refused'
+        r = await c.execute("""
+            SELECT tool, COUNT(*) AS count
+            FROM operation_log
+            WHERE created_at >= :since AND outcome = 'refused'
+            GROUP BY tool
+            ORDER BY count DESC
+            LIMIT 20
+        """, {"since": since})
+        result["tool_refusals"] = [dict(r) for r in r.mappings().all()]
+
+    return result
+```
+
+Register the router in `api/main.py` alongside existing routers:
+
+```python
+from api.routers import gates
+app.include_router(gates.router)
+```
+
+## Change 2 — api/db/drift.py — suppress drift events during maintenance
+
+Locate the drift-event insertion path. Around the `INSERT INTO entity_history`
+or drift-view trigger, consult the active maintenance windows before recording
+an unsuppressed event.
+
+```python
+async def record_drift_event(entity_id: str, prev_hash: str, new_hash: str):
+    eng = get_engine()
+    async with eng.begin() as c:
+        # Check if entity is under an active maintenance window
+        r = await c.execute("""
+            SELECT COUNT(*) FROM maintenance_windows
+            WHERE entity_id = :eid
+              AND starts_at <= NOW() AND ends_at > NOW()
+        """, {"eid": entity_id})
+        under_maintenance = (r.scalar() or 0) > 0
+
+        await c.execute("""
+            INSERT INTO drift_events
+                (entity_id, prev_config_hash, new_config_hash,
+                 recorded_at, suppressed_by_maintenance)
+            VALUES
+                (:eid, :prev, :new, NOW(), :suppressed)
+        """, {"eid": entity_id, "prev": prev_hash, "new": new_hash,
+              "suppressed": under_maintenance})
+
+        return {"suppressed": under_maintenance}
+```
+
+If `drift_events` is a view rather than a table, add a
+`suppressed_by_maintenance` boolean column to whatever base table it reads from,
+or convert to a materialised table. A migration may be needed:
+
+```python
+# Alembic migration
+op.add_column("drift_events",
+              sa.Column("suppressed_by_maintenance", sa.Boolean,
+                        nullable=False, server_default="false"))
+```
+
+## Change 3 — api/websocket.py — emit maintenance-suppressed drift as info event
+
+When a drift fires under maintenance, emit a different WS event type so the
+frontend can render it greyed out instead of amber:
+
+```python
+# In drift emission path
+if under_maintenance:
+    await ws_manager.broadcast({
+        "type": "drift_suppressed",
+        "entity_id": entity_id,
+        "reason": "maintenance_window_active",
+    })
+else:
+    await ws_manager.broadcast({
+        "type": "drift_detected",
+        "entity_id": entity_id,
+        "prev_hash": prev_hash,
+        "new_hash": new_hash,
+    })
+```
+
+## Change 4 — gui/src/components/GatesView.jsx (new file)
+
+```jsx
+import { useEffect, useState } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+const RADIUS_COLORS = {
+  none:    'var(--green)',
+  node:    'var(--cyan)',
+  service: 'var(--amber)',
+  cluster: 'var(--red)',
+  fleet:   '#a366ff',
+}
+
+export default function GatesView() {
+  const [data, setData] = useState(null)
+  const [windowH, setWindowH] = useState(24)
+
+  const load = () => {
+    fetch(`${BASE}/api/gates/overview?window_hours=${windowH}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setData(d))
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 30_000)
+    return () => clearInterval(id)
+  }, [windowH])
+
+  if (!data) return <div style={{ padding: 16, fontSize: 11, color: 'var(--text-3)' }}>Loading gates…</div>
+
+  return (
+    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Window selector */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>WINDOW</span>
+        {[6, 24, 72, 168].map(h => (
+          <button key={h} onClick={() => setWindowH(h)}
+            style={{ fontSize: 9, padding: '3px 8px', borderRadius: 2,
+              fontFamily: 'var(--font-mono)', cursor: 'pointer',
+              background: windowH === h ? 'var(--accent-dim)' : 'var(--bg-2)',
+              color: windowH === h ? 'var(--accent)' : 'var(--text-3)',
+              border: `1px solid ${windowH === h ? 'var(--accent)' : 'var(--border)'}` }}>
+            {h < 24 ? `${h}h` : `${h/24}d`}
+          </button>
+        ))}
+      </div>
+
+      {/* Plan confirmations by blast radius */}
+      <Panel title="PLAN CONFIRMATIONS BY BLAST RADIUS">
+        {data.plan_confirmations.map(row => (
+          <div key={row.blast_radius} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
+            <span style={{
+              fontSize: 9, padding: '1px 6px', borderRadius: 2,
+              background: `${RADIUS_COLORS[row.blast_radius]}22`,
+              color: RADIUS_COLORS[row.blast_radius],
+              border: `1px solid ${RADIUS_COLORS[row.blast_radius]}`,
+              fontFamily: 'var(--font-mono)', letterSpacing: 1,
+              minWidth: 70, textAlign: 'center',
+            }}>{row.blast_radius.toUpperCase()}</span>
+            <Stat label="total"      value={row.total}      />
+            <Stat label="approved"   value={row.approved}   color="var(--green)" />
+            <Stat label="rejected"   value={row.rejected}   color="var(--red)"   />
+            <Stat label="executed"   value={row.executed}   />
+            <Stat label="failed"     value={row.failed}     color="var(--amber)" />
+          </div>
+        ))}
+        {data.plan_confirmations.length === 0 && <Empty />}
+      </Panel>
+
+      {/* Escalations */}
+      <Panel title="ESCALATIONS">
+        <div style={{ display: 'flex', gap: 24, padding: '4px 0' }}>
+          <Stat label="total"         value={data.escalations.total} />
+          <Stat label="open"          value={data.escalations.open}         color="var(--amber)" />
+          <Stat label="acknowledged"  value={data.escalations.acknowledged} color="var(--green)" />
+        </div>
+      </Panel>
+
+      {/* Drift */}
+      <Panel title="DRIFT EVENTS">
+        <div style={{ display: 'flex', gap: 24, padding: '4px 0' }}>
+          <Stat label="total"        value={data.drift.total} />
+          <Stat label="open"         value={data.drift.open}         color="var(--amber)" />
+          <Stat label="acknowledged" value={data.drift.acknowledged} color="var(--green)" />
+          <Stat label="suppressed"   value={data.drift.suppressed}   color="var(--text-3)"
+            tooltip="Auto-suppressed because entity was in a maintenance window" />
+        </div>
+      </Panel>
+
+      {/* Hard caps */}
+      <Panel title="AGENT HARD CAPS TRIGGERED">
+        <div style={{ display: 'flex', gap: 24, padding: '4px 0' }}>
+          <Stat label="wall clock"      value={data.hard_caps.wall_clock}      color={data.hard_caps.wall_clock > 0 ? 'var(--amber)' : undefined} />
+          <Stat label="token cap"       value={data.hard_caps.token_cap}       color={data.hard_caps.token_cap > 0 ? 'var(--amber)' : undefined} />
+          <Stat label="failure cap"     value={data.hard_caps.failure_cap}     color={data.hard_caps.failure_cap > 0 ? 'var(--red)' : undefined} />
+          <Stat label="destructive cap" value={data.hard_caps.destructive_cap} color={data.hard_caps.destructive_cap > 0 ? 'var(--red)' : undefined} />
+        </div>
+      </Panel>
+
+      {/* Tool refusals */}
+      <Panel title="TOOL REFUSALS (TOP 20)">
+        {data.tool_refusals.length === 0 ? <Empty /> : (
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+            {data.tool_refusals.map(r => (
+              <div key={r.tool} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                <span style={{ color: 'var(--text-2)' }}>{r.tool}</span>
+                <span style={{ color: 'var(--red)' }}>{r.count}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      {/* Active maintenance */}
+      <Panel title={`ACTIVE MAINTENANCE WINDOWS (${data.maintenance_active.length})`}>
+        {data.maintenance_active.length === 0 ? <Empty /> : (
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+            {data.maintenance_active.map((m, i) => (
+              <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid var(--bg-3)' }}>
+                <div style={{ color: 'var(--text-1)' }}>{m.entity_id}</div>
+                <div style={{ color: 'var(--text-3)', fontSize: 9 }}>
+                  {new Date(m.starts_at).toLocaleString()} → {new Date(m.ends_at).toLocaleString()}
+                  {m.reason && ` · ${m.reason}`}
+                  {m.created_by && ` · by ${m.created_by}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  )
+}
+
+function Panel({ title, children }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 2, background: 'var(--bg-1)' }}>
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)',
+        fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', letterSpacing: 1 }}>
+        {title}
+      </div>
+      <div style={{ padding: 10 }}>{children}</div>
+    </div>
+  )
+}
+
+function Stat({ label, value, color, tooltip }) {
+  return (
+    <div title={tooltip} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ fontSize: 16, color: color || 'var(--text-1)', fontFamily: 'var(--font-mono)', lineHeight: 1 }}>
+        {value ?? '—'}
+      </span>
+      <span style={{ fontSize: 8, color: 'var(--text-3)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+        {label}
+      </span>
+    </div>
+  )
+}
+
+function Empty() {
+  return <div style={{ fontSize: 10, color: 'var(--text-3)', padding: '4px 0' }}>none</div>
+}
+```
+
+## Change 5 — gui/src/components/Sidebar.jsx — nav entry
+
+Add under MONITOR, after the existing Kafka/Security entries:
+
+```jsx
+<SidebarLink to="/gates" icon="🛡" label="Gates" />
+```
+
+Routing wire-up in `gui/src/App.jsx`:
+
+```jsx
+import GatesView from './components/GatesView'
+// ...
+{view === 'gates' && <GatesView />}
+```
+
+## Change 6 — tests
+
+`tests/test_gates_overview.py`:
+
+```python
+def test_overview_endpoint_auth_required(client):
+    r = client.get("/api/gates/overview")
+    assert r.status_code in (401, 403)
+
+def test_overview_shape(authed_client):
+    r = authed_client.get("/api/gates/overview?window_hours=24")
+    assert r.status_code == 200
+    d = r.json()
+    for k in ["plan_confirmations", "escalations", "drift",
+              "maintenance_active", "hard_caps", "tool_refusals"]:
+        assert k in d, f"missing {k}"
+
+def test_drift_during_maintenance_is_suppressed(authed_client, seeded_maintenance):
+    # Given a maintenance window covering entity E
+    # When a drift event fires on E
+    # Then the resulting drift_events row has suppressed_by_maintenance=True
+    from api.db.drift import record_drift_event
+    r = await record_drift_event("proxmox:worker-03:9203", "aaa", "bbb")
+    assert r["suppressed"] is True
+
+def test_window_capped_at_168h(authed_client):
+    r = authed_client.get("/api/gates/overview?window_hours=9999")
+    assert r.json()["window_hours"] == 9999  # input echoed
+    # But since-timestamp reflects cap — compare to 168h ago +/- fudge
+```
+
+## Version bump
+Update `VERSION`: 2.33.19 → 2.33.20
+
+## Commit
+```
+git add -A
+git commit -m "feat(security): v2.33.20 Gates dashboard + drift/maintenance suppression"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy, run Alembic upgrade.
+2. Click new Gates entry in MONITOR sidebar.
+3. Verify all panels render and numbers are non-nonsense.
+4. Create a maintenance window for an entity (v2.31.10 UI).
+5. Trigger a manual config change on that entity (e.g. restart it).
+6. Confirm the resulting drift event appears in the Drift panel under
+   "suppressed", NOT "open", and no amber ⚠ DRIFT badge fires on the card.
+7. End the maintenance window → next drift event fires normally.

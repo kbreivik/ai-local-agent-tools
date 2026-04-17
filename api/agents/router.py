@@ -154,8 +154,11 @@ _DIAGNOSTICS = frozenset({
 
 EXECUTE_KAFKA_TOOLS = frozenset({
     "pre_kafka_check", "kafka_broker_status", "kafka_topic_health",
+    "kafka_topic_inspect",                 # v2.33.18: ISR verify
     "kafka_consumer_lag", "kafka_rolling_restart_safe", "kafka_exec",
     "swarm_node_status", "swarm_service_force_update",
+    "service_placement",                   # v2.33.18: broker placement
+    "proxmox_vm_power",                    # v2.33.18: VM-level recovery
     "vm_exec", "infra_lookup",                   # SSH diagnostics on workers
     "service_list", "service_health",             # Swarm service state
     "entity_history", "entity_events",            # change tracking
@@ -178,6 +181,9 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "result_fetch", "result_query",
     "entity_history", "entity_events",
     "swarm_node_status", "swarm_service_force_update",
+    "service_placement",                 # v2.33.18: worker-node recovery composite
+    "proxmox_vm_power",                  # v2.33.18: worker-node recovery composite
+    "kafka_topic_inspect",               # v2.33.18: ISR verify after node rejoin
     "resolve_entity",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
@@ -191,6 +197,7 @@ EXECUTE_PROXMOX_TOOLS = frozenset({
     "proxmox_vm_power",                # start/stop/reboot VMs via Proxmox API
     "swarm_node_status",               # check which Swarm worker nodes are Down
     "swarm_service_force_update",      # force-update a Swarm service after node recovery
+    "kafka_topic_inspect",             # v2.33.18: ISR verify after node recovery
     "vm_exec", "infra_lookup",         # SSH to VM hosts for diagnostics
     "service_list", "service_health",  # check Swarm services after VM recovery
     "service_placement",               # locate which node a service task is on

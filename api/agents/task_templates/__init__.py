@@ -13,6 +13,7 @@ from api.agents.task_templates import drain_swarm_node
 from api.agents.task_templates import diagnose_kafka_under_replicated
 from api.agents.task_templates import verify_backup_job
 from api.agents.task_templates import investigate_drift
+from api.agents.task_templates import recover_worker_node
 
 TEMPLATES: dict[str, dict] = {}
 
@@ -21,6 +22,7 @@ TEMPLATES[drain_swarm_node.TEMPLATE["id"]] = drain_swarm_node.TEMPLATE
 TEMPLATES[diagnose_kafka_under_replicated.TEMPLATE["id"]] = diagnose_kafka_under_replicated.TEMPLATE
 TEMPLATES[verify_backup_job.TEMPLATE["id"]] = verify_backup_job.TEMPLATE
 TEMPLATES[investigate_drift.TEMPLATE["id"]] = investigate_drift.TEMPLATE
+TEMPLATES[recover_worker_node.TEMPLATE["id"]] = recover_worker_node.TEMPLATE
 
 
 TASK_TEMPLATES: list[dict] = [

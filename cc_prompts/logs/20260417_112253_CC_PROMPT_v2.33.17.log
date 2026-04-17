@@ -422,3 +422,19 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 11:22:53
 ========================================================================
+v2.33.17 pushed to origin/main (commit 18c3ea4). All 6 new tests pass, 10 existing docker+crypto tests still pass, Python syntax validates clean.
+[STATUS] 6m18s
+
+**Summary of changes:**
+- `gui/src/components/OptionsModal.jsx` — removed `_ssh_source` field + dropdown, added docker_host to the credential profile picker (SSH-typed profiles only), added `NEEDS PROFILE` red badge
+- `api/collectors/swarm.py` — replaced `_ssh_source` vm_host lookup with the profile-first `resolve_credentials_for_connection` resolver
+- `api/connections.py` — added one-shot `_migrate_docker_host_ssh_source()` (PG + SQLite paths), wired into `init_connections()`; extended `credential_state` to return `needs_profile` for docker_host SSH rows without creds
+- `tests/test_docker_host_profile.py` — 6 regression tests
+- `VERSION` — 2.33.16 → 2.33.17
+
+PROMPT COMPLETE: v2.33.17
+
+========================================================================
+EXIT CODE: 0
+DURATION:  6m18s
+========================================================================
