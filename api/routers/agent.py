@@ -1182,8 +1182,27 @@ async def _run_single_agent_step(
                         _pst_sub_budget  = int(_pst_args.get("budget_tools") or 0)
                         _pst_allow_dest  = bool(_pst_args.get("allow_destructive", False))
 
-                        # Prefer in-band spawn when an objective + agent_type pair is
-                        # provided. Fall back to legacy proposal card otherwise.
+                        # v2.34.4: Auto-promote legacy `task=` calls to in-band
+                        # spawn. The LLM frequently sends only `task` (legacy
+                        # shape) even when its system prompt advertises shape
+                        # (b). Treat ANY propose_subtask call as an in-band
+                        # spawn request unless the agent explicitly opts out by
+                        # passing executable_steps without an objective/task.
+                        if not _pst_objective and _pst_task:
+                            _pst_objective = _pst_task
+                        if not _pst_sub_type:
+                            # Inherit parent's agent_type (mapped to allowed set)
+                            _inherit = {
+                                "investigate": "investigate",
+                                "research":    "investigate",
+                                "observe":     "observe",
+                                "status":      "observe",
+                                "execute":     "execute",
+                                "action":      "execute",
+                                "build":       "investigate",
+                            }
+                            _pst_sub_type = _inherit.get(agent_type, "investigate")
+
                         _inband_ok = bool(_pst_objective) and _pst_sub_type in (
                             "observe", "investigate", "execute"
                         )
@@ -1250,6 +1269,11 @@ async def _run_single_agent_step(
                                     f"(tools={_spawn.get('tools_used', 0)})",
                                     status="ok", session_id=session_id,
                                 )
+                                try:
+                                    from api.metrics import SUBAGENT_SPAWN_COUNTER
+                                    SUBAGENT_SPAWN_COUNTER.labels(outcome="spawned").inc()
+                                except Exception:
+                                    pass
                             else:
                                 # Spawn refused by guardrails — surface to the model
                                 _pst_result = {
@@ -1262,6 +1286,20 @@ async def _run_single_agent_step(
                                     f"[subagent] refused — {_pst_result['message']}",
                                     status="error", session_id=session_id,
                                 )
+                                try:
+                                    from api.metrics import SUBAGENT_SPAWN_COUNTER
+                                    _err = (_pst_result.get("message") or "").lower()
+                                    if "depth" in _err:
+                                        _outcome = "rejected_depth"
+                                    elif "budget" in _err or "insufficient" in _err:
+                                        _outcome = "rejected_budget"
+                                    elif "destructive" in _err:
+                                        _outcome = "rejected_destructive"
+                                    else:
+                                        _outcome = "rejected_budget"
+                                    SUBAGENT_SPAWN_COUNTER.labels(outcome=_outcome).inc()
+                                except Exception:
+                                    pass
 
                         else:
                             # ── Legacy proposal-card path ────────────────────
@@ -1306,6 +1344,15 @@ async def _run_single_agent_step(
                                 f"({_confidence} confidence). User notified.",
                                 status="ok", session_id=session_id,
                             )
+                            try:
+                                from api.metrics import SUBAGENT_SPAWN_COUNTER
+                                # v2.34.4 canary: this fires when the harness falls
+                                # through to v2.24.0 proposal-only behaviour. Should
+                                # be 0 in steady state — auto-promotion above means
+                                # only truly empty propose_subtask calls land here.
+                                SUBAGENT_SPAWN_COUNTER.labels(outcome="proposal_only").inc()
+                            except Exception:
+                                pass
                             _pst_result = {
                                 "status": "proposed",
                                 "proposal_id": _proposal_id,

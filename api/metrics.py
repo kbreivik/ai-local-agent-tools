@@ -56,6 +56,14 @@ KAFKA_BROKERS_UP = Gauge(
     "Reachable brokers in cluster",
 )
 
+# --- sub-agents (v2.34.4) ---
+SUBAGENT_SPAWN_COUNTER = Counter(
+    "deathstar_subagent_spawns_total",
+    "Sub-agent spawn attempts by outcome",
+    # spawned | rejected_depth | rejected_budget | rejected_destructive | proposal_only
+    ["outcome"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

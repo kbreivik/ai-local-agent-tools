@@ -175,7 +175,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.0.md  | v2.34.0  | feat(agents): sub-agent execution in isolated sub-context | DONE (ebd5810) |
 | CC_PROMPT_v2.34.1.md  | v2.34.1  | feat(agents): coordinator uses agent_attempts for starting-tool selection | DONE (1019f7f) |
 | CC_PROMPT_v2.34.2.md  | v2.34.2  | feat(skills): execution observability + adoption metrics | DONE (03e1149) |
-| CC_PROMPT_v2.34.3.md  | v2.34.3  | fix(ui): pull-bar UPDATING label + self-recreate hard-refresh instructions | RUNNING |
+| CC_PROMPT_v2.34.3.md  | v2.34.3  | fix(ui): pull-bar UPDATING label + self-recreate hard-refresh instructions | DONE (3258866) |
 | CC_PROMPT_v2.34.4.md  | v2.34.4  | fix(agents): complete v2.34.0 sub-agent wiring — pop-up still proposes, does not execute | PENDING · CRITICAL |
 
 ---

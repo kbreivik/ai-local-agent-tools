@@ -568,6 +568,25 @@ async def websocket_output(ws: WebSocket, token: Optional[str] = Query(default=N
 # Serve built React GUI if present
 _gui_dist = Path(__file__).parent.parent / "gui" / "dist"
 if _gui_dist.exists():
+    # v2.34.4: SPA fallback for popup routes. main.jsx handles client-side
+    # routing for /subtask/{id} and /runbook/{id}, but a cold visit hits the
+    # server first — without these explicit routes, StaticFiles returns 404.
+    from fastapi.responses import FileResponse
+
+    _index_html = _gui_dist / "index.html"
+
+    @app.get("/subtask/{session_id}")
+    async def _spa_subtask(session_id: str):
+        if _index_html.exists():
+            return FileResponse(str(_index_html))
+        return Response(status_code=404)
+
+    @app.get("/runbook/{proposal_id}")
+    async def _spa_runbook(proposal_id: str):
+        if _index_html.exists():
+            return FileResponse(str(_index_html))
+        return Response(status_code=404)
+
     app.mount("/", StaticFiles(directory=str(_gui_dist), html=True), name="gui")
 
 
