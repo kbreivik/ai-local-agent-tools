@@ -87,6 +87,13 @@ TOOL_SIGNATURE_ERROR_COUNTER = Counter(
     ["tool_name"],
 )
 
+# --- vm_exec safe-pipe usage (v2.34.10) ---
+VM_EXEC_PIPE_COUNTER = Counter(
+    "deathstar_vm_exec_pipe_usage_total",
+    "vm_exec calls that use a safe pipe stage",
+    ["pipe_stage"],  # head | tail | grep | wc | sort | uniq | awk | sed | cut | tr
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

@@ -181,6 +181,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.6.md  | v2.34.6  | feat(tools): elastic_search_logs auto-samples schema on filter miss | DONE (41b55c8) |
 | CC_PROMPT_v2.34.7.md  | v2.34.7  | fix(ui): restore running-version marker in container tag dropdown | DONE (36d4b62) |
 | CC_PROMPT_v2.34.8.md  | v2.34.8  | fix(agents): hallucination guard — require N substantive tool calls before final_answer | PENDING · CRITICAL |
+| CC_PROMPT_v2.34.9.md  | v2.34.9  | feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination | DONE (00c6090) |
+| CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | RUNNING |
 
 ---
 
@@ -196,153 +198,131 @@ bash cc_prompts/run_queue.sh             # run all
 ## Phase summaries
 
 **v2.32.0–v2.32.3** — Harness Tightening phase (representation + runtime).
-See individual entries below.
 
 **v2.32.0** — refactor(agents): structured system prompts for observe + investigate.
-Restructures STATUS_PROMPT and RESEARCH_PROMPT into labeled ═══ SECTION ═══ sections.
-No logic changes. Representation-only, based on Tsinghua NLH research.
+Restructures STATUS_PROMPT and RESEARCH_PROMPT into labeled ═══ SECTION ═══ sections. Representation-only, based on Tsinghua NLH research.
 
 **v2.32.1** — refactor(agents): structured system prompts for execute + build.
 Completes prompt restructuring for all 4 agent types. Same ═══ SECTION ═══ pattern.
 
 **v2.32.2** — feat(agents): post-action verify step.
-Harness auto-calls verification tool after destructive ops succeed (force-update →
-service_health, proxmox_power → swarm_node_status, upgrade → post_upgrade_verify).
+Harness auto-calls verification tool after destructive ops succeed (force-update → service_health, proxmox_power → swarm_node_status, upgrade → post_upgrade_verify).
 
 **v2.32.3** — feat(agents): attempt history table + context injection.
 New agent_attempts table. Injects last 3 attempts per entity into system prompt.
 
 **v2.32.4** — fix(agents): final_answer truncation at 300 chars.
-verdict_from_text() truncated summary to text[:300], and _stream_agent used
-prior_verdict["summary"] as last_reasoning → final_answer always cut to 300 chars.
-Fix: preserve full step output in verdict dict via "full_output" key, use it for
-final_answer. Also increases verdict summary from 300→1500 chars for better
-coordinator context.
+verdict_from_text() truncated summary to text[:300], and _stream_agent used prior_verdict["summary"] as last_reasoning → final_answer always cut to 300 chars. Fix preserves full step output via "full_output" key, raises verdict summary from 300 to 1500 chars.
 
 **v2.32.5** — feat(agents): enforced tool call budgets per agent type.
 Adds _MAX_TOOL_CALLS_BY_TYPE: observe=8, investigate=16, execute=14, build=12.
-Checked at start of each LLM step — when exhausted, harness forces a summary with
-no further tool calls. Previously only max_steps (LLM rounds) was enforced but one
-step can fire multiple tool calls.
 
 **v2.32.6** — feat(infra): version-check refresh button + configurable timers.
-Fixes stale-cache issue where a new image push could take up to 10 min to appear
-in the expanded ghcr container card. Adds `?force=1` on `/containers/{id}/tags`
-to bypass `_GHCR_TAG_CACHE`, a "↻ Refresh versions" button in the expanded card,
-and two new DB-backed Settings → Infrastructure knobs: `ghcrTagCacheTTL` (default
-600s) and `autoUpdateInterval` (default 300s).
+?force=1 on /containers/{id}/tags, Refresh versions button, ghcrTagCacheTTL + autoUpdateInterval settings.
 
 ---
 
-## Phase: v2.33.x — Test-Fix-Verify expansion (10 cycles)
-
-Paired with `reports/test_cycles.html` — a paged HTML report with per-cycle
-status (Discovered / Planned Fix / Post-Fix Verify) saved to localStorage.
-Each version below has one matching cycle in the report. Open the report,
-run the pre-fix test plan, mark status as `testing`, then run the prompt,
-then mark `verified` after the post-fix verify passes.
+## Phase: v2.33.x — Test-Fix-Verify expansion (paired with reports/test_cycles.html)
 
 **v2.33.0** — feat(tools): kafka_topic_inspect — structured cluster state in one call.
-New MCP tool returning `{brokers[], topics[{partitions[{leader,replicas,isr,under_replicated}]}], summary}` via `KafkaAdminClient`. Added to OBSERVE + INVESTIGATE allowlists. Triage order updated so kafka_topic_inspect is the first call for any kafka query, then kafka_consumer_lag, then kafka_exec for deep dives. Replaces the 4-5 call chain agents currently use to reconstruct ISR.
+New MCP tool returning {brokers, topics, partitions with ISR/under_replicated, summary}. OBSERVE + INVESTIGATE allowlists.
 
 **v2.33.1** — feat(templates): drain_swarm_node task template.
-Agent template in SWARM group, inputs: node_name + timeout_s. Sequence: swarm_node_status → plan_action for `docker node update --availability drain` → poll `docker node ps` until zero running tasks. Execute-agent, blast_radius=node, destructive=True. Closes the manual drain step before worker-03 reboots.
+Inputs node_name + timeout_s. swarm_node_status → plan_action drain → poll docker node ps.
 
 **v2.33.2** — feat(templates): diagnose_kafka_under_replicated fixed 4-step RCA.
-Investigate-agent template chaining kafka_topic_inspect (v2.33.0) → service_placement → swarm_node_status → optional proxmox_vm_power(status). Uses `prompt_override` to enforce STRICT output shape: MISSING_BROKERS / IMPACT / ROOT_CAUSE / RESPONSIBLE_NODE / RECOMMENDED_FIX. Router gains prompt_override support keeping Role+Environment sections while replacing body.
+Chains kafka_topic_inspect → service_placement → swarm_node_status → optional proxmox_vm_power(status). Enforces STRICT output shape.
 
 **v2.33.3** — feat(agents): mandatory sub-agent proposal near budget exhaustion.
-Strengthens propose_subtask (v2.24.0). When tools_used >= 70% of budget without a `DIAGNOSIS:` section, harness injects a nudge and agent MUST call propose_subtask next. OutputPanel renders a clickable inline sub-task offer card (accent border), emits WS `subtask_proposed` + `budget_nudge` events. agent_attempts gains was_proposal column for measurement.
+When tools_used >= 70% without DIAGNOSIS, nudges agent to propose_subtask.
 
 **v2.33.4** — feat(skills): auto-promoter for repeated vm_exec patterns.
-New background worker auto_promoter scans agent_actions weekly: `(tool, args_shape)` with count ≥ 5 across ≥ 2 tasks becomes a skill_candidates row. SHAPE_RULES normalises vm_exec to (host, first_command_token). Skills tab gains Candidates subtab with Approve/Reject/Scan-now buttons. Approved candidates flow through existing skill_create (v2.13.0).
+Weekly scan of agent_actions: (tool, args_shape) count >= 5 across >= 2 tasks becomes a skill_candidate.
 
 **v2.33.5** — feat(ops): Prometheus /metrics endpoint.
-New `api/metrics.py` module with stable `deathstar_*` metric families: collector poll histogram, agent task counter, tool-call counter, agent wall-time histogram, escalation counter, kafka under-replicated gauge, build info. Mounted at unauthenticated GET /metrics. CollectorManager.trigger_poll wrapped, agent loop counts tool calls + terminal status, escalations increment on record.
+api/metrics.py with deathstar_* metric families. Unauthenticated /metrics.
 
 **v2.33.6** — feat(security): blast radius tagging + tiered plan confirmation.
-New `api/agents/tool_metadata.py` with `BLAST_RADIUS = {none, node, service, cluster, fleet}`. Each destructive tool annotated. `radius_of(tool, args)` does arg-based escalation for vm_exec/kafka_exec. Plan payload enriched with radius per step + plan_radius. PlanModal renders colored pills (green/amber/red/violet) + extra-confirm checkbox required for cluster+ radii. Plans with >1 fleet-radius step rejected at backend.
+BLAST_RADIUS = {none, node, service, cluster, fleet}. PlanModal coloured pills + extra-confirm for cluster+.
 
 **v2.33.7** — feat(ui): Kafka inspection tab — brokers, topics, partitions, lag.
-New sidebar entry under MONITOR. Backend `/api/kafka/overview` aggregates v2.33.0 kafka_topic_inspect + kafka_consumer_lag, cached 30s (configurable kafkaOverviewCacheTTL setting). UI: 3-pane grid — broker list (left), topic grid with under-replicated + max-lag columns (centre), partition drill-in with ISR vs Replicas (right). Polls every 15s client-side. Amber rows for under-replicated topics.
+MONITOR sidebar. /api/kafka/overview aggregates inspect + consumer_lag, 30s cache.
 
 **v2.33.8** — feat(templates): verify_backup_job + PBS last-success tracking.
-PBS collector extended to enumerate `/admin/datastore/{s}/snapshots` and record last_success_ts per (backup_type, backup_id). Cross-reference written so VMCard can join. New MCP tool pbs_last_backup(vm_id) returns {status, age_hours, last_success_ts, datastore}. Task template verify_backup_job in STORAGE group, default max_age_hours=25. VMCard gets green/amber freshness dot.
+PBS collector records last_success_ts per (backup_type, backup_id). pbs_last_backup(vm_id) tool + STORAGE template.
 
 **v2.33.9** — feat(security): drift detection — config_hash reconciliation + badge.
-entity_history gains config_hash + prev_config_hash columns; `compute_config_hash` ignores volatile keys (uptime, cpu_usage, etc.). New `drift_events` view flags hash changes without a sanctioned agent_action within ±60s. `/api/entity/{id}/drift` + `/api/drift/recent` endpoints. Cards get ⚠ DRIFT badge (amber) — clicking opens investigate_drift template pre-scoped to the entity. Enforces DEATHSTAR as the single source of truth for changes.
+entity_history gains config_hash. drift_events view flags changes without sanctioned agent_action within ±60s.
 
 **v2.33.10** — feat(ui): container pull — in-card progress + eager version controls.
-Three coordinated fixes for the ghcr container update flow. (1) New async pull API: `POST /containers/{id}/pull-start` returns a job_id; `GET /pull-jobs/{id}` reports layer-aggregated bytes_done/bytes_total + phase (downloading/extracting/recreating/done/error). Uses `client.api.pull(stream=True, decode=True)` for live Docker events. (2) Frontend lifts full tags list from ContainerCardExpanded to ServiceCards parent — Choose version + Refresh buttons render instantly on expand, no fetch-on-mount delay. Full tags cached, not just `[0]`. (3) In-card progress block with phase label, percent bar, message, layer byte counter, DISMISS button; replaces the bottom-right "Done" toast for pull success. Errors remain inline too. Self-container (hp1_agent) preserves the sidecar-recreate path.
-
----
-
-## Phase: v2.33.11–v2.33.15 — Agent Reasoning Quality
-
-Surfaced by live investigate trace on 2026-04-17 09:39 (`Search Elasticsearch for error-level log entries in the last 1 hour`). The trace confirmed v2.33.3 works correctly (budget nudge fired at 11/16, propose_subtask called at step 12) but surfaced three concrete bugs: (1) `elastic_search_logs` rejected `level=` kwarg with `TypeError`, (2) agent issued 7 consecutive zero-result calls without pivoting, (3) final answer concluded "no errors found" despite step 3 returning 90 log entries. This phase fixes all three and adds live observability into the harness.
+POST /containers/{id}/pull-start, GET /pull-jobs/{id}, in-card progress block with DISMISS.
 
 **v2.33.11** — fix(tools): elastic_search_logs level kwarg + aliases.
-Add `level: Union[str, Sequence[str], None]` parameter with case-insensitive normalisation (err↔error, warn↔warning, crit↔critical). Silent aliases `severity=` and `log_level=` map to the same filter. Response envelope gains `applied_filters`, `total_in_window`, `index`. Updates MCP manifest + RESEARCH_PROMPT ELK section. Regression test locks in that `level=` kwarg is permanently accepted.
+level: Union[str, Sequence[str], None] with case-insensitive normalisation. severity= and log_level= aliases.
 
 **v2.33.12** — feat(agents): zero-result pivot detection — 3-in-a-row nudge.
-Harness tracks `_zero_streaks` + `_nonzero_seen` per tool per task. When the same tool returns 0 results 3 consecutive times AFTER having returned non-zero earlier, injects a system nudge instructing the agent to (a) synthesize from the non-zero call, (b) broaden the filter, or (c) switch tools. Also nudges at 4 consecutive zeros even without prior non-zero (likely wrong tool). Emits WS `zero_result_pivot` event; OutputPanel shows amber PIVOT NUDGE banner. `_result_count()` helper handles hits[]/total/count/"Found N" summary shapes.
+Tracks _zero_streaks + _nonzero_seen. Nudges on 3 consecutive zeros after non-zero, or 4 consecutive zeros.
 
 **v2.33.13** — feat(agents): contradiction detection in synthesis.
-Before emitting final_answer, harness scans the draft for negative claims (`no X`, `zero X`, `not found`, `nothing detected`) and cross-references tool history. If any prior call returned non-zero results for a related query, emits WS `contradiction_detected` event, red OutputPanel banner, and injects a system message asking the agent to reconcile (acknowledge the earlier data) or revise. One reconciliation attempt per task; unresolved contradictions surface as a `[HARNESS WARNING]` prefix on final_answer.
+Before final_answer, scans for negative claims, cross-references tool history. Reconciliation attempt once per task.
 
 **v2.33.14** — feat(tools): elastic_search_logs rich query metadata + hint.
-Extends v2.33.11 response envelope with `total_relation`, `query_lucene` (serialised ES query body for debugging), and an auto-generated `hint` string when `total == 0 and total_in_window > 0`. Hint names the active filters and suggests which to drop first (host → service → level → query). Same envelope applied to `elastic_log_pattern`. Prompt updated so the agent is told to read and respond to `hint` when present.
+total_relation, query_lucene, auto hint when total==0 and total_in_window>0.
 
 **v2.33.15** — feat(ui): live agent diagnostics overlay.
-New `AgentDiagnostics` component rendered at top of OutputPanel during investigate runs. Compact horizontal bar shows: tool budget (N/max with coloured progress bar), DIAGNOSIS emitted (· not yet / ✓ emitted), per-tool zero-streak badges (e.g. `e_search×4`), pivot nudge count, SUBTASK PROPOSED indicator. Backend emits periodic `agent_diagnostics` WS events after each tool call. Makes harness state visible to operator in real-time — they can see the agent struggling before budget exhaustion.
+AgentDiagnostics component: tool budget, DIAGNOSIS status, zero-streak badges, pivot nudge count, SUBTASK PROPOSED indicator.
 
 **v2.33.16** — fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition.
-Follow-up to v2.33.10. Observed in live use: percent text advanced but the bar appeared bumpy — stalling or stepping backward. Three root causes in `api/routers/dashboard.py::_update_pull_job`: (1) `bytes_total` was recomputed as the sum of all discovered layers, so as Docker streamed new layer headers the denominator grew faster than `bytes_done`, making raw `int(done/total*100)` *decrease* between polls; (2) the `done` callsite passed `percent=100` via kwargs but the function applied kwargs first and then overwrote percent with the layer recomputation; (3) CSS `transition: 0.3s ease` with a 600 ms poll interval left the bar idle for 300 ms per cycle. Fix replaces raw byte math with fixed phase bands (starting 0–5%, downloading 5–70%, extracting 70–92%, recreating 92–98%, done 100%), scales within each band by bytes (download) or layer completions (extract), and enforces `max(prev, pct)` monotonicity per job. Explicit percent only raises, never lowers. `error` freezes at last-seen percent rather than resetting. Frontend transition bumped to `650ms linear` so the bar interpolates continuously across poll boundaries instead of finishing early and pausing.
+Fixed phase bands (starting 0-5%, downloading 5-70%, extracting 70-92%, recreating 92-98%, done 100%), max(prev, pct) monotonicity, 650ms linear CSS transition matched to 600ms poll.
 
 **v2.33.17** — fix(security): docker_host SSH credentials from profiles, not other connections.
-The docker_host platform form was the last holdout using a different credential source pattern from every other SSH-capable platform. Its SSH-tunnel mode exposed a "Credentials from" dropdown (`_ssh_source`) that let the user inherit credentials from another vm_host connection, creating invisible cross-connection dependencies, breaking rotation test coverage (profile rotation tests don't follow `_ssh_source` chains), and making the `credential_state` audit field inaccurate. Fix removes `_ssh_source` entirely and wires docker_host into the same `credential_profile_id` picker used by vm_host/windows/fortiswitch/cisco/juniper/aruba, filtered to SSH-typed profiles. Backend credential resolution switches to the standard profile-first resolver from v2.31.22. Alembic migration rewrites existing `_ssh_source` values — if the source vm_host had a profile, the docker_host inherits its `credential_profile_id`; otherwise `_ssh_source` is stripped and a warning is logged. New `credential_state.source = needs_profile` plus a red ⚠ NEEDS PROFILE badge surface rows that require manual relinking. Establishes credential profiles as the single source of truth for all connection credentials.
-
----
-
-## Phase: v2.33.18–v2.33.20 + v2.34.0 — Operations Maturity
-
-Four prompts that close the remaining gaps in the tasks/tools/gates/sub-agents stack. The first three stay within 2.33.x as iterative additions to existing subsystems. The fourth bumps to 2.34.0 because it introduces the sub-agent runtime — a new subsystem and multi-file architectural change. Rule: once v2.34.0 ships, no further 2.33.x prompts are written.
+Removes _ssh_source dropdown, wires docker_host into credential_profile_id picker. Migration + needs_profile badge.
 
 **v2.33.18** — feat(templates): recover_worker_node composite task template.
-First composite task template that includes verification as part of its own chain rather than relying only on v2.32.2's post-action verify. Sequence: swarm_node_status (pre-check) → service_placement (inventory) → plan_action + proxmox_vm_power(reboot) → poll swarm_node_status until Ready or timeout → swarm_service_force_update for each service that didn't auto-reschedule → swarm_node_status + kafka_topic_inspect for verification. Closes the worker-03 manual loop that's been running the same sequence by hand for weeks. Execute-agent, blast_radius=node, destructive=True, always shows plan modal. Required inputs: node_name, proxmox_vm_label; optional ready_timeout_s (default 180).
+6-step chain: swarm_node_status → service_placement → plan_action + proxmox_vm_power(reboot) → poll until Ready → swarm_service_force_update → verify (incl kafka_topic_inspect).
 
 **v2.33.19** — feat(tools): log_timeline — unified cross-source timeline per entity.
-New MCP tool returning a chronologically merged timeline for an entity, drawing from operation_log (agent tool calls), agent_actions (destructive audit v2.31.2), entity_history (status transitions + drift v2.33.9), and Elasticsearch logs (filtered to entity's host/service in the window). Single call replaces the 4-5 separate lookups agents currently use to reconstruct "what happened to X". Normalised event schema: `{ts, source, kind, actor, summary, detail}`. Added to observe and investigate allowlists. RESEARCH_PROMPT updated so the agent reaches for log_timeline first on "what happened" questions and only falls back to raw elastic_search_logs for regex/field-specific needs.
+Merges operation_log + agent_actions + entity_history + Elasticsearch logs. Normalised {ts, source, kind, actor, summary, detail}.
 
 **v2.33.20** — feat(security): Gates dashboard + drift/maintenance-window suppression.
-Two coupled changes: (1) New Gates view under MONITOR aggregates plan-confirmation rate by blast radius, escalations (open vs acknowledged), drift events (open/acknowledged/suppressed), agent hard-cap triggers (wall-clock, token, failure, destructive from v2.31.8), top-20 tool refusals, and active maintenance windows. GET /api/gates/overview endpoint with configurable window_hours (6/24/72/168, capped at 168). 30s client poll. (2) Drift events fired on entities inside an active maintenance window auto-mark `suppressed_by_maintenance = true` and emit a different WS event (`drift_suppressed` vs `drift_detected`) so the card doesn't show amber DRIFT during planned work. drift_events gains the column via Alembic migration. Closes the gap where the safety machinery runs but has no single operator-visible health view.
-
-**v2.34.0** — feat(agents): sub-agent execution in isolated sub-context.
-Architectural completion of the sub-agent story. Since v2.24.0 the parent could propose a sub-task and v2.33.3 nudged it near budget exhaustion, but proposals only rendered as clickable cards the operator had to run manually. This change makes the harness intercept propose_subtask and spawn an actual sub-agent with its own context window, its own tool budget, and its own depth counter. Parent awaits completion, receives the sub-agent's final_answer + diagnosis as the tool_result of propose_subtask, and resumes with the summary in hand. Sub-agents can themselves spawn sub-sub-agents up to `subagentMaxDepth` (default 2). Budget cap: sub cannot exceed parent's remaining minus `subagentMinParentReserve` (default 2). Tree-wide wall-clock cap `subagentTreeWallClockS` (default 1800) prevents runaway chains. Destructive operations forbidden in sub-agents unless explicit `allow_destructive=true` AND parent is execute-type AND depth=1. Fresh context rule: sub-agent receives only the objective, a 3-line parent summary, and its scope entity — **not** the parent's full tool history. Refactor `_stream_agent` into a reusable `drive_agent(AgentTask) → AgentResult` driver so both top-level and sub-agents share the same loop. New `subagent_runs` table links parent and sub task IDs + terminal outcome. New `SubAgentPanel` React component renders indented under the parent's OutputPanel with its own collapsible WS stream. Closes the biggest remaining architectural gap in the agent design.
-
-**v2.34.1** — feat(agents): coordinator uses agent_attempts for starting-tool selection.
-v2.10.0's coordinator and v2.32.3's agent_attempts table have not been connected. When the same entity is investigated or recovered repeatedly, the agent re-walks the same tool chain each time because it has no memory of prior runs. This change makes the coordinator query agent_attempts at task start (scoped to the task's scope_entity, last 7 days, up to 3 attempts, across agent types) and inject a compact `═══ PRIOR ATTEMPTS ON THIS ENTITY ═══` section into the system prompt above v2.32.3's in-task history. Each entry shows timestamp, agent_type, objective, outcome (done/failed/timeout_cap/...), tool sequence (first 6 + count), and last diagnosis. Includes GUIDANCE lines telling the agent not to repeat exact sequences from done-outcome attempts, to consider alternatives when prior runs timed out at a specific tool, and to acknowledge recurrence when a prior diagnosis resolved the same problem. Opt-out via `coordinatorPriorAttemptsEnabled` setting (default true). Routine-success skip: if all 3 prior attempts are same agent_type and succeeded, no injection (avoids prompt bloat on routine ops). Alembic backfill populates `tools_used_list` from `operation_log` for recent rows where it's empty. Only applies to investigate/execute; observe and build skip.
-
-**v2.34.2** — feat(skills): execution observability + adoption metrics.
-v2.13.0-13.1 built the skill system, v2.33.4 added the auto-promoter, but no signal anywhere shows whether skills are used, which are dead code, whether the promoter is actually running, or how skills compare to the raw tool chains they replaced. This change adds three things: (1) New `skill_executions` table capturing every skill invocation with skill_id, task_id, duration, outcome, error, args, and result_summary. Instruments the existing skill_execute dispatcher to write a start row and update a completion row. (2) New `auto_promoter_scans` audit table recording every scan (cron or manual via the `Scan now` button in the Candidates tab) with actions scanned, candidates found, candidates new, duration, and trigger source. (3) New Metrics subtab in the Skills view showing: auto-promoter health banner (amber if last scan > 8 days ago), candidate pipeline breakdown (detected/pending/approved/rejected/promoted), per-skill execution table (runs, successes, errors, avg duration, last run) with dead-skill markers. GET /api/skills/metrics endpoint backs the view. Prometheus metrics `deathstar_skill_executions_total` + `deathstar_skill_duration_seconds` + `deathstar_auto_promoter_scans_total` added if v2.33.5 is wired. Closes the observability gap on the entire skill stack.
+MONITOR Gates view aggregating plan-confirmations, escalations, drift events, hard-caps, refusals. Drift during maintenance auto-suppresses.
 
 ---
 
-## Phase: v2.34.5–v2.34.6 — Harness math + ELK schema discovery (trace-driven)
+## Phase: v2.34.x — Sub-agent runtime + follow-ups
 
-Two fixes motivated directly by live trace 2026-04-17 15:17–15:19 (investigate Logstash→ES writes). The trace shows v2.33.12 pivot detection, v2.33.13 contradiction detection, and v2.34.0's `_handle_propose_subtask` refuse branch all firing correctly. But the agent still failed to diagnose, for two unrelated reasons: (1) the budget math makes sub-agent spawn mathematically unreachable once the nudge fires, and (2) the agent had no way to see the actual document schema in Elasticsearch, so it kept trying wrong field names.
+**v2.34.0** — feat(agents): sub-agent execution in isolated sub-context.
+Harness intercepts propose_subtask and spawns a sub-agent with fresh context, own budget, depth counter. Parent awaits rendezvous. subagentMaxDepth=2, subagentMinParentReserve=2, subagentTreeWallClockS=1800. New subagent_runs table + SubAgentPanel React component. Refactored _stream_agent → reusable drive_agent(AgentTask) → AgentResult.
+
+**v2.34.1** — feat(agents): coordinator uses agent_attempts for starting-tool selection.
+Injects ═══ PRIOR ATTEMPTS ON THIS ENTITY ═══ section showing last 3 attempts in 7 days with outcome, tool sequence, diagnosis, and GUIDANCE. coordinatorPriorAttemptsEnabled opt-out. Routine-success skip avoids prompt bloat.
+
+**v2.34.2** — feat(skills): execution observability + adoption metrics.
+skill_executions + auto_promoter_scans tables. Skills view gains Metrics subtab (promoter health banner, candidate pipeline, per-skill run table). Prometheus counters.
+
+**v2.34.3** — fix(ui): pull-bar UPDATING label + self-recreate hard-refresh instructions.
+Header collapses all in-flight statuses into ⟳ UPDATING so it stops disagreeing with phase subtitle. Self-recreate path sets is_self_recreate=True and shows Ctrl+Shift+R + re-login instructions in an amber callout.
+
+**v2.34.4** — fix(agents): verify v2.34.0 sub-agent wiring — spawn path confirmed working in 15:42 trace. **PENDING · VERIFY ONLY.**
+Originally critical regression fix. Subsequent traces (15:42, 16:19) confirmed spawn + refuse branches both work. Keep prompt as documentation + canary counter, but downgrade to verification-only: CC greps, confirms wiring is correct, adds SUBAGENT_SPAWN_COUNTER with proposal_only label for future regression detection.
 
 **v2.34.5** — fix(agents): propose_subtask math unreachable — earlier nudge + dynamic reserve.
-Budget=16. v2.33.3 nudge at 70% fires at `used=12`. The `propose_subtask` call itself is tool #13, leaving `remaining=3`. With `reserve=2` and `min_sub_budget=2`, max sub budget is 1 — below minimum — so v2.34.0's `_handle_propose_subtask` always returns `insufficient parent budget`. Confirmed in trace: refused at step 8 (remaining=3) and step 9 (remaining=1). Two coupled fixes. (1) Drop the nudge threshold setting `subagentNudgeThreshold` from 0.70 to 0.60 (clamped to [0.40, 0.90]). For budget=16 this fires at `used=10`, leaving 6 remaining — after the propose call, remaining=5, reserve=2, max sub=3 — viable. (2) Replace the static `subagentMinParentReserve=2` with a dynamic function: when parent has NO DIAGNOSIS and is above 60% usage, reserve=0 (parent has nothing to do with reserved slots anyway); when it has a partial diagnosis, reserve = min(2, remaining // 3); otherwise default 2. Refuse messages now include `reserve=N (relaxed|default)` so operators can see which branch fired. New `deathstar_agent_budget_nudges_total{outcome=proposed_and_spawned|proposed_and_refused|not_proposed|diagnosis_present}` counter lets us measure how often nudges actually result in a useful spawn. Together these make the nudge-to-spawn handoff actually reachable; regression tests lock in both the nudge threshold firing point and the reserve relaxation rule.
+Nudge threshold 0.70 → 0.60. Dynamic reserve: parent with no DIAGNOSIS at >=60% usage → reserve=0. For budget=16 this makes spawn viable: fires at used=10, remaining=5 after propose call, max sub=3.
 
 **v2.34.6** — feat(tools): elastic_search_logs auto-samples schema on filter miss.
-Trace showed the agent issuing `service='logstash'` → 0 hits, then narrowing further with `level=error, service='logstash'` → 0 hits, then `level=warn` → 0, … while a plain `(no filter)` at step 5 returned 99 entries. The agent never learned that the actual field routing `logstash` in this ES index is probably `container.name`, not `service.name` — different log shippers (filebeat vs logstash vs fluentd vs Kubernetes) put service routing in different paths. v2.33.14's `hint` told it to drop a filter but didn't show the schema. This change makes `elastic_search_logs` do schema discovery automatically when `total == 0 AND total_in_window > 0`: runs a no-filter sample query, extracts top 20 field names with example values via dict flattening, heuristically maps likely {service, host, level} filter candidates against known shipper patterns (service.name, container.name, kubernetes.labels.app, log.level, severity, etc), and returns `sample_docs`, `available_fields`, `suggested_filters` in the response envelope. RESEARCH_PROMPT updated so the agent reads sample_docs and picks from suggested_filters on a miss rather than narrowing further. Same enrichment applied to `elastic_log_pattern` (v2.33.14). Opt-out via `elasticSchemaDiscoveryOnMiss` setting (default true). Response size capped — max 3 sample docs, max 20 fields — so the envelope stays bounded. Closes the "agent keeps narrowing filters that were wrong from the start" failure mode.
+When total==0 AND total_in_window>0, runs no-filter sample, extracts top 20 field names via dict flattening, heuristically maps {service, host, level} candidates against shipper patterns (service.name, container.name, kubernetes.labels.app, log.level, etc). Returns sample_docs, available_fields, suggested_filters.
 
 **v2.34.7** — fix(ui): restore running-version marker in container tag dropdown.
-Regression spotted in live use: the tag-dropdown in the expanded container card (v2.33.10 onward) lists all available GHCR tags but no longer shows which one is the currently-running version. Previously the running tag had a `▶` arrow prefix and a `(running)` text suffix; now all tags render identically, forcing the user to read the closed-dropdown state at the bottom of the card to know their current version. Most likely lost during v2.33.10's "lift full tags list to ServiceCards parent" refactor or v2.34.3's pull-bar label rewrite. Fix: restore the `▶` prefix + `(running)` suffix conditional on `tag === runningTag`, with subtle bold + accent colour styling to make the row visually distinct. Ensures `runningTag` is correctly threaded from the parent's container state down to the dropdown component.
+Regression: tag-dropdown lost the ▶ prefix + (running) suffix on the current version. Fix restores both with bold + accent styling, threads runningTag prop from parent.
 
-**v2.34.8** — fix(agents): hallucination guard — require N substantive tool calls before final_answer. **CRITICAL.**
-Live trace 2026-04-17 15:42–15:43 confirmed v2.34.5 shipped successfully (60% nudge fires at 9/16) and v2.34.0 sub-agent spawn path works end-to-end. But the sub-agent that spawned emitted a fully-confident final_answer with specific fabricated numbers ("Stable at ~2.3k events/sec", "no restarts in 24h", "1 primary shard unassigned") after making exactly one tool call — `audit_log`, which returns no data. Every number was hallucinated. Had the parent resumed, it would have received these fabrications as authoritative sub-agent output via the propose_subtask tool_result and cited them in its own final_answer. Worse than a missed diagnosis: **confidently wrong**. Two coupled parts. (1) Track `substantive_tool_calls` separately from `tools_used` — a META_TOOLS set (`audit_log`, `runbook_search`, `memory_recall`, `propose_subtask`, `engram_activate`, `plan_action`) does not count toward substantive investigation. When the LLM attempts a final_answer with `substantive_tool_calls < MIN_SUBSTANTIVE_BY_TYPE[agent_type]` (observe=1, investigate=2, execute=2, build=1), the harness rejects the answer, injects a correction nudge telling the agent which meta tools don't count and to call real data-returning tools, and emits a `hallucination_block` WS event. Guard fires once per task to avoid infinite loops — the second attempt is accepted with a `[HARNESS WARNING]` prefix. (2) Agent_type guidance added to the propose_subtask prompt section so parents match verb-to-type (deep-dive/why/diagnose → investigate, not observe) — the trace showed parent proposed "Deep-dive Logstash→ES write health" with agent_type=observe, which is wrong. Observe is for one-shot status checks, not deep-dives. Also adds `substantive_tool_calls` column to `subagent_runs` table for post-hoc audit (`SELECT * WHERE substantive_tool_calls = 0 AND terminal_status = 'done'` finds likely-hallucinated sub-agents). Prometheus counter `deathstar_agent_hallucination_guards_total{agent_type, outcome}` tracks rate. Amber banner in OutputPanel surfaces blocks in real time. Closes the confidently-wrong-answer correctness gap — the most serious bug yet because it produces output operators might act on.
+**v2.34.8** — fix(agents): hallucination guard — require N substantive tool calls before final_answer. **PENDING · CRITICAL.**
+Trace 15:42 showed sub-agent emitting a confident final_answer with fabricated numbers after one audit_log call. Tracks substantive_tool_calls separately (META_TOOLS set: audit_log, runbook_search, memory_recall, propose_subtask, engram_activate, plan_action does not count). Blocks final_answer when substantive < MIN_SUBSTANTIVE_BY_TYPE (observe=1, investigate=2, execute=2, build=1). Guard fires once per task. Also adds agent_type guidance to propose_subtask prompt (deep-dive/why/diagnose → investigate, not observe). substantive_tool_calls column in subagent_runs for post-hoc audit.
+
+**v2.34.9** — feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination.
+Recurring bug: agent calls tools with wrong kwargs (service_name= vs name=, since_minutes= vs minutes_ago=, pattern= vs query=). 16:21 sub-agent lost its last call to kafka_consumer_lag() missing 1 required positional argument: 'group'. Fix extracts real signatures via inspect.signature() at startup, caches per-process, renders ═══ TOOL SIGNATURES ═══ section into system prompt with only the allowlist's signatures. Prometheus deathstar_tool_signature_errors_total tracks TypeError rate.
+
+**v2.34.10** — feat(vm_exec): read-only network diagnostics + safe pipe passthrough.
+16:21 sub-agent tried nc -zv + 2>&1 + | head -5 to verify Kafka broker 3 connectivity — blocked by metachar check and allowlist. Adds network_diagnostics allowlist group (nc -zv, netstat, ss, curl --head, ping -c, dig, host, traceroute -m, mtr -r -c, plus docker-exec variants) with blast_radius=none. Replaces _validate_command: pipe safelist (head, tail, grep, wc, sort, uniq, awk, sed, cut, tr) and redirect safelist (2>&1, > /dev/null). Dangerous chars still blocked.
 
 ---
 
@@ -356,17 +336,18 @@ gui/src/components/VMHostsSection.jsx     — ask/detail buttons + onEntityDetai
 gui/src/App.jsx                           — onEntityDetail passed to VMHostsSection (v2.26.7)
 gui/src/components/DashboardLayout.jsx    — TILE_DISPLAY_NAMES, "VM Hosts" label (v2.26.7)
 api/agents/router.py                      — allowlists, prompts, classifier (v2.26.2, v2.26.3, v2.32.0, v2.32.1)
-api/agents/orchestrator.py                — verdict_from_text, coordinator (v2.10.0, v2.32.4)
-api/routers/agent.py                      — loop, plan gate, verify, budgets (v2.32.2, v2.32.3, v2.32.4, v2.32.5)
+api/agents/orchestrator.py                — verdict_from_text, coordinator (v2.10.0, v2.32.4, v2.34.1)
+api/routers/agent.py                      — loop, plan gate, verify, budgets (v2.32.2, v2.32.3, v2.32.4, v2.32.5, v2.34.0)
 api/db/agent_attempts.py                  — attempt history table (v2.32.3)
+api/db/subagent_runs.py                   — sub-agent runs table (v2.34.0, v2.34.8 adds substantive_tool_calls)
 api/db/runbooks.py                        — BASE_RUNBOOKS + seed_base_runbooks() (v2.26.4)
-api/db/vm_exec_allowlist.py               — allowlist table + cache + session purge (v2.23.3)
+api/db/vm_exec_allowlist.py               — allowlist table + cache + session purge (v2.23.3, v2.34.10)
 api/routers/vm_exec_allowlist.py          — REST API for allowlist management (v2.23.3)
-mcp_server/tools/vm.py                    — _validate_command DB-backed + 3 new tools (v2.23.3)
+mcp_server/tools/vm.py                    — _validate_command DB-backed + 3 new tools (v2.23.3, v2.34.10)
 gui/src/components/OptionsModal.jsx       — Allowlist tab (v2.23.3)
 api/routers/settings.py                   — agentHostIp setting key (v2.22.6)
 api/collectors/docker_agent01.py          — started_at + restart_count in card + metadata (v2.26.8)
-api/db/credential_profiles.py             — seq_id, discoverable, get_profile_safe, get_profile_by_seq_id (v2.26.9)
+api/db/credential_profiles.py             — seq_id, discoverable, get_profile_safe (v2.26.9)
 api/db/audit_log.py                       — connection_audit_log table + write/list events (v2.26.9)
 api/connections.py                        — username_cache column + credential_state in list (v2.26.9, v2.27.0)
 api/routers/credential_profiles.py        — rotation test/confirm, safe fields, audit (v2.26.10)
@@ -376,18 +357,12 @@ api/routers/discovery.py                  — harvest, devices, test, link endpo
 gui/src/components/RotationTestModal.jsx  — rotation test modal with role-gated override (v2.27.4)
 gui/src/components/DiscoveredView.jsx     — discovered devices view (v2.27.5)
 gui/src/components/Sidebar.jsx            — Discovered nav item under MONITOR (v2.27.5)
-api/collectors/docker_agent01.py          — entity_id + to_entities() per container (v2.26.0)
-api/collectors/swarm.py                   — entity_id + to_entities() per service (v2.26.0)
-api/collectors/external_services.py      — entity_id on all probe returns (v2.26.0)
-api/collectors/unifi.py                   — entity_id per device in _build_result (v2.26.0)
-api/collectors/pbs.py                     — entity_id per datastore in _poll_one_conn (v2.26.0)
-api/collectors/truenas.py                 — entity_id per pool in _collect_sync (v2.26.0)
-api/collectors/fortigate.py               — entity_id per interface in _collect_sync (v2.26.0)
-gui/src/components/ServiceCards.jsx       — InfraCard universal entity buttons (v2.26.1)
-api/routers/dashboard.py                  — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0)
+gui/src/components/ServiceCards.jsx       — InfraCard universal entity buttons (v2.26.1), tag dropdown (v2.34.7)
+api/routers/dashboard.py                  — _vm_ssh_exec credential fix + Proxmox action fix (v2.23.0), _update_pull_job (v2.33.16, v2.34.3)
 api/db/infra_inventory.py                 — resolve_entity + write_cross_reference (v2.23.1)
 api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.23.1)
 gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
 api/db/metric_samples.py                  — time-series metrics (v2.21.0)
 mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
+api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10)
 ```

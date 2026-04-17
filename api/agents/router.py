@@ -629,6 +629,27 @@ Use list_metrics(entity_id="...") to discover available metrics.
 NETWORK QUERIES:
 For IP/hostname/port/connectivity questions: call get_host_network() first.
 
+═══ NETWORK DIAGNOSTICS (v2.34.10) ═══
+For connectivity / port / DNS verification these commands are allowlisted
+and read-only. Use them to confirm a networking hypothesis:
+
+  nc -zv <host> <port>              port probe
+  netstat -tuln | grep <port>       local listeners
+  ss -tuln                          local listeners (faster)
+  curl -I http://<host>:<port>/     HTTP HEAD probe
+  ping -c 3 <host>                  ICMP (always bounded by count)
+  dig <hostname>                    DNS query
+  host <hostname>                   DNS (short form)
+
+Inside containers:
+  docker exec <id> nc -zv <host> <port>
+  docker exec <id> netstat -tuln
+  docker exec <id> cat /etc/resolv.conf
+
+Safe pipes are supported for output trimming: `| head`, `| tail`, `| grep`,
+`| wc`, `| sort`, `| uniq`, `| awk` (no -f), `| sed` (no -f), and trailing
+`2>&1` / `> /dev/null`. Do NOT use `;`, `&`, `` ` ``, `$( )`, or `<`.
+
 NON-KAFKA INVESTIGATION PATHS:
 
 STORAGE (TrueNAS / PBS):
@@ -1006,6 +1027,24 @@ your remaining budget on it, call propose_subtask with the spawn shape:
 The harness spawns a fresh agent, runs it to completion in its own context,
 and returns its final_answer to you as the tool_result. Synthesize from that
 — do not re-verify everything it did. Depth and budget caps are enforced.
+
+═══ NETWORK DIAGNOSTICS (v2.34.10) ═══
+For connectivity / port / DNS verification during or after remediation:
+
+  nc -zv <host> <port>              port probe
+  netstat -tuln | grep <port>       local listeners
+  ss -tuln                          local listeners (faster)
+  curl -I http://<host>:<port>/     HTTP HEAD probe
+  ping -c 3 <host>                  ICMP (always bounded by count)
+  dig <hostname>                    DNS query
+
+Inside containers:
+  docker exec <id> nc -zv <host> <port>
+  docker exec <id> netstat -tuln
+
+Safe pipes: `| head`, `| tail`, `| grep`, `| wc`, `| sort`, `| uniq`;
+safe redirects: `2>&1`, `> /dev/null`. No `;`, `&`, `` ` ``, `$( )`, or `<`.
+These are read-only — no plan_action required.
 
 ═══ BLOCKED COMMAND RULE ═══
 If vm_exec returns "not in allowlist", do NOT retry. Instead:

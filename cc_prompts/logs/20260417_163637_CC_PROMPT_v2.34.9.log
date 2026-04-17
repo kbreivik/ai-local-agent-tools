@@ -1,0 +1,355 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.34.9.md (v2.34.9)
+Theme: feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination
+
+Prompt content:
+
+# CC PROMPT — v2.34.9 — feat(agents): inject MCP tool signatures into prompt to stop kwarg hallucination
+
+## Evidence
+
+Recurring failure across multiple traces:
+
+- **2026-04-17 14:54** (execute task) — `service_health() got an unexpected keyword argument 'service_name'`, `service_health() missing 1 required positional argument: 'name'`, `elastic_kafka_logs() got an unexpected keyword argument 'pattern'`, `elastic_error_logs() got an unexpected keyword argument 'since_minutes'`, `service_current_version() got an unexpected keyword argument 'service_name'`. Six signature errors in one 8-tool task.
+- **2026-04-17 16:21** (Logstash sub-agent) — `kafka_consumer_lag() missing 1 required positional argument: 'group'`. Last substantive call burned on a signature error.
+
+The agent has the tool names in the allowlist. It does not have the
+parameter signatures. The LLM is pattern-matching from training data or from
+adjacent tool names and guessing — `since_minutes` instead of `minutes_ago`,
+`service_name` instead of `name`, `pattern` instead of `query`. Each miss
+costs a full tool call.
+
+Fix: materialise the real signatures (from the MCP manifest) into the
+agent system prompt, so the agent sees the exact parameter names before it
+calls.
+
+Version bump: 2.34.8 → 2.34.9
+
+---
+
+## Change 1 — extract tool signatures from MCP registry
+
+In `api/agents/router.py` (or wherever the per-agent-type prompt is
+assembled), build a compact signature manifest at startup:
+
+```python
+import inspect
+from mcp_server import get_mcp_server  # the FastMCP instance
+
+_TOOL_SIGNATURES_CACHE: dict[str, str] | None = None
+
+def build_tool_signatures() -> dict[str, str]:
+    """Return {tool_name: one_line_signature} for every registered MCP tool.
+
+    Output format example:
+      'kafka_consumer_lag': 'kafka_consumer_lag(group: str, topic: str | None = None)'
+      'elastic_search_logs': 'elastic_search_logs(query: str | None = None, service: str | None = None, level: str | list[str] | None = None, minutes_ago: int = 60, limit: int = 50)'
+    """
+    global _TOOL_SIGNATURES_CACHE
+    if _TOOL_SIGNATURES_CACHE is not None:
+        return _TOOL_SIGNATURES_CACHE
+
+    mcp = get_mcp_server()
+    sigs: dict[str, str] = {}
+
+    for tool_name, tool in mcp.list_tools().items():
+        try:
+            fn = tool.callable
+            sig = inspect.signature(fn)
+            parts = []
+            for param_name, param in sig.parameters.items():
+                if param_name in ("self", "ctx", "context"):
+                    continue
+                ann = param.annotation
+                ann_str = _format_annotation(ann) if ann is not inspect.Parameter.empty else "Any"
+                if param.default is inspect.Parameter.empty:
+                    parts.append(f"{param_name}: {ann_str}")
+                else:
+                    default_repr = repr(param.default) if param.default is not None else "None"
+                    parts.append(f"{param_name}: {ann_str} = {default_repr}")
+            sigs[tool_name] = f"{tool_name}({', '.join(parts)})"
+        except (ValueError, TypeError) as e:
+            sigs[tool_name] = f"{tool_name}(...)  # signature unavailable: {e}"
+
+    _TOOL_SIGNATURES_CACHE = sigs
+    return sigs
+
+
+def _format_annotation(ann) -> str:
+    """Render a type annotation as a short string."""
+    if ann is str:   return "str"
+    if ann is int:   return "int"
+    if ann is bool:  return "bool"
+    if ann is float: return "float"
+    if ann is list:  return "list"
+    if ann is dict:  return "dict"
+    # Union / Optional / Sequence / Literal handling
+    s = str(ann)
+    s = s.replace("typing.", "").replace("<class '", "").replace("'>", "")
+    return s[:60]
+```
+
+## Change 2 — inject into system prompt
+
+In the prompt assembly path, render the signatures of the allowed tools for
+this agent_type only — not the full registry. Add a new section to the
+agent's system prompt, placed **after** the tool-list section and **before**
+the task message:
+
+```python
+def format_tool_signatures_section(allowlist: list[str]) -> str:
+    sigs = build_tool_signatures()
+    lines = ["═══ TOOL SIGNATURES ═══",
+             "Call each tool with EXACTLY these parameter names. Do not invent",
+             "kwargs — guessing will fail with TypeError and waste your budget.",
+             ""]
+    for tool_name in sorted(allowlist):
+        sig = sigs.get(tool_name, f"{tool_name}(...)  # signature unknown")
+        lines.append(f"  {sig}")
+    return "\n".join(lines)
+```
+
+Wire into the existing prompt assembly:
+
+```python
+# After building base prompt + memory + prior attempts + etc.
+system_messages.append({
+    "role": "system",
+    "content": format_tool_signatures_section(allowlist_for(agent_type)),
+})
+```
+
+## Change 3 — token budget awareness
+
+Signatures add roughly 30-80 tokens per tool. Investigate has ~25 tools in
+its allowlist → ~1500 tokens max. Acceptable. Observe has fewer tools → less.
+If signature section exceeds 3000 tokens, truncate the least-likely tools
+(e.g. build tools in investigate context) and add a footer:
+
+```
+... N more tools available — call `list_tools` to see their signatures if needed.
+```
+
+For now, do not implement `list_tools` — just log a warning if the section
+grows past 3000 tokens. Implement the deferred-tool path in a future prompt
+if we hit the cap.
+
+## Change 4 — cache invalidation on reload
+
+The signatures cache lives in a module-global. When the process restarts
+(e.g. after an agent self-recreate from v2.34.3), the cache is rebuilt.
+That's fine. But if MCP hot-reload is ever wired, `_TOOL_SIGNATURES_CACHE`
+needs to be cleared. For now: no hot-reload, so no invalidation needed.
+Document this in a comment.
+
+## Change 5 — test for common hallucinated kwargs
+
+`tests/test_tool_signatures.py`:
+
+```python
+def test_signatures_built_for_known_tools():
+    from api.agents.router import build_tool_signatures
+    sigs = build_tool_signatures()
+    assert "kafka_consumer_lag" in sigs
+    # Must mention the required `group` param
+    assert "group" in sigs["kafka_consumer_lag"]
+    assert "elastic_search_logs" in sigs
+    # Must mention `minutes_ago` not `since_minutes`
+    assert "minutes_ago" in sigs["elastic_search_logs"]
+    assert "since_minutes" not in sigs["elastic_search_logs"]
+
+
+def test_signature_section_formatted():
+    from api.agents.router import format_tool_signatures_section
+    section = format_tool_signatures_section(["kafka_consumer_lag", "elastic_search_logs"])
+    assert "═══ TOOL SIGNATURES ═══" in section
+    assert "kafka_consumer_lag(group:" in section
+    assert "elastic_search_logs(" in section
+
+
+def test_hallucinated_kwargs_not_present_anywhere():
+    """Regression: ensure we didn't accidentally re-introduce the bad names."""
+    from api.agents.router import build_tool_signatures
+    sigs = build_tool_signatures()
+    rendered = "\n".join(sigs.values())
+    assert "since_minutes" not in rendered
+    assert "service_name" not in rendered  # the known-bad guess for service_health
+    # pattern= was guessed for elastic_kafka_logs — confirm real signature doesn't use it
+    if "elastic_kafka_logs" in sigs:
+        # It's fine if the real signature uses `pattern=` — just document what's there
+        assert "elastic_kafka_logs" in sigs["elastic_kafka_logs"]
+```
+
+## Change 6 — Prometheus counter for TypeError tool calls
+
+Add to `api/metrics.py`:
+
+```python
+TOOL_SIGNATURE_ERROR_COUNTER = Counter(
+    "deathstar_tool_signature_errors_total",
+    "Tool call TypeError / signature mismatch failures",
+    ["tool_name"],
+)
+```
+
+Increment in the tool-call dispatch path whenever a `TypeError` is caught
+from a tool invocation (likely in `drive_agent` or the MCP client wrapper).
+After v2.34.9 ships, this counter should drop toward zero. If it doesn't,
+the injected signatures aren't being read by the LLM and we need to look
+at prompt ordering or bold the section.
+
+## Version bump
+Update `VERSION`: 2.34.8 → 2.34.9
+
+## Commit
+```
+git add -A
+git commit -m "feat(agents): v2.34.9 inject MCP tool signatures into system prompt — stop kwarg hallucination"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Re-run the Logstash investigate task.
+3. Inspect the system prompt (via operation_log or raw task dump). Confirm
+   `═══ TOOL SIGNATURES ═══` section exists with real signatures for every
+   allowlisted tool.
+4. Run a task that would have previously hallucinated kwargs (e.g. force
+   it to call kafka_consumer_lag). Agent should now pass `group=` correctly.
+5. Check Prometheus: `deathstar_tool_signature_errors_total` should stay flat
+   or near zero across several tasks.
+6. Regression: signature section is skipped only for cases where allowlist
+   is empty (shouldn't happen in practice).
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 16:36:37
+========================================================================
+PROMPT COMPLETE: v2.34.9
+[STATUS] 5m26s
+
+Summary of changes in commit `00c6090`:
+- `api/agents/router.py` — added `build_tool_signatures()`, `format_tool_signatures_section()`, `allowlist_for()` helpers; signatures derived from AST-based tool registry so they match the exact functions `invoke_tool()` calls.
+- `api/routers/agent.py` — injects `═══ TOOL SIGNATURES ═══` block into the system prompt at both initial and per-step assembly; increments `TOOL_SIGNATURE_ERROR_COUNTER` on TypeError-shaped tool failures.
+- `api/metrics.py` — new `deathstar_tool_signature_errors_total{tool_name}` counter.
+- `tests/test_tool_signatures.py` — 7 passing tests pin `minutes_ago` vs `since_minutes` on elastic_* tools and `name` vs `service_name` on `service_health` / `service_current_version`.
+- `VERSION` → `2.34.9`.
+
+Observe allowlist renders to ~2144 chars (47 tools), well under the 12000-char warning threshold.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  5m27s
+========================================================================

@@ -418,3 +418,23 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 15:54:42
 ========================================================================
+Pushed commit `45ae853`. Per the queue runner instructions, I do NOT modify INDEX.md — the runner handles that.
+[STATUS] 9m01s
+
+PROMPT COMPLETE: v2.34.8
+
+Summary of v2.34.8 changes:
+- `api/agents/__init__.py` — new `META_TOOLS` + `MIN_SUBSTANTIVE_BY_TYPE` constants
+- `api/routers/agent.py` — substantive counter, hallucination guard with one-retry-max fallback, WS event, sub-agent substantive harvest
+- `api/db/subagent_runs.py` — `substantive_tool_calls` column + `record_completion` param
+- `api/db/migrations.py` — migration v9 adds column on existing DBs
+- `api/metrics.py` — `HALLUCINATION_GUARD_COUNTER` (retried | fallback_accepted)
+- `api/agents/router.py` — agent_type selection rules in investigate prompt
+- `gui/src/context/AgentOutputContext.jsx` + `OutputPanel.jsx` — amber banner
+- `tests/test_hallucination_guard.py` — 11 tests, all pass
+- `VERSION` → 2.34.8
+
+========================================================================
+EXIT CODE: 0
+DURATION:  9m01s
+========================================================================

@@ -30,11 +30,80 @@ def _load_allowlist(session_id: str = "") -> list[str]:
             return []
 
 
+# ── Safe-pipe support (v2.34.10) ──────────────────────────────────────────
+# Trailing commands that only trim/format output — never change the primary
+# command's side-effects.
+PIPE_SAFELIST = {
+    "head",  # may have -N or --lines=
+    "tail",
+    "grep",  # text match only; -f FILE forbidden (reads arbitrary files)
+    "wc",
+    "sort",
+    "uniq",
+    "awk",   # read-only awk; -f FILE forbidden
+    "sed",   # -f FILE forbidden
+    "cut",
+    "tr",
+}
+
+# Trailing redirects that only silence / merge output — safe on any command.
+REDIRECT_SAFELIST = (
+    "2>&1",
+    "2> /dev/null",
+    "2>/dev/null",
+    "> /dev/null",
+    ">/dev/null",
+)
+
+
+def _split_pipeline(cmd: str) -> list[str]:
+    """Split a shell command on `|` respecting quoted strings.
+
+    Trailing safelisted redirects (2>&1, >/dev/null, 2>/dev/null) are stripped
+    from the command before splitting — they don't form a pipeline stage.
+    Returns list of pipeline stages, each stripped of leading/trailing ws.
+    """
+    s = cmd.strip()
+    # Strip any number of trailing safelisted redirects
+    changed = True
+    while changed:
+        changed = False
+        for redir in REDIRECT_SAFELIST:
+            if s.endswith(redir):
+                s = s[: -len(redir)].rstrip()
+                changed = True
+                break
+
+    stages: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+    for ch in s:
+        if in_quote:
+            current.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+            current.append(ch)
+        elif ch == "|":
+            stages.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    stages.append("".join(current).strip())
+    return [s for s in stages if s != ""]
+
+
 def _validate_command(command: str, session_id: str = "") -> tuple:
     """Validate a command against the allowlist (DB-backed, 30s cache).
 
+    Pipeline model (v2.34.10):
+      stage0           — must match the allowlist (the actual command)
+      stage1..stageN   — must be in PIPE_SAFELIST (head/tail/grep/wc/...)
+      trailing redir   — 2>&1, >/dev/null, 2>/dev/null all allowed
+
     Returns:
-        (True, cleaned_command)  — command is allowed
+        (True, command)          — command is allowed (shell handles redirects)
         (False, error_dict)      — command blocked; error_dict has:
             {"blocked": True, "message": str, "segment": str,
              "pattern_suggestion": str, "hint": str}
@@ -42,43 +111,88 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
     """
     import re as _re
 
-    # Strip '2>/dev/null' before metachar check — safe stderr discard.
-    cleaned = _re.sub(r'\s*2>/dev/null', '', command).strip()
+    # Strip Go template --format arguments before metachar check (contain { }).
+    sanitized = _re.sub(
+        r"""--format\s+['"]?\{\{[^'"]*\}\}['"]?""",
+        '--format TEMPLATE',
+        command,
+    )
 
-    # Strip Go template --format arguments before metachar check.
-    sanitized = _re.sub(r"""--format\s+['"]?\{\{[^'"]*\}\}['"]?""", '--format TEMPLATE', cleaned)
+    # Strip safelisted redirects BEFORE the metachar check — these legitimately
+    # contain & and > that would otherwise be blocked.
+    scrubbed = sanitized
+    for redir in REDIRECT_SAFELIST:
+        scrubbed = scrubbed.replace(redir, "")
 
-    # Block remaining shell injection chars
-    if any(c in sanitized for c in [';', '`', '$', '>', '<', '&&', '||']):
-        return False, f"Shell metacharacters not allowed: {command!r}"
+    # Block dangerous characters that have no safe use after scrubbing.
+    # ; & ` $ < > are ALL dangerous outside of the safelisted redirects above.
+    for bad in (';', '`', '$', '<', '&', '>'):
+        if bad in scrubbed:
+            return False, (
+                f"Shell metacharacters not allowed: {command!r}. "
+                f"Disallowed character: {bad!r}. "
+                "Safe redirects (2>&1, >/dev/null) are allowed; inline "
+                "substitution ($(), backticks), statement separators (;, &&), "
+                "and file redirects are not."
+            )
 
-    # Split on pipe — allow up to 3 segments
-    parts = [p.strip() for p in sanitized.split('|')]
-    if len(parts) > 3:
-        return False, "Maximum two pipes allowed (e.g. cmd | sort -hr | head -20)"
+    # Parse into pipeline stages (operates on sanitized cmd with redirects intact;
+    # _split_pipeline strips trailing safelisted redirects for us).
+    stages = _split_pipeline(sanitized)
+    if not stages:
+        return False, "Empty command"
+
+    # Cap pipeline depth to keep commands comprehensible.
+    if len(stages) > 3:
+        return False, "Maximum two pipes allowed (e.g. cmd | grep X | head -20)"
 
     allowlist = _load_allowlist(session_id=session_id)
 
-    for part in parts:
-        if not any(_re.match(p, part) for p in allowlist):
-            suggestion = _suggest_pattern(part)
-            return False, {
-                "blocked": True,
-                "segment": part,
-                "pattern_suggestion": suggestion,
-                "message": (
-                    f"Command segment not in allowlist: {part!r}. "
-                    "Call vm_exec_allowlist_request() to request approval for this session "
-                    "or permanent addition."
-                ),
-                "hint": (
-                    f"Call vm_exec_allowlist_request(command={command!r}, "
-                    f"reason='<why you need this>', scope='session') "
-                    f"then plan_action() then vm_exec_allowlist_add(pattern={suggestion!r}, ...)"
-                ),
-            }
+    # Stage 0 — the actual command — must match the allowlist.
+    stage0 = stages[0]
+    if not any(_re.match(p, stage0) for p in allowlist):
+        suggestion = _suggest_pattern(stage0)
+        return False, {
+            "blocked": True,
+            "segment": stage0,
+            "pattern_suggestion": suggestion,
+            "message": (
+                f"Command segment not in allowlist: {stage0!r}. "
+                "Call vm_exec_allowlist_request() to request approval for this session "
+                "or permanent addition."
+            ),
+            "hint": (
+                f"Call vm_exec_allowlist_request(command={command!r}, "
+                f"reason='<why you need this>', scope='session') "
+                f"then plan_action() then vm_exec_allowlist_add(pattern={suggestion!r}, ...)"
+            ),
+        }
 
-    return True, cleaned
+    # Remaining stages — each must be a safelisted pipe helper.
+    try:
+        from api.metrics import VM_EXEC_PIPE_COUNTER
+    except Exception:
+        VM_EXEC_PIPE_COUNTER = None
+
+    for idx, stage in enumerate(stages[1:], start=1):
+        tokens = stage.split()
+        head = tokens[0] if tokens else ""
+        if head not in PIPE_SAFELIST:
+            return False, (
+                f"Pipe stage {idx} uses disallowed command: {head!r}. "
+                f"Allowed pipe helpers: {sorted(PIPE_SAFELIST)}"
+            )
+        # grep/awk/sed can read arbitrary files via -f FILE — block that.
+        if head in ("grep", "awk", "sed") and " -f " in stage:
+            return False, f"{head} -f (file argument) not allowed in pipe stage {idx}"
+        if VM_EXEC_PIPE_COUNTER is not None:
+            try:
+                VM_EXEC_PIPE_COUNTER.labels(pipe_stage=head).inc()
+            except Exception:
+                pass
+
+    # Pass the command through unchanged — shell handles 2>&1 / >/dev/null.
+    return True, command
 
 
 def _resolve_connection(host, all_conns):
