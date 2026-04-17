@@ -315,6 +315,23 @@ export async function fetchContainerTags(containerId, { force = false } = {}) {
   return r.json()
 }
 
+export async function startContainerPull(containerId, tag) {
+  const qs = tag ? `?tag=${encodeURIComponent(tag)}` : ''
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/pull-start${qs}`, {
+    method: 'POST', headers: { ...authHeaders() }, credentials: 'include',
+  })
+  if (!r.ok) throw new Error(`pull-start HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function getPullJob(jobId) {
+  const r = await fetch(`${BASE}/api/dashboard/pull-jobs/${jobId}`, {
+    headers: { ...authHeaders() }, credentials: 'include',
+  })
+  if (!r.ok) throw new Error(`pull-job HTTP ${r.status}`)
+  return r.json()
+}
+
 export async function fetchEntityHistory(entityId, hours = 48) {
   const r = await fetch(
     `${BASE}/api/entities/${encodeURIComponent(entityId)}/history?hours=${hours}`,

@@ -44,6 +44,153 @@ def _get_ghcr_tag_ttl() -> int:
     except Exception:
         return _GHCR_TAG_TTL_DEFAULT
 
+# ── Pull jobs (async container pull with live progress) ─────────────────────
+import uuid as _uuid
+
+_PULL_JOBS: dict = {}   # job_id -> state dict
+_PULL_JOBS_MAX = 50     # keep last N jobs, prune terminal LRU
+
+
+def _prune_pull_jobs() -> None:
+    if len(_PULL_JOBS) <= _PULL_JOBS_MAX:
+        return
+    terminal = [(k, v["updated_at"]) for k, v in _PULL_JOBS.items()
+                if v.get("status") in ("done", "error")]
+    terminal.sort(key=lambda kv: kv[1])
+    for k, _ in terminal[: len(_PULL_JOBS) - _PULL_JOBS_MAX]:
+        _PULL_JOBS.pop(k, None)
+
+
+def _new_pull_job(container_id: str, tag: str | None) -> str:
+    job_id = _uuid.uuid4().hex[:16]
+    _PULL_JOBS[job_id] = {
+        "job_id":       job_id,
+        "container_id": container_id,
+        "tag":          tag,
+        "status":       "starting",   # starting|downloading|extracting|recreating|done|error
+        "phase":        "",
+        "message":      "",
+        "layers":       {},            # layer_id -> {status, current, total}
+        "bytes_done":   0,
+        "bytes_total":  0,
+        "percent":      0,
+        "error":        None,
+        "created_at":   _time.time(),
+        "updated_at":   _time.time(),
+        "completed_at": None,
+    }
+    _prune_pull_jobs()
+    return job_id
+
+
+def _update_pull_job(job_id: str, **kwargs) -> None:
+    j = _PULL_JOBS.get(job_id)
+    if not j:
+        return
+    j.update(kwargs)
+    j["updated_at"] = _time.time()
+    # Aggregate bytes across all layers on every update
+    total = 0
+    done = 0
+    for layer in j["layers"].values():
+        layer_total = layer.get("total") or 0
+        layer_curr = layer.get("current") or 0
+        if layer_total > 0:
+            total += layer_total
+            done += min(layer_curr, layer_total)
+    j["bytes_total"] = total
+    j["bytes_done"] = done
+    if total > 0:
+        j["percent"] = min(100, int((done / total) * 100))
+
+
+def _do_pull_streaming(job_id: str, container_id: str, tag: str | None) -> None:
+    """Background worker: stream Docker pull progress into _PULL_JOBS[job_id]."""
+    try:
+        client, container = _resolve_container(container_id)
+        image_name = container.attrs["Config"]["Image"]
+
+        auth_config = None
+        if image_name.startswith("ghcr.io/"):
+            token = os.environ.get("GHCR_TOKEN", "")
+            if token:
+                auth_config = {"username": "token", "password": token}
+
+        bare = image_name.split("@")[0].split(":")[0]
+        pull_image = f"{bare}:{tag}" if tag else image_name
+
+        _update_pull_job(
+            job_id, status="downloading",
+            phase=f"pulling {pull_image}",
+            message=f"Pulling {pull_image}",
+        )
+
+        # Low-level API gives per-layer streaming events
+        repo, sep, ref = pull_image.rpartition(":")
+        if not sep:
+            repo, ref = pull_image, "latest"
+
+        for evt in client.api.pull(
+            repo, tag=ref, auth_config=auth_config, stream=True, decode=True
+        ):
+            status_txt = evt.get("status", "")
+            lid = evt.get("id") or ""
+            progress_detail = evt.get("progressDetail") or {}
+            if lid:
+                layer = _PULL_JOBS[job_id]["layers"].setdefault(
+                    lid, {"status": "", "current": 0, "total": 0})
+                layer["status"] = status_txt
+                if "current" in progress_detail:
+                    layer["current"] = progress_detail["current"]
+                if "total" in progress_detail:
+                    layer["total"] = progress_detail["total"]
+            new_phase = None
+            if "Downloading" in status_txt:
+                new_phase = "downloading"
+            elif "Extracting" in status_txt:
+                new_phase = "extracting"
+            elif "Pull complete" in status_txt or status_txt == "Download complete":
+                new_phase = _PULL_JOBS[job_id].get("phase") or "extracting"
+            elif "up to date" in status_txt.lower():
+                new_phase = "up_to_date"
+            _update_pull_job(
+                job_id,
+                message=status_txt[:120],
+                phase=new_phase or _PULL_JOBS[job_id]["phase"],
+            )
+
+        # Retag for versioned pulls so :latest (or running tag) points to the pulled image
+        if tag:
+            pulled = client.images.get(f"{bare}:{tag}")
+            current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
+            pulled.tag(bare, tag=current_tag)
+
+        # Recreate
+        _update_pull_job(
+            job_id, status="recreating", phase="recreating",
+            message="Recreating container",
+        )
+        if _is_self_container(container):
+            _restart_self_container()
+            _update_pull_job(
+                job_id, status="done", phase="done",
+                message="Agent recreation triggered — it will be back shortly",
+                completed_at=_time.time(), percent=100,
+            )
+        else:
+            container.restart()
+            _update_pull_job(
+                job_id, status="done", phase="done",
+                message="Pull + restart complete",
+                completed_at=_time.time(), percent=100,
+            )
+    except Exception as e:
+        log.exception("pull job %s failed: %s", job_id, e)
+        _update_pull_job(
+            job_id, status="error", error=str(e),
+            message=f"Error: {e}", completed_at=_time.time(),
+        )
+
 # ── Auto-update state ────────────────────────────────────────────────────────
 
 _AUTO_UPDATE_INTERVAL_DEFAULT = 300   # 5 minutes (fallback when setting missing / invalid)
@@ -1004,6 +1151,39 @@ def _resolve_container(container_id: str):
         except docker.errors.NotFound:
             continue
     raise docker.errors.NotFound(container_id)
+
+
+@router.post("/containers/{container_id}/pull-start")
+async def pull_container_start(
+    container_id: str,
+    tag: str | None = None,
+    user: str = Depends(get_current_user),
+):
+    """Start an async pull. Returns immediately with a job_id — poll /pull-jobs/{id}."""
+    job_id = _new_pull_job(container_id, tag)
+    threading.Thread(
+        target=_do_pull_streaming, args=(job_id, container_id, tag), daemon=True
+    ).start()
+    return {"ok": True, "job_id": job_id, "status": "starting"}
+
+
+@router.get("/pull-jobs/{job_id}")
+async def get_pull_job(job_id: str, _: str = Depends(get_current_user)):
+    j = _PULL_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id!r} not found")
+    # Trim layers for bandwidth: return only the top 5 currently active
+    layers = j["layers"]
+    active = sorted(
+        ({"id": lid, **l} for lid, l in layers.items()
+         if l.get("status") in ("Downloading", "Extracting")),
+        key=lambda x: x.get("current", 0), reverse=True,
+    )[:5]
+    out = dict(j)
+    out["active_layers"] = active
+    out["layer_count"] = len(layers)
+    out.pop("layers", None)   # strip full per-layer dict
+    return out
 
 
 @router.post("/containers/{container_id}/pull")

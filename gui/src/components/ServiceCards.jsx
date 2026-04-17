@@ -547,12 +547,23 @@ function Actions({ buttons }) {
 
 // ── Container card ─────────────────────────────────────────────────────────────
 
-function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, template }) {
+function ContainerCardExpanded({
+  c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, template,
+  initialTags = [], tagsLoading: tagsLoadingProp = false, refreshTags,
+}) {
   const [loading, setLoading] = useState({})
   const [scaleOpen, setScaleOpen] = useState(false)
   const [scaleVal, setScaleVal] = useState(1)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+
+  const [pullJob, setPullJob] = useState(null)   // live pull job state from /pull-jobs/{id}
+  const [pullError, setPullError] = useState(null)
+  const pullPollRef = useRef(null)
+
+  useEffect(() => () => {
+    if (pullPollRef.current) { clearInterval(pullPollRef.current); pullPollRef.current = null }
+  }, [])
 
   const [logsOpen, setLogsOpen] = useState(false)
   const [logLines, setLogLines] = useState([])
@@ -576,11 +587,11 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
     }
   }, [logLines, logsPaused])
 
-  const [tags, setTags]             = useState([])
-  const [tagsLoading, setTagsLoading] = useState(false)
+  const [tags, setTags]             = useState(initialTags)
+  const [tagsLoading, setTagsLoading] = useState(tagsLoadingProp || (initialTags.length === 0 && c.image?.startsWith('ghcr.io/')))
   const [tagsError, setTagsError]   = useState(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [selectedTag, setSelectedTag] = useState('')
+  const [selectedTag, setSelectedTag] = useState(initialTags[0] || '')
   const [versionPickerOpen, setVersionPickerOpen] = useState(false)
   const [updateStatus, setUpdateStatus] = useState(null)
 
@@ -592,43 +603,51 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
       .catch(() => {})
   }, [c.image])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadTags = useCallback((force = false) => {
-    if (isSwarm || !c.image?.startsWith('ghcr.io/')) return
-    setTagsLoading(true)
-    fetchContainerTags(c.id, { force })
-      .then(data => {
-        if (!mounted.current) return
-        setTagsLoading(false)
-        if (data.error && !data.tags?.length) {
-          setTagsError(data.error)
-          return
-        }
-        // Filter out versions before 1.12.2 (broken self-update, no sidecar recreate)
-        const MIN_SAFE = [1, 12, 2]
-        const t = (data.tags || []).filter(v => {
-          const parts = v.split('.').map(Number)
-          for (let i = 0; i < 3; i++) {
-            if ((parts[i] || 0) < MIN_SAFE[i]) return false
-            if ((parts[i] || 0) > MIN_SAFE[i]) return true
-          }
-          return true
-        })
-        setTags(t)
-        setTagsError(null)
-        if (t[0]) {
-          setSelectedTag(t[0])
-          onTagsLoaded?.(c.id, t[0])
-        }
-      })
-      .catch(err => {
-        if (!mounted.current) return
-        setTagsLoading(false)
-        setTagsError(err?.message || 'fetch failed')
-      })
-  // onTagsLoaded intentionally excluded — stable useCallback from parent.
-  }, [c.id, c.image, isSwarm])  // eslint-disable-line react-hooks/exhaustive-deps
+  // Sync from props whenever parent's tag cache updates
+  useEffect(() => {
+    if (initialTags && initialTags.length) {
+      setTags(initialTags)
+      setTagsLoading(false)
+      setSelectedTag(prev => prev || initialTags[0])
+      if (initialTags[0]) onTagsLoaded?.(c.id, initialTags[0])
+    }
+  }, [initialTags, c.id])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadTags(false) }, [loadTags])
+  // Mirror parent's loading state
+  useEffect(() => { setTagsLoading(tagsLoadingProp) }, [tagsLoadingProp])
+
+  const doAsyncPull = async (tag) => {
+    setPullError(null)
+    setPullJob(null)
+    try {
+      const { startContainerPull, getPullJob } = await import('../api')
+      const { job_id } = await startContainerPull(c.id, tag)
+      setPullJob({ job_id, status: 'starting', phase: '', message: 'Starting pull…', percent: 0 })
+      if (pullPollRef.current) clearInterval(pullPollRef.current)
+      pullPollRef.current = setInterval(async () => {
+        try {
+          const j = await getPullJob(job_id)
+          if (!mounted.current) return
+          setPullJob(j)
+          if (j.status === 'done' || j.status === 'error') {
+            clearInterval(pullPollRef.current)
+            pullPollRef.current = null
+            if (j.status === 'done') {
+              onAction()
+            } else {
+              setPullError(j.error || 'pull failed')
+            }
+          }
+        } catch (e) {
+          setPullError(String(e))
+          clearInterval(pullPollRef.current)
+          pullPollRef.current = null
+        }
+      }, 600)
+    } catch (e) {
+      setPullError(String(e))
+    }
+  }
 
   const act = async (key, path, body, msg) => {
     if (msg) {
@@ -640,7 +659,8 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
     if (!mounted.current) return
     setLoading(l => ({ ...l, [key]: false }))
     if (!r.ok) showToast(r.error || 'Action failed', 'error')
-    else { showToast('Done'); onAction() }
+    else if (!key.startsWith('pull')) { showToast('Done'); onAction() }
+    else { onAction() }
   }
 
   const openLogs = () => {
@@ -675,10 +695,13 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
   const pullPath = isSwarm ? `services/${c.name}/pull` : `containers/${c.id}/pull`
   const pullColor = c.last_pull_at && (Date.now() - new Date(c.last_pull_at).getTime()) > 7 * 86400000 ? 'urgent' : 'primary'
 
+  const pullActive = !!(pullJob && pullJob.status !== 'done' && pullJob.status !== 'error')
   const ActionsBlock = () => (
     <Actions buttons={[
       !c.image?.startsWith('ghcr.io/') && !isSwarm && (
-        <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor} loading={loading.pull} onClick={() => act('pull', pullPath, null, null)} />
+        <ActionBtn key="pull" label="↓ Pull Latest" variant={pullColor}
+          loading={pullActive} disabled={pullActive}
+          onClick={() => doAsyncPull(null)} />
       ),
       !isSwarm && <ActionBtn key="logs" label={logsOpen ? '✕ Close Logs' : 'View Logs'} onClick={openLogs} />,
       !isSwarm && <ActionBtn key="restart" label="Restart" loading={loading.restart} onClick={() => act('restart', `containers/${c.id}/restart`, null, `Restart ${c.name}?`)} />,
@@ -740,7 +763,16 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
             )}
             <div className="flex justify-end mb-1">
               <button
-                onClick={() => loadTags(true)}
+                onClick={async () => {
+                  if (!refreshTags) return
+                  setTagsLoading(true)
+                  setTagsError(null)
+                  try {
+                    await refreshTags()
+                  } catch (e) {
+                    setTagsError(e?.message || 'refresh failed')
+                  }
+                }}
                 disabled={tagsLoading}
                 className="text-[9px] px-1.5 py-0.5 rounded border border-[#2a2a4a] text-gray-500 hover:text-gray-300 hover:border-[#3a3a5a] disabled:opacity-50"
                 title="Force re-check GHCR for new versions (bypass cache)"
@@ -748,6 +780,66 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                 {tagsLoading ? '⟳ …' : '↻ Refresh versions'}
               </button>
             </div>
+            {pullJob && (
+              <div style={{
+                marginTop: 6, marginBottom: 6, padding: 8,
+                background: 'var(--bg-2)',
+                border: `1px solid ${pullJob.status === 'error' ? 'var(--red)' : 'var(--cyan)'}`,
+                borderRadius: 2, fontFamily: 'var(--font-mono)', fontSize: 10,
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                  color: pullJob.status === 'error' ? 'var(--red)' : 'var(--cyan)',
+                  letterSpacing: '0.1em', fontSize: 9, marginBottom: 4,
+                }}>
+                  <span>
+                    {pullJob.status === 'starting'    && '◐ STARTING'}
+                    {pullJob.status === 'downloading' && '↓ DOWNLOADING'}
+                    {pullJob.status === 'extracting'  && '⊡ EXTRACTING'}
+                    {pullJob.status === 'recreating'  && '⟳ RECREATING'}
+                    {pullJob.status === 'done'        && '✓ DONE'}
+                    {pullJob.status === 'error'       && '✕ ERROR'}
+                  </span>
+                  <span>{pullJob.percent ?? 0}%</span>
+                </div>
+                <div style={{
+                  height: 4, background: 'var(--bg-3)',
+                  borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${pullJob.percent ?? 0}%`,
+                    background: pullJob.status === 'error' ? 'var(--red)'
+                              : pullJob.status === 'done'  ? 'var(--green)'
+                              : 'var(--cyan)',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ color: 'var(--text-2)', fontSize: 9, lineHeight: 1.4 }}>
+                  {pullJob.message || pullJob.phase || '…'}
+                </div>
+                {pullJob.bytes_total > 0 && (
+                  <div style={{ color: 'var(--text-3)', fontSize: 9, marginTop: 2 }}>
+                    {_fmtBytes(pullJob.bytes_done)} / {_fmtBytes(pullJob.bytes_total)}
+                    {pullJob.layer_count > 0 && <> · {pullJob.layer_count} layers</>}
+                  </div>
+                )}
+                {pullJob.status === 'done' && (
+                  <button
+                    onClick={() => setPullJob(null)}
+                    style={{
+                      marginTop: 6, fontSize: 9, fontFamily: 'var(--font-mono)',
+                      background: 'transparent', border: '1px solid var(--border-hi)',
+                      color: 'var(--text-2)', padding: '2px 8px', cursor: 'pointer',
+                      borderRadius: 2, letterSpacing: '0.1em',
+                    }}
+                  >DISMISS</button>
+                )}
+                {pullJob.status === 'error' && pullError && (
+                  <div style={{ color: 'var(--red)', fontSize: 9, marginTop: 4 }}>{pullError}</div>
+                )}
+              </div>
+            )}
             {c.name?.includes('hp1_agent') && <AutoUpdateToggle />}
             {hasUpdate && !tagsError && (
               <>
@@ -763,20 +855,23 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                       value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
                       {tags.map(t => <option key={t} value={t}>{t}{t === c.running_version || `v${t}` === `v${c.running_version}` ? ' ← running' : ''}</option>)}
                     </select>
-                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
-                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setDrawerOpen(false) }} />
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary"
+                      loading={pullActive} disabled={pullActive}
+                      onClick={() => { doAsyncPull(selectedTag); setDrawerOpen(false) }} />
                   </div>
                 )}
               </>
             )}
             {!hasUpdate && !tagsError && tags.length > 0 && severity === 'current' && (
-              <ActionBtn label="↓ Re-pull Image" loading={loading.pull}
-                onClick={() => act('pull', `containers/${c.id}/pull`, null, null)} />
+              <ActionBtn label="↓ Re-pull Image"
+                loading={pullActive} disabled={pullActive}
+                onClick={() => doAsyncPull(null)} />
             )}
             {(tagsError || (!tagsLoading && !tags.length) || severity === 'ahead' || severity === 'unknown') &&
              updateStatus?.update_available !== false && (
-              <ActionBtn label="↓ Pull Latest" variant={pullColor} loading={loading.pull}
-                onClick={() => act('pull', pullPath, null, null)} />
+              <ActionBtn label="↓ Pull Latest" variant={pullColor}
+                loading={pullActive} disabled={pullActive}
+                onClick={() => doAsyncPull(null)} />
             )}
             {tags.length > 0 && (
               <>
@@ -789,8 +884,9 @@ function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTag
                       value={selectedTag} onChange={e => setSelectedTag(e.target.value)}>
                       {tags.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
-                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary" loading={loading['pull-versioned']}
-                      onClick={() => { act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null); setVersionPickerOpen(false) }} />
+                    <ActionBtn label={`↓ Pull ${selectedTag}`} variant="primary"
+                      loading={pullActive} disabled={pullActive}
+                      onClick={() => { doAsyncPull(selectedTag); setVersionPickerOpen(false) }} />
                   </div>
                 )}
               </>
@@ -1496,7 +1592,13 @@ function AutoUpdateToggle() {
 
 // ── Per-connection template wrapper ──────────────────────────────────────────
 
-function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag, entityId, onEntityDetail, compareMode, compareSet, onCompareAdd, entityForCompare, knownLatest, containerUpdateStatus }) {
+function ConnectedContainerCard({
+  c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab,
+  openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag,
+  entityId, onEntityDetail, compareMode, compareSet, onCompareAdd,
+  entityForCompare, knownLatest, containerUpdateStatus,
+  allTags, tagsLoadingMap, refreshTagsFor,
+}) {
   const template = useCardTemplate('container', c.connection_id || null)
   return (
     <InfraCard
@@ -1516,6 +1618,9 @@ function ConnectedContainerCard({ c, isSwarm, onAction, confirm, showToast, onTa
       expanded={<ContainerCardExpanded
         c={c} isSwarm={isSwarm} onAction={onAction} confirm={confirm} showToast={showToast}
         onTagsLoaded={onTagsLoaded} onTab={onTab} template={template}
+        initialTags={allTags?.[c.id] || []}
+        tagsLoading={!!tagsLoadingMap?.[c.id]}
+        refreshTags={() => refreshTagsFor?.(c.id)}
       />}
       compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
       entityForCompare={entityForCompare}
@@ -1574,6 +1679,8 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
     localStorage.setItem('hp1_proxmox_sort', JSON.stringify({ sortBy, sortDir }))
   }, [sortBy, sortDir])
   const [knownLatest, setKnownLatest] = useState({})
+  const [allTags, setAllTags] = useState({})   // { [containerId]: string[] }
+  const [tagsLoadingMap, setTagsLoadingMap] = useState({})   // { [containerId]: bool }
   const { pending, confirm, resolve } = useConfirm()
 
   const onTagsLoaded = useCallback((containerId, latestTag) => {
@@ -1587,11 +1694,49 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
       if (!container.image?.startsWith('ghcr.io/')) continue
       if (fetchedTagIds.current.has(container.id)) continue
       fetchedTagIds.current.add(container.id)
+      setTagsLoadingMap(prev => ({ ...prev, [container.id]: true }))
       fetchContainerTags(container.id).then(data => {
-        if (data?.tags?.[0]) setKnownLatest(prev => ({ ...prev, [container.id]: data.tags[0] }))
-      }).catch(() => {})
+        const MIN_SAFE = [1, 12, 2]
+        const filtered = (data?.tags || []).filter(v => {
+          const parts = v.split('.').map(Number)
+          for (let i = 0; i < 3; i++) {
+            if ((parts[i] || 0) < MIN_SAFE[i]) return false
+            if ((parts[i] || 0) > MIN_SAFE[i]) return true
+          }
+          return true
+        })
+        if (filtered.length) {
+          setAllTags(prev => ({ ...prev, [container.id]: filtered }))
+          setKnownLatest(prev => ({ ...prev, [container.id]: filtered[0] }))
+        }
+      }).catch(() => {}).finally(() => {
+        setTagsLoadingMap(prev => ({ ...prev, [container.id]: false }))
+      })
     }
   }, [containers])
+
+  const refreshTagsFor = useCallback((containerId) => {
+    setTagsLoadingMap(prev => ({ ...prev, [containerId]: true }))
+    return fetchContainerTags(containerId, { force: true })
+      .then(data => {
+        const MIN_SAFE = [1, 12, 2]
+        const filtered = (data?.tags || []).filter(v => {
+          const parts = v.split('.').map(Number)
+          for (let i = 0; i < 3; i++) {
+            if ((parts[i] || 0) < MIN_SAFE[i]) return false
+            if ((parts[i] || 0) > MIN_SAFE[i]) return true
+          }
+          return true
+        })
+        setAllTags(prev => ({ ...prev, [containerId]: filtered }))
+        if (filtered[0]) setKnownLatest(prev => ({ ...prev, [containerId]: filtered[0] }))
+        return filtered
+      })
+      .catch(err => { throw err })
+      .finally(() => {
+        setTagsLoadingMap(prev => ({ ...prev, [containerId]: false }))
+      })
+  }, [])
   const { toasts, show: showToast } = useToast()
 
   // UniFi + PBS collector data (60s poll, separate from 30s base)
@@ -1780,6 +1925,9 @@ export default function ServiceCards({ activeFilters = null, onTab, onEntityDeta
                 compareMode={compareMode} compareSet={compareSet} onCompareAdd={onCompareAdd}
                 knownLatest={knownLatest}
                 containerUpdateStatus={containerUpdateStatus}
+                allTags={allTags}
+                tagsLoadingMap={tagsLoadingMap}
+                refreshTagsFor={refreshTagsFor}
                 entityForCompare={{ id: `docker:${c.name || c.id}`, label: c.name, platform: 'docker', section: 'COMPUTE', metadata: { status: c.status, dot: c.dot, image: c.image, uptime: c.uptime } }}
               />
             ))}

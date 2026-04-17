@@ -160,7 +160,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.6.md  | v2.33.6  | feat(security): blast radius tagging + tiered plan confirmation | DONE (e1edcae) |
 | CC_PROMPT_v2.33.7.md  | v2.33.7  | feat(ui): Kafka inspection tab — brokers, topics, partitions, lag | DONE (323a342) |
 | CC_PROMPT_v2.33.8.md  | v2.33.8  | feat(templates): verify_backup_job + PBS last-success tracking | DONE (21a7a0b) |
-| CC_PROMPT_v2.33.9.md  | v2.33.9  | feat(security): drift detection — config_hash reconciliation + badge | RUNNING |
+| CC_PROMPT_v2.33.9.md  | v2.33.9  | feat(security): drift detection — config_hash reconciliation + badge | DONE (636cf2f) |
+| CC_PROMPT_v2.33.10.md | v2.33.10 | feat(ui): container pull — in-card progress + eager version controls | RUNNING |
 
 ---
 
@@ -251,6 +252,9 @@ PBS collector extended to enumerate `/admin/datastore/{s}/snapshots` and record 
 
 **v2.33.9** — feat(security): drift detection — config_hash reconciliation + badge.
 entity_history gains config_hash + prev_config_hash columns; `compute_config_hash` ignores volatile keys (uptime, cpu_usage, etc.). New `drift_events` view flags hash changes without a sanctioned agent_action within ±60s. `/api/entity/{id}/drift` + `/api/drift/recent` endpoints. Cards get ⚠ DRIFT badge (amber) — clicking opens investigate_drift template pre-scoped to the entity. Enforces DEATHSTAR as the single source of truth for changes.
+
+**v2.33.10** — feat(ui): container pull — in-card progress + eager version controls.
+Three coordinated fixes for the ghcr container update flow. (1) New async pull API: `POST /containers/{id}/pull-start` returns a job_id; `GET /pull-jobs/{id}` reports layer-aggregated bytes_done/bytes_total + phase (downloading/extracting/recreating/done/error). Uses `client.api.pull(stream=True, decode=True)` for live Docker events. (2) Frontend lifts full tags list from ContainerCardExpanded to ServiceCards parent — Choose version + Refresh buttons render instantly on expand, no fetch-on-mount delay. Full tags cached, not just `[0]`. (3) In-card progress block with phase label, percent bar, message, layer byte counter, DISMISS button; replaces the bottom-right "Done" toast for pull success. Errors remain inline too. Self-container (hp1_agent) preserves the sidecar-recreate path.
 
 ---
 

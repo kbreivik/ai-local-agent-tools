@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-17T09:20:36",
+  "updated_at": "2026-04-17T09:45:56",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -1781,10 +1781,26 @@
       "filename": "CC_PROMPT_v2.33.9.md",
       "version": "v2.33.9",
       "theme": "feat(security): drift detection — config_hash reconciliation + badge",
+      "runner_status": "DONE",
+      "commit_sha": "636cf2f",
+      "error": "",
+      "started_at": "2026-04-17T09:20:36",
+      "finished_at": "2026-04-17T09:25:56",
+      "duration_s": 320.1994599000027,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260417_092036_CC_PROMPT_v2.33.9.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.33.10.md",
+      "version": "v2.33.10",
+      "theme": "feat(ui): container pull — in-card progress + eager version controls",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-17T09:20:36",
+      "started_at": "2026-04-17T09:45:56",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
