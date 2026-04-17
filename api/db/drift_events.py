@@ -19,6 +19,10 @@ import os
 log = logging.getLogger(__name__)
 
 
+# Postgres CREATE OR REPLACE VIEW only permits appending new columns at the
+# end of the SELECT list — existing columns must keep their position, name and
+# type. So recorded_at / suppressed_by_maintenance / acknowledged are tacked
+# on after metadata.
 _VIEW_SQL = """
 CREATE OR REPLACE VIEW drift_events AS
 SELECT
@@ -26,8 +30,15 @@ SELECT
     es.snapshot_at,
     es.config_hash,
     es.prev_config_hash,
-    es.metadata
+    es.metadata,
+    es.snapshot_at                AS recorded_at,
+    (em.entity_id IS NOT NULL)    AS suppressed_by_maintenance,
+    FALSE                         AS acknowledged
 FROM entity_snapshots es
+LEFT JOIN entity_maintenance em
+  ON em.entity_id = es.entity_id
+ AND em.set_at    <= es.snapshot_at
+ AND (em.expires_at IS NULL OR em.expires_at > es.snapshot_at)
 WHERE es.config_hash IS NOT NULL
   AND es.prev_config_hash IS NOT NULL
   AND es.config_hash <> es.prev_config_hash

@@ -13,6 +13,7 @@ const NAV = [
     { key: 'Cluster',     icon: '◈' },
     { key: 'Logs',        icon: '≡' },
     { key: 'Kafka',       icon: '◉' },
+    { key: 'Gates',       icon: '⛨' },
     { key: 'Memory',      icon: '◎' },
     { key: 'Discovered',  icon: '⊕' },
   ]},

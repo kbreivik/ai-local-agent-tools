@@ -34,6 +34,7 @@ import EscalationBanner from './components/EscalationBanner'
 import WindowsSection from './components/WindowsSection'
 import RunbooksPanel from './components/RunbooksPanel'
 import DiscoveredView from './components/DiscoveredView'
+import GatesView from './components/GatesView'
 import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
@@ -1570,6 +1571,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <KafkaTab />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Gates' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
+                <GatesView />
               </div>
             </div>
           )}
