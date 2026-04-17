@@ -1,0 +1,974 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.34.12.md (v2.34.12)
+Theme: feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover)
+
+Prompt content:
+
+# CC PROMPT — v2.34.12 — feat(tools): container-introspection read-only tools
+
+## Evidence
+
+Live trace 2026-04-17 20:08 (session 2bd88acb). v2.34.11 classifier fix shipped
+and working: agent correctly routed to Investigate with 16-call budget. Ran
+the Logstash→ES investigation and made real progress, getting as far as the
+in-container probe we need to diagnose overlay-layer Kafka reachability.
+
+Of the 16 tool calls made, **5 of them were `docker exec ...` shapes that
+the vm_exec allowlist blocked or filtered**:
+
+| Step | Command | Outcome |
+|---|---|---|
+| 11 | `docker exec <logstash> nc -zv 192.168.199.33 9094` | Ran — but `nc` not installed in Logstash container |
+| 12 | `docker exec <logstash> curl -I http://localhost:9094` | BLOCKED (segment not in allowlist) |
+| 13 | `docker exec <logstash> cat /etc/resolv.conf` | BLOCKED |
+| 14 | `docker exec <logstash> cat /etc/hosts` | BLOCKED |
+| 15 | `docker exec <logstash> cat /opt/logstash/config/logstash.yml` | BLOCKED |
+
+The agent then hit the token cap (123k > 120k) and was forced to escalate
+without reaching a diagnosis. Manual follow-up in the chat established the
+root cause — Logstash's overlay network has working cross-host routing to
+brokers 1 and 2 but NOT to broker 3 on the same host (Docker hairpin-NAT
+failure on worker-03). That diagnosis hinged on four facts the agent could
+not obtain through `vm_exec` alone:
+
+1. Logstash's `bootstrap_servers` config — needs `cat <config>` in container
+2. Broker 3's advertised listeners — needs `env | grep ADVERTISED` in container
+3. The overlay networks each container belongs to — needs `docker inspect`
+   with a field-format filter
+4. Whether Logstash can reach the broker port from **inside its netns** —
+   needs `</dev/tcp/...>` probe in container (nc not installed)
+
+Each of those is a safe, read-only operation that the existing vm_exec
+allowlist cannot express without allowing broadly destructive `docker exec`
+and `docker inspect` patterns. Dedicated tools with typed, constrained
+arguments are the right safety boundary.
+
+Version bump: 2.34.11 → 2.34.12 (new subsystem but small footprint —
+five new tools in one file, one allowlist group, minor prompt additions).
+
+---
+
+## Goal
+
+Add a container-introspection tool group — five MCP tools, all read-only,
+`blast_radius=none`, with constrained argument validation. Available to
+observe, investigate, and execute agents. No new SSH path — all tools
+delegate to the existing `vm_exec` SSH machinery, wrapping specific
+pre-templated command shapes.
+
+## Change 1 — new module `mcp_server/tools/container_introspect.py`
+
+Create new file. Each tool runs its command via the existing SSH helper
+`_ssh_exec` (same helper `vm_exec` uses — import from `mcp_server/tools/vm.py`),
+with a deliberately narrow command template so the arguments can be
+validated per-tool rather than parsed through the shell safelist.
+
+```python
+"""Container introspection tools — read-only introspection of Docker
+containers running on Swarm worker hosts. All tools use SSH to the vm_host
+and run a pre-templated command with constrained argument validation.
+
+Design principles:
+- No raw user-shell expansion: arguments are validated and quoted per-tool,
+  never concatenated into free-form command strings.
+- All operations are read-only. blast_radius='none' on every tool.
+- Fail closed: argument validation rejects anything outside the allowlist.
+"""
+
+from __future__ import annotations
+
+import re
+import shlex
+from typing import Any
+
+from mcp_server.tools.vm import _ssh_exec, resolve_vm_host
+from api.metrics import CONTAINER_INTROSPECT_COUNTER  # added in Change 4
+
+
+# ── Argument validators ──────────────────────────────────────────────────────
+
+_CONTAINER_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]{1,63}$")
+_SERVICE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]{1,63}$")
+
+# Read-only paths we allow container_config_read to open.
+# Order matters: anchored at common config/log locations only.
+_ALLOWED_CONFIG_PATHS = [
+    re.compile(r"^/etc/hosts$"),
+    re.compile(r"^/etc/resolv\.conf$"),
+    re.compile(r"^/etc/hostname$"),
+    re.compile(r"^/etc/[a-zA-Z0-9_\-]+\.(conf|yml|yaml|json|ini|properties)$"),
+    re.compile(r"^/etc/[a-zA-Z0-9_\-./]+/[a-zA-Z0-9_\-]+\.(conf|yml|yaml|json|ini|properties)$"),
+    re.compile(r"^/opt/[a-zA-Z0-9_\-./]+\.(conf|yml|yaml|json|ini|properties)$"),
+    re.compile(r"^/usr/share/[a-zA-Z0-9_\-./]+\.(conf|yml|yaml|json|ini|properties)$"),
+    re.compile(r"^/usr/share/[a-zA-Z0-9_\-/]+/pipeline/[a-zA-Z0-9_\-]+\.conf$"),
+    re.compile(r"^/var/log/[a-zA-Z0-9_\-./]+\.log$"),
+]
+
+# Env var names we refuse to return — even redacted, they shouldn't surface
+# in agent context.
+_ENV_SECRET_KEYS = re.compile(
+    r"(?i)(password|passwd|secret|token|apikey|api_key|credential|private_key)"
+)
+
+
+def _validate_container_id(container_id: str) -> None:
+    if not isinstance(container_id, str) or not _CONTAINER_ID_RE.match(container_id):
+        raise ValueError(f"invalid container_id: {container_id!r}")
+
+
+def _validate_path(path: str) -> None:
+    if not isinstance(path, str) or len(path) > 512:
+        raise ValueError("path missing or too long")
+    if ".." in path or not path.startswith("/"):
+        raise ValueError("path must be absolute with no '..' segments")
+    if not any(rx.match(path) for rx in _ALLOWED_CONFIG_PATHS):
+        raise ValueError(
+            f"path not in read-only allowlist. Allowed: /etc/*, /opt/*/config/*, "
+            f"/usr/share/*/pipeline/*, /var/log/*. Got: {path}"
+        )
+
+
+def _ok(name: str, data: dict) -> dict:
+    try:
+        CONTAINER_INTROSPECT_COUNTER.labels(tool=name, outcome="ok").inc()
+    except Exception:
+        pass
+    return {"data": data, "status": "ok"}
+
+
+def _err(name: str, message: str) -> dict:
+    try:
+        CONTAINER_INTROSPECT_COUNTER.labels(tool=name, outcome="error").inc()
+    except Exception:
+        pass
+    return {"data": None, "status": "error", "message": message}
+
+
+# ── Tools ────────────────────────────────────────────────────────────────────
+
+def container_config_read(
+    host: str,
+    container_id: str,
+    path: str,
+    max_lines: int = 200,
+) -> dict:
+    """Read a config or log file from inside a running container.
+
+    Safe: path must match the read-only allowlist. No shell expansion; the
+    path is shlex-quoted into a fixed command template. Output is truncated
+    to max_lines lines (capped at 500).
+
+    Args:
+        host:         vm_host_label (e.g. 'ds-docker-worker-03')
+        container_id: Docker container ID or name
+        path:         Absolute file path inside the container
+        max_lines:    Truncate output to this many lines (1..500)
+
+    Returns:
+        {data: {content: str, lines_returned: int, truncated: bool},
+         status: 'ok' | 'error', ...}
+    """
+    try:
+        _validate_container_id(container_id)
+        _validate_path(path)
+    except ValueError as e:
+        return _err("container_config_read", str(e))
+
+    max_lines = max(1, min(int(max_lines or 200), 500))
+    q_id = shlex.quote(container_id)
+    q_path = shlex.quote(path)
+    cmd = f"docker exec {q_id} cat {q_path} 2>&1 | head -{max_lines}"
+
+    res = _ssh_exec(host=host, command=cmd, validate=False)
+    if res.get("status") != "ok":
+        return _err("container_config_read", res.get("message", "ssh failed"))
+
+    out = res["data"]["output"]
+    lines = out.splitlines()
+    truncated = len(lines) >= max_lines
+    return _ok("container_config_read", {
+        "host": host,
+        "container_id": container_id,
+        "path": path,
+        "content": out,
+        "lines_returned": len(lines),
+        "truncated": truncated,
+    })
+
+
+def container_env(
+    host: str,
+    container_id: str,
+    grep_pattern: str | None = None,
+) -> dict:
+    """Return container environment variables with secrets redacted.
+
+    Safe: env is read-only. Secrets matched by _ENV_SECRET_KEYS are replaced
+    with '<redacted>'. Optional grep_pattern is applied case-insensitively
+    against key names AFTER redaction.
+
+    Args:
+        host:         vm_host_label
+        container_id: Docker container ID or name
+        grep_pattern: Optional substring filter on key names (case-insensitive)
+
+    Returns:
+        {data: {env: [{key, value}, ...], count, redacted_count}, ...}
+    """
+    try:
+        _validate_container_id(container_id)
+    except ValueError as e:
+        return _err("container_env", str(e))
+
+    if grep_pattern is not None:
+        if not isinstance(grep_pattern, str) or len(grep_pattern) > 64:
+            return _err("container_env", "grep_pattern missing or too long")
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", grep_pattern):
+            return _err("container_env",
+                        "grep_pattern: alphanumeric / _ / - only")
+
+    q_id = shlex.quote(container_id)
+    cmd = f"docker exec {q_id} env"
+    res = _ssh_exec(host=host, command=cmd, validate=False)
+    if res.get("status") != "ok":
+        return _err("container_env", res.get("message", "ssh failed"))
+
+    env_lines = res["data"]["output"].splitlines()
+    env: list[dict] = []
+    redacted_count = 0
+    gp_lower = grep_pattern.lower() if grep_pattern else None
+    for line in env_lines:
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if _ENV_SECRET_KEYS.search(k):
+            v = "<redacted>"
+            redacted_count += 1
+        if gp_lower and gp_lower not in k.lower():
+            continue
+        env.append({"key": k, "value": v})
+
+    return _ok("container_env", {
+        "host": host,
+        "container_id": container_id,
+        "env": env,
+        "count": len(env),
+        "redacted_count": redacted_count,
+    })
+
+
+def container_networks(host: str, container_id: str) -> dict:
+    """Return overlay networks, IPs, and published ports for a container.
+
+    Parses `docker inspect` with a format template into structured data. This
+    is the fastest way to diagnose overlay mismatches (the Logstash/broker-3
+    case) — one call instead of three ad-hoc vm_exec invocations.
+
+    Returns:
+        {data: {networks: [{name, ip, mac_address}, ...],
+                published_ports: [{host_port, container_port, protocol}, ...]}}
+    """
+    try:
+        _validate_container_id(container_id)
+    except ValueError as e:
+        return _err("container_networks", str(e))
+
+    q_id = shlex.quote(container_id)
+    # Two round-trips to keep format strings simple and unambiguous.
+    net_fmt = r"""{{range $k,$v := .NetworkSettings.Networks}}{{$k}}|{{$v.IPAddress}}|{{$v.MacAddress}}
+{{end}}"""
+    port_fmt = r"""{{range $p,$bs := .NetworkSettings.Ports}}{{range $bs}}{{.HostPort}}|{{$p}}
+{{end}}{{end}}"""
+
+    nets_res = _ssh_exec(
+        host=host,
+        command=f"docker inspect {q_id} --format {shlex.quote(net_fmt)}",
+        validate=False,
+    )
+    if nets_res.get("status") != "ok":
+        return _err("container_networks", nets_res.get("message", "ssh failed"))
+    networks = []
+    for line in nets_res["data"]["output"].splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        if len(parts) >= 3:
+            networks.append({"name": parts[0], "ip": parts[1], "mac_address": parts[2]})
+
+    ports_res = _ssh_exec(
+        host=host,
+        command=f"docker inspect {q_id} --format {shlex.quote(port_fmt)}",
+        validate=False,
+    )
+    published_ports = []
+    if ports_res.get("status") == "ok":
+        for line in ports_res["data"]["output"].splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) >= 2:
+                host_port = parts[0]
+                cproto = parts[1]  # e.g. '9094/tcp'
+                cport, _, proto = cproto.partition("/")
+                published_ports.append({
+                    "host_port": host_port,
+                    "container_port": cport,
+                    "protocol": proto or "tcp",
+                })
+
+    return _ok("container_networks", {
+        "host": host,
+        "container_id": container_id,
+        "networks": networks,
+        "published_ports": published_ports,
+    })
+
+
+def container_tcp_probe(
+    host: str,
+    container_id: str,
+    target_host: str,
+    target_port: int,
+    timeout_s: int = 5,
+) -> dict:
+    """Probe TCP reachability from INSIDE the container's network namespace.
+
+    Uses bash's built-in `</dev/tcp/host/port` rather than nc, so it works
+    regardless of whether nc, netcat, ncat, or any network utility is
+    installed in the container. This is the single most important diagnostic
+    for overlay-layer reachability problems (e.g. hairpin-NAT failures).
+
+    Args:
+        host:         vm_host_label
+        container_id: Docker container ID or name
+        target_host:  Hostname or IP to probe
+        target_port:  TCP port
+        timeout_s:    Timeout in seconds (1..30)
+
+    Returns:
+        {data: {reachable: bool, rtt_ms: int|None,
+                probed: '<target_host>:<target_port>', method: 'bash_dev_tcp'}}
+    """
+    try:
+        _validate_container_id(container_id)
+    except ValueError as e:
+        return _err("container_tcp_probe", str(e))
+
+    if not isinstance(target_host, str) or not re.match(
+        r"^[a-zA-Z0-9._\-]+$", target_host
+    ):
+        return _err("container_tcp_probe", "invalid target_host")
+    try:
+        tp = int(target_port)
+    except Exception:
+        return _err("container_tcp_probe", "target_port must be int")
+    if not (1 <= tp <= 65535):
+        return _err("container_tcp_probe", "target_port out of range")
+    ts = max(1, min(int(timeout_s or 5), 30))
+
+    q_id = shlex.quote(container_id)
+    q_host = shlex.quote(target_host)
+    q_port = str(tp)
+    # bash </dev/tcp/... requires bash — fall back to sh with timeout utility
+    # command if bash is absent (rare for official images).
+    inner = (
+        f"t=$(date +%s%N); "
+        f"timeout {ts} bash -c '</dev/tcp/{target_host}/{tp}' "
+        f"&& echo OK || echo FAIL; "
+        f"echo RTT_NS=$(( $(date +%s%N) - $t ))"
+    )
+    # Wrap in docker exec ... sh -c '...' with shell-quoted inner string.
+    cmd = f"docker exec {q_id} sh -c {shlex.quote(inner)}"
+    res = _ssh_exec(host=host, command=cmd, validate=False)
+    if res.get("status") != "ok":
+        return _err("container_tcp_probe", res.get("message", "ssh failed"))
+
+    out = res["data"]["output"] or ""
+    reachable = "OK" in out.split() or out.strip().startswith("OK")
+    rtt_ms: int | None = None
+    m = re.search(r"RTT_NS=(\d+)", out)
+    if m:
+        try:
+            rtt_ms = int(int(m.group(1)) / 1_000_000)
+        except Exception:
+            rtt_ms = None
+
+    return _ok("container_tcp_probe", {
+        "host": host,
+        "container_id": container_id,
+        "target_host": target_host,
+        "target_port": tp,
+        "reachable": reachable,
+        "rtt_ms": rtt_ms,
+        "method": "bash_dev_tcp",
+        "raw_output": out[:500],
+    })
+
+
+def container_discover_by_service(service_name: str) -> dict:
+    """Map a Swarm service name to its running container IDs per node.
+
+    Replaces the common docker-ps-then-extract-ID sequence. Uses the
+    existing service_placement + vm_exec machinery, but returns a flat
+    structured list the LLM can consume in a single tool call.
+
+    Returns:
+        {data: {service: str,
+                containers: [{node, vm_host_label, container_id,
+                              container_name, state}]}}
+    """
+    if not _SERVICE_NAME_RE.match(service_name or ""):
+        return _err("container_discover_by_service", "invalid service_name")
+
+    # Import lazily to avoid circulars.
+    from mcp_server.tools.swarm import service_placement
+
+    placements = service_placement(service_name=service_name)
+    if placements.get("status") != "ok":
+        return _err("container_discover_by_service",
+                    placements.get("message", "placement lookup failed"))
+
+    containers: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for p in (placements.get("data") or {}).get("placements", []):
+        node = p.get("node")
+        vhl = p.get("vm_host_label")
+        state = p.get("current_state", "")
+        if not vhl or "Running" not in state:
+            continue
+        key = (vhl, p.get("task", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # docker ps on that host filtered by the service name prefix
+        ps_cmd = (
+            f"docker ps --filter name={shlex.quote(service_name)} "
+            f"--format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.State}}}}'"
+        )
+        res = _ssh_exec(host=vhl, command=ps_cmd, validate=False)
+        if res.get("status") != "ok":
+            continue
+        for line in (res["data"].get("output") or "").splitlines():
+            parts = line.strip().split("|")
+            if len(parts) < 3:
+                continue
+            containers.append({
+                "node": node,
+                "vm_host_label": vhl,
+                "container_id": parts[0],
+                "container_name": parts[1],
+                "state": parts[2],
+            })
+
+    return _ok("container_discover_by_service", {
+        "service": service_name,
+        "containers": containers,
+        "count": len(containers),
+    })
+```
+
+## Change 2 — register the tools
+
+In `mcp_server/tools/__init__.py` (or wherever the tool registry auto-discovers
+tools — mirror the pattern v2.33.0 used for `kafka_topic_inspect`), add:
+
+```python
+from .container_introspect import (
+    container_config_read,
+    container_env,
+    container_networks,
+    container_tcp_probe,
+    container_discover_by_service,
+)
+```
+
+Also confirm they appear in the FastMCP registration block; the project's
+existing convention is auto-registration via `@mcp.tool()` decorators on the
+function defs. If the project uses decorators, wrap each function with
+`@mcp.tool()` inside the new module (see how `kafka_topic_inspect` is
+registered for the exact pattern) and skip the explicit import above.
+
+## Change 3 — allowlists in `api/agents/router.py`
+
+Add all five tool names to the observe, investigate, and execute allowlists.
+Do NOT add to build.
+
+Insert the tool names alphabetically into each frozenset:
+
+```python
+OBSERVE_AGENT_TOOLS = frozenset({
+    ...
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
+    ...
+})
+
+INVESTIGATE_AGENT_TOOLS = frozenset({
+    ...
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
+    ...
+})
+
+# Execute-side: add to all four _EXECUTE_* sets (kafka, swarm, proxmox, general)
+# so remediation tasks can still read container config during verify steps.
+EXECUTE_KAFKA_TOOLS = frozenset({
+    ...
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
+    ...
+}) | _EXECUTE_BASE | _DIAGNOSTICS
+
+# repeat for EXECUTE_SWARM_TOOLS, EXECUTE_PROXMOX_TOOLS, EXECUTE_GENERAL_TOOLS
+```
+
+## Change 4 — Prometheus counter
+
+In `api/metrics.py`:
+
+```python
+CONTAINER_INTROSPECT_COUNTER = Counter(
+    "deathstar_container_introspect_total",
+    "Container-introspection tool invocations",
+    ["tool", "outcome"],   # outcome: 'ok' | 'error'
+)
+```
+
+## Change 5 — prompt guidance in INVESTIGATE_PROMPT (router.py)
+
+Add a section to `RESEARCH_PROMPT` (which aliases to `INVESTIGATE_PROMPT`)
+immediately after the existing `═══ NETWORK DIAGNOSTICS ═══` block:
+
+```text
+═══ CONTAINER INTROSPECTION (v2.34.12) ═══
+When investigating a problem inside a running container (config mismatch,
+overlay routing, env-driven bootstrap), use these tools BEFORE raw
+docker exec. They return structured data in one call and bypass the
+vm_exec metachar/allowlist filters by validating arguments up front:
+
+  container_config_read(host, container_id, path)
+      Read /etc/hosts, /etc/resolv.conf, /etc/*.conf, /opt/*/config/*,
+      /usr/share/*/pipeline/*.conf, /var/log/*.log. Path allowlist enforced.
+
+  container_env(host, container_id, grep_pattern=None)
+      Returns env vars (secrets redacted). Use to see KAFKA_BOOTSTRAP_SERVERS,
+      KAFKA_ADVERTISED_LISTENERS, ELASTICSEARCH_HOSTS, etc.
+
+  container_networks(host, container_id)
+      Returns {networks: [{name, ip}], published_ports: [...]}. Single call
+      to find overlay-network mismatch between two containers.
+
+  container_tcp_probe(host, container_id, target_host, target_port)
+      TCP reachability from INSIDE the container netns. Uses bash
+      </dev/tcp/...> — no nc/curl required. This is the definitive test
+      for "can container A reach container B".
+
+  container_discover_by_service(service_name)
+      Swarm service → [{node, vm_host_label, container_id, container_name}].
+      Replaces docker ps + parse. Call once and use the returned IDs
+      directly in the four tools above.
+
+Standard overlay-diagnosis pattern:
+  1. container_discover_by_service(service_name) — get container IDs
+  2. container_networks(host, container_id) for EACH container involved —
+     compare overlay network memberships
+  3. container_tcp_probe(host, container_id, target_host, target_port) —
+     definitive reachability from the right netns
+  4. container_config_read(...) / container_env(...) — only if needed to
+     identify what address the client is actually trying to reach
+```
+
+Also add the same block to `STATUS_PROMPT` (OBSERVE_PROMPT) but trim to
+two sentences: mention the five tools exist and link to the investigate
+prompt for the full pattern.
+
+Add to `ACTION_PROMPT` only the sentence:
+"For post-action verification, container_config_read and container_tcp_probe
+are available (read-only)."
+
+## Change 6 — tests
+
+New file `tests/test_container_introspect.py`. Coverage targets:
+
+```python
+import pytest
+from unittest.mock import patch, MagicMock
+from mcp_server.tools import container_introspect as ci
+
+
+# ── Argument validation ──────────────────────────────────────────────────────
+
+class TestContainerIdValidation:
+    def test_accepts_hex_id(self):
+        ci._validate_container_id("f3ef70283135")
+
+    def test_accepts_service_name(self):
+        ci._validate_container_id("logstash_logstash.1.jjquw46py3ls8go7cuqvjbr0r")
+
+    @pytest.mark.parametrize("bad", [
+        "",
+        "../etc/passwd",
+        "$(whoami)",
+        "id; rm -rf /",
+        "id`",
+        "a" * 100,
+    ])
+    def test_rejects_dangerous(self, bad):
+        with pytest.raises(ValueError):
+            ci._validate_container_id(bad)
+
+
+class TestPathValidation:
+    @pytest.mark.parametrize("p", [
+        "/etc/hosts",
+        "/etc/resolv.conf",
+        "/etc/kafka/server.properties",
+        "/opt/logstash/config/logstash.yml",
+        "/usr/share/logstash/pipeline/main.conf",
+        "/var/log/app.log",
+    ])
+    def test_accepts_safelisted(self, p):
+        ci._validate_path(p)
+
+    @pytest.mark.parametrize("p", [
+        "/etc/shadow",           # not in suffix allowlist
+        "/etc/../etc/passwd",    # traversal
+        "relative/path.conf",    # not absolute
+        "/root/.ssh/id_rsa",     # outside allowlist
+        "/etc/my.sh",            # disallowed suffix
+    ])
+    def test_rejects_unsafelisted(self, p):
+        with pytest.raises(ValueError):
+            ci._validate_path(p)
+
+
+# ── container_config_read ────────────────────────────────────────────────────
+
+class TestContainerConfigRead:
+    def test_happy_path(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {
+                "output": "line1\nline2\nline3"}}
+            r = ci.container_config_read(
+                host="worker-03",
+                container_id="f3ef70283135",
+                path="/etc/hosts",
+            )
+            assert r["status"] == "ok"
+            assert r["data"]["lines_returned"] == 3
+            assert r["data"]["truncated"] is False
+            # Verify the command was properly quoted and no metacharacters injected
+            call_cmd = mock.call_args[1]["command"]
+            assert "docker exec 'f3ef70283135' cat '/etc/hosts'" in call_cmd
+            assert "|" in call_cmd and "head -200" in call_cmd
+
+    def test_rejects_unsafelisted_path(self):
+        r = ci.container_config_read(
+            host="worker-03", container_id="f3ef70283135",
+            path="/etc/shadow",
+        )
+        assert r["status"] == "error"
+        assert "not in read-only allowlist" in r["message"]
+
+    def test_max_lines_capped(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {"output": ""}}
+            ci.container_config_read(
+                host="w", container_id="abc",
+                path="/etc/hosts", max_lines=99999,
+            )
+            assert "head -500" in mock.call_args[1]["command"]
+
+
+# ── container_env ────────────────────────────────────────────────────────────
+
+class TestContainerEnv:
+    def test_redacts_secrets(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {"output":
+                "KAFKA_BOOTSTRAP=broker-1:9092\n"
+                "DB_PASSWORD=hunter2\n"
+                "API_TOKEN=sk-secret\n"
+                "LOG_LEVEL=info"
+            }}
+            r = ci.container_env(host="w", container_id="abc")
+            env = {e["key"]: e["value"] for e in r["data"]["env"]}
+            assert env["DB_PASSWORD"] == "<redacted>"
+            assert env["API_TOKEN"] == "<redacted>"
+            assert env["KAFKA_BOOTSTRAP"] == "broker-1:9092"
+            assert env["LOG_LEVEL"] == "info"
+            assert r["data"]["redacted_count"] == 2
+
+    def test_grep_pattern_filter(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {"output":
+                "KAFKA_BOOTSTRAP=x\nELASTICSEARCH_HOSTS=y\nLOG_LEVEL=info"
+            }}
+            r = ci.container_env(host="w", container_id="abc",
+                                 grep_pattern="KAFKA")
+            assert r["data"]["count"] == 1
+            assert r["data"]["env"][0]["key"] == "KAFKA_BOOTSTRAP"
+
+
+# ── container_tcp_probe ──────────────────────────────────────────────────────
+
+class TestContainerTcpProbe:
+    def test_reachable(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {
+                "output": "OK\nRTT_NS=3200000"
+            }}
+            r = ci.container_tcp_probe(
+                host="w", container_id="abc",
+                target_host="192.168.199.33", target_port=9094,
+            )
+            assert r["data"]["reachable"] is True
+            assert r["data"]["rtt_ms"] == 3
+
+    def test_unreachable(self):
+        with patch("mcp_server.tools.container_introspect._ssh_exec") as mock:
+            mock.return_value = {"status": "ok", "data": {
+                "output": "FAIL\nRTT_NS=5000000000"
+            }}
+            r = ci.container_tcp_probe(
+                host="w", container_id="abc",
+                target_host="192.168.199.33", target_port=9094,
+            )
+            assert r["data"]["reachable"] is False
+
+    def test_rejects_shell_injection(self):
+        r = ci.container_tcp_probe(
+            host="w", container_id="abc",
+            target_host="1.2.3.4; rm -rf /", target_port=80,
+        )
+        assert r["status"] == "error"
+        assert "invalid target_host" in r["message"]
+
+    def test_rejects_bad_port(self):
+        r = ci.container_tcp_probe(
+            host="w", container_id="abc",
+            target_host="1.2.3.4", target_port=99999,
+        )
+        assert r["status"] == "error"
+
+
+# ── router allowlist integration ─────────────────────────────────────────────
+
+class TestRouterAllowlists:
+    def test_new_tools_in_observe_allowlist(self):
+        from api.agents.router import OBSERVE_AGENT_TOOLS
+        for name in (
+            "container_config_read", "container_env", "container_networks",
+            "container_tcp_probe", "container_discover_by_service",
+        ):
+            assert name in OBSERVE_AGENT_TOOLS, f"{name} missing from observe"
+
+    def test_new_tools_in_investigate_allowlist(self):
+        from api.agents.router import INVESTIGATE_AGENT_TOOLS
+        for name in (
+            "container_config_read", "container_env", "container_networks",
+            "container_tcp_probe", "container_discover_by_service",
+        ):
+            assert name in INVESTIGATE_AGENT_TOOLS, f"{name} missing from investigate"
+
+    def test_new_tools_NOT_in_build_allowlist(self):
+        from api.agents.router import BUILD_AGENT_TOOLS
+        assert "container_config_read" not in BUILD_AGENT_TOOLS
+```
+
+## Change 7 — runbook entry (optional but recommended)
+
+Seed a new runbook in `api/db/runbooks.py` so future investigations auto-find it:
+
+```python
+{
+    "name": "diagnose_container_overlay_reachability",
+    "problem_keywords": ["overlay", "hairpin", "socket timeout", "broker unreachable",
+                          "network timeout", "container cannot connect"],
+    "steps": [
+        "1. container_discover_by_service(service_name) to get container IDs for both endpoints",
+        "2. container_networks(host, container_id) for each — compare 'networks' list",
+        "3. container_tcp_probe(host, client_container, target_host, target_port) — definitive",
+        "4. If probe fails from client netns but succeeds from host: hairpin-NAT / overlay routing issue",
+        "5. Workaround: move one container to a different node (docker service update --constraint-add)",
+        "6. Proper fix: attach client to the same overlay as server; use internal listener addresses",
+    ],
+    "automatable": ["1", "2", "3"],
+    "manual": ["5", "6"],
+},
+```
+
+## Version bump
+
+Update `VERSION`: `2.34.11` → `2.34.12`
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(tools): v2.34.12 container-introspection tools — config read, env, networks, tcp probe, discover"
+git push origin main
+```
+
+## How to test after push
+
+1. Redeploy `hp1_agent` and pull the new image.
+2. Re-run the exact Logstash task (session 2bd88acb shape):
+   > Investigate why Logstash is not writing to Elasticsearch. Check Kafka
+   > broker reachability from Logstash, including a network probe (nc -zv)
+   > to broker 3 on port 9094, and correlate with consumer lag and cluster
+   > health.
+3. Expected tool-call differences from the 20:08 trace:
+   - Some of the `docker exec ... cat` calls now route through
+     `container_config_read` and succeed.
+   - Overlay mismatch is discovered in ONE `container_networks` call per
+     container instead of requiring ad-hoc `docker inspect`.
+   - The in-container reachability probe succeeds via
+     `container_tcp_probe` without the `nc: not found` failure.
+4. Total tool calls should drop from 16 (many blocked) to ~10 (all productive).
+   Token usage should drop correspondingly.
+5. Final answer should name the root cause: "Logstash overlay
+   (logstash_default) cannot reach broker-3's published port via hairpin
+   NAT. Remote brokers are reachable via VXLAN on the other nodes."
+6. Prometheus: `deathstar_container_introspect_total{tool="container_tcp_probe",outcome="ok"}`
+   increments.
+7. Run the new test suite: `pytest tests/test_container_introspect.py -v`.
+
+## Non-goals / deferred
+
+- Destructive container operations (restart, kill, exec with arbitrary
+  commands) are NOT introduced here. Those remain behind `plan_action` +
+  the execute agent's existing Swarm tools.
+- Network layer repair tools (iptables manipulation, overlay rebuild) are
+  separate — candidate for v2.35+ and require careful blast_radius design.
+- Cross-container probe orchestration (probe between N:M pairs automatically)
+  is a potential v2.35 composite built on these primitives.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 22:26:51
+========================================================================

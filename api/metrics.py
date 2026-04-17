@@ -103,6 +103,13 @@ CLASSIFIER_DECISIONS_COUNTER = Counter(
     #                 'action_keyword', 'keyword_score', 'ambiguous'
 )
 
+# --- container introspection tools (v2.34.12) ---
+CONTAINER_INTROSPECT_COUNTER = Counter(
+    "deathstar_container_introspect_total",
+    "Container-introspection tool invocations",
+    ["tool", "outcome"],   # outcome: 'ok' | 'error'
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

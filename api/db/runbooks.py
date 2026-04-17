@@ -158,6 +158,38 @@ BASE_RUNBOOKS = [
              "command": "kafka_broker_status()"},
         ],
     },
+    {
+        "title": "Diagnose container overlay reachability",
+        "description": (
+            "Procedure for overlay / hairpin-NAT / 'container cannot reach "
+            "another service' investigations. Uses the v2.34.12 "
+            "container-introspection tools to compare overlay network "
+            "membership and probe TCP reachability from INSIDE the "
+            "client container's netns — the only definitive test."
+        ),
+        "tags": ["overlay", "hairpin", "network", "container", "reachability",
+                 "broker-unreachable", "socket-timeout"],
+        "steps": [
+            {"order": 1, "tool": "container_discover_by_service",
+             "description": "Get running container IDs for both endpoints",
+             "command": "container_discover_by_service(service_name='<service>')"},
+            {"order": 2, "tool": "container_networks",
+             "description": "Compare overlay network memberships for each container",
+             "command": "container_networks(host='<vm_host_label>', container_id='<id>')"},
+            {"order": 3, "tool": "container_tcp_probe",
+             "description": "Definitive reachability test from client netns",
+             "command": "container_tcp_probe(host='<client-host>', container_id='<client-id>', target_host='<server-ip>', target_port=<port>)"},
+            {"order": 4, "tool": "container_config_read",
+             "description": "(If probe fails) check client config for the address it's trying",
+             "command": "container_config_read(host='<host>', container_id='<id>', path='/etc/<app>/<config>')"},
+            {"order": 5, "tool": "container_env",
+             "description": "(If config hasn't identified it) check bootstrap env vars",
+             "command": "container_env(host='<host>', container_id='<id>', grep_pattern='BOOTSTRAP')"},
+            {"order": 6, "tool": None,
+             "description": "Manual: if probe fails from client netns but succeeds from host → hairpin-NAT/overlay routing issue. Workaround: move one container to a different node (docker service update --constraint-add). Proper fix: attach client to the same overlay as server; use internal listener addresses.",
+             "command": None},
+        ],
+    },
 ]
 
 

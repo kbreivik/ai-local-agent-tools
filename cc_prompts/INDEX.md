@@ -183,7 +183,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.8.md  | v2.34.8  | fix(agents): hallucination guard — require N substantive tool calls before final_answer | DONE (45ae853) |
 | CC_PROMPT_v2.34.9.md  | v2.34.9  | feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination | DONE (00c6090) |
 | CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | DONE (70e6bcc) |
-| CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | RUNNING |
+| CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | DONE (b76839f) |
+| CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | RUNNING |
 
 ---
 
@@ -327,6 +328,9 @@ Recurring bug: agent calls tools with wrong kwargs (service_name= vs name=, sinc
 
 **v2.34.11** — fix(agents): classifier hard-routes investigative starters to research.
 Sessions 2f2dae36 + 5107bfa7 (same Logstash investigate prompt, both runs) classified as Observe not Investigate. Root cause in `classify_task`: status_score=5 (check/network/port/health/lag) beat research_score=3 (investigate/why/correlate) even though the task literally opens with "Investigate". Adds _RESEARCH_STARTERS frozenset {investigate, diagnose, troubleshoot, analyse, analyze, correlate, why, deepdive} and _RESEARCH_STARTER_BIGRAMS {deep dive, find out, root cause, what caused}. Short-circuits to 'research' when first word/bigram matches AND action_score==0 (so "investigate and restart X" still routes to action). New `deathstar_agent_classifier_decisions_total` Prometheus counter with trigger labels. New tests/test_task_classifier.py covers today's prompt, all starters, action-precedence, and existing behaviour regression.
+
+**v2.34.12** — feat(tools): container-introspection read-only tools.
+Session 2bd88acb hit token cap (123k > 120k) after 16 tool calls with 5 blocked `docker exec … cat/curl/nc` attempts (container_id hash-check, /etc/resolv.conf, /etc/hosts, logstash.yml, in-container curl). Adds mcp_server/tools/container_introspect.py with 5 typed tools, all blast_radius=none: container_config_read (path regex safelist for /etc/*, /opt/*/config/*, /usr/share/*/pipeline/*, /var/log/*), container_env (env dump with PASSWORD/SECRET/TOKEN regex redaction), container_networks (structured docker inspect → {networks, published_ports}), container_tcp_probe (bash </dev/tcp/> — works without nc installed in-container), container_discover_by_service (Swarm service → [{node, vm_host_label, container_id, container_name}]). Added to observe/investigate/execute allowlists (NOT build). Prompt gets a CONTAINER INTROSPECTION block teaching the overlay-diagnosis pattern (discover → networks ×2 → tcp_probe → config_read). Seeds diagnose_container_overlay_reachability runbook. Tests cover arg validation, shell-injection rejection, secret redaction, and router allowlist presence.
 
 ---
 

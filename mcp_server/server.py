@@ -797,6 +797,78 @@ def service_placement(service_name: str) -> dict:
 
 
 @mcp.tool()
+def container_config_read(host: str, container_id: str, path: str, max_lines: int = 200) -> dict:
+    """Read a config or log file from inside a running container (read-only).
+    Path must match the read-only allowlist: /etc/hosts, /etc/resolv.conf,
+    /etc/*.conf|yml|yaml|json|ini|properties, /opt/*/config/*,
+    /usr/share/*/pipeline/*.conf, /var/log/*.log.
+    Safe: shlex-quoted, no shell expansion. Output truncated to max_lines (1..500).
+    Example: container_config_read(host='ds-docker-worker-03',
+             container_id='f3ef70283135', path='/etc/hosts')
+    """
+    from mcp_server.tools.container_introspect import container_config_read as _f
+    return _f(host=host, container_id=container_id, path=path, max_lines=max_lines)
+
+
+@mcp.tool()
+def container_env(host: str, container_id: str, grep_pattern: str = "") -> dict:
+    """Return container environment variables with secrets redacted (read-only).
+    Secret-named keys (password/token/secret/apikey/credential) are replaced
+    with '<redacted>'. Optional grep_pattern filters key names (alphanumeric,
+    _, - only — max 64 chars).
+    Example: container_env(host='ds-docker-worker-01',
+             container_id='logstash_logstash.1', grep_pattern='KAFKA')
+    """
+    from mcp_server.tools.container_introspect import container_env as _f
+    return _f(host=host, container_id=container_id,
+              grep_pattern=grep_pattern if grep_pattern else None)
+
+
+@mcp.tool()
+def container_networks(host: str, container_id: str) -> dict:
+    """Return overlay networks, IPs, and published ports for a container.
+    Single-call replacement for chained docker-inspect invocations — returns
+    {networks: [{name, ip, mac_address}], published_ports: [{host_port,
+    container_port, protocol}]}. The fastest way to diagnose overlay
+    mismatches between two containers.
+    Example: container_networks(host='ds-docker-worker-03',
+             container_id='f3ef70283135')
+    """
+    from mcp_server.tools.container_introspect import container_networks as _f
+    return _f(host=host, container_id=container_id)
+
+
+@mcp.tool()
+def container_tcp_probe(host: str, container_id: str,
+                        target_host: str, target_port: int,
+                        timeout_s: int = 5) -> dict:
+    """Probe TCP reachability from INSIDE the container's network namespace.
+    Uses bash's built-in </dev/tcp/host/port — no nc/curl needed in the image.
+    Definitive test for "can container A reach container B" in overlay layer.
+    Returns {reachable, rtt_ms, method='bash_dev_tcp'}.
+    Example: container_tcp_probe(host='ds-docker-worker-01',
+             container_id='logstash_logstash.1', target_host='192.168.199.33',
+             target_port=9094)
+    """
+    from mcp_server.tools.container_introspect import container_tcp_probe as _f
+    return _f(host=host, container_id=container_id,
+              target_host=target_host, target_port=target_port,
+              timeout_s=timeout_s)
+
+
+@mcp.tool()
+def container_discover_by_service(service_name: str) -> dict:
+    """Map a Swarm service name to its running container IDs per node.
+    Replaces docker ps + parse: returns {containers: [{node, vm_host_label,
+    container_id, container_name, state}]} for every running task.
+    Use the returned container_ids directly in the other container_* tools.
+    Example: container_discover_by_service('logstash_logstash')
+    """
+    from mcp_server.tools.container_introspect import container_discover_by_service as _f
+    return _f(service_name=service_name)
+
+
+@mcp.tool()
 def proxmox_vm_power(vm_label: str, action: str) -> dict:
     """Start, stop, or reboot a Proxmox VM by name label.
     Use when a worker node is completely Down and unreachable via SSH.

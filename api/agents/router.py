@@ -115,6 +115,12 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "get_host_network",
     "docker_engine_version", "docker_engine_check_update",
     "check_internet_connectivity",
+    # Container introspection (v2.34.12) — read-only
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     # Skill system — read-only
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "storage_health",
@@ -146,6 +152,12 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "get_host_network",
     "docker_engine_version", "docker_engine_check_update",
     "ingest_url", "ingest_pdf", "check_internet_connectivity",
+    # Container introspection (v2.34.12) — read-only
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     # Skill system — read-only + compat research
     "skill_search", "skill_list", "skill_info", "skill_health_summary",
     "skill_generation_config", "skill_compat_check", "skill_compat_check_all",
@@ -190,6 +202,12 @@ EXECUTE_KAFKA_TOOLS = frozenset({
     "entity_history", "entity_events",            # change tracking
     "result_fetch", "result_query",               # large result retrieval
     "resolve_entity",
+    # Container introspection (v2.34.12) — read-only verify steps
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
@@ -211,6 +229,12 @@ EXECUTE_SWARM_TOOLS = frozenset({
     "proxmox_vm_power",                  # v2.33.18: worker-node recovery composite
     "kafka_topic_inspect",               # v2.33.18: ISR verify after node rejoin
     "resolve_entity",
+    # Container introspection (v2.34.12) — read-only verify steps
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
@@ -230,6 +254,12 @@ EXECUTE_PROXMOX_TOOLS = frozenset({
     "entity_history", "entity_events", # change tracking
     "result_fetch", "result_query",    # large result retrieval
     "resolve_entity",                  # cross-reference entity names
+    # Container introspection (v2.34.12) — read-only verify steps
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     # Allowlist management
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
@@ -248,6 +278,12 @@ EXECUTE_GENERAL_TOOLS = frozenset({
     "entity_history", "entity_events",
     "swarm_node_status", "proxmox_vm_power", "swarm_service_force_update",
     "resolve_entity",
+    # Container introspection (v2.34.12) — read-only verify steps
+    "container_config_read",
+    "container_discover_by_service",
+    "container_env",
+    "container_networks",
+    "container_tcp_probe",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "vm_exec_allowlist_add",
@@ -390,6 +426,12 @@ have a clear reason not to.
 
 NETWORK QUERIES:
 For IP addresses, hostnames, ports, or connectivity: call get_host_network() first.
+
+CONTAINER INTROSPECTION (v2.34.12):
+Five read-only tools exist for in-container config/env/network/reachability
+checks: container_config_read, container_env, container_networks,
+container_tcp_probe, container_discover_by_service. See investigate-agent
+prompt for the full overlay-diagnosis pattern.
 
 DYNAMIC SKILLS:
 Skills are not listed in the tool manifest individually.
@@ -673,6 +715,43 @@ Inside containers:
 Safe pipes are supported for output trimming: `| head`, `| tail`, `| grep`,
 `| wc`, `| sort`, `| uniq`, `| awk` (no -f), `| sed` (no -f), and trailing
 `2>&1` / `> /dev/null`. Do NOT use `;`, `&`, `` ` ``, `$( )`, or `<`.
+
+═══ CONTAINER INTROSPECTION (v2.34.12) ═══
+When investigating a problem inside a running container (config mismatch,
+overlay routing, env-driven bootstrap), use these tools BEFORE raw
+docker exec. They return structured data in one call and bypass the
+vm_exec metachar/allowlist filters by validating arguments up front:
+
+  container_config_read(host, container_id, path)
+      Read /etc/hosts, /etc/resolv.conf, /etc/*.conf, /opt/*/config/*,
+      /usr/share/*/pipeline/*.conf, /var/log/*.log. Path allowlist enforced.
+
+  container_env(host, container_id, grep_pattern=None)
+      Returns env vars (secrets redacted). Use to see KAFKA_BOOTSTRAP_SERVERS,
+      KAFKA_ADVERTISED_LISTENERS, ELASTICSEARCH_HOSTS, etc.
+
+  container_networks(host, container_id)
+      Returns {networks: [{name, ip}], published_ports: [...]}. Single call
+      to find overlay-network mismatch between two containers.
+
+  container_tcp_probe(host, container_id, target_host, target_port)
+      TCP reachability from INSIDE the container netns. Uses bash
+      </dev/tcp/...> — no nc/curl required. This is the definitive test
+      for "can container A reach container B".
+
+  container_discover_by_service(service_name)
+      Swarm service → [{node, vm_host_label, container_id, container_name}].
+      Replaces docker ps + parse. Call once and use the returned IDs
+      directly in the four tools above.
+
+Standard overlay-diagnosis pattern:
+  1. container_discover_by_service(service_name) — get container IDs
+  2. container_networks(host, container_id) for EACH container involved —
+     compare overlay network memberships
+  3. container_tcp_probe(host, container_id, target_host, target_port) —
+     definitive reachability from the right netns
+  4. container_config_read(...) / container_env(...) — only if needed to
+     identify what address the client is actually trying to reach
 
 NON-KAFKA INVESTIGATION PATHS:
 
@@ -1069,6 +1148,9 @@ Inside containers:
 Safe pipes: `| head`, `| tail`, `| grep`, `| wc`, `| sort`, `| uniq`;
 safe redirects: `2>&1`, `> /dev/null`. No `;`, `&`, `` ` ``, `$( )`, or `<`.
 These are read-only — no plan_action required.
+
+For post-action verification, container_config_read and container_tcp_probe
+are available (read-only).
 
 ═══ BLOCKED COMMAND RULE ═══
 If vm_exec returns "not in allowlist", do NOT retry. Instead:
