@@ -73,6 +73,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Bookstack sync
     "bookstackSyncEnabled":       {"env": None, "sens": False, "default": False},
     "bookstackSyncIntervalHours": {"env": None, "sens": False, "default": 6},
+    # Kafka overview cache TTL (seconds)
+    "kafkaOverviewCacheTTL":      {"env": None, "sens": False, "default": 30},
 }
 
 

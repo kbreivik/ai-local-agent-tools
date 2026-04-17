@@ -12,6 +12,7 @@ const NAV = [
     { key: 'Dashboard',   icon: '⬡' },
     { key: 'Cluster',     icon: '◈' },
     { key: 'Logs',        icon: '≡' },
+    { key: 'Kafka',       icon: '◉' },
     { key: 'Memory',      icon: '◎' },
     { key: 'Discovered',  icon: '⊕' },
   ]},

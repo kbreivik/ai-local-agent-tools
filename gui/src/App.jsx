@@ -25,6 +25,7 @@ import LoginScreen from './components/LoginScreen'
 import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
 import DocsTab from './components/DocsTab'
+import KafkaTab from './components/KafkaTab'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
@@ -1561,6 +1562,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden">
                 <LogsPanel />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Kafka' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
+                <KafkaTab />
               </div>
             </div>
           )}
