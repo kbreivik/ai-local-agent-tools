@@ -1170,3 +1170,53 @@ def get_prompt(agent_type: str) -> str:
         'build':       BUILD_PROMPT,
         'ambiguous':   STATUS_PROMPT,  # ambiguous: gather info first, ask clarifying_question
     }.get(agent_type, STATUS_PROMPT)
+
+
+# ── Prompt override support ───────────────────────────────────────────────────
+
+def _extract_sections(prompt: str, section_names: list[str]) -> str:
+    """Extract named ═══ <NAME> ═══ sections from a system prompt.
+
+    Section headers look like ``═══ ROLE ═══``. Returns the concatenation
+    of each requested section (header included) up until the next ═══
+    header, in the order requested. Missing sections are silently skipped.
+    """
+    import re
+    pattern = re.compile(r"═══\s*([A-Z][A-Z _/-]*?)\s*═══", re.MULTILINE)
+    matches = list(pattern.finditer(prompt))
+    if not matches:
+        return ""
+
+    # Map NAME -> (start, end) where end is start of next header or EOF
+    spans: dict[str, tuple[int, int]] = {}
+    for i, m in enumerate(matches):
+        name = m.group(1).strip().upper()
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(prompt)
+        # Keep the first occurrence if a name repeats
+        spans.setdefault(name, (start, end))
+
+    wanted = [s.strip().upper() for s in section_names]
+    chunks = [prompt[s:e].rstrip() for name in wanted
+              for (s, e) in [spans.get(name, (-1, -1))] if s >= 0]
+    return "\n\n".join(chunks)
+
+
+def build_system_prompt(
+    agent_type: str,
+    task_context: dict | None = None,
+    template: dict | None = None,
+) -> str:
+    """Build a system prompt, honoring template prompt_override when present.
+
+    When ``template`` carries a ``prompt_override``, the override replaces the
+    body of the default prompt while preserving the Role + Environment
+    sections (so platform-critical context — Swarm vs Kubernetes, tool
+    signatures — survives). Otherwise returns the agent-type default prompt.
+    """
+    base = get_prompt(agent_type)
+    if template and template.get("prompt_override"):
+        role_env = _extract_sections(base, ["ROLE", "ENVIRONMENT"])
+        body = template["prompt_override"].format(**(task_context or {}))
+        return (role_env + "\n\n" + body).lstrip("\n") if role_env else body
+    return base

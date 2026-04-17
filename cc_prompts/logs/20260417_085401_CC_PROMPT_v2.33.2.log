@@ -1,0 +1,230 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.2.md (v2.33.2)
+Theme: feat(templates): diagnose_kafka_under_replicated fixed 4-step RCA
+
+Prompt content:
+
+# CC PROMPT — v2.33.2 — diagnose_kafka_under_replicated task template
+
+## What this does
+Chains the new v2.33.0 `kafka_topic_inspect` tool with existing
+`service_placement`, `swarm_node_status`, and (if Proxmox conn exists)
+`proxmox_vm_power(status)` into a fixed 4-step investigation that produces
+a structured RCA. Pure investigate — no mutations.
+
+Requires v2.33.0 (kafka_topic_inspect).
+
+Version bump: 2.33.1 → 2.33.2
+
+## Change 1 — api/agents/task_templates.py — add template
+
+Append to `TASK_TEMPLATES` (group KAFKA, new group if absent):
+
+```python
+{
+    "name": "diagnose_kafka_under_replicated",
+    "label": "Diagnose Kafka Under-Replication",
+    "group": "KAFKA",
+    "agent_type": "investigate",
+    "inputs": [
+        {"name": "topic", "label": "Topic (optional)", "required": False},
+    ],
+    "prompt_override": (
+        "═══ FIXED INVESTIGATION CHAIN — DO NOT SKIP STEPS ═══\n"
+        "\n"
+        "STEP 1: kafka_topic_inspect(topic={topic!r} if {topic} else None).\n"
+        "  From the result, identify partitions where isr != replicas.\n"
+        "  If summary.under_replicated_partitions == 0: STOP and report HEALTHY.\n"
+        "\n"
+        "STEP 2: For each broker id in replicas\\isr (missing brokers), call\n"
+        "  service_placement('kafka_broker-' + str(broker_id)).\n"
+        "  Record which Swarm node that broker is (or isn't) placed on.\n"
+        "\n"
+        "STEP 3: For each node identified in step 2, call swarm_node_status and\n"
+        "  report its Availability and State.\n"
+        "\n"
+        "STEP 4: If any node is Down, optionally call proxmox_vm_power with\n"
+        "  action='status' (NOT reboot) on the matching Proxmox VM to see if it's\n"
+        "  running at the hypervisor level.\n"
+        "\n"
+        "═══ STRICT OUTPUT SHAPE ═══\n"
+        "MISSING_BROKERS: [id1, id2]\n"
+        "IMPACT: <partition count> partitions on <topic(s)> under-replicated\n"
+        "ROOT_CAUSE: <one sentence — node X down, broker Y stuck unscheduled, etc.>\n"
+        "RESPONSIBLE_NODE: <node-name> (availability=<a>, state=<s>)\n"
+        "RECOMMENDED_FIX: <one sentence — e.g. reboot VM worker-03, then kafka_broker-3 will self-schedule>\n"
+    ),
+    "blast_radius": "none",
+    "destructive": False,
+}
+```
+
+## Change 2 — api/agents/router.py — honor prompt_override
+
+When a task template has `prompt_override`, the investigate agent should use it
+AS the system prompt (with light prepend of the Role/Environment sections), not
+append to the default RESEARCH_PROMPT. Find the agent-type dispatch and check if
+it already supports `prompt_override`. If not:
+
+```python
+def build_system_prompt(agent_type, task_context, template=None):
+    base = PROMPT_BY_TYPE[agent_type]
+    if template and template.get("prompt_override"):
+        # Keep Role + Environment sections; replace the body.
+        role_env = _extract_sections(base, ["ROLE", "ENVIRONMENT"])
+        return role_env + "\n\n" + template["prompt_override"].format(**task_context)
+    return base
+```
+
+## Change 3 — gui/src/components/CommandPanel.jsx — KAFKA group
+
+If the GROUP list doesn't include KAFKA, add it after SWARM in display order.
+Otherwise just ensure the new template renders under KAFKA.
+
+## Change 4 — tests
+
+```python
+# tests/test_task_templates.py
+def test_diagnose_kafka_unrepl_chain_shape():
+    from api.agents.task_templates import TASK_TEMPLATES
+    t = next(x for x in TASK_TEMPLATES if x["name"] == "diagnose_kafka_under_replicated")
+    assert t["agent_type"] == "investigate"
+    assert t["destructive"] is False
+    assert "kafka_topic_inspect" in t["prompt_override"]
+    assert "service_placement" in t["prompt_override"]
+    assert "MISSING_BROKERS:" in t["prompt_override"]
+```
+
+## Version bump
+Update `VERSION`: 2.33.1 → 2.33.2
+
+## Commit
+```
+git add -A
+git commit -m "feat(templates): v2.33.2 diagnose_kafka_under_replicated fixed 4-step RCA"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Agent panel → templates → KAFKA → diagnose_kafka_under_replicated.
+3. Leave topic empty → Run.
+4. Expect output in strict MISSING_BROKERS / IMPACT / ROOT_CAUSE / RESPONSIBLE_NODE / RECOMMENDED_FIX shape in ≤6 tool calls.
+5. Re-run — output should name the same node/fix (determinism check).
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 08:54:01
+========================================================================

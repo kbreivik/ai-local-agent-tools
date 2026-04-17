@@ -10,11 +10,13 @@ the backend can use them to pre-fill agent runs.
 
 from api.agents.task_templates import reboot_proxmox_vm
 from api.agents.task_templates import drain_swarm_node
+from api.agents.task_templates import diagnose_kafka_under_replicated
 
 TEMPLATES: dict[str, dict] = {}
 
 TEMPLATES[reboot_proxmox_vm.TEMPLATE["id"]] = reboot_proxmox_vm.TEMPLATE
 TEMPLATES[drain_swarm_node.TEMPLATE["id"]] = drain_swarm_node.TEMPLATE
+TEMPLATES[diagnose_kafka_under_replicated.TEMPLATE["id"]] = diagnose_kafka_under_replicated.TEMPLATE
 
 
 TASK_TEMPLATES: list[dict] = [
