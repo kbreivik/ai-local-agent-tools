@@ -137,6 +137,7 @@ export function AgentOutputProvider({ children }) {
   const [pendingProposals,     setPendingProposals]     = useState([])
   const [zeroPivot,            setZeroPivot]            = useState(null)
   const [contradictions,       setContradictions]       = useState([])
+  const [hallucinationBlocks,  setHallucinationBlocks]  = useState([])
   const [agentDiag,            setAgentDiag]            = useState(null)
   const [subAgents,            setSubAgents]            = useState([])
   const agentTypeRef    = useRef(null)
@@ -172,6 +173,7 @@ export function AgentOutputProvider({ children }) {
         setPendingProposals([])           // ← clear proposals on new run
         setZeroPivot(null)                // ← clear pivot banner on new run
         setContradictions([])             // ← clear contradiction banner on new run
+        setHallucinationBlocks([])        // ← clear halluc-guard banner on new run (v2.34.8)
         setAgentDiag(null)                // ← clear diagnostics overlay on new run
         setSubAgents([])                  // ← clear sub-agent list on new run (v2.34.0)
         // Add to raw log stream
@@ -210,6 +212,20 @@ export function AgentOutputProvider({ children }) {
       // ── contradiction_detected (v2.33.13) ─────────────────────────────────
       if (t === 'contradiction_detected') {
         setContradictions(Array.isArray(msg.contradictions) ? msg.contradictions : [])
+        return
+      }
+
+      // ── hallucination_block (v2.34.8) ─────────────────────────────────────
+      // Fired when the harness rejects a final_answer because the agent has
+      // made too few substantive (non-META) tool calls. Accumulate so each
+      // firing within a run is visible in the banner.
+      if (t === 'hallucination_block') {
+        setHallucinationBlocks(prev => [...prev, {
+          substantive_count: msg.substantive_count || 0,
+          required:          msg.required          || 0,
+          agent_type:        msg.agent_type        || '',
+          timestamp:         msg.timestamp         || '',
+        }])
         return
       }
 
@@ -408,6 +424,7 @@ export function AgentOutputProvider({ children }) {
       pendingProposals,
       zeroPivot,
       contradictions,
+      hallucinationBlocks,
       agentDiag,
       subAgents,
     }}>

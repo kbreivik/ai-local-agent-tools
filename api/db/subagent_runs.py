@@ -12,22 +12,23 @@ log = logging.getLogger(__name__)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS subagent_runs (
-    id                  TEXT PRIMARY KEY,
-    parent_task_id      TEXT NOT NULL DEFAULT '',
-    sub_task_id         TEXT NOT NULL UNIQUE,
-    depth               INTEGER NOT NULL DEFAULT 1,
-    spawned_at          TIMESTAMPTZ DEFAULT NOW(),
-    completed_at        TIMESTAMPTZ,
-    objective           TEXT NOT NULL,
-    agent_type          TEXT NOT NULL,
-    scope_entity        TEXT,
-    budget_tools        INTEGER NOT NULL DEFAULT 8,
-    tools_used          INTEGER DEFAULT 0,
-    allow_destructive   BOOLEAN DEFAULT FALSE,
-    terminal_status     TEXT,
-    final_answer        TEXT,
-    diagnosis           TEXT,
-    error               TEXT
+    id                      TEXT PRIMARY KEY,
+    parent_task_id          TEXT NOT NULL DEFAULT '',
+    sub_task_id             TEXT NOT NULL UNIQUE,
+    depth                   INTEGER NOT NULL DEFAULT 1,
+    spawned_at              TIMESTAMPTZ DEFAULT NOW(),
+    completed_at            TIMESTAMPTZ,
+    objective               TEXT NOT NULL,
+    agent_type              TEXT NOT NULL,
+    scope_entity            TEXT,
+    budget_tools            INTEGER NOT NULL DEFAULT 8,
+    tools_used              INTEGER DEFAULT 0,
+    substantive_tool_calls  INTEGER DEFAULT 0,
+    allow_destructive       BOOLEAN DEFAULT FALSE,
+    terminal_status         TEXT,
+    final_answer            TEXT,
+    diagnosis               TEXT,
+    error                   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_parent ON subagent_runs(parent_task_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_sub    ON subagent_runs(sub_task_id);
@@ -53,6 +54,15 @@ def init_subagent_runs():
             s = stmt.strip()
             if s:
                 cur.execute(s)
+        # v2.34.8: ensure the substantive_tool_calls column exists for
+        # tables created under v2.34.0..v2.34.7 before the DDL change.
+        try:
+            cur.execute(
+                "ALTER TABLE subagent_runs "
+                "ADD COLUMN IF NOT EXISTS substantive_tool_calls INTEGER DEFAULT 0"
+            )
+        except Exception as _alt_e:
+            log.debug("subagent_runs ALTER TABLE skipped: %s", _alt_e)
         cur.close()
         conn.close()
         _initialized = True
@@ -88,7 +98,8 @@ def record_spawn(parent_task_id: str, sub_task_id: str, depth: int,
 
 def record_completion(sub_task_id: str, terminal_status: str,
                       final_answer: str | None, diagnosis: str | None,
-                      tools_used: int, error: str | None = None) -> bool:
+                      tools_used: int, error: str | None = None,
+                      substantive_tool_calls: int = 0) -> bool:
     try:
         from api.connections import _get_conn
         conn = _get_conn()
@@ -100,12 +111,14 @@ def record_completion(sub_task_id: str, terminal_status: str,
                       final_answer=%s,
                       diagnosis=%s,
                       tools_used=%s,
+                      substantive_tool_calls=%s,
                       error=%s
                 WHERE sub_task_id=%s""",
             (terminal_status,
              (final_answer or "")[:4000],
              (diagnosis or "")[:2000],
              int(tools_used or 0),
+             int(substantive_tool_calls or 0),
              (error or "")[:2000],
              sub_task_id),
         )

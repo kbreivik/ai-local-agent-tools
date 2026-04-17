@@ -765,6 +765,29 @@ Two call shapes — pick based on intent:
         budget_tools=<int, 2-8 typical>
       )
 
+═══ CHOOSING agent_type FOR SUB-TASK (v2.34.8) ═══
+
+Match agent_type to the verb in the objective:
+
+  observe     — "check status", "is X running", "current state of Y"
+                Quick status check. Budget 8. Read-only tools only.
+
+  investigate — "why", "diagnose", "deep-dive", "find root cause", "analyze"
+                Data gathering + correlation. Budget 16. Read-only tools.
+
+  execute     — "fix", "restart", "recover", "apply", "deploy"
+                Requires plan_action for destructive steps. Budget 14.
+
+  build       — "create skill", "generate template", "scaffold"
+                Skill authoring only. Budget 12.
+
+If your objective uses "deep-dive", "diagnose", "why", or implies correlation
+across data sources, use `investigate`. Do NOT use `observe` for deep-dives.
+Observe is for one-shot status checks only. Mis-matching the verb to the
+agent_type leaves the sub-agent under-budgeted and under-prompted, which
+often yields fabricated answers (the v2.34.8 hallucination guard will
+catch these but you waste a round-trip).
+
 When to use shape (b):
   - A diagnostic chain would consume >5 of your remaining tool budget
   - The sub-problem is out-of-scope for your agent_type

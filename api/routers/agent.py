@@ -19,6 +19,7 @@ from api.auth import get_current_user
 import api.logger as logger_mod
 from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_MODEL, DEFAULT_LM_STUDIO_KEY
 from api.metrics import AGENT_TASKS, AGENT_TOOL_CALLS, AGENT_WALL_SECONDS
+from api.agents import META_TOOLS, MIN_SUBSTANTIVE_BY_TYPE
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -521,6 +522,7 @@ async def _run_single_agent_step(
     # ── Per-run feedback accumulators ─────────────────────────────────────────
     tools_used_names: list = []
     tool_history: list = []  # v2.33.13: full per-call log for contradiction detection
+    substantive_tool_calls: int = 0  # v2.34.8: non-META tool calls (hallucination guard)
     positive_signals = 0
     negative_signals = 0
     total_prompt_tokens = 0
@@ -531,6 +533,7 @@ async def _run_single_agent_step(
     _last_blocked_tool = None    # name of most recently blocked tool
     _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
     _budget_nudge_fired = False  # v2.33.3: ensure 70% handoff nudge fires at most once
+    _hallucination_block_fired = False  # v2.34.8: fire guard at most once per task
     # v2.33.12: zero-result pivot detection — per-tool tracking for the current task
     _zero_streaks: dict[str, int] = {}       # tool_name -> consecutive zero count
     _nonzero_seen: dict[str, int] = {}       # tool_name -> best non-zero count seen
@@ -805,6 +808,76 @@ async def _run_single_agent_step(
                     )
                     continue  # Next iteration will call plan_action
 
+                # ── v2.34.8 hallucination guard ──────────────────────────────
+                # Reject final_answer if the agent has made too few substantive
+                # (non-META) tool calls. Forces at least one retry so the model
+                # cannot fabricate infrastructure facts without data. Fires at
+                # most once per task — a second attempt is accepted with a
+                # surfaced warning to prevent infinite loops when no data is
+                # genuinely available.
+                _min_subst = MIN_SUBSTANTIVE_BY_TYPE.get(agent_type, 1)
+                if substantive_tool_calls < _min_subst:
+                    if not _hallucination_block_fired:
+                        _hallucination_block_fired = True
+                        if msg.content:
+                            messages.append({"role": "assistant", "content": msg.content})
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"[harness] You attempted to finalize after "
+                                f"{substantive_tool_calls} substantive tool call(s). "
+                                f"Your agent_type ({agent_type}) requires at least "
+                                f"{_min_subst}. Call real data-returning tools before "
+                                "answering. Meta tools (audit_log, runbook_search, "
+                                "memory_recall, propose_subtask, engram_activate, "
+                                "plan_action) do not count. Do not fabricate values — "
+                                "call a tool that returns real data."
+                            ),
+                        })
+                        try:
+                            from api.metrics import HALLUCINATION_GUARD_COUNTER
+                            HALLUCINATION_GUARD_COUNTER.labels(
+                                agent_type=agent_type, outcome="retried"
+                            ).inc()
+                        except Exception:
+                            pass
+                        await manager.broadcast({
+                            "type":              "hallucination_block",
+                            "session_id":        session_id,
+                            "substantive_count": substantive_tool_calls,
+                            "required":          _min_subst,
+                            "agent_type":        agent_type,
+                            "timestamp":         datetime.now(timezone.utc).isoformat(),
+                        })
+                        await manager.send_line(
+                            "step",
+                            f"[halluc-guard] final_answer blocked — "
+                            f"{substantive_tool_calls}/{_min_subst} substantive tool calls. "
+                            "Forcing retry.",
+                            status="warning", session_id=session_id,
+                        )
+                        continue  # loop back so the LLM can call a real tool
+                    else:
+                        # Second attempt — accept but surface a warning so
+                        # the operator sees the guard fired and fallback was used.
+                        try:
+                            from api.metrics import HALLUCINATION_GUARD_COUNTER
+                            HALLUCINATION_GUARD_COUNTER.labels(
+                                agent_type=agent_type, outcome="fallback_accepted"
+                            ).inc()
+                        except Exception:
+                            pass
+                        _fallback_warn = (
+                            f"[HARNESS WARNING] Final answer delivered with only "
+                            f"{substantive_tool_calls} substantive tool call(s) "
+                            f"(required {_min_subst}). Treat the findings below as "
+                            "low-confidence — no real tool data was gathered.\n\n"
+                        )
+                        if last_reasoning and not last_reasoning.startswith("[HARNESS WARNING]"):
+                            last_reasoning = _fallback_warn + last_reasoning
+                        elif not last_reasoning:
+                            last_reasoning = _fallback_warn.strip()
+
                 # Synthesise degraded findings if present and summary is thin
                 if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
                     try:
@@ -948,6 +1021,8 @@ async def _run_single_agent_step(
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
                 tools_used_names.append(fn_name)
+                if fn_name not in META_TOOLS:
+                    substantive_tool_calls += 1  # v2.34.8: hallucination guard counter
                 tool_content_suffix = ""  # v2.32.2: populated by auto-verify after destructive tools
                 try:
                     fn_args = json.loads(tc.function.arguments)
@@ -1926,15 +2001,16 @@ async def _run_single_agent_step(
         )
 
     return {
-        "output":              last_reasoning,
-        "tools_used":          tools_used_names,
-        "tool_history":        tool_history,  # v2.33.13: for contradiction detection
-        "final_status":        final_status,
-        "positive_signals":    positive_signals,
-        "negative_signals":    negative_signals,
-        "steps_taken":         step,
-        "prompt_tokens":       total_prompt_tokens,
-        "completion_tokens":   total_completion_tokens,
+        "output":                 last_reasoning,
+        "tools_used":             tools_used_names,
+        "substantive_tool_calls": substantive_tool_calls,  # v2.34.8
+        "tool_history":           tool_history,  # v2.33.13: for contradiction detection
+        "final_status":           final_status,
+        "positive_signals":       positive_signals,
+        "negative_signals":       negative_signals,
+        "steps_taken":            step,
+        "prompt_tokens":          total_prompt_tokens,
+        "completion_tokens":      total_completion_tokens,
     }
 
 
@@ -2112,6 +2188,7 @@ async def _spawn_and_wait_subagent(
     sub_final_answer = ""
     sub_diagnosis = ""
     sub_tools_used = 0
+    sub_substantive = 0  # v2.34.8
     try:
         from api.db.base import get_engine
         from api.db import queries as q
@@ -2129,8 +2206,17 @@ async def _spawn_and_wait_subagent(
             async with get_engine().connect() as conn2:
                 tcs = await q.get_tool_calls_for_operation(conn2, sub_operation_id)
                 sub_tools_used = len(tcs or [])
+                # v2.34.8: count substantive (non-META) tool calls for this sub
+                for _tc in (tcs or []):
+                    try:
+                        _name = (_tc.get("tool_name") or "") if isinstance(_tc, dict) else ""
+                    except Exception:
+                        _name = ""
+                    if _name and _name not in META_TOOLS:
+                        sub_substantive += 1
         except Exception:
             sub_tools_used = 0
+            sub_substantive = 0
     except Exception as _he:
         log.debug("sub-agent harvest failed: %s", _he)
 
@@ -2140,6 +2226,7 @@ async def _spawn_and_wait_subagent(
         final_answer=sub_final_answer,
         diagnosis=sub_diagnosis,
         tools_used=sub_tools_used,
+        substantive_tool_calls=sub_substantive,
         error=err_msg,
     )
 

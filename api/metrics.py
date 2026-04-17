@@ -72,6 +72,14 @@ BUDGET_NUDGE_COUNTER = Counter(
     ["outcome"],
 )
 
+# --- hallucination guard (v2.34.8) ---
+HALLUCINATION_GUARD_COUNTER = Counter(
+    "deathstar_agent_hallucination_guards_total",
+    "Final-answer attempts blocked by the substantive-tool-call guard",
+    # outcome: retried | fallback_accepted
+    ["agent_type", "outcome"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

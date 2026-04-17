@@ -94,6 +94,14 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_promoter_scans_ts ON auto_promoter_scans (scanned_at DESC)",
     ]),
+    (9, "v2.34.8 — subagent_runs.substantive_tool_calls for hallucination audit", [
+        # Column may already exist via init_subagent_runs() — the
+        # ADD COLUMN IF NOT EXISTS form keeps this idempotent on Postgres.
+        # The subagent_runs table itself is not part of SQLAlchemy metadata
+        # (it's created by init_subagent_runs()), so this is a Postgres-only
+        # migration — on SQLite the statement is a no-op fallback.
+        "ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS substantive_tool_calls INTEGER DEFAULT 0",
+    ]),
 ]
 
 

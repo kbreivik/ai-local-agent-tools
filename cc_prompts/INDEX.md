@@ -179,7 +179,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.4.md  | v2.34.4  | fix(agents): verify v2.34.0 sub-agent wiring — spawn path confirmed working in 15:42 trace | PENDING · VERIFY ONLY |
 | CC_PROMPT_v2.34.5.md  | v2.34.5  | fix(agents): propose_subtask math unreachable — earlier nudge + dynamic reserve | DONE (6fe25b5) |
 | CC_PROMPT_v2.34.6.md  | v2.34.6  | feat(tools): elastic_search_logs auto-samples schema on filter miss | DONE (41b55c8) |
-| CC_PROMPT_v2.34.7.md  | v2.34.7  | fix(ui): restore running-version marker in container tag dropdown | RUNNING |
+| CC_PROMPT_v2.34.7.md  | v2.34.7  | fix(ui): restore running-version marker in container tag dropdown | DONE (36d4b62) |
 | CC_PROMPT_v2.34.8.md  | v2.34.8  | fix(agents): hallucination guard — require N substantive tool calls before final_answer | PENDING · CRITICAL |
 
 ---

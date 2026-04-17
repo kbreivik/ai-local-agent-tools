@@ -56,7 +56,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, agentDiag, subAgents } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, hallucinationBlocks, agentDiag, subAgents } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -141,6 +141,22 @@ export default function OutputPanel({ onTab }) {
             {contradictions.map((c, i) => (
               <div key={i} style={{ opacity: 0.9 }}>
                 Step {c.step}: {c.tool} → {c.nonzero_count} results (ignored in draft conclusion)
+              </div>
+            ))}
+          </div>
+        )}
+        {hallucinationBlocks && hallucinationBlocks.length > 0 && (
+          <div className="mono" style={{
+            margin: '8px 0', padding: '8px 10px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            border: '1px solid var(--amber)', borderRadius: 2, fontSize: 10,
+          }}>
+            <div style={{ letterSpacing: '0.15em', marginBottom: 4 }}>
+              ⚠ HALLUCINATION GUARD FIRED — agent attempted to finalize without sufficient data. Forced a retry.
+            </div>
+            {hallucinationBlocks.map((h, i) => (
+              <div key={i} style={{ opacity: 0.9 }}>
+                {h.agent_type || 'agent'}: {h.substantive_count}/{h.required} substantive tool calls before final_answer
               </div>
             ))}
           </div>
