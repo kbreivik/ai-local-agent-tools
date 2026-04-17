@@ -94,6 +94,15 @@ VM_EXEC_PIPE_COUNTER = Counter(
     ["pipe_stage"],  # head | tail | grep | wc | sort | uniq | awk | sed | cut | tr
 )
 
+# --- task classifier decisions (v2.34.11) ---
+CLASSIFIER_DECISIONS_COUNTER = Counter(
+    "deathstar_agent_classifier_decisions_total",
+    "Task classifier routing decisions by agent type and trigger",
+    ["agent_type", "trigger"],
+    # trigger values: 'build_keyword', 'research_starter', 'research_bigram',
+    #                 'action_keyword', 'keyword_score', 'ambiguous'
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

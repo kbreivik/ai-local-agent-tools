@@ -180,9 +180,10 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.5.md  | v2.34.5  | fix(agents): propose_subtask math unreachable — earlier nudge + dynamic reserve | DONE (6fe25b5) |
 | CC_PROMPT_v2.34.6.md  | v2.34.6  | feat(tools): elastic_search_logs auto-samples schema on filter miss | DONE (41b55c8) |
 | CC_PROMPT_v2.34.7.md  | v2.34.7  | fix(ui): restore running-version marker in container tag dropdown | DONE (36d4b62) |
-| CC_PROMPT_v2.34.8.md  | v2.34.8  | fix(agents): hallucination guard — require N substantive tool calls before final_answer | PENDING · CRITICAL |
+| CC_PROMPT_v2.34.8.md  | v2.34.8  | fix(agents): hallucination guard — require N substantive tool calls before final_answer | DONE (45ae853) |
 | CC_PROMPT_v2.34.9.md  | v2.34.9  | feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination | DONE (00c6090) |
-| CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | RUNNING |
+| CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | DONE (70e6bcc) |
+| CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | RUNNING |
 
 ---
 
@@ -315,7 +316,7 @@ When total==0 AND total_in_window>0, runs no-filter sample, extracts top 20 fiel
 **v2.34.7** — fix(ui): restore running-version marker in container tag dropdown.
 Regression: tag-dropdown lost the ▶ prefix + (running) suffix on the current version. Fix restores both with bold + accent styling, threads runningTag prop from parent.
 
-**v2.34.8** — fix(agents): hallucination guard — require N substantive tool calls before final_answer. **PENDING · CRITICAL.**
+**v2.34.8** — fix(agents): hallucination guard — require N substantive tool calls before final_answer.
 Trace 15:42 showed sub-agent emitting a confident final_answer with fabricated numbers after one audit_log call. Tracks substantive_tool_calls separately (META_TOOLS set: audit_log, runbook_search, memory_recall, propose_subtask, engram_activate, plan_action does not count). Blocks final_answer when substantive < MIN_SUBSTANTIVE_BY_TYPE (observe=1, investigate=2, execute=2, build=1). Guard fires once per task. Also adds agent_type guidance to propose_subtask prompt (deep-dive/why/diagnose → investigate, not observe). substantive_tool_calls column in subagent_runs for post-hoc audit.
 
 **v2.34.9** — feat(agents): inject MCP tool signatures into system prompt — stop kwarg hallucination.
@@ -323,6 +324,9 @@ Recurring bug: agent calls tools with wrong kwargs (service_name= vs name=, sinc
 
 **v2.34.10** — feat(vm_exec): read-only network diagnostics + safe pipe passthrough.
 16:21 sub-agent tried nc -zv + 2>&1 + | head -5 to verify Kafka broker 3 connectivity — blocked by metachar check and allowlist. Adds network_diagnostics allowlist group (nc -zv, netstat, ss, curl --head, ping -c, dig, host, traceroute -m, mtr -r -c, plus docker-exec variants) with blast_radius=none. Replaces _validate_command: pipe safelist (head, tail, grep, wc, sort, uniq, awk, sed, cut, tr) and redirect safelist (2>&1, > /dev/null). Dangerous chars still blocked.
+
+**v2.34.11** — fix(agents): classifier hard-routes investigative starters to research.
+Sessions 2f2dae36 + 5107bfa7 (same Logstash investigate prompt, both runs) classified as Observe not Investigate. Root cause in `classify_task`: status_score=5 (check/network/port/health/lag) beat research_score=3 (investigate/why/correlate) even though the task literally opens with "Investigate". Adds _RESEARCH_STARTERS frozenset {investigate, diagnose, troubleshoot, analyse, analyze, correlate, why, deepdive} and _RESEARCH_STARTER_BIGRAMS {deep dive, find out, root cause, what caused}. Short-circuits to 'research' when first word/bigram matches AND action_score==0 (so "investigate and restart X" still routes to action). New `deathstar_agent_classifier_decisions_total` Prometheus counter with trigger labels. New tests/test_task_classifier.py covers today's prompt, all starters, action-precedence, and existing behaviour regression.
 
 ---
 

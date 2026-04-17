@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-17T16:42:07",
+  "updated_at": "2026-04-17T21:45:50",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2133,10 +2133,26 @@
       "filename": "CC_PROMPT_v2.34.10.md",
       "version": "v2.34.10",
       "theme": "feat(vm_exec): read-only network diagnostics + safe pipe passthrough",
+      "runner_status": "DONE",
+      "commit_sha": "70e6bcc",
+      "error": "",
+      "started_at": "2026-04-17T16:42:07",
+      "finished_at": "2026-04-17T16:47:03",
+      "duration_s": 296.14302170000155,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260417_164207_CC_PROMPT_v2.34.10.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.34.11.md",
+      "version": "v2.34.11",
+      "theme": "fix(agents): classifier hard-routes investigative starters to research",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-17T16:42:07",
+      "started_at": "2026-04-17T21:45:50",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

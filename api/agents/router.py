@@ -44,9 +44,33 @@ BUILD_KEYWORDS = frozenset({
 QUESTION_STARTERS = frozenset({
     "what", "where", "how", "which", "is", "are", "show", "list",
     "who", "when", "why", "can", "could", "does", "do",
-    # Investigative starters — treat as questions even with action words present
+    # Neutral observational starters — questions even with action words present
     "find", "look", "check", "identify", "determine", "explain",
-    "investigate", "diagnose", "troubleshoot", "analyse", "analyze",
+    # NOTE: investigative starters (investigate, diagnose, troubleshoot, analyse,
+    # analyze) moved to _RESEARCH_STARTERS in v2.34.11 — they now hard-route to
+    # research when no action keyword is present, and defer to the action rule
+    # when an action verb IS present.
+})
+
+# Investigative intent starters — when a task OPENS with one of these verbs,
+# it is a research/diagnosis task by intent, even if its body mentions many
+# status-flavoured nouns (health, port, network, lag, etc). Used by
+# classify_task() to short-circuit the keyword tally.
+_RESEARCH_STARTERS = frozenset({
+    "investigate", "diagnose", "troubleshoot",
+    "analyse", "analyze", "correlate",
+    "why",
+    "deepdive",
+})
+
+# Bigram forms equivalent to a research starter. Checked when first_word on
+# its own is insufficient (e.g. "deep dive", "find out why").
+_RESEARCH_STARTER_BIGRAMS = frozenset({
+    "deep dive",
+    "find out",    # "find out why X" — first word "find" alone is a
+                   # QUESTION_STARTER, but "find out" signals research
+    "root cause",
+    "what caused",
 })
 
 # ── Domain keyword map ────────────────────────────────────────────────────────
@@ -1141,10 +1165,36 @@ def classify_task(task: str) -> str:
     bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words) - 1)]
     tokens = set(words) | set(bigrams)
 
+    try:
+        from api.metrics import CLASSIFIER_DECISIONS_COUNTER
+    except Exception:
+        CLASSIFIER_DECISIONS_COUNTER = None
+
+    def _record(agent_type: str, trigger: str) -> str:
+        if CLASSIFIER_DECISIONS_COUNTER is not None:
+            try:
+                CLASSIFIER_DECISIONS_COUNTER.labels(
+                    agent_type=agent_type, trigger=trigger
+                ).inc()
+            except Exception:
+                pass
+        return agent_type
+
     # Build intent: any task mentioning skill management words → route to build
     build_score = len(tokens & BUILD_KEYWORDS)
     if build_score > 0:
-        return 'build'
+        return _record('build', 'build_keyword')
+
+    # v2.34.11: Investigative-starter short-circuit.
+    # If the task OPENS with a research-intent verb AND carries no action verb,
+    # it is a research task regardless of how many status nouns follow.
+    first_word = words[0] if words else ""
+    first_bigram = bigrams[0] if bigrams else ""
+    action_score_early = len(tokens & ACTION_KEYWORDS)
+    if action_score_early == 0 and first_word in _RESEARCH_STARTERS:
+        return _record('research', 'research_starter')
+    if action_score_early == 0 and first_bigram in _RESEARCH_STARTER_BIGRAMS:
+        return _record('research', 'research_bigram')
 
     status_score   = len(tokens & STATUS_KEYWORDS)
     action_score   = len(tokens & ACTION_KEYWORDS)
@@ -1152,17 +1202,16 @@ def classify_task(task: str) -> str:
 
     top = max(status_score, action_score, research_score)
     if top == 0:
-        return 'ambiguous'
+        return _record('ambiguous', 'ambiguous')
 
     # Safety rule: any action keyword in a task routes to action agent,
     # UNLESS the task is a question (starts with what/where/how/which/is/are/show/list).
     # Questions are observational — route to status/research even if action words appear
     # incidentally (e.g. "what IP addresses can we use", "where is the service running").
-    first_word = words[0] if words else ""
     _is_question = first_word in QUESTION_STARTERS
 
     if action_score > 0 and not _is_question:
-        return 'action'
+        return _record('action', 'action_keyword')
 
     scores = {
         'status':   status_score,
@@ -1173,12 +1222,12 @@ def classify_task(task: str) -> str:
     winners = [k for k, v in scores.items() if v == top]
 
     if len(winners) == 1:
-        return winners[0]
+        return _record(winners[0], 'keyword_score')
 
     # Tie-breaking: research > status
     if 'research' in winners:
-        return 'research'
-    return 'status'
+        return _record('research', 'keyword_score')
+    return _record('status', 'keyword_score')
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
