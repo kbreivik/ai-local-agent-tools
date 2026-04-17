@@ -5,12 +5,39 @@ All queries use httpx + hand-built ES query DSL (no elasticsearch-py).
 Returns {status: "unavailable"} gracefully when ES not configured.
 Never called inline during agent execution — each call is independently async.
 """
+import json as _json
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Any, Sequence, Union
 
 
 _LEVEL_FIELDS = ("log.level", "level", "severity")
+
+
+def _compute_hint(
+    total: int,
+    total_in_window: int | None,
+    levels: list,
+    service: str | None,
+    host: str | None,
+) -> str | None:
+    """Return a short hint for the agent when results look suspicious."""
+    if total == 0 and total_in_window and total_in_window > 0:
+        filters = []
+        if levels:
+            filters.append(f"level={levels}")
+        if service:
+            filters.append(f"service={service!r}")
+        if host:
+            filters.append(f"host={host!r}")
+        if filters:
+            return (
+                f"Filter may be too narrow: 0 hits matched but "
+                f"{total_in_window} log entries exist in the same window. "
+                f"Active filters: {', '.join(filters)}. "
+                "Try dropping one filter or broadening."
+            )
+    return None
 
 
 def _norm_levels(level: Union[str, Sequence[str], None]) -> list[str]:
@@ -175,7 +202,10 @@ def elastic_search_logs(
              Aliases warn↔warning, err↔error, crit↔critical↔fatal are normalised.
              Synonyms `severity=` and `log_level=` accepted silently.
 
-    Returns _ok({total, returned, logs, total_in_window, applied_filters}).
+    Returns _ok({total, total_relation, returned, logs, total_in_window,
+                 applied_filters, query_lucene, index, hint?}).
+    `hint` is only present when results look suspicious (0 hits but the
+    unfiltered window has data).
     """
     if not _es_url():
         return _unavailable(
@@ -208,8 +238,9 @@ def elastic_search_logs(
                 level_should.append({"terms": {field: merged_levels}})
             must.append({"bool": {"should": level_should, "minimum_should_match": 1}})
 
+        query_body = {"bool": {"must": must}}
         body = {
-            "query": {"bool": {"must": must}},
+            "query": query_body,
             "sort": [{"@timestamp": {"order": "desc"}}],
             "size": min(int(size), 500),
             "_source": [
@@ -220,37 +251,62 @@ def elastic_search_logs(
         }
         resp = _post(f"/{_index()}/_search", body)
         hits = _extract_hits(resp)
-        total = resp.get("hits", {}).get("total", {}).get("value", len(hits))
+        total_val = resp.get("hits", {}).get("total", {})
+        if isinstance(total_val, dict):
+            total = total_val.get("value", len(hits))
+            total_relation = total_val.get("relation", "eq")
+        else:
+            total = int(total_val)
+            total_relation = "eq"
 
         # Compute total_in_window for narrow-filter false-negative reasoning.
-        total_in_window = total
+        total_in_window: int | None = None
         try:
             window_resp = _post(f"/{_index()}/_search", {
                 "query": {"bool": {"must": [time_filter]}},
                 "size": 0,
             })
-            total_in_window = (
-                window_resp.get("hits", {}).get("total", {}).get("value", total)
-            )
+            window_total = window_resp.get("hits", {}).get("total", {})
+            if isinstance(window_total, dict):
+                total_in_window = window_total.get("value", 0)
+            else:
+                total_in_window = int(window_total)
         except Exception:
-            pass
+            total_in_window = None
 
         applied_filters = {
-            "level":       merged_levels,
+            "level":       merged_levels or None,
             "service":     service or None,
             "host":        node_filter or None,
             "query":       query or None,
             "minutes_ago": int(minutes_ago),
         }
 
-        return _ok({
+        hint = _compute_hint(
+            total=total,
+            total_in_window=total_in_window,
+            levels=merged_levels,
+            service=service or None,
+            host=node_filter or None,
+        )
+
+        data = {
             "total":           total,
+            "total_relation": total_relation,
             "returned":        len(hits),
             "logs":            hits,
             "total_in_window": total_in_window,
             "applied_filters": applied_filters,
+            "query_lucene":    _json.dumps(query_body, separators=(",", ":")),
             "index":           _index(),
-        }, f"Found {total} log entries (window: {total_in_window})")
+        }
+        if hint:
+            data["hint"] = hint
+
+        msg = f"Found {total} log entries (window: {total_in_window})"
+        if hint:
+            msg = f"{msg} — {hint}"
+        return _ok(data, msg)
     except Exception as e:
         return _err(str(e))
 
@@ -391,7 +447,8 @@ def elastic_log_pattern(service: str, hours: int = 24) -> dict:
         return _unavailable()
     try:
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        must = [{"range": {"@timestamp": {"gte": since}}}]
+        time_filter = {"range": {"@timestamp": {"gte": since}}}
+        must = [time_filter]
         if service:
             must.append({"bool": {"should": [
                 {"wildcard": {
@@ -400,8 +457,9 @@ def elastic_log_pattern(service: str, hours: int = 24) -> dict:
                 {"wildcard": {"container.name": f"*{service}*"}},
             ], "minimum_should_match": 1}})
 
+        query_body = {"bool": {"must": must}}
         body = {
-            "query": {"bool": {"must": must}},
+            "query": query_body,
             "size": 0,
             "aggs": {
                 "by_hour": {
@@ -457,11 +515,23 @@ def elastic_log_pattern(service: str, hours: int = 24) -> dict:
                 .get("messages", {}).get("buckets", [])
         ]
 
+        total_errors = sum(h["errors"] for h in hourly)
+        total_in_window = sum(h["total"] for h in hourly)
+
+        applied_filters = {
+            "service": service or None,
+            "hours":   int(hours),
+        }
+
         return _ok({
             "service": service,
             "hours": hours,
             "hourly": hourly,
-            "total_errors": sum(h["errors"] for h in hourly),
+            "total_errors": total_errors,
+            "total_in_window": total_in_window,
+            "applied_filters": applied_filters,
+            "query_lucene": _json.dumps(query_body, separators=(",", ":")),
+            "index": _index(),
             "anomaly": anomaly,
             "anomaly_reason": anomaly_reason,
             "top_error_messages": top_errors,

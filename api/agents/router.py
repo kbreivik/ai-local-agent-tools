@@ -654,11 +654,16 @@ CONTAINER LOG ACCESS:
 ═══ ELASTICSEARCH QUERY GUIDANCE ═══
 - elastic_search_logs accepts level="error"|"warn"|"info"|"critical", or a list.
   Aliases severity= and log_level= are accepted silently (same effect as level=).
-- If a filtered call returns 0 hits while an unfiltered call in the same window
-  returned >0 hits, the filter is likely too narrow — broaden or drop fields
-  before concluding "no data".
-- The response now includes total_in_window (unfiltered count in the same window)
-  and applied_filters. Use these to reason about narrow-filter false negatives.
+- Every response includes:
+    total:           hits matched (after all filters)
+    total_in_window: unfiltered count in same time window
+    applied_filters: what was actually filtered
+    query_lucene:    exact ES query body (JSON) for debugging
+    index:           which index pattern was queried
+    hint:            harness diagnostic message if the query looks suspicious
+- If hint is present, read it — it likely explains why results are 0.
+- If total == 0 and total_in_window > 0, your filter is too narrow.
+  Drop the most specific field first (host → service → level → query).
 
 ═══ EXIT CODE RULES ═══
 
