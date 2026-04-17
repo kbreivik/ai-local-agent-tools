@@ -11,6 +11,7 @@ import pkgutil
 from pathlib import Path
 
 from api.collectors.base import BaseCollector
+from api.metrics import COLLECTOR_POLL_SECONDS, COLLECTOR_POLL_FAILURES
 
 log = logging.getLogger(__name__)
 
@@ -72,11 +73,16 @@ class CollectorManager:
         """Trigger an immediate poll for a specific collector."""
         collector = self._collectors.get(component)
         if collector:
-            try:
-                await collector._safe_poll()
-                log.info("trigger_poll: %s polled successfully", component)
-            except Exception as e:
-                log.warning("trigger_poll %s failed: %s", component, e)
+            with COLLECTOR_POLL_SECONDS.labels(platform=component).time():
+                try:
+                    await collector._safe_poll()
+                    log.info("trigger_poll: %s polled successfully", component)
+                except Exception as e:
+                    COLLECTOR_POLL_FAILURES.labels(
+                        platform=component,
+                        reason=type(e).__name__,
+                    ).inc()
+                    log.warning("trigger_poll %s failed: %s", component, e)
 
     @property
     def components(self) -> list[str]:

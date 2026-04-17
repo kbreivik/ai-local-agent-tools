@@ -18,6 +18,7 @@ from api.websocket import manager
 from api.auth import get_current_user
 import api.logger as logger_mod
 from api.constants import DEFAULT_LM_STUDIO_URL, DEFAULT_LM_STUDIO_MODEL, DEFAULT_LM_STUDIO_KEY
+from api.metrics import AGENT_TASKS, AGENT_TOOL_CALLS, AGENT_WALL_SECONDS
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -1197,6 +1198,10 @@ async def _run_single_agent_step(
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
+                        try:
+                            AGENT_TOOL_CALLS.labels(agent_type=agent_type, tool=fn_name).inc()
+                        except Exception:
+                            pass
                 except Exception as e:
                     err_str = str(e)
                     result = {"status": "error", "message": err_str, "data": None,
@@ -1587,6 +1592,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         build_step_plan, format_step_header, verdict_from_text,
         extract_structured_verdict, run_coordinator, should_use_coordinator,
     )
+    _t0 = time.monotonic()
 
     base_url = _lm_base()
     api_key  = _lm_key()
@@ -2142,6 +2148,21 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             await trim_session_log(session_id, max_lines)
         except Exception as _tl_e:
             log.debug("session log trim failed: %s", _tl_e)
+        # Emit Prometheus terminal-status + wall-time metrics
+        try:
+            _status_map = {
+                "completed": "success",
+                "escalated": "escalated",
+                "capped": "budget_exhausted",
+                "cancelled": "failed",
+                "error": "failed",
+                "failed": "failed",
+            }
+            _terminal = _status_map.get(final_status, "failed")
+            AGENT_TASKS.labels(agent_type=first_intent, status=_terminal).inc()
+            AGENT_WALL_SECONDS.labels(agent_type=first_intent).observe(time.monotonic() - _t0)
+        except Exception:
+            pass
 
 
 @router.post("/run", response_model=RunResponse)

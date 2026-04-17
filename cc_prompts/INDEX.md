@@ -155,8 +155,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.1.md  | v2.33.1  | feat(templates): drain_swarm_node task template | DONE (d62c7c7) |
 | CC_PROMPT_v2.33.2.md  | v2.33.2  | feat(templates): diagnose_kafka_under_replicated fixed 4-step RCA | DONE (47638f1) |
 | CC_PROMPT_v2.33.3.md  | v2.33.3  | feat(agents): mandatory sub-agent proposal near budget exhaustion | DONE (363a774) |
-| CC_PROMPT_v2.33.4.md  | v2.33.4  | feat(skills): auto-promoter for repeated vm_exec patterns | RUNNING |
-| CC_PROMPT_v2.33.5.md  | v2.33.5  | feat(ops): Prometheus /metrics endpoint | PENDING |
+| CC_PROMPT_v2.33.4.md  | v2.33.4  | feat(skills): auto-promoter for repeated vm_exec patterns | DONE (d7e0c0f) |
+| CC_PROMPT_v2.33.5.md  | v2.33.5  | feat(ops): Prometheus /metrics endpoint | RUNNING |
 | CC_PROMPT_v2.33.6.md  | v2.33.6  | feat(security): blast radius tagging + tiered plan confirmation | PENDING |
 | CC_PROMPT_v2.33.7.md  | v2.33.7  | feat(ui): Kafka inspection tab — brokers, topics, partitions, lag | PENDING |
 | CC_PROMPT_v2.33.8.md  | v2.33.8  | feat(templates): verify_backup_job + PBS last-success tracking | PENDING |

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from api.auth import get_current_user
+from api.metrics import ESCALATIONS
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/escalations", tags=["escalations"])
@@ -51,6 +52,10 @@ def record_escalation(session_id: str, reason: str, operation_id: str = "",
                       severity: str = "warning") -> str:
     """Store an escalation. Returns the escalation ID."""
     eid = str(uuid.uuid4())
+    try:
+        ESCALATIONS.labels(reason=(reason or "unspecified")[:64]).inc()
+    except Exception:
+        pass
     try:
         from api.connections import _get_conn
         conn = _get_conn()

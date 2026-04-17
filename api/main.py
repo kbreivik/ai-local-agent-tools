@@ -4,7 +4,7 @@ import socket
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -52,6 +52,7 @@ from api.memory.client import close_client as _close_memory
 from api.memory.ingest import ingest_runbooks
 from mcp_server.tools.skills import loader as _skill_loader
 from mcp_server.tools.skills import registry as _skill_registry
+from api.metrics import render_metrics, BUILD
 import json as _json
 
 def _load_build_info() -> dict | None:
@@ -87,6 +88,12 @@ CORS_ORIGINS_ALL = os.environ.get("CORS_ALLOW_ALL", "false").lower() == "true"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Populate Prometheus build info once per process
+    try:
+        _version_path = Path(__file__).parent.parent / "VERSION"
+        BUILD.info({"version": _version_path.read_text().strip()})
+    except Exception:
+        pass
     # Crypto boot-safety: refuse to start if env key is missing but encrypted data exists
     from api.crypto import check_encryption_key_safe
     check_encryption_key_safe()
@@ -488,6 +495,12 @@ async def session_replay(session_id: str, user: str = Depends(get_current_user))
 async def active_sessions(user: str = Depends(get_current_user)):
     from api.session_store import get_active_sessions
     return {"sessions": await get_active_sessions()}
+
+
+@app.get("/metrics")
+async def metrics():
+    body, ctype = render_metrics()
+    return Response(content=body, media_type=ctype)
 
 
 @app.get("/api/health")
