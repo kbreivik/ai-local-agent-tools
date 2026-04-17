@@ -150,7 +150,17 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.32.3.md  | v2.32.3  | feat(agents): attempt history table + context injection | DONE (4a71334) |
 | CC_PROMPT_v2.32.4.md  | v2.32.4  | fix(agents): final_answer truncation at 300 chars | DONE (306044f) |
 | CC_PROMPT_v2.32.5.md  | v2.32.5  | feat(agents): enforced tool call budgets per agent type | DONE (e3ce56c) |
-| CC_PROMPT_v2.32.6.md  | v2.32.6  | feat(infra): version-check refresh button + configurable timers | RUNNING |
+| CC_PROMPT_v2.32.6.md  | v2.32.6  | feat(infra): version-check refresh button + configurable timers | DONE (d1449e4) |
+| CC_PROMPT_v2.33.0.md  | v2.33.0  | feat(tools): kafka_topic_inspect — structured cluster state in one call | RUNNING |
+| CC_PROMPT_v2.33.1.md  | v2.33.1  | feat(templates): drain_swarm_node task template | PENDING |
+| CC_PROMPT_v2.33.2.md  | v2.33.2  | feat(templates): diagnose_kafka_under_replicated fixed 4-step RCA | PENDING |
+| CC_PROMPT_v2.33.3.md  | v2.33.3  | feat(agents): mandatory sub-agent proposal near budget exhaustion | PENDING |
+| CC_PROMPT_v2.33.4.md  | v2.33.4  | feat(skills): auto-promoter for repeated vm_exec patterns | PENDING |
+| CC_PROMPT_v2.33.5.md  | v2.33.5  | feat(ops): Prometheus /metrics endpoint | PENDING |
+| CC_PROMPT_v2.33.6.md  | v2.33.6  | feat(security): blast radius tagging + tiered plan confirmation | PENDING |
+| CC_PROMPT_v2.33.7.md  | v2.33.7  | feat(ui): Kafka inspection tab — brokers, topics, partitions, lag | PENDING |
+| CC_PROMPT_v2.33.8.md  | v2.33.8  | feat(templates): verify_backup_job + PBS last-success tracking | PENDING |
+| CC_PROMPT_v2.33.9.md  | v2.33.9  | feat(security): drift detection — config_hash reconciliation + badge | PENDING |
 
 ---
 
@@ -201,6 +211,46 @@ in the expanded ghcr container card. Adds `?force=1` on `/containers/{id}/tags`
 to bypass `_GHCR_TAG_CACHE`, a "↻ Refresh versions" button in the expanded card,
 and two new DB-backed Settings → Infrastructure knobs: `ghcrTagCacheTTL` (default
 600s) and `autoUpdateInterval` (default 300s).
+
+---
+
+## Phase: v2.33.x — Test-Fix-Verify expansion (10 cycles)
+
+Paired with `reports/test_cycles.html` — a paged HTML report with per-cycle
+status (Discovered / Planned Fix / Post-Fix Verify) saved to localStorage.
+Each version below has one matching cycle in the report. Open the report,
+run the pre-fix test plan, mark status as `testing`, then run the prompt,
+then mark `verified` after the post-fix verify passes.
+
+**v2.33.0** — feat(tools): kafka_topic_inspect — structured cluster state in one call.
+New MCP tool returning `{brokers[], topics[{partitions[{leader,replicas,isr,under_replicated}]}], summary}` via `KafkaAdminClient`. Added to OBSERVE + INVESTIGATE allowlists. Triage order updated so kafka_topic_inspect is the first call for any kafka query, then kafka_consumer_lag, then kafka_exec for deep dives. Replaces the 4-5 call chain agents currently use to reconstruct ISR.
+
+**v2.33.1** — feat(templates): drain_swarm_node task template.
+Agent template in SWARM group, inputs: node_name + timeout_s. Sequence: swarm_node_status → plan_action for `docker node update --availability drain` → poll `docker node ps` until zero running tasks. Execute-agent, blast_radius=node, destructive=True. Closes the manual drain step before worker-03 reboots.
+
+**v2.33.2** — feat(templates): diagnose_kafka_under_replicated fixed 4-step RCA.
+Investigate-agent template chaining kafka_topic_inspect (v2.33.0) → service_placement → swarm_node_status → optional proxmox_vm_power(status). Uses `prompt_override` to enforce STRICT output shape: MISSING_BROKERS / IMPACT / ROOT_CAUSE / RESPONSIBLE_NODE / RECOMMENDED_FIX. Router gains prompt_override support keeping Role+Environment sections while replacing body.
+
+**v2.33.3** — feat(agents): mandatory sub-agent proposal near budget exhaustion.
+Strengthens propose_subtask (v2.24.0). When tools_used >= 70% of budget without a `DIAGNOSIS:` section, harness injects a nudge and agent MUST call propose_subtask next. OutputPanel renders a clickable inline sub-task offer card (accent border), emits WS `subtask_proposed` + `budget_nudge` events. agent_attempts gains was_proposal column for measurement.
+
+**v2.33.4** — feat(skills): auto-promoter for repeated vm_exec patterns.
+New background worker auto_promoter scans agent_actions weekly: `(tool, args_shape)` with count ≥ 5 across ≥ 2 tasks becomes a skill_candidates row. SHAPE_RULES normalises vm_exec to (host, first_command_token). Skills tab gains Candidates subtab with Approve/Reject/Scan-now buttons. Approved candidates flow through existing skill_create (v2.13.0).
+
+**v2.33.5** — feat(ops): Prometheus /metrics endpoint.
+New `api/metrics.py` module with stable `deathstar_*` metric families: collector poll histogram, agent task counter, tool-call counter, agent wall-time histogram, escalation counter, kafka under-replicated gauge, build info. Mounted at unauthenticated GET /metrics. CollectorManager.trigger_poll wrapped, agent loop counts tool calls + terminal status, escalations increment on record.
+
+**v2.33.6** — feat(security): blast radius tagging + tiered plan confirmation.
+New `api/agents/tool_metadata.py` with `BLAST_RADIUS = {none, node, service, cluster, fleet}`. Each destructive tool annotated. `radius_of(tool, args)` does arg-based escalation for vm_exec/kafka_exec. Plan payload enriched with radius per step + plan_radius. PlanModal renders colored pills (green/amber/red/violet) + extra-confirm checkbox required for cluster+ radii. Plans with >1 fleet-radius step rejected at backend.
+
+**v2.33.7** — feat(ui): Kafka inspection tab — brokers, topics, partitions, lag.
+New sidebar entry under MONITOR. Backend `/api/kafka/overview` aggregates v2.33.0 kafka_topic_inspect + kafka_consumer_lag, cached 30s (configurable kafkaOverviewCacheTTL setting). UI: 3-pane grid — broker list (left), topic grid with under-replicated + max-lag columns (centre), partition drill-in with ISR vs Replicas (right). Polls every 15s client-side. Amber rows for under-replicated topics.
+
+**v2.33.8** — feat(templates): verify_backup_job + PBS last-success tracking.
+PBS collector extended to enumerate `/admin/datastore/{s}/snapshots` and record last_success_ts per (backup_type, backup_id). Cross-reference written so VMCard can join. New MCP tool pbs_last_backup(vm_id) returns {status, age_hours, last_success_ts, datastore}. Task template verify_backup_job in STORAGE group, default max_age_hours=25. VMCard gets green/amber freshness dot.
+
+**v2.33.9** — feat(security): drift detection — config_hash reconciliation + badge.
+entity_history gains config_hash + prev_config_hash columns; `compute_config_hash` ignores volatile keys (uptime, cpu_usage, etc.). New `drift_events` view flags hash changes without a sanctioned agent_action within ±60s. `/api/entity/{id}/drift` + `/api/drift/recent` endpoints. Cards get ⚠ DRIFT badge (amber) — clicking opens investigate_drift template pre-scoped to the entity. Enforces DEATHSTAR as the single source of truth for changes.
 
 ---
 

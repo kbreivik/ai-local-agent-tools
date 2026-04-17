@@ -1,0 +1,248 @@
+# CC PROMPT — v2.33.7 — Kafka inspection tab (UI)
+
+## What this does
+Adds a read-only Kafka tab under MONITOR in the sidebar. Backend endpoint
+`/api/kafka/overview` aggregates `kafka_topic_inspect` (v2.33.0) + existing
+`kafka_consumer_lag` with a 30s cache. UI: broker list | topic grid | partition
+drill-in. Uses DashboardDataContext version gate.
+
+Requires v2.33.0.
+
+Version bump: 2.33.6 → 2.33.7
+
+## Change 1 — api/routers/kafka_overview.py — new router
+
+```python
+"""
+GET /api/kafka/overview
+Aggregates kafka_topic_inspect + kafka_consumer_lag for UI consumption.
+Cached for 30s (configurable via setting kafkaOverviewCacheTTL).
+"""
+import time, logging
+from fastapi import APIRouter, Request, HTTPException
+from api.auth import require_auth
+from mcp_server.tools.kafka_inspect import kafka_topic_inspect
+try:
+    from mcp_server.tools.kafka import kafka_consumer_lag  # existing
+except ImportError:
+    kafka_consumer_lag = None
+
+log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/kafka", tags=["kafka"])
+
+_CACHE = {"ts": 0.0, "data": None}
+_TTL_DEFAULT = 30
+
+async def _get_ttl(pool):
+    async with pool.acquire() as c:
+        row = await c.fetchrow(
+            "SELECT value FROM settings WHERE key='kafkaOverviewCacheTTL'"
+        )
+        return int(row["value"]) if row and row["value"] else _TTL_DEFAULT
+
+@router.get("/overview")
+async def overview(request: Request, user=Depends(require_auth)):
+    pool = request.app.state.pool
+    ttl = await _get_ttl(pool)
+    if _CACHE["data"] and (time.time() - _CACHE["ts"]) < ttl:
+        return _CACHE["data"]
+    try:
+        inspect = kafka_topic_inspect()
+    except Exception as e:
+        raise HTTPException(503, f"kafka unreachable: {e}")
+    lag = {}
+    if kafka_consumer_lag:
+        try:
+            lag = kafka_consumer_lag() or {}
+        except Exception as e:
+            log.warning("kafka_consumer_lag failed: %s", e)
+            lag = {"error": str(e)}
+    topics = []
+    for t in inspect.get("topics", []):
+        n_ur = sum(1 for p in t["partitions"] if p.get("under_replicated"))
+        max_lag = _max_lag_for_topic(t["name"], lag)
+        topics.append({
+            "name": t["name"],
+            "partitions": len(t["partitions"]),
+            "under_replicated": n_ur,
+            "max_consumer_lag": max_lag,
+            "_raw_partitions": t["partitions"],  # for drill-in
+        })
+    data = {
+        "brokers": inspect.get("brokers", []),
+        "topics": topics,
+        "summary": inspect.get("summary", {}),
+        "consumer_lag": lag,
+        "fetched_at": time.time(),
+    }
+    _CACHE["ts"] = time.time()
+    _CACHE["data"] = data
+    return data
+
+def _max_lag_for_topic(topic, lag_blob):
+    if not isinstance(lag_blob, dict) or "error" in lag_blob:
+        return None
+    mx = 0
+    for group_data in lag_blob.get("groups", []):
+        for pe in group_data.get("partitions", []):
+            if pe.get("topic") == topic:
+                mx = max(mx, pe.get("lag") or 0)
+    return mx or None
+```
+
+## Change 2 — api/main.py — mount router
+
+```python
+from api.routers import kafka_overview as kafka_overview_router
+app.include_router(kafka_overview_router.router)
+```
+
+Also seed `kafkaOverviewCacheTTL` in `api/routers/settings.py` SETTINGS_KEYS:
+
+```python
+"kafkaOverviewCacheTTL": {"env": None, "sens": False, "default": 30},
+```
+
+## Change 3 — gui/src/components/KafkaTab.jsx — new component
+
+```jsx
+import React, { useEffect, useState } from 'react';
+import { authHeaders } from '../lib/api';
+
+export default function KafkaTab() {
+  const [data, setData] = useState(null);
+  const [selectedTopic, setSelectedTopic] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let stop = false;
+    async function load() {
+      try {
+        const r = await fetch('/api/kafka/overview', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        if (!stop) setData(d);
+      } catch (e) { if (!stop) setErr(String(e)); }
+    }
+    load();
+    const iv = setInterval(load, 15000);
+    return () => { stop = true; clearInterval(iv); };
+  }, []);
+
+  if (err) return <div className="mono" style={{ color: 'var(--red)' }}>KAFKA: {err}</div>;
+  if (!data) return <div className="mono" style={{ color: 'var(--text-2)' }}>loading…</div>;
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 320px', gap: 14, padding: 14 }}>
+      {/* brokers */}
+      <div>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.2em', color: 'var(--text-2)', marginBottom: 8 }}>BROKERS</div>
+        {data.brokers.map(b => (
+          <div key={b.id} style={{
+            padding: '6px 8px', marginBottom: 4,
+            border: '1px solid var(--border)', borderRadius: 2,
+            fontFamily: 'var(--font-mono)', fontSize: 11
+          }}>
+            <span style={{ color: 'var(--cyan)' }}>#{b.id}</span> {b.host}:{b.port}
+          </div>
+        ))}
+        <div className="mono" style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 8 }}>
+          {data.summary.broker_count} up · {data.summary.under_replicated_partitions} UR
+        </div>
+      </div>
+
+      {/* topic grid */}
+      <div>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.2em', color: 'var(--text-2)', marginBottom: 8 }}>TOPICS</div>
+        <table style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 11, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ color: 'var(--text-2)', borderBottom: '1px solid var(--border)' }}>
+              <th align="left" style={{ padding: 4 }}>NAME</th>
+              <th align="right" style={{ padding: 4 }}>P</th>
+              <th align="right" style={{ padding: 4 }}>UR</th>
+              <th align="right" style={{ padding: 4 }}>MAX LAG</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.topics.map(t => (
+              <tr key={t.name}
+                  onClick={() => setSelectedTopic(t)}
+                  style={{
+                    cursor: 'pointer',
+                    background: selectedTopic?.name === t.name ? 'var(--accent-dim)' : 'transparent',
+                    color: t.under_replicated ? 'var(--amber)' : 'var(--text-0)',
+                    borderBottom: '1px dashed var(--border)'
+                  }}>
+                <td style={{ padding: 4 }}>{t.name}</td>
+                <td align="right" style={{ padding: 4 }}>{t.partitions}</td>
+                <td align="right" style={{ padding: 4, color: t.under_replicated ? 'var(--red)' : 'var(--text-3)' }}>
+                  {t.under_replicated || '·'}
+                </td>
+                <td align="right" style={{ padding: 4 }}>
+                  {t.max_consumer_lag != null ? t.max_consumer_lag : '·'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* drill-in */}
+      <div>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.2em', color: 'var(--text-2)', marginBottom: 8 }}>PARTITIONS</div>
+        {selectedTopic ? (
+          <div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>{selectedTopic.name}</div>
+            {selectedTopic._raw_partitions.map(p => (
+              <div key={p.id} style={{
+                padding: '6px 8px', marginBottom: 3,
+                background: p.under_replicated ? 'var(--amber-dim)' : 'var(--bg-2)',
+                fontFamily: 'var(--font-mono)', fontSize: 11, borderRadius: 2
+              }}>
+                <div>P{p.id} → leader <span style={{ color: 'var(--cyan)' }}>{p.leader}</span></div>
+                <div style={{ color: 'var(--text-2)' }}>
+                  R=[{p.replicas.join(',')}] ISR=[{p.isr.join(',')}]
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            select a topic →
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+## Change 4 — gui/src/components/Sidebar.jsx — nav entry
+
+Under the MONITOR group (where Logs / Dashboard live), insert a Kafka link:
+
+```jsx
+<SidebarLink to="/kafka" label="Kafka" icon="◉" />
+```
+
+## Change 5 — gui/src/App.jsx — route + view
+
+Add a route handler for `/kafka` that renders `<KafkaTab />`. Follow the same
+pattern as the existing Logs/DocsTab routes.
+
+## Version bump
+Update `VERSION`: 2.33.6 → 2.33.7
+
+## Commit
+```
+git add -A
+git commit -m "feat(ui): v2.33.7 Kafka inspection tab — brokers, topics, partitions, lag"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Sidebar → MONITOR → Kafka → loads in <1s.
+3. Verify `hp1-logs` row shows under_replicated=1, topic list is alphabetised.
+4. Click `hp1-logs` → partition 0 shows ISR=[1,3] and R=[1,2,3] with amber tint.
+5. Reload within 30s → `/api/kafka/overview` returns from cache (check backend logs).

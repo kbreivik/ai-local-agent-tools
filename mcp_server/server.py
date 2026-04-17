@@ -173,6 +173,23 @@ def kafka_topic_list() -> dict:
 
 
 @mcp.tool()
+def kafka_topic_inspect(topic: str = "") -> dict:
+    """Structured read-only view of Kafka cluster state in ONE call.
+    Returns: brokers (id/host/port/rack/is_controller), topics with all partitions
+    (leader, replicas, isr, under_replicated flag), and a summary (broker_count,
+    topic_count, total_partitions, under_replicated_partitions, controller_id).
+    Call FIRST for any Kafka investigation — replaces 4-5 chained kafka_exec calls.
+    topic: optional filter to a single topic (no cap). If blank, returns first 50
+    non-internal topics with up to 200 partitions each.
+    Examples:
+      kafka_topic_inspect()
+      kafka_topic_inspect(topic="hp1-logs")
+    """
+    from mcp_server.tools.kafka_inspect import kafka_topic_inspect as _kti
+    return _kti(topic or None)
+
+
+@mcp.tool()
 def kafka_rolling_restart_safe() -> dict:
     """Checks ISR before each broker restart."""
     return kafka.kafka_rolling_restart_safe()

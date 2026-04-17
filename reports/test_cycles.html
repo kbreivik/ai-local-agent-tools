@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>DEATHSTAR — Test-Fix-Verify Cycles · v2.32.6 →</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-sans: 'Rajdhani', sans-serif;
+    --font-mono: 'Share Tech Mono', monospace;
+    --bg-0: #05060a;  --bg-1: #09090f;  --bg-2: #0d0f1a;  --bg-3: #141826;
+    --text-0: #e8e8ec;  --text-1: #a9adb7;  --text-2: #6d7280;  --text-3: #4a4e5a;
+    --accent: #a01828;  --accent-dim: rgba(160,24,40,0.12);
+    --accent-hi: #d02438;
+    --cyan: #00c8ee;  --cyan-dim: rgba(0,200,238,0.12);
+    --green: #00aa44;  --green-dim: rgba(0,170,68,0.12);
+    --amber: #cc8800;  --amber-dim: rgba(204,136,0,0.12);
+    --red: #cc2828;  --red-dim: rgba(204,40,40,0.12);
+    --violet: #8844cc;  --violet-dim: rgba(136,68,204,0.12);
+    --border: #1f2430;
+    --border-hi: #2a3040;
+    --radius-card: 2px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  .mono { font-family: var(--font-mono); }
+
+  /* --- top bar --- */
+  .topbar {
+    display: flex; align-items: center; gap: 20px;
+    padding: 10px 18px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .topbar h1 {
+    font-family: var(--font-mono);
+    font-size: 13px; letter-spacing: 0.22em;
+    color: var(--accent-hi);
+    margin: 0;
+  }
+  .topbar .sub {
+    font-family: var(--font-mono);
+    font-size: 11px; color: var(--text-2);
+    letter-spacing: 0.1em;
+  }
+  .topbar .spacer { flex: 1; }
+  .topbar .stat {
+    display: inline-block;
+    padding: 3px 8px;
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.1em;
+    border: 1px solid var(--border-hi);
+    border-radius: var(--radius-card);
+    color: var(--text-1);
+    margin-right: 6px;
+  }
+  .topbar .stat b { color: var(--accent-hi); font-weight: 500; }
+  .topbar .btn-reset {
+    font-family: var(--font-mono); font-size: 10px;
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    color: var(--text-2);
+    padding: 4px 10px;
+    cursor: pointer; letter-spacing: 0.12em;
+  }
+  .topbar .btn-reset:hover { color: var(--red); border-color: var(--red); }
+
+  /* --- layout --- */
+  .wrap {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: calc(100vh - 48px);
+  }
+
+  .sidebar {
+    background: var(--bg-1);
+    border-right: 1px solid var(--border);
+    padding: 14px 0;
+    overflow-y: auto;
+  }
+  .side-title {
+    padding: 0 16px 10px;
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em; color: var(--text-2);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .cycle-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 14px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+  }
+  .cycle-item:hover { background: var(--bg-2); }
+  .cycle-item.active {
+    background: var(--accent-dim);
+    border-left-color: var(--accent);
+  }
+  .cycle-item .num {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-2); min-width: 24px;
+    letter-spacing: 0.1em;
+  }
+  .cycle-item.active .num { color: var(--accent-hi); }
+  .cycle-item .name {
+    font-size: 12px; color: var(--text-1);
+    line-height: 1.3;
+  }
+  .cycle-item.active .name { color: var(--text-0); }
+  .cycle-item .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-top: 5px; background: var(--text-3);
+    flex-shrink: 0;
+  }
+  .cycle-item[data-status="testing"] .status-dot { background: var(--amber); }
+  .cycle-item[data-status="fix-shipped"] .status-dot { background: var(--cyan); }
+  .cycle-item[data-status="verified"] .status-dot { background: var(--green); }
+  .cycle-item[data-status="failed"] .status-dot { background: var(--red); }
+
+  /* --- main --- */
+  .main {
+    padding: 18px 22px 60px;
+    background: var(--bg-0);
+  }
+
+  .page-head {
+    display: flex; align-items: baseline; gap: 14px;
+    margin-bottom: 4px;
+  }
+  .page-head .pill {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.18em;
+    padding: 3px 8px;
+    border: 1px solid var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent-hi);
+    border-radius: var(--radius-card);
+  }
+  .page-head h2 {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 22px; font-weight: 600;
+    color: var(--text-0);
+    letter-spacing: 0.02em;
+  }
+  .page-head .tag {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.1em; color: var(--text-2);
+  }
+
+  .subhead {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-1);
+    letter-spacing: 0.05em;
+    margin-bottom: 14px;
+  }
+  .subhead .ver {
+    color: var(--cyan);
+    border-bottom: 1px dotted var(--cyan-dim);
+  }
+  .subhead .area {
+    color: var(--violet);
+    border-bottom: 1px dotted var(--violet-dim);
+  }
+
+  /* --- status bar --- */
+  .status-bar {
+    display: flex; gap: 6px;
+    margin-bottom: 16px;
+  }
+  .status-btn {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.14em;
+    padding: 5px 11px;
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    color: var(--text-2);
+    cursor: pointer;
+    border-radius: var(--radius-card);
+    transition: all 0.1s;
+  }
+  .status-btn:hover { color: var(--text-0); }
+  .status-btn.active.planned { background: var(--bg-3); color: var(--text-0); border-color: var(--text-2); }
+  .status-btn.active.testing { background: var(--amber-dim); color: var(--amber); border-color: var(--amber); }
+  .status-btn.active.fix-shipped { background: var(--cyan-dim); color: var(--cyan); border-color: var(--cyan); }
+  .status-btn.active.verified { background: var(--green-dim); color: var(--green); border-color: var(--green); }
+  .status-btn.active.failed { background: var(--red-dim); color: var(--red); border-color: var(--red); }
+
+  /* --- 3 columns --- */
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .col {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--border-hi);
+    padding: 12px 14px;
+    border-radius: var(--radius-card);
+    min-height: 400px;
+  }
+  .col.discovered { border-top-color: var(--amber); }
+  .col.planned { border-top-color: var(--cyan); }
+  .col.verified { border-top-color: var(--green); }
+
+  .col-title {
+    font-family: var(--font-mono); font-size: 10px;
+    letter-spacing: 0.22em;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .col.discovered .col-title { color: var(--amber); }
+  .col.planned .col-title { color: var(--cyan); }
+  .col.verified .col-title { color: var(--green); }
+
+  .block {
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .block:last-child { border-bottom: none; }
+  .block .lbl {
+    font-family: var(--font-mono); font-size: 9px;
+    letter-spacing: 0.15em;
+    color: var(--text-2);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .block .val {
+    font-size: 13px; color: var(--text-0);
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
+  .block .val.mono {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .block .val.hint {
+    color: var(--text-2);
+    font-style: italic;
+  }
+
+  .editable {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 8px;
+    resize: vertical;
+    min-height: 70px;
+    line-height: 1.4;
+  }
+  .editable:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg-3);
+  }
+
+  /* --- code block --- */
+  .code {
+    font-family: var(--font-mono); font-size: 11px;
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    color: var(--cyan);
+    white-space: pre-wrap;
+    word-break: break-all;
+    border-radius: var(--radius-card);
+  }
+
+  /* --- badges --- */
+  .badge {
+    display: inline-block;
+    font-family: var(--font-mono); font-size: 9px;
+    letter-spacing: 0.12em;
+    padding: 2px 6px;
+    border-radius: var(--radius-card);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .badge.tool { background: var(--cyan-dim); color: var(--cyan); border: 1px solid var(--cyan-dim); }
+  .badge.template { background: var(--violet-dim); color: var(--violet); border: 1px solid var(--violet-dim); }
+  .badge.skill { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-dim); }
+  .badge.redesign { background: var(--amber-dim); color: var(--amber); border: 1px solid var(--amber-dim); }
+  .badge.subagent { background: var(--accent-dim); color: var(--accent-hi); border: 1px solid var(--accent-dim); }
+  .badge.verify { background: var(--bg-3); color: var(--text-1); border: 1px solid var(--border-hi); }
+
+  /* --- nav --- */
+  .page-nav {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 24px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .page-nav button {
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.12em;
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    color: var(--text-1);
+    padding: 7px 16px;
+    cursor: pointer;
+    border-radius: var(--radius-card);
+  }
+  .page-nav button:hover:not(:disabled) {
+    border-color: var(--accent); color: var(--accent-hi);
+  }
+  .page-nav button:disabled {
+    opacity: 0.3; cursor: not-allowed;
+  }
+  .page-nav .progress {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-2);
+    letter-spacing: 0.1em;
+  }
+
+  /* --- overview --- */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .overview-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border-hi);
+    padding: 10px 12px;
+    cursor: pointer;
+  }
+  .overview-card:hover { background: var(--bg-2); border-left-color: var(--accent); }
+  .overview-card[data-status="verified"] { border-left-color: var(--green); }
+  .overview-card[data-status="fix-shipped"] { border-left-color: var(--cyan); }
+  .overview-card[data-status="testing"] { border-left-color: var(--amber); }
+  .overview-card[data-status="failed"] { border-left-color: var(--red); }
+  .overview-card .oc-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-2); letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+  .overview-card .oc-title {
+    font-size: 14px; color: var(--text-0); font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .overview-card .oc-tag {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-2);
+  }
+
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>◢ DEATHSTAR // TEST CYCLES</h1>
+  <span class="sub">v2.32.6 → v2.33.9 · harness tightening + capability expansion</span>
+  <div class="spacer"></div>
+  <span class="stat">CYCLES <b id="stat-total">11</b></span>
+  <span class="stat">VERIFIED <b id="stat-verified">0</b></span>
+  <span class="stat">IN PROGRESS <b id="stat-wip">0</b></span>
+  <button class="btn-reset" onclick="resetAll()">RESET STATE</button>
+</div>
+
+<div class="wrap">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<script>
+// ============================================================
+//   CYCLE DEFINITIONS
+// ============================================================
+// Each cycle: test plan → likely finding → CC prompt spec → verify plan
+// Status is stored in localStorage so you can update as you run them.
+
+const CYCLES = [
+  {
+    id: 0,
+    slug: "cycle-0-verify-current",
+    title: "Verify current harness fixes",
+    version: "v2.32.6",
+    area: "VERIFY",
+    badges: ["verify"],
+    subhead: "Confirm truncation fix, tool budgets, and version-check refresh all work as designed on live v2.32.6 before layering new work on top.",
+    discovered: {
+      hypothesis: [
+        "v2.32.4 (truncation 300→1500): confirmed 379-char final_answer on first observe test — working.",
+        "v2.32.5 (tool budgets observe=8, investigate=16, execute=14): unproven under load.",
+        "v2.32.6 (GHCR refresh button + configurable TTLs): unproven in browser."
+      ],
+      test_plan: `T1 — observe "status of kafka cluster" → expect STATUS/FINDINGS/ACTION block, full_output ≥ 500 chars if degraded.
+T2 — investigate "why is kafka hp1-logs degraded" → expect ≥3 tools, structured output, budget not exhausted.
+T3 — investigate "walk every vm_host, check disk, summarize" → force budget exhaustion (16 tools). Expect forced summary at cap, no runaway.
+T4 — open ghcr container in expanded view → click "↻ Refresh versions" → expect new tag list within 2s without full page reload.
+T5 — Settings → Infrastructure → change ghcrTagCacheTTL to 60s → verify change persists across reload.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "— none — (unless bugs surface)",
+      summary: "This cycle is pure verification. No new CC prompt unless tests fail. If a bug turns up: write v2.32.7 hotfix with a tight repro.",
+      scope: [],
+      code_preview: ""
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1: final_answer > 300 chars, structured sections present.
+• T2: investigate completes in ≤16 tools with DIAGNOSIS + EVIDENCE + RECOMMENDATION.
+• T3: at tool #16 harness forces summary-only mode — no 17th tool call.
+• T4: refresh button produces fresh tag list (compare to previous cached list).
+• T5: reload UI, setting persists, new TTL observed in backend logs.`,
+      results: "",
+      git_hashes: "v2.32.4 306044f · v2.32.5 e3ce56c · v2.32.6 d1449e4"
+    }
+  },
+
+  {
+    id: 1,
+    slug: "cycle-1-kafka-topic-inspect",
+    title: "kafka_topic_inspect — structured Kafka state tool",
+    version: "v2.33.0",
+    area: "TOOLS",
+    badges: ["tool"],
+    subhead: "kafka_broker_status returns terse connectivity info; agents have to string 4-5 exec calls together to reason about ISR. Add one structured read-only tool.",
+    discovered: {
+      hypothesis: [
+        "Kafka triage still fans out into kafka_exec calls to reconstruct ISR/lag/partition layout per incident.",
+        "Agent cannot give partition-level replication facts in one tool call today.",
+        "hp1-logs DEGRADED state reasoning takes 8+ tool calls when 1 structured call would suffice."
+      ],
+      test_plan: `T1 (pre-fix, baseline) — investigate "diagnose kafka hp1-logs under-replication" on current build.
+  Record: tool count, elapsed, whether broker→node→vm_host chain is traced correctly.
+T2 (pre-fix) — observe "what's the state of kafka" → record final_answer precision (broker IDs? ISR? partition count?).`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.0.md",
+      summary: "New MCP tool kafka_topic_inspect(topic?) returning { brokers[], topics[{name, partitions[{id, leader, replicas, isr, lag_ms?}]}] }. Added to OBSERVE + INVESTIGATE allowlists. KAFKA_INVESTIGATION_PROMPT updated: call kafka_topic_inspect first, then kafka_consumer_lag, only then kafka_exec for deep dives.",
+      scope: [
+        "mcp_server/tools/kafka_inspect.py — new module",
+        "mcp_server/tools/__init__.py — register",
+        "api/agents/router.py — allowlist + investigate prompt",
+        "api/agents/router.py — RESEARCH_PROMPT → triage uses kafka_topic_inspect first"
+      ],
+      code_preview: `# kafka_topic_inspect(topic: str | None = None) -> dict
+#  Uses kafka-python AdminClient against bootstrap.servers (resolved via connections).
+#  Read-only: describe_cluster + list_topics + describe_topics.
+#  For each partition: leader, replicas, isr, under_replicated flag.
+#  Result size cap: first 50 partitions; pagination via offset param.`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: ≤5 tool calls to reach identical conclusion; first call is kafka_topic_inspect.
+• T2 post-fix: observe names broker ID missing from ISR in the final_answer directly.
+• Regression: existing kafka_exec paths still function; no collector break.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 2,
+    slug: "cycle-2-drain-swarm-node",
+    title: "drain_swarm_node task template",
+    version: "v2.33.1",
+    area: "TASK TEMPLATES",
+    badges: ["template"],
+    subhead: "worker-03 bounce works via reboot_proxmox_vm (v2.31.9), but clean drain first is a manual sequence. Template it, reuse the plan gate.",
+    discovered: {
+      hypothesis: [
+        "CommandPanel has reboot_proxmox_vm but not drain_swarm_node.",
+        "Operator has to type exact docker node update command manually from a manager.",
+        "Without drain, reboot_proxmox_vm on a worker causes visible task churn."
+      ],
+      test_plan: `T1 (pre-fix) — open Agent panel → task templates dropdown → confirm drain_swarm_node not listed.
+T2 (pre-fix) — "drain worker-03" free-form task → observe how many tools the agent fires + whether it picks the right manager to shell from.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.1.md",
+      summary: "Add drain_swarm_node template to api/agents/task_templates.py. Sequence: swarm_node_status → docker node update --availability drain <node> → wait-loop on docker node ps until zero running tasks → return summary. Gated as execute_swarm. Surface in CommandPanel dropdown with input: node_name.",
+      scope: [
+        "api/agents/task_templates.py — new template entry",
+        "gui/src/components/CommandPanel.jsx — dropdown + input form",
+        "api/routers/agent.py — bind template to execute agent, preserve plan_action gate"
+      ],
+      code_preview: `{ "name": "drain_swarm_node",
+  "agent_type": "execute",
+  "inputs": ["node_name"],
+  "prompt": "Drain Swarm node {node_name}: use swarm_node_status to confirm node exists, \
+then run docker node update --availability drain {node_name} from a manager, \
+then poll docker node ps {node_name} until running=0. Return node availability + task shed timeline.",
+  "blast_radius": "node" }`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: drain_swarm_node appears in dropdown with node_name input.
+• T2 post-fix: invocation goes through plan_action, shows the exact docker service commands to be run, then on approve drains cleanly and returns when tasks == 0.
+• Safety: cannot run without manager-node SSH; blocks with manual command if allowlist denies.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 3,
+    slug: "cycle-3-diagnose-kafka-unrepl",
+    title: "diagnose_kafka_under_replicated template",
+    version: "v2.33.2",
+    area: "TASK TEMPLATES",
+    badges: ["template"],
+    subhead: "One-click template that pairs with v2.33.0's kafka_topic_inspect to produce a clean RCA for the current infra issue.",
+    discovered: {
+      hypothesis: [
+        "hp1-logs under-replicated (ISR: 1,3; broker 2 missing; broker 3 unscheduled) is a recurring scenario.",
+        "Operator re-types the same diagnostic prompt every time.",
+        "Agent investigation tends to go deep on logs before checking cluster topology."
+      ],
+      test_plan: `T1 (pre-fix) — free-form "hp1-logs is under-replicated, diagnose" → record tool chain, final RCA text.
+T2 (pre-fix) — same prompt rerun 1h later → compare for stability (attempt history should help, measure drift).`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.2.md",
+      summary: "Template chains kafka_topic_inspect → service_placement(kafka_broker-N missing) → swarm_node_status(worker-N) → proxmox_vm_power?status → produce structured RCA with: missing_broker_ids, affected_topics, responsible_node, recommended_fix. Pure investigate, no mutations.",
+      scope: [
+        "api/agents/task_templates.py — new template",
+        "gui/src/components/CommandPanel.jsx — dropdown entry (Kafka group)",
+        "api/agents/router.py — if template=diagnose_kafka_under_replicated, inject a tight system-prompt override with the fixed 4-step chain"
+      ],
+      code_preview: `{ "name": "diagnose_kafka_under_replicated",
+  "agent_type": "investigate",
+  "inputs": [],
+  "prompt_override": "STEP 1: kafka_topic_inspect — list partitions with isr != replicas. \
+STEP 2: for each missing broker id, kafka_exec to find which swarm service it maps to. \
+STEP 3: service_placement(kafka_broker-N) → find node. \
+STEP 4: swarm_node_status + vm_host status for that node. \
+OUTPUT: MISSING / IMPACT / ROOT_CAUSE / FIX strictly in that shape." }`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: template produces output in MISSING/IMPACT/ROOT_CAUSE/FIX shape in ≤6 tool calls.
+• T2 post-fix: rerunning gives same identified node and same recommended fix text (determinism check).
+• RCA names worker-03 specifically as the responsible node.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 4,
+    slug: "cycle-4-subagent-budget",
+    title: "Mandatory sub-agent proposal near budget exhaustion",
+    version: "v2.33.3",
+    area: "SUB-AGENTS",
+    badges: ["subagent"],
+    subhead: "propose_subtask was added in v2.24.0 but rarely fires. When the investigate budget is ≥70% consumed with no DIAGNOSIS yet, the agent should hand off.",
+    discovered: {
+      hypothesis: [
+        "Investigations that hit budget cap currently produce a forced summary but no sub-agent handoff.",
+        "Operator gets a shallow conclusion instead of a split-further suggestion.",
+        "Complex multi-platform diagnoses (kafka + es + swarm + proxmox) need >16 tools in practice."
+      ],
+      test_plan: `T1 (pre-fix) — investigate "kafka hp1-logs AND elasticsearch both degraded, correlate" → record if budget exhausts and whether propose_subtask is offered.
+T2 (pre-fix) — pick a tight single-surface task and verify propose_subtask does NOT fire (no false positives).`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.3.md",
+      summary: "In the investigate system prompt, add: 'If tool budget reaches 70% used without a DIAGNOSIS section, your next action MUST be propose_subtask with a tight sub-query.' Enforce in router: if after tool #12 the model output lacks 'DIAGNOSIS:' the harness injects a reminder message. Also surface propose_subtask offers in the output panel as an inline clickable card.",
+      scope: [
+        "api/agents/router.py — RESEARCH_PROMPT CONSTRAINTS section",
+        "api/routers/agent.py — threshold check at tool count >= 0.7 × budget",
+        "gui/src/components/OutputPanel.jsx — render subtask_proposed event as inline card",
+        "api/db/agent_attempts.py — log subtask_proposed outcomes to measure real signal"
+      ],
+      code_preview: `# in agent loop, after each tool call:
+if tools_used >= int(0.7 * budget) and "DIAGNOSIS:" not in combined_output:
+    ws.send_json({"event": "nudge", "msg": "Budget 70% used, no DIAGNOSIS yet. Propose a subtask."})
+    inject_system("HARNESS: Budget at 70% without DIAGNOSIS. Call propose_subtask now or produce DIAGNOSIS next step.")`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: at tool #12, agent fires propose_subtask with a tight scope.
+• T2 post-fix: small task completes normally, no spurious proposals.
+• UI: proposed subtask renders as a clickable card in OutputPanel; accepting it starts a fresh budget.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 5,
+    slug: "cycle-5-autoskill-vmexec",
+    title: "Auto-promote repeated vm_exec patterns into skills",
+    version: "v2.33.4",
+    area: "SKILLS",
+    badges: ["skill"],
+    subhead: "Observe agent keeps re-issuing the same vm_exec 'df -h | head -20' against the same 6 hosts. After N repeats, promote the pattern into a named skill.",
+    discovered: {
+      hypothesis: [
+        "agent_actions audit table (v2.31.2) contains the raw data to detect repetition.",
+        "No current mechanism converts repeated patterns into first-class skills.",
+        "Observe agent token cost is inflated by repetitive vm_exec argument construction."
+      ],
+      test_plan: `T1 (pre-fix) — query agent_actions table for vm_exec calls in last 7 days, group by (host, command_hash). Expect clusters with count ≥ 5.
+T2 (pre-fix) — run observe "check disk on all vm_hosts" — record tool count + token usage.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.4.md",
+      summary: "New background worker auto_skill_promoter scans agent_actions weekly. For any (tool, args_shape) with count ≥ 5 across ≥ 2 tasks, generate a skill draft via skill_create (v2.13.0) with name derived from intent. Dashboard gets a Skills → Candidates view showing proposals the operator approves before promotion.",
+      scope: [
+        "api/skills/auto_promoter.py — new module, scheduled via main.py lifespan",
+        "api/routers/skills.py — /candidates endpoint",
+        "gui/src/components/SkillsTab.jsx — Candidates subtab with approve button",
+        "api/db/skill_candidates.py — candidate table"
+      ],
+      code_preview: `# auto_promoter.py
+def detect_candidates(min_count=5, min_tasks=2):
+    sql = """SELECT tool, md5(args::text) AS shape, COUNT(*), COUNT(DISTINCT task_id)
+             FROM agent_actions WHERE created_at > NOW() - INTERVAL '7 days'
+             GROUP BY 1,2 HAVING COUNT(*) >= %s AND COUNT(DISTINCT task_id) >= %s"""
+    # for each cluster: construct skill spec, call skill_create, insert into skill_candidates
+`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: after worker run, skill_candidates table has rows for vm_disk_check-style patterns.
+• T2 post-fix: "check disk on all vm_hosts" resolves to skill_execute(vm_disk_check_all) in ≤2 tool calls.
+• UI: approved candidate appears in Skills tab + becomes available to observe agent immediately.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 6,
+    slug: "cycle-6-prometheus-metrics",
+    title: "Prometheus /metrics endpoint — observe the observer",
+    version: "v2.33.5",
+    area: "TOOLS",
+    badges: ["tool"],
+    subhead: "No external heartbeat on DEATHSTAR itself. Expose a /metrics endpoint with collector latency, agent task counts, escalation rate, Kafka ISR, so Grafana (or any prober) can chart it.",
+    discovered: {
+      hypothesis: [
+        "If agent-01 falls over, nothing alerts.",
+        "Collector poll timings are logged but not aggregated for trend detection.",
+        "Escalation rate per 24h is invisible to humans outside the dashboard."
+      ],
+      test_plan: `T1 (pre-fix) — curl /metrics → expect 404.
+T2 (pre-fix) — check if any prom_client / prometheus_client dep already vendored (avoid duplication).`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.5.md",
+      summary: "Add prometheus_client dependency. Register metrics: deathstar_collector_poll_seconds (histogram, label=platform), deathstar_agent_tasks_total (counter, label=type+status), deathstar_escalations_total (counter), deathstar_kafka_under_replicated (gauge), deathstar_version_info (info). Expose at GET /metrics (no auth, bind to same port). Seeded by CollectorManager.trigger_poll instrumentation + agent.py wrappers.",
+      scope: [
+        "requirements.txt — prometheus_client>=0.19",
+        "api/metrics.py — new module with all metric definitions",
+        "api/main.py — mount /metrics route",
+        "api/collectors/manager.py — wrap trigger_poll with histogram",
+        "api/routers/agent.py — increment counters in loop",
+        "api/routers/escalations.py — increment counter"
+      ],
+      code_preview: `# api/metrics.py
+from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest
+COLLECTOR_POLL = Histogram("deathstar_collector_poll_seconds", "collector poll time", ["platform"])
+AGENT_TASKS   = Counter("deathstar_agent_tasks_total", "agent tasks", ["type", "status"])
+ESCALATIONS   = Counter("deathstar_escalations_total", "escalations raised")
+KAFKA_UR      = Gauge("deathstar_kafka_under_replicated", "partitions under-replicated", ["topic"])`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: curl /metrics returns text/plain with deathstar_* families.
+• T2 post-fix: after a collector poll + an agent task + an escalation, respective metrics increment.
+• Integration: point a local Prometheus at /metrics, confirm scrape succeeds for 5 minutes.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 7,
+    slug: "cycle-7-blast-radius",
+    title: "Blast radius tagging on destructive tools + plan UI surface",
+    version: "v2.33.6",
+    area: "REDESIGN",
+    badges: ["redesign"],
+    subhead: "plan_action is binary today. Tag each destructive tool with node/service/cluster/fleet radius; plan confirmation UI shows radius per step so the operator can scan risk fast.",
+    discovered: {
+      hypothesis: [
+        "Plan dialog lists steps without danger indication.",
+        "Operator has to read each command to judge blast radius.",
+        "docker service update --force kafka_broker-3 (cluster radius) looks identical to a single-host systemctl restart in the UI."
+      ],
+      test_plan: `T1 (pre-fix) — trigger execute task → plan modal → check if any radius indicator present (expect none).
+T2 (pre-fix) — survey mcp_server/tools for destructive actions missing explicit tagging.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.6.md",
+      summary: "Introduce BLAST_RADIUS = {'node','service','cluster','fleet'} taxonomy. Annotate every destructive tool (vm_exec writes, swarm_service_force_update, proxmox_vm_power, kafka_exec writes) with a radius constant. Plan payload carries radius per step. Plan modal renders a colored pill per step (green=node, amber=service, red=cluster, purple=fleet). High-radius steps require an extra confirm checkbox.",
+      scope: [
+        "api/agents/tool_metadata.py — new module with radius registry",
+        "api/routers/agent.py — plan emission includes radius[]",
+        "gui/src/components/PlanModal.jsx — radius pills + extra-confirm for cluster+",
+        "api/routers/agent.py — post-plan validation: refuse >1 fleet step per plan"
+      ],
+      code_preview: `TOOL_RADIUS = {
+    "vm_exec": "node",        # per-host
+    "proxmox_vm_power": "node",
+    "swarm_service_force_update": "service",
+    "kafka_exec:delete_topic": "cluster",
+    "connection_delete": "fleet",
+}
+def radius_of(tool, args): ...`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: plan modal shows colored radius pill per step.
+• T2 post-fix: cluster+ step triggers a second confirmation checkbox before Approve button enables.
+• Regression: existing plans still approve cleanly for node/service radii.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 8,
+    slug: "cycle-8-kafka-tab-ui",
+    title: "Kafka inspection tab — surface ISR, lag, topics",
+    version: "v2.33.7",
+    area: "REDESIGN",
+    badges: ["redesign"],
+    subhead: "Kafka state is tracked internally but not visible as a browsable tab. Add a read-only Kafka tab using kafka_topic_inspect (v2.33.0) as its data source.",
+    discovered: {
+      hypothesis: [
+        "Operators must use agent Ask to get Kafka internals.",
+        "There's no at-a-glance view of broker↔topic↔partition↔ISR.",
+        "Consumer lag trend is invisible without agent calls."
+      ],
+      test_plan: `T1 (pre-fix) — check sidebar for Kafka tab — expect absent.
+T2 (pre-fix) — Platform Core shows broker count but no topic or lag drill-in.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.7.md",
+      summary: "New KafkaTab.jsx in MONITOR section (below Logs). Backend: /api/kafka/overview (calls kafka_topic_inspect + kafka_consumer_lag) with 30s cache. UI: left = broker list (id, host, status), center = topic grid (name, partitions, RF, min.isr, under-replicated count, consumer lag max), right = partition detail on click. Uses DashboardDataContext version gate.",
+      scope: [
+        "api/routers/kafka_overview.py — new router",
+        "gui/src/components/KafkaTab.jsx — new component",
+        "gui/src/components/Sidebar.jsx — nav entry under MONITOR",
+        "gui/src/App.jsx — route handler for /kafka"
+      ],
+      code_preview: `GET /api/kafka/overview
+{ "brokers": [{"id":1,"host":"..","status":"up","leader_count":12}],
+  "topics":  [{"name":"hp1-logs","partitions":3,"rf":3,"min_isr":2,
+               "under_replicated":1,"max_consumer_lag":1153}] }`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: sidebar shows Kafka entry, clicking loads table in <1s.
+• T2 post-fix: hp1-logs row shows under_replicated=1, clicking reveals partition 0 with ISR=[1,3].
+• Cache: second load within 30s uses cache (no new kafka_topic_inspect call).`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 9,
+    slug: "cycle-9-verify-backup-template",
+    title: "verify_backup_job template + PBS age threshold",
+    version: "v2.33.8",
+    area: "TASK TEMPLATES",
+    badges: ["template"],
+    subhead: "PBS backup age isn't surfaced as a pass/fail check. Template queries PBS for a VM's last backup, compares to SLO, returns PASS/FAIL + age.",
+    discovered: {
+      hypothesis: [
+        "PBS collector already pulls datastore list and backup counts.",
+        "No per-VM last-backup age surfaced in UI or to agent.",
+        "Operator does not get a daily 'all backups green' roll-up."
+      ],
+      test_plan: `T1 (pre-fix) — ask 'when was the last backup of deathstar-agent-01' → record response quality and tool count.
+T2 (pre-fix) — check pbs.py — does collector store per-VM last-success timestamp? If not, the template needs a new collector hook.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.8.md",
+      summary: "Extend PBS collector to record last_verified_ts and last_success_ts per VM/CT. New agent tool pbs_last_backup(vm_id) returning {age_hours, success_ts, verify_ts, status}. Task template verify_backup_job(vm_id, max_age_hours=25) wraps it with PASS/FAIL. Surface on VMCard as a subtle green/amber dot when age>24h.",
+      scope: [
+        "api/collectors/pbs.py — extract last_success_ts per VM from group manifest",
+        "mcp_server/tools/pbs.py — pbs_last_backup tool",
+        "api/agents/task_templates.py — verify_backup_job entry",
+        "gui/src/components/ServiceCards.jsx — VMCard backup freshness dot"
+      ],
+      code_preview: `{ "name": "verify_backup_job",
+  "agent_type": "observe",
+  "inputs": ["vm_id", "max_age_hours"],
+  "prompt": "Call pbs_last_backup({vm_id}). If age_hours > {max_age_hours}, \
+status=FAIL else PASS. Include age, last_success_ts, datastore." }`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: template returns structured PASS/FAIL in ≤2 tool calls.
+• T2 post-fix: VMCard shows backup dot; hover reveals age_hours.
+• Collector: pbs.py surfaces last_success_ts in the datastore entity metadata.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 10,
+    slug: "cycle-10-drift-detection",
+    title: "Drift detection — catch out-of-band config changes",
+    version: "v2.33.9",
+    area: "REDESIGN",
+    badges: ["redesign", "subagent"],
+    subhead: "If someone SSHes into a manager and force-updates a service out-of-band, DEATHSTAR doesn't notice. Add periodic config-hash reconciliation; flag drift on the card.",
+    discovered: {
+      hypothesis: [
+        "collector snapshots have raw config but no diff-against-last.",
+        "No drift flag on cards.",
+        "Out-of-band swarm edits on worker hosts vs manager-approved edits are indistinguishable."
+      ],
+      test_plan: `T1 (pre-fix) — manually run docker service update label.foo=bar on kafka_broker-1 on a manager → observe whether card notes any change.
+T2 (pre-fix) — ensure entity_history is the right substrate (already has change events) or if we need new drift table.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.9.md",
+      summary: "Extend entity_history to compute a config_hash on every snapshot (sha256 of stable-sorted config keys excluding timestamps). New drift_events view lifts rows where config_hash changed without a corresponding plan_action in agent_actions within ±60s. Dashboard shows an ⚠ drift badge on the card with a sub-agent 'investigate this drift' shortcut that scopes a fresh investigate task.",
+      scope: [
+        "api/db/entity_history.py — config_hash column + compute helper",
+        "api/db/drift_events.py — new view + query helper",
+        "api/routers/entities.py — /entity/{id}/drift endpoint",
+        "gui/src/components/ServiceCards.jsx — drift badge + click handler",
+        "api/agents/task_templates.py — investigate_drift template"
+      ],
+      code_preview: `-- drift_events view: joins entity_history snapshots with agent_actions
+-- flags config_hash change with no sanctioned action within 60s window
+CREATE OR REPLACE VIEW drift_events AS
+SELECT eh.entity_id, eh.snapshot_at, eh.config_hash, eh.prev_config_hash
+FROM entity_history eh
+WHERE eh.config_hash <> eh.prev_config_hash
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_actions aa
+    WHERE aa.entity_id = eh.entity_id
+      AND aa.created_at BETWEEN eh.snapshot_at - INTERVAL '60s'
+                          AND eh.snapshot_at + INTERVAL '60s'
+      AND aa.was_planned = true
+  );`
+    },
+    verify: {
+      plan: `PASS criteria:
+• T1 post-fix: out-of-band change → ⚠ drift badge appears on card within next collector poll.
+• T2 post-fix: clicking badge opens investigate_drift sub-task with entity pre-scoped.
+• Regression: sanctioned changes (via plan_action) do NOT produce drift events.`,
+      results: "",
+      git_hashes: ""
+    }
+  }
+];
+
+// ============================================================
+//   STATE
+// ============================================================
+const LS_KEY = "deathstar_cycles_v1";
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveState(s) { localStorage.setItem(LS_KEY, JSON.stringify(s)); }
+
+let state = loadState();
+let currentIdx = parseInt(location.hash.replace("#cycle-", "")) || 0;
+if (isNaN(currentIdx) || currentIdx < 0 || currentIdx > CYCLES.length) currentIdx = 0;
+
+function getCycleState(id) {
+  if (!state[id]) state[id] = { status: "planned", notes: {}, results: "" };
+  return state[id];
+}
+
+// ============================================================
+//   RENDER
+// ============================================================
+function renderSidebar() {
+  const el = document.getElementById("sidebar");
+  let html = '<div class="side-title">CYCLE INDEX</div>';
+  // overview link
+  html += `<div class="cycle-item ${currentIdx === -1 ? 'active' : ''}" onclick="goTo(-1)">
+    <span class="num">◢</span>
+    <span class="name">Overview</span>
+  </div>`;
+  CYCLES.forEach((c, i) => {
+    const st = getCycleState(c.id).status;
+    html += `<div class="cycle-item ${currentIdx === i ? 'active' : ''}" data-status="${st}" onclick="goTo(${i})">
+      <span class="num">${String(c.id).padStart(2,'0')}</span>
+      <div style="flex:1;">
+        <div class="name">${c.title}</div>
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-3);letter-spacing:0.1em;margin-top:2px;">${c.version} · ${c.area}</div>
+      </div>
+      <span class="status-dot"></span>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+function renderMain() {
+  if (currentIdx === -1) { renderOverview(); return; }
+  const c = CYCLES[currentIdx];
+  if (!c) { currentIdx = 0; renderMain(); return; }
+  const st = getCycleState(c.id);
+  const badgesHtml = (c.badges || []).map(b => `<span class="badge ${b}">${b.toUpperCase()}</span>`).join('');
+
+  const html = `
+    <div class="page-head">
+      <span class="pill">CYCLE ${String(c.id).padStart(2,'0')} · ${c.version}</span>
+      <h2>${c.title}</h2>
+      <span class="tag">${badgesHtml}</span>
+    </div>
+    <div class="subhead">
+      <span class="ver">${c.version}</span>
+      &nbsp;·&nbsp;
+      <span class="area">${c.area}</span>
+      &nbsp;·&nbsp;
+      ${c.subhead}
+    </div>
+
+    <div class="status-bar">
+      ${["planned","testing","fix-shipped","verified","failed"].map(s => `
+        <button class="status-btn ${s} ${st.status === s ? 'active' : ''}" onclick="setStatus('${c.id}','${s}')">${s.replace('-', ' ')}</button>
+      `).join('')}
+    </div>
+
+    <div class="cols">
+      <!-- discovered -->
+      <div class="col discovered">
+        <div class="col-title">◤ DISCOVERED — PRE-FIX</div>
+        <div class="block">
+          <div class="lbl">Hypothesis</div>
+          <div class="val">${(c.discovered.hypothesis || []).map(h => '• ' + h).join('\n')}</div>
+        </div>
+        <div class="block">
+          <div class="lbl">Test plan</div>
+          <div class="val mono">${escapeHtml(c.discovered.test_plan || '')}</div>
+        </div>
+        <div class="block">
+          <div class="lbl">Actual findings (fill in during run)</div>
+          <textarea class="editable" placeholder="paste raw tool counts, outputs, bug notes..."
+            oninput="saveNote('${c.id}','discovered',this.value)">${escapeHtml(st.notes.discovered || '')}</textarea>
+        </div>
+      </div>
+
+      <!-- planned -->
+      <div class="col planned">
+        <div class="col-title">◆ PLANNED FIX</div>
+        <div class="block">
+          <div class="lbl">CC prompt</div>
+          <div class="val mono">${c.planned.prompt}</div>
+        </div>
+        <div class="block">
+          <div class="lbl">Summary</div>
+          <div class="val">${escapeHtml(c.planned.summary)}</div>
+        </div>
+        ${c.planned.scope && c.planned.scope.length ? `
+        <div class="block">
+          <div class="lbl">Scope (files)</div>
+          <div class="val mono">${c.planned.scope.map(s => '• ' + escapeHtml(s)).join('\n')}</div>
+        </div>` : ''}
+        ${c.planned.code_preview ? `
+        <div class="block">
+          <div class="lbl">Code preview</div>
+          <div class="code">${escapeHtml(c.planned.code_preview)}</div>
+        </div>` : ''}
+        <div class="block">
+          <div class="lbl">Shipped (paste git hash once CC has pushed)</div>
+          <input type="text" class="editable" style="min-height:auto;height:32px;"
+            placeholder="e.g. d1449e4"
+            value="${escapeHtml(st.notes.git_hash || '')}"
+            oninput="saveNote('${c.id}','git_hash',this.value)" />
+        </div>
+      </div>
+
+      <!-- verify -->
+      <div class="col verified">
+        <div class="col-title">◇ POST-FIX VERIFY</div>
+        <div class="block">
+          <div class="lbl">Verification plan</div>
+          <div class="val mono">${escapeHtml(c.verify.plan || '')}</div>
+        </div>
+        <div class="block">
+          <div class="lbl">Verification results (fill in after fix)</div>
+          <textarea class="editable" placeholder="paste tool counts post-fix, whether PASS criteria met, any regressions..."
+            oninput="saveNote('${c.id}','verify',this.value)">${escapeHtml(st.notes.verify || '')}</textarea>
+        </div>
+        ${c.verify.git_hashes ? `
+        <div class="block">
+          <div class="lbl">Reference hashes</div>
+          <div class="val mono">${escapeHtml(c.verify.git_hashes)}</div>
+        </div>` : ''}
+      </div>
+    </div>
+
+    <div class="page-nav">
+      <button onclick="prev()" ${currentIdx === 0 ? 'disabled' : ''}>◁  PREV</button>
+      <span class="progress">${String(currentIdx + 1).padStart(2,'0')} / ${CYCLES.length}</span>
+      <button onclick="next()" ${currentIdx === CYCLES.length - 1 ? 'disabled' : ''}>NEXT  ▷</button>
+    </div>
+  `;
+  document.getElementById("main").innerHTML = html;
+}
+
+function renderOverview() {
+  const cards = CYCLES.map((c, i) => {
+    const st = getCycleState(c.id);
+    const badgesHtml = (c.badges || []).map(b => `<span class="badge ${b}">${b.toUpperCase()}</span>`).join('');
+    return `
+      <div class="overview-card" data-status="${st.status}" onclick="goTo(${i})">
+        <div class="oc-top">
+          <span>${c.version} · CYCLE ${String(c.id).padStart(2,'0')}</span>
+          <span>${st.status.toUpperCase()}</span>
+        </div>
+        <div class="oc-title">${c.title}</div>
+        <div class="oc-tag">${c.area} ${badgesHtml}</div>
+      </div>
+    `;
+  }).join('');
+  document.getElementById("main").innerHTML = `
+    <div class="page-head">
+      <span class="pill">OVERVIEW</span>
+      <h2>Test → Fix → Verify · 11 cycles</h2>
+    </div>
+    <div class="subhead">Click any card to open that cycle. Status and notes are saved in your browser (localStorage).</div>
+    <div class="overview-grid">${cards}</div>
+    <div class="page-nav">
+      <span class="progress">use sidebar or click a card</span>
+      <button onclick="goTo(0)">START ▷</button>
+    </div>
+  `;
+}
+
+// ============================================================
+//   ACTIONS
+// ============================================================
+function goTo(i) {
+  currentIdx = i;
+  location.hash = i === -1 ? "" : "#cycle-" + i;
+  renderSidebar(); renderMain();
+  updateStats();
+  window.scrollTo(0, 0);
+}
+function next() { if (currentIdx < CYCLES.length - 1) goTo(currentIdx + 1); }
+function prev() { if (currentIdx > 0) goTo(currentIdx - 1); }
+
+function setStatus(id, status) {
+  getCycleState(id).status = status;
+  saveState(state);
+  renderSidebar(); renderMain();
+  updateStats();
+}
+
+function saveNote(id, key, value) {
+  const s = getCycleState(id);
+  if (key === "git_hash") s.notes.git_hash = value;
+  else s.notes[key] = value;
+  saveState(state);
+}
+
+function resetAll() {
+  if (!confirm("Clear all progress and notes? This cannot be undone.")) return;
+  localStorage.removeItem(LS_KEY);
+  state = {};
+  renderSidebar(); renderMain(); updateStats();
+}
+
+function updateStats() {
+  let v = 0, w = 0;
+  CYCLES.forEach(c => {
+    const st = getCycleState(c.id).status;
+    if (st === "verified") v++;
+    else if (st === "testing" || st === "fix-shipped") w++;
+  });
+  document.getElementById("stat-total").textContent = CYCLES.length;
+  document.getElementById("stat-verified").textContent = v;
+  document.getElementById("stat-wip").textContent = w;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+window.addEventListener("hashchange", () => {
+  const h = location.hash;
+  if (h === "" || h === "#") { currentIdx = -1; }
+  else {
+    const m = h.match(/^#cycle-(\d+)$/);
+    if (m) currentIdx = parseInt(m[1]);
+  }
+  renderSidebar(); renderMain(); updateStats();
+});
+
+// init
+renderSidebar();
+renderMain();
+updateStats();
+</script>
+</body>
+</html>

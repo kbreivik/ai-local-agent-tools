@@ -85,6 +85,7 @@ def detect_domain(task: str) -> str:
 OBSERVE_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
+    "kafka_topic_inspect",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_index_stats",
     "audit_log", "escalate", "clarifying_question",
     "get_host_network",
@@ -112,6 +113,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
 INVESTIGATE_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
     "service_version_history", "kafka_broker_status", "kafka_topic_health",
+    "kafka_topic_inspect",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_error_logs",
     "elastic_search_logs", "elastic_log_pattern", "elastic_index_stats",
     "elastic_kafka_logs", "elastic_correlate_operation", "audit_log",
@@ -520,6 +522,13 @@ If no doc context was injected, rely on training knowledge and note the source.
 RUNBOOK CHECK (ALWAYS DO FIRST):
 At the START of any investigation, call runbook_search("<problem keyword>") to check
 if a proven procedure exists. If found, cite it in evidence and follow its steps.
+
+═══ KAFKA TRIAGE ORDER ═══
+1. kafka_topic_inspect (no args, or topic=X for focused) — FIRST call for any
+   kafka issue. Returns structured broker/partition/ISR state in one call.
+2. kafka_consumer_lag — ONLY after step 1, if lag is suspected.
+3. service_placement(kafka_broker-N) — map broker id to Swarm node.
+4. kafka_exec — last resort for deep-dives beyond what the above provide.
 
 KAFKA TRIAGE — STEP 0 (MANDATORY):
 kafka_broker_status and kafka_consumer_lag are INDEPENDENT checks.
