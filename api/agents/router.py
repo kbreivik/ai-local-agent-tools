@@ -501,6 +501,11 @@ This platform runs Docker Swarm (NOT Kubernetes).
    your next action MUST be propose_subtask(task=..., executable_steps=[...],
    manual_steps=[...]) with a tight, single-entity scope that carries forward
    what you have found so far. Do NOT try to cram a conclusion; hand off.
+7. ZERO-RESULT PIVOT RULE: If the same tool returns 0 results 3 times in a row,
+   STOP using that filter pattern. Either (a) broaden by dropping fields,
+   (b) reuse data from an earlier non-zero call of the same tool, or
+   (c) switch tools / propose_subtask. Never exceed 3 consecutive zero-result
+   calls to the same tool.
 
 BLOCKED TOOL RULE:
 When a tool is unavailable or blocked:

@@ -54,7 +54,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -115,6 +115,17 @@ export default function OutputPanel({ onTab }) {
 
       {/* Output stream */}
       <div className="flex-1 overflow-y-auto px-3 py-2 bg-slate-950">
+        {zeroPivot && (
+          <div className="mono" style={{
+            margin: '6px 0', padding: '6px 10px',
+            background: 'var(--amber-dim)', color: 'var(--amber)',
+            border: '1px solid var(--amber)', borderRadius: 2,
+            fontSize: 10, letterSpacing: '0.1em',
+          }}>
+            ⚠ PIVOT NUDGE — {zeroPivot.tool} returned 0 · {zeroPivot.consecutive_zeros}× in a row
+            {zeroPivot.prior_nonzero > 0 && <> (earlier: {zeroPivot.prior_nonzero})</>}
+          </div>
+        )}
         {outputLines.length === 0 && (
           <p className="text-xs text-slate-600 mt-4">
             Waiting for agent output…<br />

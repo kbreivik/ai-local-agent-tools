@@ -135,6 +135,7 @@ export function AgentOutputProvider({ children }) {
   const [lastAgentType,        setLastAgentType]        = useState(null)
   const [currentSessionId,     setCurrentSessionId]     = useState(null)
   const [pendingProposals,     setPendingProposals]     = useState([])
+  const [zeroPivot,            setZeroPivot]            = useState(null)
   const agentTypeRef    = useRef(null)
   const sessionIdRef    = useRef(null)
   const feedStartRef    = useRef(null)  // timestamp when current run started
@@ -166,6 +167,7 @@ export function AgentOutputProvider({ children }) {
         setCurrentSessionId(msg.session_id || null)
         setRunState('running')
         setPendingProposals([])           // ← clear proposals on new run
+        setZeroPivot(null)                // ← clear pivot banner on new run
         // Add to raw log stream
         setOutputLines(prev => [...prev.slice(-500), msg])
         // Reset inline feed
@@ -185,6 +187,16 @@ export function AgentOutputProvider({ children }) {
           question:  msg.question  || '',
           options:   msg.options   || [],
           sessionId: msg.session_id || '',
+        })
+        return
+      }
+
+      // ── zero_result_pivot (v2.33.12) ───────────────────────────────────────
+      if (t === 'zero_result_pivot') {
+        setZeroPivot({
+          tool:              msg.tool              || '',
+          consecutive_zeros: msg.consecutive_zeros || 0,
+          prior_nonzero:     msg.prior_nonzero     || 0,
         })
         return
       }
@@ -314,6 +326,7 @@ export function AgentOutputProvider({ children }) {
     sessionIdRef.current = null
     setAgentType(null)
     setCurrentSessionId(null)
+    setZeroPivot(null)
   }, [])
 
   const stopAgent = useCallback(async () => {
@@ -344,6 +357,7 @@ export function AgentOutputProvider({ children }) {
       agentType, lastAgentType,
       currentSessionId, stopAgent,
       pendingProposals,
+      zeroPivot,
     }}>
       {children}
     </AgentOutputContext.Provider>

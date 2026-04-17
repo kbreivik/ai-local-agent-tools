@@ -43,6 +43,32 @@ def _step_temperature(agent_type: str, has_tool_calls: bool, is_force_summary: b
     return 0.1
 
 
+def _result_count(tool_result: dict) -> int | None:
+    """Heuristic: extract a 'count of items returned' from common tool response shapes.
+
+    Used by the v2.33.12 zero-result pivot detector to spot stuck filters.
+    Returns None when no count can be inferred (so the detector ignores the call).
+    """
+    if not isinstance(tool_result, dict):
+        return None
+    # Direct count fields
+    for key in ("total", "count", "hit_count", "num_results"):
+        v = tool_result.get(key)
+        if isinstance(v, int):
+            return v
+    # Array fields
+    for key in ("hits", "results", "items", "entries", "logs"):
+        arr = tool_result.get(key)
+        if isinstance(arr, list):
+            return len(arr)
+    # Stringly-typed "Found N ..." summary fallback
+    summary = tool_result.get("summary") or tool_result.get("message") or ""
+    m = re.search(r"[Ff]ound\s+(\d+)", str(summary))
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _should_disable_thinking(tool_names_this_step: list[str], step: int, max_steps: int) -> bool:
     """Return True if we should append /no_think to suppress the <think> block.
 
@@ -486,6 +512,10 @@ async def _run_single_agent_step(
     _last_blocked_tool = None    # name of most recently blocked tool
     _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
     _budget_nudge_fired = False  # v2.33.3: ensure 70% handoff nudge fires at most once
+    # v2.33.12: zero-result pivot detection — per-tool tracking for the current task
+    _zero_streaks: dict[str, int] = {}       # tool_name -> consecutive zero count
+    _nonzero_seen: dict[str, int] = {}       # tool_name -> best non-zero count seen
+    _zero_pivot_fired: set[str] = set()      # tools we've already nudged about
 
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
@@ -1322,6 +1352,78 @@ async def _run_single_agent_step(
                     "tool_call_id": tc.id,
                     "content": tool_content + tool_content_suffix,
                 })
+
+                # ── v2.33.12: zero-result pivot detection ────────────────────
+                # If a tool returns 0 results 3+ times in a row, inject a
+                # harness nudge so the agent stops repeating a broken filter.
+                _count = _result_count(result if isinstance(result, dict) else {})
+                if _count is not None:
+                    if _count == 0:
+                        _zero_streaks[fn_name] = _zero_streaks.get(fn_name, 0) + 1
+                    else:
+                        _zero_streaks[fn_name] = 0
+                        _nonzero_seen[fn_name] = max(_nonzero_seen.get(fn_name, 0), _count)
+
+                if (
+                    _zero_streaks.get(fn_name, 0) >= 3
+                    and _nonzero_seen.get(fn_name, 0) > 0
+                    and fn_name not in _zero_pivot_fired
+                ):
+                    _zero_pivot_fired.add(fn_name)
+                    _prior_n = _nonzero_seen[fn_name]
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"HARNESS NUDGE: Your last 3 calls to {fn_name} returned 0 results. "
+                            f"Earlier in this task, {fn_name} returned {_prior_n} result(s). "
+                            "Your filter is likely too narrow. Your next step must either "
+                            "(a) synthesize from the non-zero call's output, "
+                            "(b) broaden the filter (drop level/service/host constraints), or "
+                            "(c) switch to a different tool. "
+                            "Do NOT repeat the same narrow-filter pattern."
+                        ),
+                    })
+                    await manager.broadcast({
+                        "type":              "zero_result_pivot",
+                        "session_id":        session_id,
+                        "tool":              fn_name,
+                        "consecutive_zeros": _zero_streaks[fn_name],
+                        "prior_nonzero":     _prior_n,
+                        "timestamp":         datetime.now(timezone.utc).isoformat(),
+                    })
+                    await manager.send_line(
+                        "step",
+                        f"[pivot] {fn_name} returned 0 · {_zero_streaks[fn_name]}× in a row "
+                        f"(earlier: {_prior_n}) — nudging agent to broaden or pivot",
+                        status="warning", session_id=session_id,
+                    )
+                elif (
+                    _zero_streaks.get(fn_name, 0) >= 4
+                    and fn_name not in _zero_pivot_fired
+                ):
+                    _zero_pivot_fired.add(fn_name)
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"HARNESS NUDGE: {fn_name} has returned 0 results for 4 consecutive calls "
+                            "in this task and has never returned any data. It may not be the right tool "
+                            "for this question. Switch to a different approach or call propose_subtask."
+                        ),
+                    })
+                    await manager.broadcast({
+                        "type":              "zero_result_pivot",
+                        "session_id":        session_id,
+                        "tool":              fn_name,
+                        "consecutive_zeros": _zero_streaks[fn_name],
+                        "prior_nonzero":     0,
+                        "timestamp":         datetime.now(timezone.utc).isoformat(),
+                    })
+                    await manager.send_line(
+                        "step",
+                        f"[pivot] {fn_name} returned 0 · {_zero_streaks[fn_name]}× with no prior "
+                        "data — nudging agent to switch tools",
+                        status="warning", session_id=session_id,
+                    )
 
                 _is_hard_failure = result_status in ("failed", "escalated") or (fn_name == "escalate" and result_status != "blocked")
                 _is_degraded = result_status == "degraded"
