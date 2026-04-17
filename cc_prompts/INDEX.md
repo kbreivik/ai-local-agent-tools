@@ -166,7 +166,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.12.md | v2.33.12 | feat(agents): zero-result pivot detection — 3-in-a-row nudge | DONE (41398f2) |
 | CC_PROMPT_v2.33.13.md | v2.33.13 | feat(agents): contradiction detection in synthesis | DONE (f0e84b4) |
 | CC_PROMPT_v2.33.14.md | v2.33.14 | feat(tools): elastic_search_logs rich query metadata + hint | DONE (cba6198) |
-| CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | RUNNING |
+| CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | DONE (d575a1a) |
+| CC_PROMPT_v2.33.16.md | v2.33.16 | fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition | RUNNING |
 
 ---
 
@@ -281,6 +282,9 @@ Extends v2.33.11 response envelope with `total_relation`, `query_lucene` (serial
 
 **v2.33.15** — feat(ui): live agent diagnostics overlay.
 New `AgentDiagnostics` component rendered at top of OutputPanel during investigate runs. Compact horizontal bar shows: tool budget (N/max with coloured progress bar), DIAGNOSIS emitted (· not yet / ✓ emitted), per-tool zero-streak badges (e.g. `e_search×4`), pivot nudge count, SUBTASK PROPOSED indicator. Backend emits periodic `agent_diagnostics` WS events after each tool call. Makes harness state visible to operator in real-time — they can see the agent struggling before budget exhaustion.
+
+**v2.33.16** — fix(ui): smoother pull bar — phase-weighted monotonic percent + matched transition.
+Follow-up to v2.33.10. Observed in live use: percent text advanced but the bar appeared bumpy — stalling or stepping backward. Three root causes in `api/routers/dashboard.py::_update_pull_job`: (1) `bytes_total` was recomputed as the sum of all discovered layers, so as Docker streamed new layer headers the denominator grew faster than `bytes_done`, making raw `int(done/total*100)` *decrease* between polls; (2) the `done` callsite passed `percent=100` via kwargs but the function applied kwargs first and then overwrote percent with the layer recomputation; (3) CSS `transition: 0.3s ease` with a 600 ms poll interval left the bar idle for 300 ms per cycle. Fix replaces raw byte math with fixed phase bands (starting 0–5%, downloading 5–70%, extracting 70–92%, recreating 92–98%, done 100%), scales within each band by bytes (download) or layer completions (extract), and enforces `max(prev, pct)` monotonicity per job. Explicit percent only raises, never lowers. `error` freezes at last-seen percent rather than resetting. Frontend transition bumped to `650ms linear` so the bar interpolates continuously across poll boundaries instead of finishing early and pausing.
 
 ---
 

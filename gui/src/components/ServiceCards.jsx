@@ -812,7 +812,10 @@ function ContainerCardExpanded({
                     background: pullJob.status === 'error' ? 'var(--red)'
                               : pullJob.status === 'done'  ? 'var(--green)'
                               : 'var(--cyan)',
-                    transition: 'width 0.3s ease',
+                    // 650ms linear matches the 600ms poll interval — bar interpolates
+                    // continuously between server snapshots instead of jumping-then-stalling.
+                    transition: 'width 650ms linear, background-color 300ms ease',
+                    willChange: 'width',
                   }} />
                 </div>
                 <div style={{ color: 'var(--text-2)', fontSize: 9, lineHeight: 1.4 }}>

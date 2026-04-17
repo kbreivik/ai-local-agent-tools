@@ -84,24 +84,80 @@ def _new_pull_job(container_id: str, tag: str | None) -> str:
 
 
 def _update_pull_job(job_id: str, **kwargs) -> None:
+    """
+    Update a pull job's live state.
+
+    Percent progression is phase-weighted so it always moves forward:
+      starting   → 0–5%     (connecting to registry)
+      downloading→ 5–70%    (byte progress within this band)
+      extracting → 70–92%   (layer completion within this band)
+      recreating → 92–98%   (container recreate)
+      done       → 100%
+      error      → keep last seen %
+
+    Percent is monotonic within a job — it never decreases.
+    """
     j = _PULL_JOBS.get(job_id)
     if not j:
         return
+
+    # Apply caller-provided fields first (status, phase, message, completed_at, ...)
+    # Explicitly NOT letting the caller overwrite percent here — we compute it below.
+    explicit_percent = kwargs.pop("percent", None)
     j.update(kwargs)
     j["updated_at"] = _time.time()
-    # Aggregate bytes across all layers on every update
-    total = 0
-    done = 0
+
+    # Aggregate bytes + layer completion from streaming events
+    bytes_total = 0
+    bytes_done = 0
+    layers_total = 0
+    layers_extracted = 0
     for layer in j["layers"].values():
-        layer_total = layer.get("total") or 0
-        layer_curr = layer.get("current") or 0
-        if layer_total > 0:
-            total += layer_total
-            done += min(layer_curr, layer_total)
-    j["bytes_total"] = total
-    j["bytes_done"] = done
-    if total > 0:
-        j["percent"] = min(100, int((done / total) * 100))
+        lt = layer.get("total") or 0
+        lc = layer.get("current") or 0
+        status_txt = (layer.get("status") or "").lower()
+        if lt > 0:
+            bytes_total += lt
+            bytes_done += min(lc, lt)
+        layers_total += 1
+        if "pull complete" in status_txt or status_txt == "already exists":
+            layers_extracted += 1
+    j["bytes_total"] = bytes_total
+    j["bytes_done"] = bytes_done
+    j["layers_extracted"] = layers_extracted
+
+    # Phase-weighted percent
+    status = j.get("status", "starting")
+    if status == "done":
+        pct = 100
+    elif status == "error":
+        pct = j.get("percent", 0)  # freeze at last value
+    elif status == "starting":
+        pct = 2
+    elif status == "recreating":
+        pct = 94
+    elif status == "extracting":
+        # 70–92% band, scale on layers extracted
+        if layers_total > 0:
+            pct = 70 + int((layers_extracted / layers_total) * 22)
+        else:
+            pct = 72
+    else:  # downloading (default)
+        # 5–70% band, scale on bytes
+        if bytes_total > 0:
+            pct = 5 + int((bytes_done / bytes_total) * 65)
+        else:
+            pct = 6
+
+    # Allow explicit caller-provided percent to raise (e.g. done=100) but
+    # never decrease and never exceed 100.
+    if explicit_percent is not None:
+        pct = max(pct, int(explicit_percent))
+    pct = min(100, pct)
+
+    # Monotonic: never decrease within a job
+    prev = j.get("percent", 0)
+    j["percent"] = max(prev, pct)
 
 
 def _do_pull_streaming(job_id: str, container_id: str, tag: str | None) -> None:
