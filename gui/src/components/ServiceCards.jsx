@@ -238,7 +238,7 @@ function useConfirm() {
 
 const _SLOT_COLORS = ['#00aa44','#00c8ee','#cc8800','#7c6af7']
 
-function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, headerSub, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare, entityId, onEntityDetail }) {
+function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, forceExpanded, dot, name, sub, net, uptime, headerSub, collapsed, expanded, compareMode, compareSet, onCompareAdd, entityForCompare, entityId, onEntityDetail, hasDrift, onInvestigateDrift }) {
   const isOpen = forceExpanded || (openKeys || new Set()).has(cardKey)
   const subText = sub ? (typeof sub === 'object' ? sub.text : sub) : ''
   const compareId = entityForCompare?.id
@@ -326,6 +326,24 @@ function InfraCard({ cardKey, openKeys, setOpenKeys, lastOpenedKey, setLastOpene
           <Dot color={dot} />
           <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--text-1)' }}>{name}</span>
           <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{isOpen ? '▾' : '▸'}</span>
+          {hasDrift && (
+            <span
+              className="mono"
+              title="Configuration changed without a sanctioned action — click to investigate"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onInvestigateDrift && entityId) onInvestigateDrift(entityId);
+              }}
+              style={{
+                fontSize: 9, letterSpacing: '0.15em',
+                padding: '1px 5px', marginLeft: 4,
+                background: 'var(--accent-dim)', color: 'var(--amber)',
+                border: '1px solid var(--amber)', borderRadius: 2,
+                cursor: onInvestigateDrift ? 'pointer' : 'default',
+                lineHeight: 1,
+              }}
+            >⚠ DRIFT</span>
+          )}
         </div>
         <div className="flex items-center gap-0 shrink-0 ml-1" onClick={e => e.stopPropagation()}>
           {/* sub moved to line 2 via TemplateCardRenderer header_sub field */}

@@ -174,6 +174,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.debug("Entity history init skipped: %s", e)
     try:
+        from api.db.drift_events import init_drift_view
+        init_drift_view()
+    except Exception as e:
+        _log.debug("Drift view init skipped: %s", e)
+    try:
         from api.db.notifications import init_notifications
         init_notifications()
     except Exception as e:

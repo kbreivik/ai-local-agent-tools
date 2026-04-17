@@ -8,9 +8,14 @@ entity_events: permanent discrete named events.
   Restarts, version changes, digest changes, threshold crossings.
   Severity-tagged for alert filtering.
 
-Both tables are indexed for fast entity + time range queries.
+entity_snapshots: per-poll config_hash snapshot used for drift reconciliation
+  (v2.33.9). Hashes only "intentional" metadata (not uptime, cpu_usage, etc.)
+  so that genuine config changes stand out from churn.
+
+All tables are indexed for fast entity + time range queries.
 Agent tools and GUI use these for "what changed" and "what happened" queries.
 """
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +23,28 @@ import uuid
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
+
+# Keys to exclude from the config hash — volatile fields unrelated to
+# "intentional" config. Anything here can change every poll without
+# counting as a drift event.
+_VOLATILE_KEYS = frozenset({
+    "uptime", "last_seen", "age_hours", "restart_count",
+    "cpu_usage", "memory_usage", "disk_read", "disk_write",
+    "network_rx", "network_tx", "fetched_at",
+})
+
+
+def compute_config_hash(metadata: dict | None) -> str:
+    """Deterministic 16-char SHA-256 over non-volatile metadata keys.
+
+    Returns "" for empty/None input. Keys listed in _VOLATILE_KEYS are
+    excluded before hashing so uptime/CPU churn never registers as drift.
+    """
+    if not metadata:
+        return ""
+    stable = {k: v for k, v in metadata.items() if k not in _VOLATILE_KEYS}
+    serialized = json.dumps(stable, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 _DDL_PG = """
 CREATE TABLE IF NOT EXISTS entity_changes (
@@ -52,6 +79,19 @@ CREATE INDEX IF NOT EXISTS idx_entity_events_entity   ON entity_events(entity_id
 CREATE INDEX IF NOT EXISTS idx_entity_events_type     ON entity_events(event_type, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_entity_events_severity ON entity_events(severity, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_entity_events_time     ON entity_events(occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS entity_snapshots (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id           TEXT NOT NULL,
+    metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    config_hash         TEXT,
+    prev_config_hash    TEXT,
+    snapshot_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_entity_snapshots_entity ON entity_snapshots(entity_id, snapshot_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entity_snapshots_drift
+  ON entity_snapshots(entity_id, snapshot_at)
+  WHERE config_hash IS NOT NULL AND config_hash <> COALESCE(prev_config_hash, '');
 """
 
 _initialized = False
@@ -163,6 +203,45 @@ def write_event(
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         log.debug("write_event failed (non-fatal): %s", e)
+
+
+def record_snapshot(entity_id: str, metadata: dict | None) -> str:
+    """Append one entity_snapshots row with the computed config_hash.
+
+    Looks up the prior snapshot's hash so that drift_events can detect a
+    transition without an extra self-join. Never raises — drift tracking is
+    best-effort and must never block a collector poll.
+
+    Returns the new row id, or '' on any failure / non-Postgres backend.
+    """
+    if not _is_pg() or not entity_id:
+        return ""
+    h = compute_config_hash(metadata or {})
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT config_hash FROM entity_snapshots "
+            "WHERE entity_id = %s ORDER BY snapshot_at DESC LIMIT 1",
+            (entity_id,),
+        )
+        row = cur.fetchone()
+        prev = row[0] if row else None
+        rid = str(uuid.uuid4())
+        cur.execute(
+            """
+            INSERT INTO entity_snapshots
+                (id, entity_id, metadata, config_hash, prev_config_hash, snapshot_at)
+            VALUES (%s, %s, %s::jsonb, %s, %s, %s)
+            """,
+            (rid, entity_id, json.dumps(metadata or {}), h, prev, _ts()),
+        )
+        conn.commit(); cur.close(); conn.close()
+        return rid
+    except Exception as e:
+        log.debug("record_snapshot failed (non-fatal): %s", e)
+        return ""
 
 
 def get_changes(

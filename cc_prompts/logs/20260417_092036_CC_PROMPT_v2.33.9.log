@@ -1,0 +1,358 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.9.md (v2.33.9)
+Theme: feat(security): drift detection — config_hash reconciliation + badge
+
+Prompt content:
+
+# CC PROMPT — v2.33.9 — Drift detection (config_hash reconciliation)
+
+## What this does
+Catches out-of-band config changes — someone SSHes into a manager and runs
+`docker service update ...` without going through DEATHSTAR. Compute a
+`config_hash` on every entity snapshot; when it changes without a matching
+`agent_actions` row within ±60s, flag it as drift. Surface as a ⚠ badge on
+the card with a one-click `investigate_drift` sub-task.
+
+Depends on: v2.31.2 (agent_actions table) — already shipped.
+
+Version bump: 2.33.8 → 2.33.9
+
+## Change 1 — api/db/entity_history.py — config_hash column + helper
+
+Extend the existing table (v2.9.0) with a `config_hash` column if missing:
+
+```python
+ADD_COLUMN_SQL = """
+ALTER TABLE entity_history
+ADD COLUMN IF NOT EXISTS config_hash TEXT;
+ALTER TABLE entity_history
+ADD COLUMN IF NOT EXISTS prev_config_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_entity_history_drift
+  ON entity_history(entity_id, snapshot_at)
+  WHERE config_hash IS NOT NULL AND config_hash <> COALESCE(prev_config_hash, '');
+"""
+
+import hashlib, json
+
+# Keys to exclude — volatile fields unrelated to "intentional" config
+_VOLATILE_KEYS = frozenset({
+    "uptime", "last_seen", "age_hours", "restart_count",
+    "cpu_usage", "memory_usage", "disk_read", "disk_write",
+    "network_rx", "network_tx", "fetched_at",
+})
+
+def compute_config_hash(metadata: dict | None) -> str:
+    if not metadata:
+        return ""
+    stable = {k: v for k, v in metadata.items() if k not in _VOLATILE_KEYS}
+    serialized = json.dumps(stable, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+async def record_snapshot(pool, entity_id: str, metadata: dict):
+    h = compute_config_hash(metadata)
+    async with pool.acquire() as c:
+        prev = await c.fetchval("""
+            SELECT config_hash FROM entity_history
+             WHERE entity_id = $1 ORDER BY snapshot_at DESC LIMIT 1
+        """, entity_id)
+        await c.execute("""
+            INSERT INTO entity_history (entity_id, metadata, config_hash, prev_config_hash, snapshot_at)
+            VALUES ($1, $2::jsonb, $3, $4, NOW())
+        """, entity_id, json.dumps(metadata), h, prev)
+```
+
+Ensure the existing `record_snapshot` path is the only writer so the hash is
+always set. If multiple writers exist, add a DB trigger as a safety net.
+
+## Change 2 — api/db/drift_events.py — view + query
+
+```python
+"""
+Drift events: config_hash changed without a sanctioned agent_action within 60s.
+"""
+
+CREATE_VIEW_SQL = """
+CREATE OR REPLACE VIEW drift_events AS
+SELECT
+    eh.entity_id,
+    eh.snapshot_at,
+    eh.config_hash,
+    eh.prev_config_hash,
+    eh.metadata
+FROM entity_history eh
+WHERE eh.config_hash IS NOT NULL
+  AND eh.prev_config_hash IS NOT NULL
+  AND eh.config_hash <> eh.prev_config_hash
+  AND NOT EXISTS (
+    SELECT 1
+      FROM agent_actions aa
+     WHERE aa.entity_id = eh.entity_id
+       AND aa.was_planned = TRUE
+       AND aa.created_at BETWEEN eh.snapshot_at - INTERVAL '60 seconds'
+                             AND eh.snapshot_at + INTERVAL '60 seconds'
+  );
+"""
+
+async def ensure_view(pool):
+    async with pool.acquire() as c:
+        await c.execute(CREATE_VIEW_SQL)
+
+async def get_drift_for_entity(pool, entity_id: str, limit: int = 10):
+    async with pool.acquire() as c:
+        rows = await c.fetch("""
+            SELECT snapshot_at, config_hash, prev_config_hash, metadata
+              FROM drift_events
+             WHERE entity_id = $1
+             ORDER BY snapshot_at DESC
+             LIMIT $2
+        """, entity_id, limit)
+        return [dict(r) for r in rows]
+
+async def recent_drift(pool, hours: int = 24, limit: int = 100):
+    async with pool.acquire() as c:
+        rows = await c.fetch("""
+            SELECT entity_id, snapshot_at, config_hash, prev_config_hash
+              FROM drift_events
+             WHERE snapshot_at > NOW() - ($1 || ' hours')::interval
+             ORDER BY snapshot_at DESC
+             LIMIT $2
+        """, str(hours), limit)
+        return [dict(r) for r in rows]
+```
+
+Call `ensure_view` in the lifespan startup section of `api/main.py`.
+
+## Change 3 — api/routers/entities.py — /entity/{id}/drift endpoint
+
+```python
+from api.db.drift_events import get_drift_for_entity, recent_drift
+
+@router.get("/entity/{entity_id:path}/drift")
+async def entity_drift(entity_id: str, request: Request):
+    rows = await get_drift_for_entity(request.app.state.pool, entity_id)
+    return {"entity_id": entity_id, "events": rows}
+
+@router.get("/drift/recent")
+async def drift_recent(hours: int = 24, request: Request = None):
+    rows = await recent_drift(request.app.state.pool, hours=hours)
+    return {"since_hours": hours, "events": rows, "count": len(rows)}
+```
+
+## Change 4 — dashboard summary — expose drift flag per entity
+
+In whatever endpoint feeds the cards (dashboard summary), include
+`has_drift: bool` on each entity by joining against `drift_events` with a
+LEFT JOIN on the last 24h. Keep the join cheap with the partial index already
+created in Change 1.
+
+## Change 5 — gui/src/components/ServiceCards.jsx — drift badge
+
+On any card, when `entity.has_drift === true`, render a clickable ⚠ badge
+in the card header:
+
+```jsx
+{entity.has_drift && (
+  <span
+    className="mono"
+    title="Configuration changed without a sanctioned action — click to investigate"
+    onClick={(e) => {
+      e.stopPropagation();
+      onInvestigateDrift?.(entity.id);
+    }}
+    style={{
+      fontSize: 10, letterSpacing: '0.15em',
+      padding: '1px 5px', marginLeft: 6,
+      background: 'var(--amber-dim)', color: 'var(--amber)',
+      border: '1px solid var(--amber)', borderRadius: 2,
+      cursor: 'pointer'
+    }}
+  >⚠ DRIFT</span>
+)}
+```
+
+Wire `onInvestigateDrift(entity_id)` in `App.jsx` to open the agent panel
+pre-filled with the `investigate_drift` template (next change).
+
+## Change 6 — api/agents/task_templates.py — investigate_drift
+
+```python
+{
+    "name": "investigate_drift",
+    "label": "Investigate Drift",
+    "group": "DIAGNOSTICS",
+    "agent_type": "investigate",
+    "inputs": [
+        {"name": "entity_id", "label": "Entity ID", "required": True},
+    ],
+    "prompt_template": (
+        "The entity {entity_id} has drifted — its config_hash changed without "
+        "a sanctioned agent_action within ±60s. "
+        "STEP 1: Call entity_history_recent(entity_id={entity_id!r}, limit=5) to see "
+        "recent snapshots with diff.\n"
+        "STEP 2: Identify which metadata keys changed.\n"
+        "STEP 3: Correlate with agent_actions for the same entity in a wider "
+        "10-minute window — maybe the action was logged but delayed.\n"
+        "STEP 4: Output:\n"
+        "  DRIFT_KEYS: <comma-separated>\n"
+        "  LIKELY_SOURCE: <human|automation|agent>\n"
+        "  SEVERITY: <info|warn|critical>\n"
+        "  SUGGESTED_ACTION: <one sentence>\n"
+    ),
+    "blast_radius": "none",
+    "destructive": False,
+}
+```
+
+## Change 7 — tests
+
+```python
+def test_compute_config_hash_ignores_volatile():
+    from api.db.entity_history import compute_config_hash
+    h1 = compute_config_hash({"image": "nginx:1.24", "uptime": "3d"})
+    h2 = compute_config_hash({"image": "nginx:1.24", "uptime": "5d"})
+    assert h1 == h2   # uptime is volatile
+
+def test_compute_config_hash_detects_image_change():
+    from api.db.entity_history import compute_config_hash
+    h1 = compute_config_hash({"image": "nginx:1.24"})
+    h2 = compute_config_hash({"image": "nginx:1.25"})
+    assert h1 != h2
+
+def test_investigate_drift_template_exists():
+    from api.agents.task_templates import TASK_TEMPLATES
+    assert any(t["name"] == "investigate_drift" for t in TASK_TEMPLATES)
+```
+
+## Version bump
+Update `VERSION`: 2.33.8 → 2.33.9
+
+## Commit
+```
+git add -A
+git commit -m "feat(security): v2.33.9 drift detection — config_hash reconciliation + badge"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. SSH to a Swarm manager → run `docker service update --label-add test=drift kafka_broker-1` (harmless label).
+3. Wait for the next collector poll (≤60s) → card shows ⚠ DRIFT badge.
+4. Click badge → agent opens pre-filled `investigate_drift` template → run → expect DRIFT_KEYS naming `labels` or similar.
+5. Now rerun the same label change via a DEATHSTAR plan_action → no drift badge should appear (was_planned = TRUE within ±60s).
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 09:20:36
+========================================================================

@@ -66,6 +66,15 @@ async def _build_entities() -> list[dict]:
                     result.append(d)
             except Exception as exc:
                 log.warning("to_entities failed for %s: %s", component, exc)
+    # Tag entities with has_drift so the GUI can render the ⚠ badge without
+    # an N+1 per-card fetch. Single set lookup over the last 24h.
+    try:
+        from api.db.drift_events import entities_with_drift
+        drift_ids = entities_with_drift(hours=24)
+        for d in result:
+            d["has_drift"] = d.get("id") in drift_ids
+    except Exception as exc:
+        log.debug("has_drift tagging skipped: %s", exc)
     return result
 
 
@@ -206,3 +215,29 @@ async def entity_history(
         "changes":   changes,
         "events":    events,
     }
+
+
+# Route ordering: `/drift/recent` must be declared BEFORE the path-captured
+# `/{entity_id:path}/drift` below, otherwise FastAPI matches "drift" as an
+# entity_id and the recent-drift endpoint becomes unreachable.
+@router.get("/drift/recent")
+async def drift_recent(
+    hours: int = 24,
+    _: str = Depends(get_current_user),
+):
+    """Recent drift events across all entities. Used by admin overview."""
+    hours = min(max(1, hours), 168)
+    from api.db.drift_events import recent_drift
+    rows = recent_drift(hours=hours, limit=200)
+    return {"since_hours": hours, "events": rows, "count": len(rows)}
+
+
+@router.get("/{entity_id:path}/drift")
+async def entity_drift(
+    entity_id: str,
+    _: str = Depends(get_current_user),
+):
+    """Drift events for one entity — what intentional config changed, when."""
+    from api.db.drift_events import get_drift_for_entity
+    rows = get_drift_for_entity(entity_id, limit=20)
+    return {"entity_id": entity_id, "events": rows, "count": len(rows)}
