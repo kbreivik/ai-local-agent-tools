@@ -188,6 +188,39 @@ class PBSCollector(BaseCollector):
                 ds["entity_id"] = f"pbs:{conn_label}:datastore:{ds['name']}"
             tasks = _collect_tasks(base, headers)
 
+            # Per-VM/CT last successful backup timestamps across all datastores
+            last_backups = {}
+            for ds in datastores:
+                ds_name = ds.get("name")
+                if not ds_name:
+                    continue
+                snaps = _fetch_group_snapshots(base, headers, ds_name)
+                for (btype, bid), ts in snaps.items():
+                    prev = last_backups.get((btype, bid), (0, ""))
+                    if ts > prev[0]:
+                        last_backups[(btype, bid)] = (ts, ds_name)
+            # Record cross-reference rows per VM/CT so pbs_last_backup() can resolve them
+            try:
+                from api.db.infra_inventory import write_cross_reference
+                for (btype, bid), (ts, ds_name) in last_backups.items():
+                    write_cross_reference(
+                        connection_id=f"pbs:{conn_label}:{btype}/{bid}",
+                        platform="pbs_backup",
+                        label=f"{btype}/{bid}",
+                        hostname="",
+                        ips=[],
+                        aliases=[str(bid)],
+                        meta={
+                            "last_backup_ts": ts,
+                            "datastore": ds_name,
+                            "vmid": str(bid),
+                            "backup_type": btype,
+                            "pbs_connection": conn_label,
+                        },
+                    )
+            except Exception as e:
+                log.debug("PBS cross-reference write failed: %s", e)
+
             has_full = any(ds["usage_pct"] > 95 for ds in datastores)
             has_warn = any(ds["usage_pct"] > 85 for ds in datastores)
             has_task_failures = tasks.get("failed_count", 0) > 0
@@ -206,6 +239,15 @@ class PBSCollector(BaseCollector):
                 "latency_ms": latency_ms,
                 "connection_label": conn_label,
                 "connection_id": conn_id,
+                "last_backups": [
+                    {
+                        "backup_type": btype,
+                        "backup_id": bid,
+                        "last_backup_ts": ts,
+                        "datastore": ds_name,
+                    }
+                    for (btype, bid), (ts, ds_name) in last_backups.items()
+                ],
             }
 
         except httpx.HTTPStatusError as e:
@@ -265,6 +307,36 @@ def _collect_datastores(base: str, headers: dict) -> list:
             "snapshot_count": snapshot_count,
         })
     return result
+
+
+def _fetch_group_snapshots(base: str, headers: dict, datastore: str) -> dict:
+    """Return {(backup_type, backup_id): last_success_ts_unix} for a datastore.
+
+    Skips snapshots whose verification state is not 'ok' when present.
+    Hits /admin/datastore/{store}/snapshots.
+    """
+    try:
+        r = httpx.get(f"{base}/admin/datastore/{datastore}/snapshots",
+                      headers=headers, verify=False, timeout=10)
+    except Exception as e:
+        log.debug("PBS snapshots fetch for %s failed: %s", datastore, e)
+        return {}
+    if r.status_code != 200:
+        return {}
+    out: dict = {}
+    for snap in r.json().get("data", []):
+        btype = snap.get("backup-type")
+        bid = str(snap.get("backup-id"))
+        if not btype or not bid:
+            continue
+        ts = int(snap.get("backup-time") or 0)
+        verification = snap.get("verification")
+        if isinstance(verification, dict) and verification.get("state") not in (None, "ok"):
+            continue  # skip failed verifications
+        prev = out.get((btype, bid), 0)
+        if ts > prev:
+            out[(btype, bid)] = ts
+    return out
 
 
 def _collect_tasks(base: str, headers: dict) -> dict:

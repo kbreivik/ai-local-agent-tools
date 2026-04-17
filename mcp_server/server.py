@@ -885,5 +885,16 @@ def list_metrics(entity_id: str = "") -> dict:
     return _lm(entity_id=entity_id)
 
 
+@mcp.tool()
+def pbs_last_backup(vm_id: str) -> dict:
+    """Freshest successful PBS backup for a Proxmox VMID. Read-only.
+    vm_id accepts: "120", "qemu/120", or "lxc/9221".
+    Returns {status: PASS|FAIL|UNKNOWN, age_hours, last_success_ts, datastore}.
+    PASS = backup < 25h old; FAIL = older; UNKNOWN = no backup found.
+    """
+    from mcp_server.tools.pbs import pbs_last_backup as _plb
+    return _plb(vm_id)
+
+
 if __name__ == "__main__":
     mcp.run()

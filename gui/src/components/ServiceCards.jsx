@@ -996,6 +996,7 @@ function ProxmoxCardCollapsed({ vm }) {
   const typeBadge = vm.type === 'lxc'
     ? <span className="text-[9px] px-1 py-px rounded bg-[#0a1a2a] text-cyan-600 border border-[#0d2030]">LXC</span>
     : <span className="text-[9px] px-1 py-px rounded bg-[#0d0a2a] text-violet-600 border border-[#1a1040]">VM</span>
+  const backupAge = vm.pbs_backup_age_hours ?? vm.metadata?.pbs_backup_age_hours
   return (
     <div style={{ marginTop: 3 }}>
       <div style={{
@@ -1018,6 +1019,15 @@ function ProxmoxCardCollapsed({ vm }) {
             background: 'var(--amber-dim)', color: 'var(--amber)',
             borderRadius: 2, letterSpacing: 0.5,
           }}>MAINT</span>
+        )}
+        {backupAge != null && (
+          <span
+            title={`Last PBS backup ${backupAge.toFixed(1)}h ago`}
+            style={{
+              display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+              background: backupAge > 25 ? 'var(--amber)' : 'var(--green)',
+            }}
+          />
         )}
       </div>
     </div>

@@ -109,6 +109,50 @@ def _swarm_problem(svc: dict) -> str | None:
     return None
 
 
+# ── PBS backup enrichment ────────────────────────────────────────────────────
+# In-process cache to avoid hammering pbs_last_backup on every dashboard call.
+_PBS_BACKUP_CACHE: dict = {}   # vmid -> (age_hours | None, cached_at_epoch)
+_PBS_BACKUP_CACHE_TTL = 300    # 5 minutes
+
+
+def _get_pbs_backup_age_hours(vmid) -> float | None:
+    """Look up most recent PBS backup age for a VMID. Cached 5 min, never raises."""
+    if vmid is None or vmid == "":
+        return None
+    key = str(vmid)
+    now = _time.time()
+    cached = _PBS_BACKUP_CACHE.get(key)
+    if cached and (now - cached[1]) < _PBS_BACKUP_CACHE_TTL:
+        return cached[0]
+    try:
+        from mcp_server.tools.pbs import pbs_last_backup
+        r = pbs_last_backup(key)
+        age = r.get("age_hours") if isinstance(r, dict) and r.get("status") != "UNKNOWN" else None
+    except Exception:
+        age = None
+    _PBS_BACKUP_CACHE[key] = (age, now)
+    return age
+
+
+def _enrich_vms_with_pbs_backup(vms: list) -> list:
+    """Annotate each VM/LXC dict with pbs_backup_age_hours. Safe on any shape."""
+    if not vms:
+        return vms
+    for vm in vms:
+        if not isinstance(vm, dict):
+            continue
+        vmid = vm.get("vmid") or vm.get("id")
+        age = _get_pbs_backup_age_hours(vmid)
+        meta = vm.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+            vm["metadata"] = meta
+        meta["pbs_backup_age_hours"] = age
+        # Also expose at top level for cards that don't unpack metadata
+        vm["pbs_backup_age_hours"] = age
+    return vms
+
+
 # ── GET /summary ─────────────────────────────────────────────────────────────
 
 @router.get("/summary")
@@ -177,9 +221,14 @@ async def get_dashboard_summary(user: str = Depends(get_current_user)):
             "last_updated":   swarm_snap.get("timestamp") if swarm_snap else None,
         },
         "vms": {
-            "clusters":          vms_state.get("clusters", []),
-            "vms":               vms_state.get("vms", []),
-            "lxc":               vms_state.get("lxc", []),
+            "clusters":          [
+                {**c,
+                 "vms": _enrich_vms_with_pbs_backup(list(c.get("vms", []))),
+                 "lxc": _enrich_vms_with_pbs_backup(list(c.get("lxc", [])))}
+                for c in vms_state.get("clusters", [])
+            ],
+            "vms":               _enrich_vms_with_pbs_backup(list(vms_state.get("vms", []))),
+            "lxc":               _enrich_vms_with_pbs_backup(list(vms_state.get("lxc", []))),
             "health":            vms_state.get("health", "unknown"),
             "connection_label":  vms_state.get("connection_label", ""),
             "connection_host":   vms_state.get("connection_host", ""),
@@ -301,11 +350,19 @@ async def get_vms(user: str = Depends(get_current_user)):
             "lxc": state.get("lxc", []),
         }]
 
+    # Enrich VMs with PBS backup freshness (cached 5 min, safe no-op if unavailable)
+    clusters = [
+        {**c,
+         "vms": _enrich_vms_with_pbs_backup(list(c.get("vms", []))),
+         "lxc": _enrich_vms_with_pbs_backup(list(c.get("lxc", [])))}
+        for c in clusters
+    ]
+
     return {
         "clusters": clusters,
         # Keep flat lists for any code still using vms/lxc directly
-        "vms": state.get("vms", []),
-        "lxc": state.get("lxc", []),
+        "vms": _enrich_vms_with_pbs_backup(list(state.get("vms", []))),
+        "lxc": _enrich_vms_with_pbs_backup(list(state.get("lxc", []))),
         "health": state.get("health", "unknown"),
         # Legacy single-cluster fields — first cluster's values
         "connection_label": clusters[0].get("connection_label", "") if clusters else "",
