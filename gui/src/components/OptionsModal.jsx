@@ -635,7 +635,7 @@ function AIServicesTab({ draft, update }) {
       </div>
 
       {/* Escalation Policy */}
-      <div>
+      <div className="mb-5">
         <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
           Escalation Policy
         </h3>
@@ -649,6 +649,21 @@ function AIServicesTab({ draft, update }) {
         <Field label="">
           <Toggle value={draft.requireConfirmation} onChange={v => update('requireConfirmation', v)}
             label="Require confirmation before external AI call" />
+        </Field>
+      </div>
+
+      {/* Coordinator */}
+      <div>
+        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
+          Coordinator
+        </h3>
+        <Field label="Inject prior attempts context"
+          hint="When a task scopes an entity, show the agent up to 3 prior attempts on that entity from the last 7 days. Helps avoid repeating failed tool chains.">
+          <Toggle
+            value={draft.coordinatorPriorAttemptsEnabled !== false}
+            onChange={v => update('coordinatorPriorAttemptsEnabled', v)}
+            label="Enabled"
+          />
         </Field>
       </div>
     </div>

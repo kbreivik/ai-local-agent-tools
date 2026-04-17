@@ -44,6 +44,9 @@ const DEFAULTS = {
   autoEscalate:        'both',
   requireConfirmation: true,
 
+  // Coordinator
+  coordinatorPriorAttemptsEnabled: true,
+
   // Display (localStorage only)
   cardMinHeight:        70,
   cardMaxHeight:        200,
@@ -69,6 +72,7 @@ const SERVER_KEYS = new Set([
   'lmStudioUrl', 'lmStudioApiKey', 'modelName',
   'externalProvider', 'externalApiKey', 'externalModel',
   'autoEscalate', 'requireConfirmation',
+  'coordinatorPriorAttemptsEnabled',
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',
   'autoUpdate', 'dashboardRefreshInterval',

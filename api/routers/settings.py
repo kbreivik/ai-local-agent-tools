@@ -27,6 +27,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Escalation
     "autoEscalate":          {"env": None,                      "sens": False, "default": "both"},
     "requireConfirmation":   {"env": None,                      "sens": False, "default": True},
+    # Coordinator
+    "coordinatorPriorAttemptsEnabled": {"env": None,            "sens": False, "default": True},
     # Infrastructure — Docker / Messaging
     "dockerHost":            {"env": "DOCKER_HOST",             "sens": False, "default": ""},
     "kafkaBootstrapServers": {"env": "KAFKA_BOOTSTRAP_SERVERS", "sens": False, "default": ""},

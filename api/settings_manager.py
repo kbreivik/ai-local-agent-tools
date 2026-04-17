@@ -28,6 +28,7 @@ CATEGORIES = {
     "externalProvider": "llm", "externalApiKey": "llm", "externalModel": "llm",
     # Agent behavior
     "autoEscalate": "agent", "requireConfirmation": "agent", "autoUpdate": "agent",
+    "coordinatorPriorAttemptsEnabled": "agent",
     # Infrastructure
     "dockerHost": "infrastructure", "kafkaBootstrapServers": "infrastructure",
     "elasticsearchUrl": "infrastructure", "kibanaUrl": "infrastructure",

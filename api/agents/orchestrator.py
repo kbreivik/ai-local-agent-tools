@@ -316,3 +316,131 @@ def should_use_coordinator(steps: list[dict]) -> bool:
     Multi-step tasks or tasks with check/cleanup words use coordinator.
     """
     return len(steps) > 1
+
+
+# ── v2.34.1: prior-attempts injection for cross-task learning ─────────────────
+# Pulls from agent_attempts to give the agent memory of what has already been
+# tried on the same entity, so repeat investigations don't re-walk dead ends.
+
+def _coordinator_prior_attempts_enabled() -> bool:
+    """Check opt-out setting. Defaults to enabled."""
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        val = get_backend().get_setting("coordinatorPriorAttemptsEnabled")
+        if val is None:
+            return True
+        return str(val).lower() not in ("false", "0", "no", "off")
+    except Exception:
+        return True
+
+
+def fetch_prior_attempts(
+    scope_entity: str | None,
+    agent_type: str,
+    limit: int = 3,
+    window_days: int = 7,
+) -> list[dict]:
+    """
+    Fetch up to `limit` most-recent agent_attempts for this scope_entity
+    within the last `window_days`, regardless of agent_type (cross-type
+    context is useful — investigate informs execute and vice versa).
+
+    Returns empty list when scope_entity is missing or feature is disabled.
+    Synchronous: wraps the sync agent_attempts store.
+    """
+    if not scope_entity:
+        return []
+    if not _coordinator_prior_attempts_enabled():
+        return []
+    try:
+        from api.db.agent_attempts import get_recent_attempts
+    except Exception:
+        return []
+
+    try:
+        rows = get_recent_attempts(scope_entity, limit=limit) or []
+    except Exception:
+        return []
+
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+
+    filtered = []
+    for r in rows:
+        when = r.get("when") or ""
+        try:
+            dt = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            dt = None
+        if dt is None or dt >= cutoff:
+            filtered.append(r)
+    return filtered[:limit]
+
+
+def format_attempts_for_prompt(attempts: list[dict], agent_type: str) -> str:
+    """
+    Render the attempts as a system-prompt-ready section.
+    Returns '' if the list is empty OR all attempts are same-type and succeeded
+    (skip noisy injection for routine ops).
+
+    Input rows follow get_recent_attempts shape:
+      {"when", "task_type", "tools" (list), "outcome", "summary"}
+    """
+    if not attempts:
+        return ""
+
+    all_same_and_done = (
+        len(attempts) >= 3
+        and all(a.get("task_type") == agent_type for a in attempts)
+        and all(a.get("outcome") == "done" for a in attempts)
+    )
+    if all_same_and_done:
+        return ""
+
+    n = len(attempts)
+    lines = ["═══ PRIOR ATTEMPTS ON THIS ENTITY ═══"]
+    lines.append(
+        f"{n} previous task{'s' if n != 1 else ''} "
+        f"attempted this entity in the last 7 days:"
+    )
+    lines.append("")
+
+    for a in attempts:
+        when = (a.get("when") or "")[:16].replace("T", " ")
+        tools = a.get("tools") or []
+        tools_count = len(tools)
+        tools_str = ", ".join(tools[:6]) if tools else "—"
+        if tools_count > 6:
+            tools_str += f", ... (+{tools_count - 6} more)"
+        objective = (a.get("summary") or "")[:80] or "(no summary)"
+        diag = (a.get("summary") or "").strip()
+        outcome = a.get("outcome") or "unknown"
+        task_type = a.get("task_type") or "?"
+
+        lines.append(f"[{when} UTC] {task_type} — {objective}")
+        lines.append(
+            f"  outcome: {outcome} · tools({tools_count}): {tools_str}"
+        )
+        if diag:
+            lines.append(f"  diagnosis: \"{diag[:160]}\"")
+        else:
+            lines.append("  diagnosis: (none emitted)")
+        lines.append("")
+
+    lines.append("GUIDANCE:")
+    lines.append(
+        "  - Do not repeat the exact tool sequence from a done-outcome "
+        "attempt unless you have a specific reason. Start from the last diagnosis."
+    )
+    lines.append(
+        "  - If a prior attempt timed out at a specific tool, consider "
+        "an alternative first (e.g. log_timeline instead of raw elastic_search_logs)."
+    )
+    lines.append(
+        "  - If a prior diagnosis resolved the problem but it's back, "
+        "state that explicitly in your final_answer."
+    )
+
+    return "\n".join(lines)

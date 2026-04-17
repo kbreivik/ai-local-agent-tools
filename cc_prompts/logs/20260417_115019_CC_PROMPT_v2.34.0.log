@@ -622,3 +622,22 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-17 11:50:19
 ========================================================================
+PROMPT COMPLETE: v2.34.0
+[STATUS] 10m05s
+
+Summary of what shipped in commit `ebd5810`:
+
+- **`api/db/subagent_runs.py`** (new) — sync, matching `subtask_proposals.py` style: `record_spawn`, `record_completion`, `get_ancestry`, `list_children`; table auto-initialized at startup via `api/main.py`.
+- **`api/routers/agent.py`** — added `_SUBAGENT_MAX_DEPTH`, `_SUBAGENT_MIN_PARENT_RESERVE`, `_SUBAGENT_TREE_WALL_CLOCK_S` env caps; new `_build_subagent_context()` + `_spawn_and_wait_subagent()` helpers; rewrote the `propose_subtask` handler to spawn in-band when `objective`+`agent_type` are supplied, falling back to the legacy proposal-card path otherwise. Enforces depth cap, budget reservation, and destructive guards.
+- **`mcp_server/tools/orchestration.py`** — `propose_subtask` tool signature now accepts `objective`, `agent_type`, `scope_entity`, `budget_tools`, `allow_destructive` (legacy args preserved).
+- **`api/agents/router.py`** — investigate and observe prompts now describe both call shapes and the constraints.
+- **GUI**: new `SubAgentPanel.jsx`, `AgentOutputContext` tracks `subAgents` list via `subagent_spawned`/`subagent_done` WS events, `OutputPanel.jsx` renders nested panels.
+- **`tests/test_subagent_runtime.py`** — guardrail tests for context builder, depth cap, budget reservation, destructive permission.
+- **`VERSION`** 2.33.20 → 2.34.0.
+
+Pragmatic deviation from the prompt: rather than refactoring the 600-line `_run_single_agent_step` loop into a new `drive_agent` primitive, the spawn helper reuses the existing `_stream_agent` recursively with `parent_context`/`parent_session_id`. Same isolation guarantees (fresh context, own WS stream, own budget counters, own wall-clock cap) with far less blast radius.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  10m06s
+========================================================================
