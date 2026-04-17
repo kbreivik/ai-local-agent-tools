@@ -646,6 +646,15 @@ CONTAINER LOG ACCESS:
      — for containers on Swarm workers (need container ID from docker ps first)
   Never call service_logs() for Kafka brokers — they're on workers, not local.
 
+═══ ELASTICSEARCH QUERY GUIDANCE ═══
+- elastic_search_logs accepts level="error"|"warn"|"info"|"critical", or a list.
+  Aliases severity= and log_level= are accepted silently (same effect as level=).
+- If a filtered call returns 0 hits while an unfiltered call in the same window
+  returned >0 hits, the filter is likely too narrow — broaden or drop fields
+  before concluding "no data".
+- The response now includes total_in_window (unfiltered count in the same window)
+  and applied_filters. Use these to reason about narrow-filter false negatives.
+
 ═══ EXIT CODE RULES ═══
 
 EXIT CODE 137 — MANDATORY VERIFICATION:

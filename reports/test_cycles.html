@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>DEATHSTAR — Test-Fix-Verify Cycles · v2.32.6 →</title>
+<title>DEATHSTAR — Test-Fix-Verify Cycles · v2.32.6 → v2.33.15</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -373,9 +373,9 @@
 
 <div class="topbar">
   <h1>◢ DEATHSTAR // TEST CYCLES</h1>
-  <span class="sub">v2.32.6 → v2.33.9 · harness tightening + capability expansion</span>
+  <span class="sub">v2.32.6 → v2.33.15 · harness tightening + reasoning quality</span>
   <div class="spacer"></div>
-  <span class="stat">CYCLES <b id="stat-total">11</b></span>
+  <span class="stat">CYCLES <b id="stat-total">17</b></span>
   <span class="stat">VERIFIED <b id="stat-verified">0</b></span>
   <span class="stat">IN PROGRESS <b id="stat-wip">0</b></span>
   <button class="btn-reset" onclick="resetAll()">RESET STATE</button>
@@ -602,9 +602,17 @@ if tools_used >= int(0.7 * budget) and "DIAGNOSIS:" not in combined_output:
       plan: `PASS criteria:
 • T1 post-fix: at tool #12, agent fires propose_subtask with a tight scope.
 • T2 post-fix: small task completes normally, no spurious proposals.
-• UI: proposed subtask renders as a clickable card in OutputPanel; accepting it starts a fresh budget.`,
+• UI: proposed subtask renders as a clickable card in OutputPanel; accepting it starts a fresh budget.
+
+LIVE VERIFICATION (2026-04-17 09:40, git 363a774):
+✓ Nudge fired at tool 11/16 — "[budget] 70% threshold reached (11/16) without DIAGNOSIS"
+✓ propose_subtask called at step 12 (high confidence: 'Deep-dive Elasticsearch error logs in last hour')
+✓ Agent structured output emitted with Key observations / Recommended action
+⚠ Also exposed: elastic_search_logs rejected level= kwarg → queued as v2.33.11
+⚠ Also exposed: 7 consecutive zero-result calls without pivot → queued as v2.33.12
+⚠ Also exposed: false "no errors" conclusion despite step 3 returning 90 entries → queued as v2.33.13`,
       results: "",
-      git_hashes: ""
+      git_hashes: "v2.33.3 363a774 · verified in live trace 2026-04-17"
     }
   },
 
@@ -880,6 +888,272 @@ WHERE eh.config_hash <> eh.prev_config_hash
       results: "",
       git_hashes: ""
     }
+  },
+
+  {
+    id: 11,
+    slug: "cycle-11-container-pull-ux",
+    title: "Container pull UX: in-card progress + eager version controls",
+    version: "v2.33.10",
+    area: "REDESIGN",
+    badges: ["redesign"],
+    subhead: "Manual hp1_agent update showed 'Done' in a bottom-right toast instead of in the card, no progress while pulling, and version controls appeared only after a delayed fetch on expand. Fix all three in one pass.",
+    discovered: {
+      hypothesis: [
+        "act() called showToast('Done') on pull success — Toast renders fixed bottom-right.",
+        "_do_pull() was sync-blocking on client.images.pull(); no streaming progress surfaced.",
+        "ContainerCardExpanded re-fetched tags on every mount; parent only kept tags[0] in knownLatest."
+      ],
+      test_plan: `T1 (pre-fix) — expand hp1_agent card → observe 200–500 ms before Choose version / Refresh buttons render.
+T2 (pre-fix) — click Pull → button shows '…' → Toast appears bottom-right on completion.
+T3 (pre-fix) — no progress bar, no phase label, no byte counter at any point.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.10.md",
+      summary: "Async pull API (POST /pull-start → job_id, GET /pull-jobs/{id} with layer bytes + phase). Frontend lifts full tag list + loading map to ServiceCards parent; child reads from props, zero fetch-on-mount. In-card progress block replaces 'Done' toast — phase label, percent bar, byte counter, DISMISS. Self-container sidecar recreate preserved.",
+      scope: [
+        "api/routers/dashboard.py — _PULL_JOBS dict + _do_pull_streaming + two endpoints",
+        "gui/src/api.js — startContainerPull + getPullJob helpers",
+        "gui/src/components/ServiceCards.jsx — allTags / tagsLoadingMap / refreshTagsFor state, doAsyncPull, in-card progress block, suppressed 'Done' toast for pull keys"
+      ],
+      code_preview: `POST /api/dashboard/containers/{id}/pull-start → { job_id }
+GET  /api/dashboard/pull-jobs/{id} → {
+  status: starting|downloading|extracting|recreating|done|error,
+  phase, percent, bytes_done, bytes_total, message,
+  active_layers: [...], layer_count
+}`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Expand hp1_agent — Refresh versions + Choose version render within 50 ms (no delayed tag fetch).
+• Pull — inline progress block appears immediately: STARTING → DOWNLOADING (filling bar) → EXTRACTING → RECREATING → DONE.
+• No bottom-right toast on pull success.
+• Error path: inline red banner with error text, DISMISS works.
+• Regression: non-GHCR containers (e.g. nginx:alpine) still pull via the legacy sync path without breakage.`,
+      results: "",
+      git_hashes: "v2.33.10 0b3255b"
+    }
+  },
+
+  {
+    id: 12,
+    slug: "cycle-12-elastic-level-kwarg",
+    title: "elastic_search_logs level kwarg + aliases",
+    version: "v2.33.11",
+    area: "TOOLS",
+    badges: ["tool"],
+    subhead: "Live trace 2026-04-17 09:39: agent called level='error' → TypeError 'unexpected keyword argument level'. Tool schema must accept it.",
+    discovered: {
+      hypothesis: [
+        "Tool signature lacks `level` parameter despite being obvious filter.",
+        "Agent kept guessing parameter names: level, severity, log_level.",
+        "First tool call in the trace failed immediately with TypeError."
+      ],
+      test_plan: `T1 (pre-fix) — observed in trace: elastic_search_logs(level="error") → TypeError.
+T2 (pre-fix) — inspect tool signature via inspect.signature() — confirm absent.
+T3 (pre-fix) — inspect RESEARCH_PROMPT ELK guidance — confirm no mention of level parameter shape.`,
+      raw_output: "2026-04-17 09:39:38 elastic_search_logs → error | got an unexpected keyword argument 'level'"
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.11.md",
+      summary: "Add level: Union[str, Sequence[str], None] to signature with case-insensitive normalisation (err↔error, warn↔warning, crit↔critical). Silent aliases severity= and log_level= map to same filter. Response envelope gains applied_filters, total_in_window, index. Regression test locks in level= kwarg acceptance.",
+      scope: [
+        "mcp_server/tools/elastic.py (or wherever elastic_search_logs lives) — signature + _norm_levels + response envelope",
+        "MCP tool manifest — document level parameter",
+        "api/agents/router.py — ELK section in RESEARCH_PROMPT",
+        "tests/test_elastic_search_logs_signature.py — regression"
+      ],
+      code_preview: `def elastic_search_logs(query="", minutes_ago=60, size=50,
+                        service=None, host=None,
+                        level=None,
+                        severity=None, log_level=None,  # aliases
+                        **_ignored) -> dict: ...`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Re-run the 2026-04-17 09:39 trace prompt — step 1 succeeds, no TypeError.
+• Response envelope includes applied_filters, total_in_window, index.
+• severity="error" and log_level="error" both accepted, same filter result.
+• Regression test test_level_kwarg_accepted passes.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 13,
+    slug: "cycle-13-zero-result-pivot",
+    title: "Zero-result pivot detection — 3-in-a-row nudge",
+    version: "v2.33.12",
+    area: "SUB-AGENTS",
+    badges: ["subagent"],
+    subhead: "Trace showed 7 consecutive zero-result calls (steps 5–11) after step 3 returned 90 entries. Agent didn't pivot. Harness must force one.",
+    discovered: {
+      hypothesis: [
+        "Current harness only nudges on budget threshold (v2.33.3) — no signal on repetitive zero results.",
+        "Agent interprets 'Found 0 log entries' as success (status=ok) rather than broken filter.",
+        "Budget waste: 7/16 tool calls on narrow-filter zero-result variants."
+      ],
+      test_plan: `T1 (pre-fix) — replay the trace task; count tool calls until conclusion (baseline: 12).
+T2 (pre-fix) — verify no pivot nudge fires at step 5, 6, 7 when zero-results repeat.`,
+      raw_output: "2026-04-17 09:39:46–09:40:04: 7 consecutive elastic_search_logs → 'Found 0 log entries' without pivot"
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.12.md",
+      summary: "Harness tracks _zero_streaks[tool] and _nonzero_seen[tool] per task. At 3 consecutive zeros with prior non-zero: inject nudge to synthesize from non-zero call / broaden / switch tool. At 4 consecutive zeros without prior non-zero: nudge to switch tool entirely. Emits zero_result_pivot WS event; OutputPanel shows amber banner.",
+      scope: [
+        "api/routers/agent.py — _zero_streaks/_nonzero_seen tracking, nudge injection, WS event",
+        "api/routers/agent.py — _result_count() heuristic (hits[]/total/count/'Found N')",
+        "api/agents/router.py — RESEARCH_PROMPT ZERO-RESULT PIVOT RULE",
+        "gui/src/components/OutputPanel.jsx — amber PIVOT NUDGE banner"
+      ],
+      code_preview: `if _zero_streaks[tool] >= 3 and _nonzero_seen[tool] > 0:
+  inject_system("HARNESS NUDGE: Your last 3 calls returned 0 ...")
+  ws.send({event:'zero_result_pivot', tool, consecutive_zeros, prior_nonzero})`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Replay the trace: at the 3rd consecutive zero-result call, amber PIVOT NUDGE banner appears.
+• Next agent step is either propose_subtask, a substantially different query, or synthesis referencing the earlier 90-entry call.
+• Total tool calls to reach a conclusion drops from ~12 to ≤8.
+• Regression: tasks with legitimately diverse tools do not trigger false pivots.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 14,
+    slug: "cycle-14-contradiction-synthesis",
+    title: "Contradiction detection in synthesis",
+    version: "v2.33.13",
+    area: "SUB-AGENTS",
+    badges: ["subagent"],
+    subhead: "Trace concluded 'No error-level log entries were found' despite step 3 returning 90 entries. Pre-synthesis guard must catch this.",
+    discovered: {
+      hypothesis: [
+        "Agent's final answer made a negative claim that contradicts its own tool history.",
+        "No automated check compares conclusion against observed data.",
+        "This is a generalisable issue — any 'no X found' claim risks ignoring prior non-zero evidence."
+      ],
+      test_plan: `T1 (pre-fix) — trace final_answer: "No error-level log entries were found" vs step 3: 90 entries.
+T2 (pre-fix) — grep the negative-claim patterns against historical investigate outputs to estimate prevalence.`,
+      raw_output: "2026-04-17 09:40:22 final_answer: 'No error-level log entries were found ...' // step 3 returned 90 entries"
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.13.md",
+      summary: "Pre-synthesis check: scan draft final_answer for negative claims ('no X', 'zero X', 'not found', 'nothing detected'). Cross-reference tool history via _result_count(). If any call returned non-zero contradicting a claim, emit contradiction_detected WS event + red banner, inject reconciliation system message. One reconciliation attempt per task; unresolved surfaces as [HARNESS WARNING] prefix.",
+      scope: [
+        "api/agents/orchestrator.py — detect_negative_claim + detect_contradictions helpers",
+        "api/routers/agent.py — pre-emit contradiction check + reconciliation loop",
+        "gui/src/components/OutputPanel.jsx — red CONTRADICTION banner",
+        "tests/test_contradiction_detection.py"
+      ],
+      code_preview: `contradictions = detect_contradictions(final_text, tool_history)
+if contradictions and not _already_reconciled:
+  inject_system("HARNESS: Your draft contradicts step N — reconcile or revise")`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Replay the trace: red CONTRADICTION banner appears before final_answer emits.
+• Revised conclusion either acknowledges the earlier 90-entry result OR accurately restates the claim.
+• Positive conclusions ("Found N errors") do not trigger false positives.
+• Unreconciled contradictions surface with [HARNESS WARNING] prefix for human review.`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 15,
+    slug: "cycle-15-elastic-query-metadata",
+    title: "elastic_search_logs rich query metadata + hint",
+    version: "v2.33.14",
+    area: "TOOLS",
+    badges: ["tool"],
+    subhead: "Give the agent (and operator) enough data to diagnose 'filter too narrow' false negatives without guessing. Self-describing tool responses.",
+    discovered: {
+      hypothesis: [
+        "Agent can't distinguish 'zero matching hits' from 'zero logs in window'.",
+        "No visibility into which index pattern matched or what query was actually sent.",
+        "Adding structured metadata is cheap and enables both v2.33.12 pivot logic and human debugging."
+      ],
+      test_plan: `T1 (pre-fix) — manually call tool, inspect response — confirm no total_in_window, index, or query_lucene.
+T2 (pre-fix) — note absence of diagnostic hint when narrow filter returns 0.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.14.md",
+      summary: "Extend v2.33.11 envelope with total_relation, query_lucene (serialised ES query body), and a hint string auto-generated when total==0 && total_in_window>0. Hint names the active filters and suggests which to drop first. Same envelope applied to elastic_log_pattern. Prompt updated to instruct agent to read hint.",
+      scope: [
+        "mcp_server/tools/elastic.py — response envelope + _compute_hint()",
+        "mcp_server/tools/elastic.py (log_pattern section) — same envelope",
+        "api/agents/router.py — RESEARCH_PROMPT ELK guidance extension",
+        "tests/test_elastic_hint.py"
+      ],
+      code_preview: `def _compute_hint(total, total_in_window, levels, service, host):
+  if total == 0 and total_in_window > 0 and (levels or service or host):
+    return f"Filter may be too narrow: 0 hits matched but {total_in_window} exist in window."
+  return None`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Tool response includes total_in_window, applied_filters, query_lucene, index, hint.
+• When filter is narrow and hits=0 but total_in_window>0: hint is non-empty and actionable.
+• Agent's subsequent reasoning step visibly addresses the hint (broadens filter or concludes with evidence).
+• Regression: when hits>0, hint is null (no spurious hints).`,
+      results: "",
+      git_hashes: ""
+    }
+  },
+
+  {
+    id: 16,
+    slug: "cycle-16-diagnostics-overlay",
+    title: "Live agent diagnostics overlay",
+    version: "v2.33.15",
+    area: "REDESIGN",
+    badges: ["redesign"],
+    subhead: "Surface harness internals (budget, DIAGNOSIS status, zero-streaks, pivot nudges, subtask proposed) in OutputPanel so operator sees the agent struggling BEFORE it exhausts budget.",
+    discovered: {
+      hypothesis: [
+        "Operator only sees tool calls and final answer — no harness state visible.",
+        "Budget exhaustion, zero-streaks, nudge firings happen invisibly in backend logs.",
+        "A compact always-on overlay turns harness state into feedback loop."
+      ],
+      test_plan: `T1 (pre-fix) — run an investigate — OutputPanel shows no live budget counter or diagnostic indicators.
+T2 (pre-fix) — confirm budget_nudge, zero_result_pivot, contradiction_detected events emit to WS but aren't visually aggregated.`,
+      raw_output: ""
+    },
+    planned: {
+      prompt: "CC_PROMPT_v2.33.15.md",
+      summary: "New AgentDiagnostics component at top of OutputPanel during investigate runs. Compact horizontal bar: budget N/max with coloured progress bar, DIAGNOSIS (· not yet / ✓ emitted), per-tool zero-streak badges, pivot nudge counter, SUBTASK PROPOSED indicator. Backend emits agent_diagnostics WS event after each tool call aggregating v2.33.3/12/13 state.",
+      scope: [
+        "api/routers/agent.py — agent_diagnostics WS event emission",
+        "gui/src/components/AgentDiagnostics.jsx — new component",
+        "gui/src/components/OutputPanel.jsx — mount + state",
+        "tests/AgentDiagnostics.test.jsx"
+      ],
+      code_preview: `<AgentDiagnostics diag={{
+  agent_type:'investigate', tools_used:11, budget:16, budget_pct:68,
+  has_diagnosis:false,
+  zero_streaks:{elastic_search_logs:4},
+  pivot_nudges_fired:['elastic_search_logs'],
+  subtask_proposed:false
+}} />`
+    },
+    verify: {
+      plan: `PASS criteria:
+• Diagnostics bar renders at top of OutputPanel during investigate runs.
+• Budget counter + bar animate live per tool call.
+• DIAGNOSIS toggle flips '· not yet' → '✓ emitted' when agent writes DIAGNOSIS:.
+• Zero-streak badges appear in amber at 2+ zeros, red at 3+.
+• SUBTASK PROPOSED indicator appears in accent colour when v2.33.3 triggers.
+• Observe tasks do not render the bar (investigate-only).`,
+      results: "",
+      git_hashes: ""
+    }
   }
 ];
 
@@ -1051,7 +1325,7 @@ function renderOverview() {
   document.getElementById("main").innerHTML = `
     <div class="page-head">
       <span class="pill">OVERVIEW</span>
-      <h2>Test → Fix → Verify · 11 cycles</h2>
+      <h2>Test → Fix → Verify · 17 cycles</h2>
     </div>
     <div class="subhead">Click any card to open that cycle. Status and notes are saved in your browser (localStorage).</div>
     <div class="overview-grid">${cards}</div>

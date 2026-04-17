@@ -161,7 +161,12 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.33.7.md  | v2.33.7  | feat(ui): Kafka inspection tab — brokers, topics, partitions, lag | DONE (323a342) |
 | CC_PROMPT_v2.33.8.md  | v2.33.8  | feat(templates): verify_backup_job + PBS last-success tracking | DONE (21a7a0b) |
 | CC_PROMPT_v2.33.9.md  | v2.33.9  | feat(security): drift detection — config_hash reconciliation + badge | DONE (636cf2f) |
-| CC_PROMPT_v2.33.10.md | v2.33.10 | feat(ui): container pull — in-card progress + eager version controls | RUNNING |
+| CC_PROMPT_v2.33.10.md | v2.33.10 | feat(ui): container pull — in-card progress + eager version controls | DONE (0b3255b) |
+| CC_PROMPT_v2.33.11.md | v2.33.11 | fix(tools): elastic_search_logs level kwarg + aliases | RUNNING |
+| CC_PROMPT_v2.33.12.md | v2.33.12 | feat(agents): zero-result pivot detection — 3-in-a-row nudge | PENDING |
+| CC_PROMPT_v2.33.13.md | v2.33.13 | feat(agents): contradiction detection in synthesis | PENDING |
+| CC_PROMPT_v2.33.14.md | v2.33.14 | feat(tools): elastic_search_logs rich query metadata + hint | PENDING |
+| CC_PROMPT_v2.33.15.md | v2.33.15 | feat(ui): live agent diagnostics overlay | PENDING |
 
 ---
 
@@ -255,6 +260,27 @@ entity_history gains config_hash + prev_config_hash columns; `compute_config_has
 
 **v2.33.10** — feat(ui): container pull — in-card progress + eager version controls.
 Three coordinated fixes for the ghcr container update flow. (1) New async pull API: `POST /containers/{id}/pull-start` returns a job_id; `GET /pull-jobs/{id}` reports layer-aggregated bytes_done/bytes_total + phase (downloading/extracting/recreating/done/error). Uses `client.api.pull(stream=True, decode=True)` for live Docker events. (2) Frontend lifts full tags list from ContainerCardExpanded to ServiceCards parent — Choose version + Refresh buttons render instantly on expand, no fetch-on-mount delay. Full tags cached, not just `[0]`. (3) In-card progress block with phase label, percent bar, message, layer byte counter, DISMISS button; replaces the bottom-right "Done" toast for pull success. Errors remain inline too. Self-container (hp1_agent) preserves the sidecar-recreate path.
+
+---
+
+## Phase: v2.33.11–v2.33.15 — Agent Reasoning Quality
+
+Surfaced by live investigate trace on 2026-04-17 09:39 (`Search Elasticsearch for error-level log entries in the last 1 hour`). The trace confirmed v2.33.3 works correctly (budget nudge fired at 11/16, propose_subtask called at step 12) but surfaced three concrete bugs: (1) `elastic_search_logs` rejected `level=` kwarg with `TypeError`, (2) agent issued 7 consecutive zero-result calls without pivoting, (3) final answer concluded "no errors found" despite step 3 returning 90 log entries. This phase fixes all three and adds live observability into the harness.
+
+**v2.33.11** — fix(tools): elastic_search_logs level kwarg + aliases.
+Add `level: Union[str, Sequence[str], None]` parameter with case-insensitive normalisation (err↔error, warn↔warning, crit↔critical). Silent aliases `severity=` and `log_level=` map to the same filter. Response envelope gains `applied_filters`, `total_in_window`, `index`. Updates MCP manifest + RESEARCH_PROMPT ELK section. Regression test locks in that `level=` kwarg is permanently accepted.
+
+**v2.33.12** — feat(agents): zero-result pivot detection — 3-in-a-row nudge.
+Harness tracks `_zero_streaks` + `_nonzero_seen` per tool per task. When the same tool returns 0 results 3 consecutive times AFTER having returned non-zero earlier, injects a system nudge instructing the agent to (a) synthesize from the non-zero call, (b) broaden the filter, or (c) switch tools. Also nudges at 4 consecutive zeros even without prior non-zero (likely wrong tool). Emits WS `zero_result_pivot` event; OutputPanel shows amber PIVOT NUDGE banner. `_result_count()` helper handles hits[]/total/count/"Found N" summary shapes.
+
+**v2.33.13** — feat(agents): contradiction detection in synthesis.
+Before emitting final_answer, harness scans the draft for negative claims (`no X`, `zero X`, `not found`, `nothing detected`) and cross-references tool history. If any prior call returned non-zero results for a related query, emits WS `contradiction_detected` event, red OutputPanel banner, and injects a system message asking the agent to reconcile (acknowledge the earlier data) or revise. One reconciliation attempt per task; unresolved contradictions surface as a `[HARNESS WARNING]` prefix on final_answer.
+
+**v2.33.14** — feat(tools): elastic_search_logs rich query metadata + hint.
+Extends v2.33.11 response envelope with `total_relation`, `query_lucene` (serialised ES query body for debugging), and an auto-generated `hint` string when `total == 0 and total_in_window > 0`. Hint names the active filters and suggests which to drop first (host → service → level → query). Same envelope applied to `elastic_log_pattern`. Prompt updated so the agent is told to read and respond to `hint` when present.
+
+**v2.33.15** — feat(ui): live agent diagnostics overlay.
+New `AgentDiagnostics` component rendered at top of OutputPanel during investigate runs. Compact horizontal bar shows: tool budget (N/max with coloured progress bar), DIAGNOSIS emitted (· not yet / ✓ emitted), per-tool zero-streak badges (e.g. `e_search×4`), pivot nudge count, SUBTASK PROPOSED indicator. Backend emits periodic `agent_diagnostics` WS events after each tool call. Makes harness state visible to operator in real-time — they can see the agent struggling before budget exhaustion.
 
 ---
 

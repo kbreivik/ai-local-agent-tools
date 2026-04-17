@@ -7,7 +7,44 @@ Never called inline during agent execution — each call is independently async.
 """
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Sequence, Union
+
+
+_LEVEL_FIELDS = ("log.level", "level", "severity")
+
+
+def _norm_levels(level: Union[str, Sequence[str], None]) -> list[str]:
+    """Normalise level inputs to a flat, deduped list of lowercase strings.
+
+    Accepts single string, list/tuple of strings, or None.
+    Expands common synonyms: warn↔warning, err↔error, crit↔critical↔fatal.
+    """
+    if level is None:
+        return []
+    if isinstance(level, str):
+        vals = [level]
+    else:
+        vals = list(level)
+    out: list[str] = []
+    for v in vals:
+        if not v:
+            continue
+        s = str(v).strip().lower()
+        if s in ("warn", "warning"):
+            out.extend(["warn", "warning"])
+        elif s in ("err", "error"):
+            out.extend(["err", "error"])
+        elif s in ("crit", "critical", "fatal"):
+            out.extend(["crit", "critical", "fatal"])
+        else:
+            out.append(s)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for v in out:
+        if v not in seen:
+            seen.add(v)
+            ordered.append(v)
+    return ordered
 
 
 def _es_url() -> str:
@@ -118,10 +155,27 @@ def elastic_search_logs(
     node: str = "",
     minutes_ago: int = 60,
     size: int = 50,
+    level: Union[str, Sequence[str], None] = None,
+    # Silent aliases — models guess these names frequently:
+    severity: Union[str, Sequence[str], None] = None,
+    log_level: Union[str, Sequence[str], None] = None,
+    host: str = "",
+    **_ignored,
 ) -> dict:
     """
-    Search infrastructure logs. Filter by service name, node, time range.
-    Returns: list of {timestamp, message, service, node, level, container}.
+    Search infrastructure logs. Filter by service name, node, time range, level.
+
+    Parameters:
+      query: Optional free-text query. Empty = match_all in time window.
+      service: Container/service name substring filter.
+      node: Host.name substring filter (alias: host).
+      minutes_ago: Lookback window (default 60).
+      size: Max hits to return (default 50, cap 500).
+      level: Log level filter. "error" | "warn" | "info" | "critical" or list.
+             Aliases warn↔warning, err↔error, crit↔critical↔fatal are normalised.
+             Synonyms `severity=` and `log_level=` accepted silently.
+
+    Returns _ok({total, returned, logs, total_in_window, applied_filters}).
     """
     if not _es_url():
         return _unavailable(
@@ -129,31 +183,74 @@ def elastic_search_logs(
             "Configure Elasticsearch to enable log search."
         )
     try:
-        must = [_time_range(minutes_ago)]
+        # Merge aliased level parameters
+        merged_levels = _norm_levels(level) + _norm_levels(severity) + _norm_levels(log_level)
+        seen: set[str] = set()
+        merged_levels = [v for v in merged_levels if not (v in seen or seen.add(v))]
+
+        # Allow `host=` as an alias for `node=` (models guess this name).
+        node_filter = node or host
+
+        time_filter = _time_range(minutes_ago)
+        must = [time_filter]
         if query:
             must.append({"match": {"message": {"query": query, "operator": "or"}}})
         if service:
             must.append({"wildcard": {
                 "docker.container.labels.com.docker.swarm.service.name": f"*{service}*"
             }})
-        if node:
-            must.append({"wildcard": {"host.name": f"*{node}*"}})
+        if node_filter:
+            must.append({"wildcard": {"host.name": f"*{node_filter}*"}})
+        if merged_levels:
+            level_should = []
+            for field in _LEVEL_FIELDS:
+                level_should.append({"terms": {f"{field}.keyword": merged_levels}})
+                level_should.append({"terms": {field: merged_levels}})
+            must.append({"bool": {"should": level_should, "minimum_should_match": 1}})
 
         body = {
             "query": {"bool": {"must": must}},
             "sort": [{"@timestamp": {"order": "desc"}}],
-            "size": size,
+            "size": min(int(size), 500),
             "_source": [
-                "@timestamp", "message", "log.level", "host.name",
-                "container.name", "hp1_node_role",
+                "@timestamp", "message", "log.level", "level", "severity",
+                "host.name", "container.name", "hp1_node_role",
                 "docker.container.labels.com.docker.swarm.service.name",
             ],
         }
         resp = _post(f"/{_index()}/_search", body)
         hits = _extract_hits(resp)
         total = resp.get("hits", {}).get("total", {}).get("value", len(hits))
-        return _ok({"total": total, "returned": len(hits), "logs": hits},
-                   f"Found {total} log entries")
+
+        # Compute total_in_window for narrow-filter false-negative reasoning.
+        total_in_window = total
+        try:
+            window_resp = _post(f"/{_index()}/_search", {
+                "query": {"bool": {"must": [time_filter]}},
+                "size": 0,
+            })
+            total_in_window = (
+                window_resp.get("hits", {}).get("total", {}).get("value", total)
+            )
+        except Exception:
+            pass
+
+        applied_filters = {
+            "level":       merged_levels,
+            "service":     service or None,
+            "host":        node_filter or None,
+            "query":       query or None,
+            "minutes_ago": int(minutes_ago),
+        }
+
+        return _ok({
+            "total":           total,
+            "returned":        len(hits),
+            "logs":            hits,
+            "total_in_window": total_in_window,
+            "applied_filters": applied_filters,
+            "index":           _index(),
+        }, f"Found {total} log entries (window: {total_in_window})")
     except Exception as e:
         return _err(str(e))
 

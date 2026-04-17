@@ -1,0 +1,826 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.10.md (v2.33.10)
+Theme: feat(ui): container pull — in-card progress + eager version controls
+
+Prompt content:
+
+# CC PROMPT — v2.33.10 — Container update UX: in-card progress + eager version controls
+
+## What this does
+Three coordinated fixes for the hp1_agent / GHCR container update flow:
+
+1. **In-card pull progress** — replaces the bottom-right "Done" toast with an
+   inline progress block inside the expanded card. Shows current phase
+   (Downloading / Extracting / Recreating) and a real percentage based on
+   Docker pull-layer streaming events.
+
+2. **Async pull job API** — new `POST /containers/{id}/pull-start` returns
+   a `job_id`; `GET /pull-jobs/{job_id}` reports live progress. The existing
+   sync `POST /containers/{id}/pull` endpoint is kept as a compat fallback.
+
+3. **Eager version controls** — the full GHCR tag list is lifted from the
+   expanded card to the parent `ServiceCards`. Parent already fetches tags
+   proactively on mount; it now caches the full list, not just `[0]`. The
+   expanded card reads tags from props with zero fetch-on-mount — Re-pull
+   and Choose-version buttons appear immediately.
+
+**Priority: this is a UX fix. If possible run this BEFORE the v2.33.0–v2.33.9
+feature queue** (use `bash cc_prompts/run_queue.sh --one` until v2.33.10
+completes, then resume the feature queue).
+
+Version bump: 2.33.9 → 2.33.10
+
+---
+
+## Change 1 — api/routers/dashboard.py — pull jobs module
+
+Near the top of the file (after the existing `_GHCR_TAG_CACHE`/`_GHCR_TAG_TTL_DEFAULT`
+block, before `# ── Auto-update state ──`), add:
+
+```python
+# ── Pull jobs (async container pull with live progress) ─────────────────────
+import uuid as _uuid
+
+_PULL_JOBS: dict = {}   # job_id -> state dict
+_PULL_JOBS_MAX = 50     # keep last N jobs, prune terminal LRU
+
+
+def _prune_pull_jobs() -> None:
+    if len(_PULL_JOBS) <= _PULL_JOBS_MAX:
+        return
+    terminal = [(k, v["updated_at"]) for k, v in _PULL_JOBS.items()
+                if v.get("status") in ("done", "error")]
+    terminal.sort(key=lambda kv: kv[1])
+    for k, _ in terminal[: len(_PULL_JOBS) - _PULL_JOBS_MAX]:
+        _PULL_JOBS.pop(k, None)
+
+
+def _new_pull_job(container_id: str, tag: str | None) -> str:
+    job_id = _uuid.uuid4().hex[:16]
+    _PULL_JOBS[job_id] = {
+        "job_id":       job_id,
+        "container_id": container_id,
+        "tag":          tag,
+        "status":       "starting",   # starting|downloading|extracting|recreating|done|error
+        "phase":        "",
+        "message":      "",
+        "layers":       {},            # layer_id -> {status, current, total}
+        "bytes_done":   0,
+        "bytes_total":  0,
+        "percent":      0,
+        "error":        None,
+        "created_at":   _time.time(),
+        "updated_at":   _time.time(),
+        "completed_at": None,
+    }
+    _prune_pull_jobs()
+    return job_id
+
+
+def _update_pull_job(job_id: str, **kwargs) -> None:
+    j = _PULL_JOBS.get(job_id)
+    if not j:
+        return
+    j.update(kwargs)
+    j["updated_at"] = _time.time()
+    # Aggregate bytes across all layers on every update
+    total = 0
+    done = 0
+    for layer in j["layers"].values():
+        layer_total = layer.get("total") or 0
+        layer_curr = layer.get("current") or 0
+        if layer_total > 0:
+            total += layer_total
+            done += min(layer_curr, layer_total)
+    j["bytes_total"] = total
+    j["bytes_done"] = done
+    if total > 0:
+        j["percent"] = min(100, int((done / total) * 100))
+
+
+def _do_pull_streaming(job_id: str, container_id: str, tag: str | None) -> None:
+    """Background worker: stream Docker pull progress into _PULL_JOBS[job_id]."""
+    try:
+        client, container = _resolve_container(container_id)
+        image_name = container.attrs["Config"]["Image"]
+
+        auth_config = None
+        if image_name.startswith("ghcr.io/"):
+            token = os.environ.get("GHCR_TOKEN", "")
+            if token:
+                auth_config = {"username": "token", "password": token}
+
+        bare = image_name.split("@")[0].split(":")[0]
+        pull_image = f"{bare}:{tag}" if tag else image_name
+
+        _update_pull_job(
+            job_id, status="downloading",
+            phase=f"pulling {pull_image}",
+            message=f"Pulling {pull_image}",
+        )
+
+        # Low-level API gives per-layer streaming events
+        repo, sep, ref = pull_image.rpartition(":")
+        if not sep:
+            repo, ref = pull_image, "latest"
+
+        for evt in client.api.pull(
+            repo, tag=ref, auth_config=auth_config, stream=True, decode=True
+        ):
+            status_txt = evt.get("status", "")
+            lid = evt.get("id") or ""
+            progress_detail = evt.get("progressDetail") or {}
+            if lid:
+                layer = _PULL_JOBS[job_id]["layers"].setdefault(
+                    lid, {"status": "", "current": 0, "total": 0})
+                layer["status"] = status_txt
+                if "current" in progress_detail:
+                    layer["current"] = progress_detail["current"]
+                if "total" in progress_detail:
+                    layer["total"] = progress_detail["total"]
+            new_phase = None
+            if "Downloading" in status_txt:
+                new_phase = "downloading"
+            elif "Extracting" in status_txt:
+                new_phase = "extracting"
+            elif "Pull complete" in status_txt or status_txt == "Download complete":
+                new_phase = _PULL_JOBS[job_id].get("phase") or "extracting"
+            elif "up to date" in status_txt.lower():
+                new_phase = "up_to_date"
+            _update_pull_job(
+                job_id,
+                message=status_txt[:120],
+                phase=new_phase or _PULL_JOBS[job_id]["phase"],
+            )
+
+        # Retag for versioned pulls so :latest (or running tag) points to the pulled image
+        if tag:
+            pulled = client.images.get(f"{bare}:{tag}")
+            current_tag = image_name.split(":")[-1] if ":" in image_name else "latest"
+            pulled.tag(bare, tag=current_tag)
+
+        # Recreate
+        _update_pull_job(
+            job_id, status="recreating", phase="recreating",
+            message="Recreating container",
+        )
+        if _is_self_container(container):
+            _restart_self_container()
+            _update_pull_job(
+                job_id, status="done", phase="done",
+                message="Agent recreation triggered — it will be back shortly",
+                completed_at=_time.time(), percent=100,
+            )
+        else:
+            container.restart()
+            _update_pull_job(
+                job_id, status="done", phase="done",
+                message="Pull + restart complete",
+                completed_at=_time.time(), percent=100,
+            )
+    except Exception as e:
+        log.exception("pull job %s failed: %s", job_id, e)
+        _update_pull_job(
+            job_id, status="error", error=str(e),
+            message=f"Error: {e}", completed_at=_time.time(),
+        )
+```
+
+## Change 2 — api/routers/dashboard.py — new endpoints
+
+Insert IMMEDIATELY BEFORE the existing `@router.post("/containers/{container_id}/pull")`
+definition:
+
+```python
+@router.post("/containers/{container_id}/pull-start")
+async def pull_container_start(
+    container_id: str,
+    tag: str | None = None,
+    user: str = Depends(get_current_user),
+):
+    """Start an async pull. Returns immediately with a job_id — poll /pull-jobs/{id}."""
+    job_id = _new_pull_job(container_id, tag)
+    threading.Thread(
+        target=_do_pull_streaming, args=(job_id, container_id, tag), daemon=True
+    ).start()
+    return {"ok": True, "job_id": job_id, "status": "starting"}
+
+
+@router.get("/pull-jobs/{job_id}")
+async def get_pull_job(job_id: str, _: str = Depends(get_current_user)):
+    j = _PULL_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(404, f"job {job_id!r} not found")
+    # Trim layers for bandwidth: return only the top 5 currently active
+    layers = j["layers"]
+    active = sorted(
+        ({"id": lid, **l} for lid, l in layers.items()
+         if l.get("status") in ("Downloading", "Extracting")),
+        key=lambda x: x.get("current", 0), reverse=True,
+    )[:5]
+    out = dict(j)
+    out["active_layers"] = active
+    out["layer_count"] = len(layers)
+    out.pop("layers", None)   # strip full per-layer dict
+    return out
+```
+
+## Change 3 — gui/src/api.js — add helpers
+
+Find the existing `fetchContainerTags` / pull helpers. Add (near them):
+
+```js
+export async function startContainerPull(containerId, tag) {
+  const qs = tag ? `?tag=${encodeURIComponent(tag)}` : ''
+  const r = await fetch(`${BASE}/api/dashboard/containers/${containerId}/pull-start${qs}`, {
+    method: 'POST', headers: { ...authHeaders() }, credentials: 'include',
+  })
+  if (!r.ok) throw new Error(`pull-start HTTP ${r.status}`)
+  return r.json()
+}
+
+export async function getPullJob(jobId) {
+  const r = await fetch(`${BASE}/api/dashboard/pull-jobs/${jobId}`, {
+    headers: { ...authHeaders() }, credentials: 'include',
+  })
+  if (!r.ok) throw new Error(`pull-job HTTP ${r.status}`)
+  return r.json()
+}
+```
+
+(If `BASE` / `authHeaders` are imported elsewhere in the file, use the same
+local references. Do not re-import.)
+
+## Change 4 — gui/src/components/ServiceCards.jsx — lift full tags to parent
+
+### 4a. Rename/retype the proactive-fetch state
+
+Find in `ServiceCards`:
+
+```jsx
+const [knownLatest, setKnownLatest] = useState({})
+```
+
+Keep it (backward compat). Immediately AFTER, add:
+
+```jsx
+const [allTags, setAllTags] = useState({})   // { [containerId]: string[] }
+const [tagsLoadingMap, setTagsLoadingMap] = useState({})   // { [containerId]: bool }
+```
+
+### 4b. Update the proactive fetch to keep the full list
+
+Find the proactive fetch `useEffect` block:
+
+```jsx
+const fetchedTagIds = useRef(new Set())
+useEffect(() => {
+  for (const container of containers?.containers || []) {
+    if (!container.image?.startsWith('ghcr.io/')) continue
+    if (fetchedTagIds.current.has(container.id)) continue
+    fetchedTagIds.current.add(container.id)
+    fetchContainerTags(container.id).then(data => {
+      if (data?.tags?.[0]) setKnownLatest(prev => ({ ...prev, [container.id]: data.tags[0] }))
+    }).catch(() => {})
+  }
+}, [containers])
+```
+
+Replace with:
+
+```jsx
+const fetchedTagIds = useRef(new Set())
+useEffect(() => {
+  for (const container of containers?.containers || []) {
+    if (!container.image?.startsWith('ghcr.io/')) continue
+    if (fetchedTagIds.current.has(container.id)) continue
+    fetchedTagIds.current.add(container.id)
+    setTagsLoadingMap(prev => ({ ...prev, [container.id]: true }))
+    fetchContainerTags(container.id).then(data => {
+      const MIN_SAFE = [1, 12, 2]
+      const filtered = (data?.tags || []).filter(v => {
+        const parts = v.split('.').map(Number)
+        for (let i = 0; i < 3; i++) {
+          if ((parts[i] || 0) < MIN_SAFE[i]) return false
+          if ((parts[i] || 0) > MIN_SAFE[i]) return true
+        }
+        return true
+      })
+      if (filtered.length) {
+        setAllTags(prev => ({ ...prev, [container.id]: filtered }))
+        setKnownLatest(prev => ({ ...prev, [container.id]: filtered[0] }))
+      }
+    }).catch(() => {}).finally(() => {
+      setTagsLoadingMap(prev => ({ ...prev, [container.id]: false }))
+    })
+  }
+}, [containers])
+```
+
+### 4c. Expose a refresh callback
+
+Below the proactive fetch, add:
+
+```jsx
+const refreshTagsFor = useCallback((containerId) => {
+  setTagsLoadingMap(prev => ({ ...prev, [containerId]: true }))
+  return fetchContainerTags(containerId, { force: true })
+    .then(data => {
+      const MIN_SAFE = [1, 12, 2]
+      const filtered = (data?.tags || []).filter(v => {
+        const parts = v.split('.').map(Number)
+        for (let i = 0; i < 3; i++) {
+          if ((parts[i] || 0) < MIN_SAFE[i]) return false
+          if ((parts[i] || 0) > MIN_SAFE[i]) return true
+        }
+        return true
+      })
+      setAllTags(prev => ({ ...prev, [containerId]: filtered }))
+      if (filtered[0]) setKnownLatest(prev => ({ ...prev, [containerId]: filtered[0] }))
+      return filtered
+    })
+    .catch(err => { throw err })
+    .finally(() => {
+      setTagsLoadingMap(prev => ({ ...prev, [containerId]: false }))
+    })
+}, [])
+```
+
+### 4d. Wire props through ConnectedContainerCard
+
+Find the `ConnectedContainerCard` function and its call site. Add two new props.
+
+ConnectedContainerCard signature — add `allTags`, `tagsLoadingMap`, `refreshTagsFor`:
+
+```jsx
+function ConnectedContainerCard({
+  c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab,
+  openKeys, setOpenKeys, lastOpenedKey, setLastOpenedKey, expandAllFlag,
+  entityId, onEntityDetail, compareMode, compareSet, onCompareAdd,
+  entityForCompare, knownLatest, containerUpdateStatus,
+  allTags, tagsLoadingMap, refreshTagsFor,
+}) {
+  const template = useCardTemplate('container', c.connection_id || null)
+  return (
+    <InfraCard
+      ...existing props...
+      expanded={<ContainerCardExpanded
+        c={c} isSwarm={isSwarm} onAction={onAction} confirm={confirm} showToast={showToast}
+        onTagsLoaded={onTagsLoaded} onTab={onTab} template={template}
+        initialTags={allTags?.[c.id] || []}
+        tagsLoading={!!tagsLoadingMap?.[c.id]}
+        refreshTags={() => refreshTagsFor?.(c.id)}
+      />}
+      ...existing props...
+    />
+  )
+}
+```
+
+At the call site inside `ServiceCards` (the `.map(c => (<ConnectedContainerCard ...>)`),
+pass the new props:
+
+```jsx
+<ConnectedContainerCard
+  ...existing...
+  knownLatest={knownLatest}
+  containerUpdateStatus={containerUpdateStatus}
+  allTags={allTags}
+  tagsLoadingMap={tagsLoadingMap}
+  refreshTagsFor={refreshTagsFor}
+  ...existing...
+/>
+```
+
+## Change 5 — gui/src/components/ServiceCards.jsx — rewire ContainerCardExpanded
+
+### 5a. New signature + initial tags from props
+
+Find `function ContainerCardExpanded({ c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, template }) {`
+
+Replace with:
+
+```jsx
+function ContainerCardExpanded({
+  c, isSwarm, onAction, confirm, showToast, onTagsLoaded, onTab, template,
+  initialTags = [], tagsLoading: tagsLoadingProp = false, refreshTags,
+}) {
+```
+
+### 5b. Replace the local tags state + loadTags with prop-driven state
+
+Find:
+
+```jsx
+  const [tags, setTags]             = useState([])
+  const [tagsLoading, setTagsLoading] = useState(false)
+  const [tagsError, setTagsError]   = useState(null)
+```
+
+Replace with:
+
+```jsx
+  const [tags, setTags]             = useState(initialTags)
+  const [tagsLoading, setTagsLoading] = useState(tagsLoadingProp || (initialTags.length === 0 && c.image?.startsWith('ghcr.io/')))
+  const [tagsError, setTagsError]   = useState(null)
+
+  // Sync from props whenever parent's tag cache updates
+  useEffect(() => {
+    if (initialTags && initialTags.length) {
+      setTags(initialTags)
+      setTagsLoading(false)
+      if (initialTags[0]) onTagsLoaded?.(c.id, initialTags[0])
+    }
+  }, [initialTags, c.id])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mirror parent's loading state
+  useEffect(() => { setTagsLoading(tagsLoadingProp) }, [tagsLoadingProp])
+```
+
+### 5c. Remove the local `loadTags` useCallback + its useEffect
+
+Find the existing `loadTags` `useCallback` block and the `useEffect(() => { loadTags(false) }, [loadTags])`.
+DELETE both entirely. The parent now owns tag fetching.
+
+### 5d. Replace the Refresh button onClick
+
+Find `onClick={() => loadTags(true)}` on the `↻ Refresh versions` button.
+Replace with:
+
+```jsx
+onClick={async () => {
+  if (!refreshTags) return
+  setTagsLoading(true)
+  setTagsError(null)
+  try {
+    await refreshTags()
+  } catch (e) {
+    setTagsError(e?.message || 'refresh failed')
+  }
+}}
+```
+
+### 5e. Add pull-job state + progress block
+
+Near the other `useState` declarations at the top of `ContainerCardExpanded`, add:
+
+```jsx
+  const [pullJob, setPullJob] = useState(null)   // live pull job state from /pull-jobs/{id}
+  const [pullError, setPullError] = useState(null)
+  const pullPollRef = useRef(null)
+```
+
+Add an effect that stops polling on unmount:
+
+```jsx
+  useEffect(() => () => {
+    if (pullPollRef.current) { clearInterval(pullPollRef.current); pullPollRef.current = null }
+  }, [])
+```
+
+### 5f. Replace the `act()` helper for pull actions
+
+ABOVE the existing `const act = async (key, path, body, msg) => {` function,
+add a dedicated async pull helper:
+
+```jsx
+  const doAsyncPull = async (tag) => {
+    setPullError(null)
+    setPullJob(null)
+    try {
+      const { startContainerPull, getPullJob } = await import('../api')
+      const { job_id } = await startContainerPull(c.id, tag)
+      // Optimistic initial state
+      setPullJob({ job_id, status: 'starting', phase: '', message: 'Starting pull…', percent: 0 })
+      if (pullPollRef.current) clearInterval(pullPollRef.current)
+      pullPollRef.current = setInterval(async () => {
+        try {
+          const j = await getPullJob(job_id)
+          if (!mounted.current) return
+          setPullJob(j)
+          if (j.status === 'done' || j.status === 'error') {
+            clearInterval(pullPollRef.current)
+            pullPollRef.current = null
+            if (j.status === 'done') {
+              // Refresh dashboard data quietly, NO toast — status stays in card
+              onAction()
+            } else {
+              setPullError(j.error || 'pull failed')
+            }
+          }
+        } catch (e) {
+          setPullError(String(e))
+          clearInterval(pullPollRef.current)
+          pullPollRef.current = null
+        }
+      }, 600)
+    } catch (e) {
+      setPullError(String(e))
+    }
+  }
+```
+
+### 5g. Rewire the pull buttons to use `doAsyncPull`
+
+Find every place inside `ContainerCardExpanded` that calls:
+
+```jsx
+act('pull', pullPath, null, null)
+act('pull', `containers/${c.id}/pull`, null, null)
+act('pull-versioned', `containers/${c.id}/pull?tag=${selectedTag}`, null, null)
+```
+
+Replace each with the appropriate `doAsyncPull` call:
+
+- `act('pull', pullPath, null, null)` → **only for Swarm** (leave as-is, swarm pulls use the existing path)
+- `act('pull', 'containers/${c.id}/pull', null, null)` → `doAsyncPull(null)`
+- `act('pull-versioned', 'containers/${c.id}/pull?tag=${selectedTag}', null, null)` → `doAsyncPull(selectedTag)`
+- `act('pull', pullPath, null, null)` when `!isSwarm` and non-GHCR → `doAsyncPull(null)` (the non-ghcr branch)
+
+Keep `act()` itself for restart/stop/scale — those stay synchronous.
+
+Also remove the two `showToast('Done')` calls inside `act` for the pull path.
+Simplest approach: in `act`, detect pull actions and skip the toast:
+
+```jsx
+  const act = async (key, path, body, msg) => {
+    if (msg) {
+      const ok = await confirm(msg)
+      if (!ok) return
+    }
+    setLoading(l => ({ ...l, [key]: true }))
+    const r = await dashboardAction(path, body)
+    if (!mounted.current) return
+    setLoading(l => ({ ...l, [key]: false }))
+    if (!r.ok) showToast(r.error || 'Action failed', 'error')
+    else if (!key.startsWith('pull')) { showToast('Done'); onAction() }
+    else { onAction() }
+  }
+```
+
+### 5h. Render the progress block
+
+Inside the ghcr version block (the `{!isSwarm && c.image?.startsWith('ghcr.io/') && (() => { ... })}`),
+immediately after the `↻ Refresh versions` button's containing div (before the
+"update available" ActionBtn), insert:
+
+```jsx
+            {pullJob && (
+              <div style={{
+                marginTop: 6, marginBottom: 6, padding: 8,
+                background: 'var(--bg-2)',
+                border: `1px solid ${pullJob.status === 'error' ? 'var(--red)' : 'var(--cyan)'}`,
+                borderRadius: 2, fontFamily: 'var(--font-mono)', fontSize: 10,
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                  color: pullJob.status === 'error' ? 'var(--red)' : 'var(--cyan)',
+                  letterSpacing: '0.1em', fontSize: 9, marginBottom: 4,
+                }}>
+                  <span>
+                    {pullJob.status === 'starting'    && '◐ STARTING'}
+                    {pullJob.status === 'downloading' && '↓ DOWNLOADING'}
+                    {pullJob.status === 'extracting'  && '⊡ EXTRACTING'}
+                    {pullJob.status === 'recreating'  && '⟳ RECREATING'}
+                    {pullJob.status === 'done'        && '✓ DONE'}
+                    {pullJob.status === 'error'       && '✕ ERROR'}
+                  </span>
+                  <span>{pullJob.percent ?? 0}%</span>
+                </div>
+                <div style={{
+                  height: 4, background: 'var(--bg-3)',
+                  borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${pullJob.percent ?? 0}%`,
+                    background: pullJob.status === 'error' ? 'var(--red)'
+                              : pullJob.status === 'done'  ? 'var(--green)'
+                              : 'var(--cyan)',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ color: 'var(--text-2)', fontSize: 9, lineHeight: 1.4 }}>
+                  {pullJob.message || pullJob.phase || '…'}
+                </div>
+                {pullJob.bytes_total > 0 && (
+                  <div style={{ color: 'var(--text-3)', fontSize: 9, marginTop: 2 }}>
+                    {_fmtBytes(pullJob.bytes_done)} / {_fmtBytes(pullJob.bytes_total)}
+                    {pullJob.layer_count > 0 && <> · {pullJob.layer_count} layers</>}
+                  </div>
+                )}
+                {pullJob.status === 'done' && (
+                  <button
+                    onClick={() => setPullJob(null)}
+                    style={{
+                      marginTop: 6, fontSize: 9, fontFamily: 'var(--font-mono)',
+                      background: 'transparent', border: '1px solid var(--border-hi)',
+                      color: 'var(--text-2)', padding: '2px 8px', cursor: 'pointer',
+                      borderRadius: 2, letterSpacing: '0.1em',
+                    }}
+                  >DISMISS</button>
+                )}
+                {pullJob.status === 'error' && pullError && (
+                  <div style={{ color: 'var(--red)', fontSize: 9, marginTop: 4 }}>{pullError}</div>
+                )}
+              </div>
+            )}
+```
+
+### 5i. Disable pull buttons while job active
+
+For each Pull button (`↓ Pull Latest`, `↓ Pull ${selectedTag}`, `↓ Re-pull Image`),
+add a `disabled` condition based on pullJob state. Example:
+
+```jsx
+<ActionBtn
+  label={`↓ Pull ${selectedTag}`}
+  variant="primary"
+  loading={pullJob && pullJob.status !== 'done' && pullJob.status !== 'error'}
+  disabled={!!(pullJob && pullJob.status !== 'done' && pullJob.status !== 'error')}
+  onClick={() => { doAsyncPull(selectedTag); setDrawerOpen(false) }}
+/>
+```
+
+Apply the same `loading` + `disabled` pattern to the other two Pull buttons.
+
+## Change 6 — tests
+
+Add `tests/test_pull_jobs.py`:
+
+```python
+def test_new_and_update_pull_job():
+    from api.routers import dashboard as d
+    job = d._new_pull_job("abc123", "v1.2.3")
+    assert job in d._PULL_JOBS
+    d._update_pull_job(job, status="downloading", layers={"L1": {"current": 50, "total": 100}})
+    # layers are mutated via setdefault inside the streaming loop — simulate here
+    d._PULL_JOBS[job]["layers"]["L1"] = {"status": "Downloading", "current": 50, "total": 100}
+    d._update_pull_job(job, _recompute=True)
+    assert d._PULL_JOBS[job]["bytes_done"] == 50
+    assert d._PULL_JOBS[job]["bytes_total"] == 100
+    assert d._PULL_JOBS[job]["percent"] == 50
+
+def test_prune_keeps_max():
+    from api.routers import dashboard as d
+    d._PULL_JOBS.clear()
+    for i in range(d._PULL_JOBS_MAX + 10):
+        jid = d._new_pull_job(f"c{i}", None)
+        d._PULL_JOBS[jid]["status"] = "done"
+    assert len(d._PULL_JOBS) <= d._PULL_JOBS_MAX
+```
+
+## Version bump
+Update `VERSION`: 2.33.9 → 2.33.10
+
+## Commit
+```
+git add -A
+git commit -m "feat(ui): v2.33.10 container pull — in-card progress + eager version controls"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy hp1_agent.
+2. Expand the hp1_agent card — Choose version + Refresh versions buttons visible immediately (no 200-500ms wait).
+3. Click "↓ Choose version ▾" → pick a version → "↓ Pull {version}".
+4. Expect the in-card progress block to appear instantly showing STARTING → DOWNLOADING with a filling progress bar and layer byte counter.
+5. Watch progress through DOWNLOADING → EXTRACTING → RECREATING → DONE.
+6. No "Done" toast should appear at bottom-right.
+7. Click DISMISS to clear the block.
+8. Try a non-hp1 ghcr container (if any) — same flow, no self-restart special case.
+9. Error path: temporarily unset GHCR_TOKEN → pull should land in ERROR state with red bar + error message inline.
+10. Regression: plain non-GHCR containers (e.g. nginx:alpine) still work via the unchanged sync path.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 09:45:56
+========================================================================
+PROMPT COMPLETE: v2.33.10
+[STATUS] 6m45s
+
+Summary:
+- Added `_PULL_JOBS` state + `_new_pull_job`/`_update_pull_job`/`_do_pull_streaming` in `api/routers/dashboard.py`
+- Added `POST /containers/{id}/pull-start` and `GET /pull-jobs/{id}` endpoints
+- Added `startContainerPull`/`getPullJob` helpers to `gui/src/api.js`
+- Lifted full GHCR tag list to `ServiceCards` parent (`allTags`, `tagsLoadingMap`, `refreshTagsFor`)
+- Rewired `ContainerCardExpanded` for prop-driven tags, `doAsyncPull` progress polling, and in-card progress block
+- Added `tests/test_pull_jobs.py` (2 passing)
+- VERSION 2.33.9 → 2.33.10, pushed as 0b3255b
+
+========================================================================
+EXIT CODE: 0
+DURATION:  6m45s
+========================================================================

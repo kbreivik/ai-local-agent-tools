@@ -276,9 +276,27 @@ def elastic_search_logs(
     node: str = "",
     minutes_ago: int = 60,
     size: int = 50,
+    level=None,
+    severity=None,
+    log_level=None,
+    host: str = "",
 ) -> dict:
-    """Search infrastructure logs. Filter by service, node, time range, keyword."""
-    return elastic.elastic_search_logs(query, service, node, minutes_ago, size)
+    """Search Elasticsearch logs. Filters: query, service, host/node, level
+    (error|warn|info|critical, single string or list), minutes_ago, size.
+    Aliases: severity= and log_level= map to level=. Response includes
+    total_in_window (unfiltered count) + applied_filters for narrow-filter reasoning.
+    """
+    return elastic.elastic_search_logs(
+        query=query,
+        service=service,
+        node=node,
+        minutes_ago=minutes_ago,
+        size=size,
+        level=level,
+        severity=severity,
+        log_level=log_level,
+        host=host,
+    )
 
 
 @mcp.tool()
