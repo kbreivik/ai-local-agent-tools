@@ -914,5 +914,26 @@ def pbs_last_backup(vm_id: str) -> dict:
     return _plb(vm_id)
 
 
+@mcp.tool()
+def log_timeline(
+    entity_id: str,
+    window_minutes: int = 60,
+    sources: list = None,
+    limit: int = 200,
+) -> dict:
+    """Unified chronological timeline for an entity — call FIRST for any
+    "what happened to X" question. Merges operation_log (agent tool calls),
+    agent_actions (destructive audit), entity_history (state/drift changes),
+    and Elasticsearch log lines filtered to the entity's host/service.
+    Replaces 4-5 separate lookup calls with one time-sorted view.
+    entity_id: free-form, e.g. "proxmox:worker-03:9203", "kafka_broker-1",
+    or a vm_host label. window_minutes caps at 1440 (24h).
+    sources: subset of {operation_log, agent_action, entity_history, elastic}.
+    """
+    from mcp_server.tools.log_timeline import log_timeline as _lt
+    return _lt(entity_id=entity_id, window_minutes=window_minutes,
+               sources=sources, limit=limit)
+
+
 if __name__ == "__main__":
     mcp.run()

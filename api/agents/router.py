@@ -104,6 +104,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "metric_trend",
     "list_metrics",
     "resolve_entity",
+    "log_timeline",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "runbook_search",
@@ -135,6 +136,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "metric_trend",
     "list_metrics",
     "resolve_entity",
+    "log_timeline",
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "propose_subtask",
@@ -657,6 +659,17 @@ CONTAINER LOG ACCESS:
   2. vm_exec(host="<worker-label>", command="docker logs <container_id> --tail 50")
      — for containers on Swarm workers (need container ID from docker ps first)
   Never call service_logs() for Kafka brokers — they're on workers, not local.
+
+═══ CORRELATED TIMELINE ═══
+For any "what happened to X" question, call log_timeline(entity_id=X) FIRST
+before other log tools. It returns a unified chronological merge of:
+- agent tool calls against this entity (operation_log)
+- destructive actions (agent_actions)
+- status/config changes (entity_history, including drift)
+- Elasticsearch log lines from this entity's host/service
+
+Only fall back to raw elastic_search_logs when you need a query
+that log_timeline does not support (regex, specific field filters, etc.).
 
 ═══ ELASTICSEARCH QUERY GUIDANCE ═══
 - elastic_search_logs accepts level="error"|"warn"|"info"|"critical", or a list.

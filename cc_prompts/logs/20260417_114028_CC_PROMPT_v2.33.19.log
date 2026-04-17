@@ -1,0 +1,444 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.33.19.md (v2.33.19)
+Theme: feat(tools): log_timeline — unified cross-source timeline per entity
+
+Prompt content:
+
+# CC PROMPT — v2.33.19 — feat(tools): log_timeline — unified cross-source timeline per entity
+
+## What this does
+
+Adds a single MCP tool that returns a chronologically merged timeline for an
+entity, drawing from four sources that the agent currently has to query
+separately and correlate by hand:
+
+1. `operation_log` — agent tool calls scoped to this entity
+2. `agent_actions` (v2.31.2) — destructive actions audit
+3. `entity_history` (v2.9.0) — status transitions, config hash changes (drift v2.33.9)
+4. Elasticsearch logs — filtered to entity's host/service within window
+
+Observed cost: most investigate traces spend ~40% of their tool budget
+reconstructing this timeline. This single call replaces 4-5 other calls and
+gives the agent a clean synthesis input.
+
+Version bump: 2.33.18 → 2.33.19
+
+---
+
+## Change 1 — mcp_server/tools/log_timeline.py (new file)
+
+```python
+"""
+log_timeline — unified chronological view of everything that happened to an entity.
+
+Merges events from operation_log, agent_actions, entity_history, and Elasticsearch
+logs into a single time-sorted list with a normalised schema.
+"""
+from __future__ import annotations
+import datetime as _dt
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+from api.db.base import get_engine
+from api.db.infra_inventory import resolve_entity
+
+
+EVENT_SCHEMA = """\
+Each timeline entry has:
+  ts:       ISO8601 UTC timestamp
+  source:   operation_log | agent_action | entity_history | elastic
+  kind:     tool_call | state_change | drift | log_line | plan_executed | ...
+  actor:    who/what caused it (agent task_id, user, collector name, log shipper)
+  summary:  one-line description
+  detail:   structured dict with source-specific fields
+"""
+
+
+def register(mcp: FastMCP) -> None:
+
+    @mcp.tool()
+    async def log_timeline(
+        entity_id: str,
+        window_minutes: int = 60,
+        sources: list[str] | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """
+        Return a unified event timeline for an entity.
+
+        Args:
+            entity_id:       Entity ID in `platform:name:id` form (e.g. `proxmox:worker-03:9203`).
+            window_minutes:  How far back to look. Default 60. Max 1440 (24h).
+            sources:         Subset of {operation_log, agent_action, entity_history, elastic}.
+                             None = all.
+            limit:           Max events per source. Default 200.
+        """
+        window_minutes = min(max(1, window_minutes), 1440)
+        since = _dt.datetime.utcnow() - _dt.timedelta(minutes=window_minutes)
+        sources = set(sources or ["operation_log", "agent_action", "entity_history", "elastic"])
+
+        # Resolve entity to (platform, name, underlying_id, host, service)
+        resolved = resolve_entity(entity_id) or {}
+        host     = resolved.get("host") or resolved.get("ip")
+        service  = resolved.get("service_name")
+        name     = resolved.get("name")
+
+        events: list[dict] = []
+
+        if "operation_log" in sources:
+            events.extend(await _from_operation_log(entity_id, name, since, limit))
+
+        if "agent_action" in sources:
+            events.extend(await _from_agent_actions(entity_id, name, since, limit))
+
+        if "entity_history" in sources:
+            events.extend(await _from_entity_history(entity_id, since, limit))
+
+        if "elastic" in sources and (host or service):
+            events.extend(await _from_elastic(host, service, since, limit))
+
+        # Sort descending by ts (most recent first)
+        events.sort(key=lambda e: e["ts"], reverse=True)
+        events = events[: limit * 2]  # cap overall after merge
+
+        return {
+            "entity_id": entity_id,
+            "window_minutes": window_minutes,
+            "sources_queried": sorted(sources),
+            "total": len(events),
+            "events": events,
+            "schema_note": EVENT_SCHEMA.strip(),
+        }
+
+
+async def _from_operation_log(entity_id, name, since, limit):
+    """operation_log rows where entity_id matches OR args reference this entity's name."""
+    eng = get_engine()
+    rows = []
+    async with eng.connect() as c:
+        q = """
+        SELECT created_at, task_id, tool, args, outcome, duration_ms
+        FROM operation_log
+        WHERE created_at >= :since
+          AND (entity_id = :eid OR args::text ILIKE :name_like)
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """
+        rs = await c.execute(q, {
+            "since": since,
+            "eid": entity_id,
+            "name_like": f"%{name}%" if name else "%%",
+            "limit": limit,
+        })
+        rows = rs.mappings().all()
+    return [{
+        "ts": r["created_at"].isoformat() + "Z",
+        "source": "operation_log",
+        "kind": "tool_call",
+        "actor": f"task:{r['task_id']}",
+        "summary": f"{r['tool']} → {r['outcome']} ({r['duration_ms']}ms)",
+        "detail": {"tool": r["tool"], "args": r["args"], "outcome": r["outcome"]},
+    } for r in rows]
+
+
+async def _from_agent_actions(entity_id, name, since, limit):
+    """agent_actions — destructive actions audit (v2.31.2)."""
+    eng = get_engine()
+    async with eng.connect() as c:
+        q = """
+        SELECT created_at, task_id, user_id, tool, args, blast_radius, status, error
+        FROM agent_actions
+        WHERE created_at >= :since
+          AND (entity_id = :eid OR args::text ILIKE :name_like)
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """
+        rs = await c.execute(q, {"since": since, "eid": entity_id,
+                                 "name_like": f"%{name}%" if name else "%%",
+                                 "limit": limit})
+        rows = rs.mappings().all()
+    return [{
+        "ts": r["created_at"].isoformat() + "Z",
+        "source": "agent_action",
+        "kind": "plan_executed",
+        "actor": f"user:{r['user_id']} task:{r['task_id']}",
+        "summary": f"{r['tool']} [radius={r['blast_radius']}] → {r['status']}",
+        "detail": {"tool": r["tool"], "args": r["args"],
+                   "blast_radius": r["blast_radius"],
+                   "status": r["status"], "error": r["error"]},
+    } for r in rows]
+
+
+async def _from_entity_history(entity_id, since, limit):
+    """entity_history — state transitions + drift events (v2.9.0, v2.33.9)."""
+    eng = get_engine()
+    async with eng.connect() as c:
+        q = """
+        SELECT recorded_at, event_type, prev_state, new_state, config_hash, prev_config_hash
+        FROM entity_history
+        WHERE entity_id = :eid AND recorded_at >= :since
+        ORDER BY recorded_at DESC
+        LIMIT :limit
+        """
+        rs = await c.execute(q, {"eid": entity_id, "since": since, "limit": limit})
+        rows = rs.mappings().all()
+    out = []
+    for r in rows:
+        kind = "drift" if (r["config_hash"] != r["prev_config_hash"] and r["prev_config_hash"]) else "state_change"
+        out.append({
+            "ts": r["recorded_at"].isoformat() + "Z",
+            "source": "entity_history",
+            "kind": kind,
+            "actor": "collector",
+            "summary": (f"{r['prev_state']} → {r['new_state']}" if kind == "state_change"
+                        else f"config_hash {r['prev_config_hash'][:8]}… → {r['config_hash'][:8]}…"),
+            "detail": dict(r),
+        })
+    return out
+
+
+async def _from_elastic(host, service, since, limit):
+    """Elasticsearch log slice — reuse v2.33.11/14 tool internals."""
+    from mcp_server.tools.elastic import _run_elastic_search  # internal helper
+    body = {
+        "query": {
+            "bool": {
+                "filter": [
+                    {"range": {"@timestamp": {"gte": since.isoformat() + "Z"}}},
+                ],
+            },
+        },
+        "sort": [{"@timestamp": "desc"}],
+        "size": limit,
+    }
+    if host:
+        body["query"]["bool"]["filter"].append(
+            {"bool": {"should": [{"term": {"host.name": host}},
+                                 {"term": {"host.ip": host}}]}})
+    if service:
+        body["query"]["bool"]["filter"].append({"term": {"service.name": service}})
+
+    try:
+        result = await _run_elastic_search(body)
+    except Exception as e:
+        return [{
+            "ts": _dt.datetime.utcnow().isoformat() + "Z",
+            "source": "elastic",
+            "kind": "error",
+            "actor": "log_timeline",
+            "summary": f"elastic query failed: {e}",
+            "detail": {},
+        }]
+
+    return [{
+        "ts": hit.get("_source", {}).get("@timestamp"),
+        "source": "elastic",
+        "kind": "log_line",
+        "actor": hit.get("_source", {}).get("service", {}).get("name") or hit.get("_source", {}).get("host", {}).get("name") or "?",
+        "summary": (hit.get("_source", {}).get("message") or "")[:140],
+        "detail": {"level": hit.get("_source", {}).get("log", {}).get("level"),
+                   "index": hit.get("_index")},
+    } for hit in (result.get("hits", {}).get("hits", []) or [])]
+```
+
+## Change 2 — mcp_server/__init__.py or wherever tools register
+
+Register the new module so the tool is discoverable:
+
+```python
+from mcp_server.tools import log_timeline as _log_timeline_module
+_log_timeline_module.register(mcp)
+```
+
+## Change 3 — api/agents/router.py — add to allowlists
+
+Add `log_timeline` to the observe and investigate agent allowlists. Execute agent
+does not need it. Build agent does not need it.
+
+## Change 4 — prompt integration
+
+In `RESEARCH_PROMPT` (investigate agent), replace the paragraph that currently
+tells the agent to correlate multiple log sources manually with:
+
+```
+═══ CORRELATED TIMELINE ═══
+For any "what happened to X" question, call log_timeline(entity_id=X) FIRST
+before other log tools. It returns a unified chronological merge of:
+- agent tool calls against this entity (operation_log)
+- destructive actions (agent_actions)
+- status/config changes (entity_history, including drift)
+- Elasticsearch log lines from this entity's host/service
+
+Only fall back to raw elastic_search_logs when you need a query
+that log_timeline does not support (regex, specific field filters, etc.).
+```
+
+## Change 5 — tests
+
+`tests/test_log_timeline.py`:
+
+```python
+import pytest
+
+@pytest.mark.asyncio
+async def test_empty_window_returns_empty_events(seeded_db):
+    from mcp_server.tools.log_timeline import log_timeline
+    r = await log_timeline("proxmox:nonexistent:9999", window_minutes=1)
+    assert r["total"] == 0
+    assert r["events"] == []
+
+@pytest.mark.asyncio
+async def test_sources_filter_respected(seeded_db):
+    from mcp_server.tools.log_timeline import log_timeline
+    r = await log_timeline("proxmox:worker-03:9203", sources=["entity_history"])
+    assert all(e["source"] == "entity_history" for e in r["events"])
+    assert r["sources_queried"] == ["entity_history"]
+
+@pytest.mark.asyncio
+async def test_events_sorted_desc(seeded_db):
+    from mcp_server.tools.log_timeline import log_timeline
+    r = await log_timeline("proxmox:worker-03:9203")
+    ts = [e["ts"] for e in r["events"]]
+    assert ts == sorted(ts, reverse=True)
+
+@pytest.mark.asyncio
+async def test_window_capped_at_24h():
+    from mcp_server.tools.log_timeline import log_timeline
+    r = await log_timeline("any", window_minutes=99999)
+    assert r["window_minutes"] == 1440
+```
+
+## Version bump
+Update `VERSION`: 2.33.18 → 2.33.19
+
+## Commit
+```
+git add -A
+git commit -m "feat(tools): v2.33.19 log_timeline — unified cross-source timeline per entity"
+git push origin main
+```
+
+## How to test after push
+1. Redeploy.
+2. Run the investigate-agent query: `What happened to worker-03 in the last hour?`
+3. Trace should show `log_timeline(entity_id=proxmox:worker-03:9203)` as the
+   first or second tool call, not a sequence of 4+ separate lookups.
+4. Final answer should cite specific events from the returned timeline.
+5. Regression: elastic_search_logs still works standalone for regex queries.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-17 11:40:28
+========================================================================
