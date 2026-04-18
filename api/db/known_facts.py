@@ -6,13 +6,15 @@ cross-source contradictions, and computes a deterministic confidence score
 for every row.
 
 Tables:
-  known_facts_current           — live value, 1 row per (fact_key, source)
-  known_facts_history           — append-only on value change
-  known_facts_locks             — admin-asserted "don't overwrite" on keys
-  known_facts_conflicts         — collector disagrees with a locked fact
-  known_facts_permissions       — user/role grants for admin ops
-  known_facts_refresh_schedule  — per-key-pattern expected poll cadence
-  facts_audit_log               — admin action audit log
+  known_facts_current                   — live value, 1 row per (fact_key, source)
+  known_facts_history                   — append-only on value change
+  known_facts_locks                     — admin-asserted "don't overwrite" on keys
+  known_facts_conflicts                 — collector disagrees with a locked fact
+  known_facts_permissions               — user/role grants for admin ops
+  known_facts_refresh_schedule          — per-key-pattern expected poll cadence
+  facts_audit_log                       — admin action audit log
+  known_facts_keywords                  — v2.35.1 preflight keyword corpus
+  known_facts_keyword_suggestions       — v2.35.1 auto-proposed keywords from tier-3 LLM
 
 This module is sync-only, never raises into callers, and no-ops on SQLite.
 """
@@ -127,7 +129,50 @@ CREATE TABLE IF NOT EXISTS facts_audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_facts_audit_log_at
     ON facts_audit_log(at DESC);
+
+-- v2.35.1 preflight keyword corpus (DB-editable extension of hardcoded defaults)
+CREATE TABLE IF NOT EXISTS known_facts_keywords (
+    keyword             TEXT PRIMARY KEY,
+    resolver_name       TEXT NOT NULL,
+    default_window_min  INT,
+    description         TEXT NOT NULL DEFAULT '',
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    added_by            TEXT NOT NULL DEFAULT 'system',
+    added_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS known_facts_keyword_suggestions (
+    id                  BIGSERIAL PRIMARY KEY,
+    proposed_keyword    TEXT,
+    raw_task            TEXT NOT NULL,
+    raw_proposal        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at         TIMESTAMPTZ,
+    reviewed_by         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_known_facts_keyword_suggestions_pending
+    ON known_facts_keyword_suggestions(created_at DESC)
+    WHERE status = 'pending';
 """
+
+
+_KEYWORD_SEEDS: list[tuple[str, str, int | None, str]] = [
+    ("restarted",  "_lookup_recent_restart_actions", None, "recent service/vm restart ops"),
+    ("restart",    "_lookup_recent_restart_actions", None, "recent service/vm restart ops"),
+    ("rebooted",   "_lookup_recent_reboot_actions",  None, "recent VM/host reboots"),
+    ("reboot",     "_lookup_recent_reboot_actions",  None, "recent VM/host reboots"),
+    ("upgraded",   "_lookup_recent_upgrade_actions", 1440, "recent image pulls + service updates"),
+    ("upgrade",    "_lookup_recent_upgrade_actions", 1440, "recent image pulls + service updates"),
+    ("degraded",   "_lookup_degraded_entities",      None, "entities in Degraded state"),
+    ("failing",    "_lookup_failing_entities",       None, "entities in Failed/Failing state"),
+    ("offline",    "_lookup_offline_entities",       None, "entities marked Down/Offline"),
+    ("broken",     "_lookup_recent_errors",          None, "recent error-level events"),
+    ("crashed",    "_lookup_recent_crashes",         None, "recent crash/OOM/exit signals"),
+    ("alerting",   "_lookup_alerting_entities",      None, "alerts currently firing"),
+    ("deployed",   "_lookup_recent_deployments",     1440, "recent deploy actions"),
+    ("scaled",     "_lookup_recent_scale_events",    None, "recent scale events"),
+]
 
 
 _SCHEDULE_SEEDS: list[tuple[str, int, str]] = [
@@ -315,6 +360,15 @@ def init_known_facts() -> bool:
                 "INSERT INTO known_facts_refresh_schedule (pattern, cadence_sec, description) "
                 "VALUES (%s, %s, %s) ON CONFLICT (pattern) DO NOTHING",
                 (pattern, cadence, desc),
+            )
+        # v2.35.1 — seed keyword corpus from hardcoded defaults
+        for kw, resolver, win, desc in _KEYWORD_SEEDS:
+            cur.execute(
+                "INSERT INTO known_facts_keywords "
+                "(keyword, resolver_name, default_window_min, description, active, added_by) "
+                "VALUES (%s, %s, %s, %s, TRUE, 'system') "
+                "ON CONFLICT (keyword) DO NOTHING",
+                (kw, resolver, win, desc),
             )
         cur.close()
         conn.close()
@@ -1173,3 +1227,162 @@ def get_gauge_snapshot() -> dict:
     except Exception as e:
         log.debug("get_gauge_snapshot failed: %s", e)
     return snap
+
+
+# ── v2.35.1 keyword corpus helpers ───────────────────────────────────────────
+
+def list_keywords_rows(active_only: bool = True) -> list[dict]:
+    if not _is_pg():
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        if active_only:
+            cur.execute(
+                "SELECT keyword, resolver_name, default_window_min, description, "
+                "active, added_by, added_at FROM known_facts_keywords "
+                "WHERE active = TRUE ORDER BY keyword ASC"
+            )
+        else:
+            cur.execute(
+                "SELECT keyword, resolver_name, default_window_min, description, "
+                "active, added_by, added_at FROM known_facts_keywords "
+                "ORDER BY keyword ASC"
+            )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("list_keywords_rows failed: %s", e)
+        return []
+
+
+def upsert_keyword_row(keyword: str, resolver_name: str,
+                       default_window_min: int | None,
+                       description: str, active: bool, actor: str) -> dict:
+    if not _is_pg() or not keyword or not resolver_name:
+        return {}
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return {}
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO known_facts_keywords "
+            "(keyword, resolver_name, default_window_min, description, active, added_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (keyword) DO UPDATE SET "
+            " resolver_name = EXCLUDED.resolver_name, "
+            " default_window_min = EXCLUDED.default_window_min, "
+            " description = EXCLUDED.description, "
+            " active = EXCLUDED.active, "
+            " added_by = EXCLUDED.added_by, "
+            " added_at = NOW()",
+            (keyword.lower().strip(), resolver_name, default_window_min,
+             description or "", bool(active), actor),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT keyword, resolver_name, default_window_min, description, "
+            "active, added_by, added_at FROM known_facts_keywords WHERE keyword=%s",
+            (keyword.lower().strip(),),
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows[0] if rows else {}
+    except Exception as e:
+        log.warning("upsert_keyword_row failed: %s", e)
+        return {}
+
+
+def delete_keyword_row(keyword: str) -> None:
+    if not _is_pg() or not keyword:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute("DELETE FROM known_facts_keywords WHERE keyword=%s",
+                    (keyword.lower().strip(),))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("delete_keyword_row failed: %s", e)
+
+
+def record_keyword_suggestion(task: str, proposal) -> None:
+    """Append a suggestion row for admin review (auto-propose from tier 3)."""
+    if not _is_pg():
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        proposed_kw = None
+        if isinstance(proposal, list) and proposal:
+            proposed_kw = str(proposal[0])[:64]
+        elif isinstance(proposal, str):
+            proposed_kw = proposal[:64]
+        cur.execute(
+            "INSERT INTO known_facts_keyword_suggestions "
+            "(proposed_keyword, raw_task, raw_proposal, status) "
+            "VALUES (%s, %s, %s::jsonb, 'pending')",
+            (proposed_kw, (task or "")[:1024], _json_dumps(proposal)),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.debug("record_keyword_suggestion failed: %s", e)
+
+
+def list_keyword_suggestions(status: str = "pending", limit: int = 100) -> list[dict]:
+    if not _is_pg():
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, proposed_keyword, raw_task, raw_proposal, status, "
+            "created_at, reviewed_at, reviewed_by FROM known_facts_keyword_suggestions "
+            "WHERE status = %s ORDER BY created_at DESC LIMIT %s",
+            (status, int(limit)),
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("list_keyword_suggestions failed: %s", e)
+        return []
+
+
+def review_keyword_suggestion(suggestion_id: int, status: str, actor: str) -> None:
+    if not _is_pg() or not suggestion_id:
+        return
+    if status not in ("accepted", "rejected", "dismissed"):
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE known_facts_keyword_suggestions SET status=%s, "
+            "reviewed_at=NOW(), reviewed_by=%s WHERE id=%s",
+            (status, actor, int(suggestion_id)),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("review_keyword_suggestion failed: %s", e)

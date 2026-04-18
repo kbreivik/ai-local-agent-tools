@@ -250,6 +250,23 @@ FACTS_REFRESH_STALE_GAUGE = Gauge(
     ["platform"],
 )
 
+# --- preflight (v2.35.1) ---
+PREFLIGHT_RESOLUTIONS_COUNTER = Counter(
+    "deathstar_preflight_resolutions_total",
+    "Preflight resolution outcomes",
+    ["outcome"],   # direct | regex | keyword_db | llm_fallback | ambiguous | zero_hit
+)
+PREFLIGHT_DISAMBIGUATION_OUTCOME_COUNTER = Counter(
+    "deathstar_preflight_disambiguation_outcome_total",
+    "How users resolved an ambiguous preflight",
+    ["result"],    # auto_proceed | user_picked | cancelled | timeout
+)
+PREFLIGHT_FACTS_INJECTED = Histogram(
+    "deathstar_preflight_facts_injected_count",
+    "Facts injected per preflight",
+    buckets=(0, 1, 2, 5, 10, 20, 40, 100),
+)
+
 # --- build info ---
 BUILD = Info("deathstar_build", "Build metadata")
 

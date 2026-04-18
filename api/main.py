@@ -451,6 +451,44 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
     _aio.create_task(_refresh_facts_gauges_loop())
+    # v2.35.1 — auto-cancel preflight-awaiting operations past the timeout.
+    async def _preflight_timeout_sweeper():
+        while True:
+            await _aio.sleep(60)
+            try:
+                from api.db.base import get_engine as _pge
+                from sqlalchemy import text as _pt
+                # Default 300s; settings table may override but we keep the
+                # sweeper lightweight and read the current setting each tick.
+                timeout_sec = 300
+                try:
+                    async with _pge().connect() as _pc:
+                        r = await _pc.execute(_pt(
+                            "SELECT value FROM settings WHERE key='preflightDisambiguationTimeout'"
+                        ))
+                        row = r.fetchone()
+                        if row and row[0]:
+                            timeout_sec = int(row[0])
+                except Exception:
+                    pass
+                async with _pge().begin() as _pc:
+                    res = await _pc.execute(_pt(
+                        "UPDATE operations SET status='cancelled', "
+                        "final_answer='preflight clarification timeout' "
+                        "WHERE status='awaiting_clarification' "
+                        "  AND created_at < NOW() - (:sec || ' seconds')::interval "
+                        "RETURNING id"
+                    ), {"sec": timeout_sec})
+                    cancelled = res.fetchall() or []
+                for _row in cancelled:
+                    try:
+                        from api.agents.preflight import record_disambiguation_outcome
+                        record_disambiguation_outcome("timeout")
+                    except Exception:
+                        pass
+            except Exception as _ste:
+                _log.debug("preflight timeout sweeper failed: %s", _ste)
+    _aio.create_task(_preflight_timeout_sweeper())
     # Auto-promoter: weekly scan of agent_actions for repeated tool patterns
     try:
         from api.skills.auto_promoter import schedule_weekly

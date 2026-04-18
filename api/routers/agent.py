@@ -2820,6 +2820,47 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
     system_prompt = get_prompt(first_intent)
 
+    # v2.35.1 — preflight resolution (regex → keyword_db → optional LLM fallback).
+    # Resolves entity references against infra_inventory + known_facts and builds
+    # a PREFLIGHT FACTS section to inject into the system prompt. Never raises.
+    _preflight_result = None
+    _preflight_facts_block = ""
+    try:
+        from api.agents.preflight import (
+            preflight_resolve, format_preflight_facts_section,
+        )
+        _preflight_result = preflight_resolve(task, first_intent)
+        _preflight_facts_block = format_preflight_facts_section(_preflight_result)
+        # Emit a preflight event on the websocket so the Preflight Panel can render.
+        try:
+            await manager.broadcast({
+                "type": "preflight",
+                "session_id": session_id,
+                "operation_id": operation_id,
+                "preflight": _preflight_result.as_dict(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+        # Mark the operation as awaiting_clarification when ambiguous so the UI
+        # can pause. The LLM still sees the candidates via the prompt block
+        # below; if the operator picks one via the clarify endpoint, a
+        # `preflight_clarify` WS event is echoed back.
+        if _preflight_result.clarifying_needed:
+            try:
+                from api.db.base import get_engine as _pge
+                from sqlalchemy import text as _pt
+                async with _pge().begin() as _pconn:
+                    await _pconn.execute(
+                        _pt("UPDATE operations SET status='awaiting_clarification' "
+                            "WHERE id=:oid AND status='running'"),
+                        {"oid": operation_id},
+                    )
+            except Exception as _pop_e:
+                log.debug("preflight op status update failed: %s", _pop_e)
+    except Exception as _pre_e:
+        log.debug("preflight resolve skipped: %s", _pre_e)
+
     # v2.34.9: inject MCP tool signatures so the agent calls tools with exact kwargs
     try:
         from api.agents.router import allowlist_for as _aw, format_tool_signatures_section as _fsig
@@ -3049,6 +3090,10 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                     src = src_m.group(1).strip() if src_m else "docs"
                     doc_lines.append(f"[{src}]\n{body[:500]}")
                 injected_sections.append("\n\n".join(doc_lines))
+
+        # v2.35.1 — prepend PREFLIGHT FACTS above RELEVANT PAST OUTCOMES.
+        if _preflight_facts_block:
+            injected_sections.insert(0, _preflight_facts_block)
 
         if injected_sections:
             injection = "\n\n".join(injected_sections) + "\n\n"
@@ -3535,6 +3580,86 @@ async def clarify_agent(req: ClarifyRequest, _: str = Depends(get_current_user))
     if not ok:
         return {"status": "error", "message": f"No pending clarification for session '{req.session_id}'"}
     return {"status": "ok", "message": "Clarification received"}
+
+
+class PreflightClarifyRequest(BaseModel):
+    session_id: str
+    selected_entity_id: str | None = None
+    refined_task: str | None = None
+
+
+class PreflightCancelRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/preflight/clarify")
+async def preflight_clarify(req: PreflightClarifyRequest,
+                             user: str = Depends(get_current_user)):
+    """Resume an operation paused on preflight disambiguation.
+
+    Body: {session_id, selected_entity_id?|refined_task?}.
+
+    Echoes a `preflight_clarify` WS event the feed can react to and flips
+    the operation status back to `running`. Counters are incremented via
+    `record_disambiguation_outcome`.
+    """
+    if not req.selected_entity_id and not req.refined_task:
+        raise HTTPException(400, "selected_entity_id or refined_task required")
+
+    try:
+        from api.db.base import get_engine as _pge
+        from sqlalchemy import text as _pt
+        async with _pge().begin() as _pconn:
+            await _pconn.execute(
+                _pt("UPDATE operations SET status='running' "
+                    "WHERE session_id=:sid AND status='awaiting_clarification'"),
+                {"sid": req.session_id},
+            )
+    except Exception as _e:
+        log.debug("preflight_clarify op update failed: %s", _e)
+
+    try:
+        await manager.broadcast({
+            "type": "preflight_clarify",
+            "session_id": req.session_id,
+            "selected_entity_id": req.selected_entity_id,
+            "refined_task": req.refined_task,
+            "actor": user,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    try:
+        from api.agents.preflight import record_disambiguation_outcome
+        record_disambiguation_outcome("user_picked")
+    except Exception:
+        pass
+
+    return {"status": "ok", "message": "Preflight clarified"}
+
+
+@router.post("/preflight/cancel")
+async def preflight_cancel(req: PreflightCancelRequest, user: str = Depends(get_current_user)):
+    """Cancel an operation paused on preflight disambiguation."""
+    try:
+        from api.db.base import get_engine as _pge
+        from sqlalchemy import text as _pt
+        async with _pge().begin() as _pconn:
+            await _pconn.execute(
+                _pt("UPDATE operations SET status='cancelled', "
+                    "final_answer='Preflight disambiguation cancelled by user' "
+                    "WHERE session_id=:sid"),
+                {"sid": req.session_id},
+            )
+    except Exception as _e:
+        log.debug("preflight_cancel op update failed: %s", _e)
+    try:
+        from api.agents.preflight import record_disambiguation_outcome
+        record_disambiguation_outcome("cancelled")
+    except Exception:
+        pass
+    return {"status": "ok", "message": "Preflight cancelled"}
 
 
 class StopRequest(BaseModel):

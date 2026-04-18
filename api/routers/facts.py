@@ -13,6 +13,7 @@ from api.auth import get_current_user
 from api.db.known_facts import (
     compute_confidence,
     create_lock_row,
+    delete_keyword_row,
     get_conflict,
     get_confident_facts,
     get_fact,
@@ -24,12 +25,16 @@ from api.db.known_facts import (
     get_summary_stats,
     list_all_locks,
     list_audit_log,
+    list_keyword_suggestions,
+    list_keywords_rows,
     list_refresh_schedule_rows,
     mark_conflict_resolved,
     refresh_manual_fact_timestamp,
     remove_lock_row,
+    review_keyword_suggestion,
     sample_fact_rows,
     update_lock,
+    upsert_keyword_row,
     write_audit,
 )
 from api.security.facts_permissions import (
@@ -279,6 +284,76 @@ async def list_audit(
     user: str = Depends(get_current_user),
 ):
     return {"entries": list_audit_log(limit=limit)}
+
+
+# ── Preflight keyword corpus (v2.35.1) ───────────────────────────────────────
+
+@router.get("/keywords")
+async def list_preflight_keywords(
+    include_inactive: bool = Query(False),
+    user: str = Depends(get_current_user),
+):
+    """Return the DB-editable keyword corpus for preflight tier 2."""
+    rows = list_keywords_rows(active_only=not include_inactive)
+    return {"keywords": rows, "count": len(rows)}
+
+
+@router.post("/keywords")
+async def upsert_preflight_keyword(
+    body: dict = Body(...),
+    user: str = Depends(require_role("sith_lord")),
+):
+    """Create or update a keyword row. Body: {keyword, resolver_name,
+    default_window_min?, description?, active?}. sith_lord-only."""
+    kw = (body or {}).get("keyword") or ""
+    resolver = (body or {}).get("resolver_name") or ""
+    if not kw or not resolver:
+        raise HTTPException(400, "keyword and resolver_name are required")
+    row = upsert_keyword_row(
+        keyword=kw,
+        resolver_name=resolver,
+        default_window_min=body.get("default_window_min"),
+        description=body.get("description", ""),
+        active=bool(body.get("active", True)),
+        actor=user,
+    )
+    write_audit("keyword_upsert", fact_key=None, actor=user, detail=body)
+    return {"ok": True, "keyword": row}
+
+
+@router.delete("/keywords/{keyword}")
+async def delete_preflight_keyword(
+    keyword: str,
+    user: str = Depends(require_role("sith_lord")),
+):
+    delete_keyword_row(keyword)
+    write_audit("keyword_delete", fact_key=None, actor=user, detail={"keyword": keyword})
+    return {"ok": True}
+
+
+@router.get("/keyword-suggestions")
+async def list_preflight_keyword_suggestions(
+    status: str = Query("pending"),
+    limit: int = Query(100, ge=1, le=500),
+    user: str = Depends(get_current_user),
+):
+    """Tier-3-LLM-proposed keyword rows, pending admin review."""
+    return {"suggestions": list_keyword_suggestions(status=status, limit=limit)}
+
+
+@router.post("/keyword-suggestions/{suggestion_id}/review")
+async def review_preflight_keyword_suggestion(
+    suggestion_id: int,
+    body: dict = Body(...),
+    user: str = Depends(require_role("sith_lord")),
+):
+    status = (body or {}).get("status", "rejected")
+    if status not in ("accepted", "rejected", "dismissed"):
+        raise HTTPException(400, "status must be accepted|rejected|dismissed")
+    review_keyword_suggestion(suggestion_id, status=status, actor=user)
+    write_audit("keyword_suggestion_review", fact_key=None, actor=user,
+                detail={"suggestion_id": suggestion_id, "status": status})
+    return {"ok": True}
 
 
 # ── Key detail last to avoid shadowing /conflicts, /locks, etc. ──────────────
