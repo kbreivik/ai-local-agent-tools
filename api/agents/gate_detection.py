@@ -27,6 +27,7 @@ GATE_DEFS = (
     "budget_nudge",
     "sanitizer",
     "forced_synthesis",
+    "inrun_contradiction",
 )
 
 
@@ -96,6 +97,12 @@ def detect_gates_from_steps(steps: list) -> dict:
             ):
                 gates["forced_synthesis"]["count"] += 1
                 gates["forced_synthesis"]["details"].append(
+                    {"step": step_idx, "snippet": content[:160]}
+                )
+            # v2.35.2 — in-run cross-tool contradiction advisory
+            if "[harness] Contradiction detected within this run" in content:
+                gates["inrun_contradiction"]["count"] += 1
+                gates["inrun_contradiction"]["details"].append(
                     {"step": step_idx, "snippet": content[:160]}
                 )
 

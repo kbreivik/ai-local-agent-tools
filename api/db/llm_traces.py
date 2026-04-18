@@ -266,8 +266,13 @@ def get_trace(operation_id: str) -> dict:
     return result
 
 
-def render_digest(trace: dict) -> str:
-    """Render a compact markdown digest of the trace."""
+def render_digest(trace: dict, operation_id: str | None = None) -> str:
+    """Render a compact markdown digest of the trace.
+
+    v2.35.2 — appends the list of facts written to known_facts at the
+    agent_observation source for this operation (if any) so operators can see
+    what the run contributed to the knowledge store.
+    """
     lines: list[str] = []
     if trace.get("system_prompt"):
         lines.append(
@@ -328,4 +333,33 @@ def render_digest(trace: dict) -> str:
                 user_preview = (m.get("content") or "")[:200]
                 lines.append(f"- **User/harness:** {user_preview}")
         lines.append("")
+
+    # v2.35.2 — facts written to known_facts by this run
+    if operation_id:
+        try:
+            from api.db.known_facts import get_facts_by_operation
+            written = get_facts_by_operation(operation_id)
+        except Exception as _fe:
+            log.debug("get_facts_by_operation failed during digest: %s", _fe)
+            written = []
+        if written:
+            lines.append("## Facts written to known_facts (agent_observation)")
+            for w in written:
+                md = w.get("metadata") or {}
+                via = md.get("via_tool") or "?"
+                step = md.get("step")
+                value = w.get("fact_value")
+                try:
+                    import json as _json
+                    value_s = _json.dumps(value, default=str)
+                except Exception:
+                    value_s = str(value)
+                if len(value_s) > 140:
+                    value_s = value_s[:140] + "..."
+                step_s = f", step {step}" if step is not None else ""
+                lines.append(
+                    f"- {w.get('fact_key')} = {value_s} (via {via}{step_s})"
+                )
+            lines.append("")
+
     return "\n".join(lines)

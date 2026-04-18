@@ -75,7 +75,7 @@ async def get_llm_trace(
     if not trace.get("system_prompt") and not trace.get("steps"):
         raise HTTPException(404, f"No trace found for '{op_id}'")
     if format == "digest":
-        return {"markdown": llm_traces.render_digest(trace)}
+        return {"markdown": llm_traces.render_digest(trace, operation_id=op_id)}
     return {
         "operation_id": op_id,
         "system_prompt": trace.get("system_prompt"),

@@ -250,6 +250,20 @@ FACTS_REFRESH_STALE_GAUGE = Gauge(
     ["platform"],
 )
 
+# --- in-run contradiction + agent_observation fact writes (v2.35.2) ---
+INRUN_CONTRADICTION_COUNTER = Counter(
+    "deathstar_inrun_contradictions_total",
+    "Cross-tool contradictions detected within a single agent run",
+    ["fact_key_prefix"],   # truncated to first 3 dotted segments for cardinality safety
+)
+
+AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER = Counter(
+    "deathstar_agent_observation_facts_written_total",
+    "Facts written to known_facts from completed agent runs",
+    # wrote | skipped_fabrication | skipped_halluc | skipped_nonterminal | skipped_cap
+    ["wrote_or_skipped"],
+)
+
 # --- preflight (v2.35.1) ---
 PREFLIGHT_RESOLUTIONS_COUNTER = Counter(
     "deathstar_preflight_resolutions_total",

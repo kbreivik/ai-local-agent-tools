@@ -10,6 +10,7 @@ export const GATE_DEFS = [
   'budget_nudge',
   'sanitizer',
   'forced_synthesis',
+  'inrun_contradiction',
 ]
 
 function emptyGates() {
@@ -81,6 +82,11 @@ export function detectGates(steps) {
       )) {
         gates.forced_synthesis.count++
         gates.forced_synthesis.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
+      }
+      // v2.35.2 — in-run cross-tool contradiction advisory
+      if (c.includes('[harness] Contradiction detected within this run')) {
+        gates.inrun_contradiction.count++
+        gates.inrun_contradiction.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
       }
     }
   }

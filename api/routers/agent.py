@@ -570,6 +570,11 @@ async def _run_single_agent_step(
     _zero_streaks: dict[str, int] = {}       # tool_name -> consecutive zero count
     _nonzero_seen: dict[str, int] = {}       # tool_name -> best non-zero count seen
     _zero_pivot_fired: set[str] = set()      # tools we've already nudged about
+    # v2.35.2: in-run cross-tool fact tracking — key → {value, step, tool, timestamp, raw}
+    # Populated by the tool fact extractor; mismatches inject a harness
+    # contradiction advisory; survivors of a completed run are upserted into
+    # known_facts at source=agent_observation.
+    _run_facts: dict[str, dict] = {}
 
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
@@ -2127,6 +2132,68 @@ async def _run_single_agent_step(
                     "step":   step,
                 })
 
+                # ── v2.35.2: in-run cross-tool contradiction detection ───────
+                # Extract structured facts from the tool result, compare
+                # against prior fact values observed in this run, inject a
+                # harness advisory on disagreement. Survivors will be written
+                # to known_facts at source=agent_observation on completion.
+                try:
+                    from api.facts.tool_extractors import extract_facts_from_tool_result
+                    _new_facts = extract_facts_from_tool_result(
+                        fn_name,
+                        fn_args if isinstance(fn_args, dict) else {},
+                        result if isinstance(result, dict) else {},
+                    )
+                except Exception as _fe:
+                    log.debug("tool fact extraction failed: %s", _fe)
+                    _new_facts = []
+
+                for _nf in _new_facts:
+                    _fk = _nf.get("fact_key")
+                    if not _fk:
+                        continue
+                    _nv = _nf.get("value")
+                    _prior = _run_facts.get(_fk)
+                    if _prior is not None and _prior.get("value") != _nv:
+                        try:
+                            _prior_snip = json.dumps(_prior.get("value"), default=str)[:80]
+                            _new_snip = json.dumps(_nv, default=str)[:80]
+                        except Exception:
+                            _prior_snip = str(_prior.get("value"))[:80]
+                            _new_snip = str(_nv)[:80]
+                        _contra_msg = (
+                            f"[harness] Contradiction detected within this run: "
+                            f"{_fk} — step {_prior.get('step')} "
+                            f"({_prior.get('tool')}) said {_prior_snip}, "
+                            f"step {step} ({fn_name}) says {_new_snip}. "
+                            f"Resolve before concluding. The {_fk} field in your "
+                            f"EVIDENCE block must cite only ONE value or explicitly "
+                            f"note the conflict."
+                        )
+                        _propose_state.queued_harness_messages.append(_contra_msg)
+                        await manager.send_line(
+                            "step",
+                            f"[contradiction] {_fk} disagrees across "
+                            f"step {_prior.get('step')} → step {step}",
+                            status="warning", session_id=session_id,
+                        )
+                        try:
+                            from api.metrics import INRUN_CONTRADICTION_COUNTER
+                            _parts = _fk.split(".")
+                            _prefix = ".".join(_parts[:3]) if len(_parts) >= 3 else _fk
+                            INRUN_CONTRADICTION_COUNTER.labels(
+                                fact_key_prefix=_prefix,
+                            ).inc()
+                        except Exception:
+                            pass
+                    _run_facts[_fk] = {
+                        "value":     _nv,
+                        "step":      step,
+                        "tool":      fn_name,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "raw":       _nf,
+                    }
+
                 if (
                     _zero_streaks.get(fn_name, 0) >= 3
                     and _nonzero_seen.get(fn_name, 0) > 0
@@ -2507,6 +2574,8 @@ async def _run_single_agent_step(
         "steps_taken":            step,
         "prompt_tokens":          total_prompt_tokens,
         "completion_tokens":      total_completion_tokens,
+        "run_facts":              _run_facts,  # v2.35.2 — in-run fact snapshot
+        "fabrication_detected":   bool(_fabrication_detected_once),  # v2.35.2
     }
 
 
@@ -3134,6 +3203,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
     # Aggregate feedback across all steps
     all_tools_used: list = []
     all_tool_history: list = []  # v2.33.13: cross-step tool call log
+    all_run_facts: dict = {}     # v2.35.2: in-run fact snapshot (across coordinator steps)
+    any_fabrication_detected = False   # v2.35.2: any step fired fabrication detector
     agg_positive = 0
     agg_negative = 0
     agg_steps = 0
@@ -3216,6 +3287,11 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
         all_tools_used.extend(step_result["tools_used"])
         all_tool_history.extend(step_result.get("tool_history", []))
+        _step_run_facts = step_result.get("run_facts") or {}
+        if isinstance(_step_run_facts, dict):
+            all_run_facts.update(_step_run_facts)
+        if step_result.get("fabrication_detected"):
+            any_fabrication_detected = True
         agg_positive += step_result["positive_signals"]
         agg_negative += step_result["negative_signals"]
         agg_steps    += step_result["steps_taken"]
@@ -3494,6 +3570,81 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 await logger_mod.set_operation_final_answer(session_id, last_reasoning)
             except Exception as _sfa_e:
                 log.debug("set_operation_final_answer failed: %s", _sfa_e)
+
+        # ── v2.35.2: agent_observation fact writer ───────────────────────────
+        # Only successful + non-suspect runs are allowed to persist facts into
+        # known_facts. Any failure mode (capped, escalated, failed, cancelled,
+        # error, fabrication firing) is skipped and recorded on the metric.
+        try:
+            _facts_reason = None
+            if final_status != "completed":
+                _facts_reason = "skipped_nonterminal"
+            elif any_fabrication_detected:
+                _facts_reason = "skipped_fabrication"
+            elif not all_run_facts:
+                _facts_reason = None  # nothing to write — no metric
+
+            if _facts_reason:
+                try:
+                    from api.metrics import AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER
+                    AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER.labels(
+                        wrote_or_skipped=_facts_reason,
+                    ).inc()
+                except Exception:
+                    pass
+            elif all_run_facts:
+                try:
+                    from mcp_server.tools.skills.storage import get_backend as _gb_fs
+                    _max_rows = int(_gb_fs().get_setting("factInjectionMaxRows") or 40) * 2
+                except Exception:
+                    _max_rows = 80
+
+                _facts_to_write: list[dict] = []
+                for _fk, _info in all_run_facts.items():
+                    if len(_facts_to_write) >= _max_rows:
+                        break
+                    _raw = _info.get("raw") or {}
+                    _md = {
+                        "operation_id": operation_id,
+                        "via_tool":     _info.get("tool"),
+                        "step":         _info.get("step"),
+                    }
+                    _raw_md = _raw.get("metadata") if isinstance(_raw, dict) else None
+                    if isinstance(_raw_md, dict):
+                        _md.update(_raw_md)
+                    _facts_to_write.append({
+                        "fact_key": _fk,
+                        "source":   "agent_observation",
+                        "value":    _info.get("value"),
+                        "metadata": _md,
+                    })
+
+                _dropped = max(0, len(all_run_facts) - len(_facts_to_write))
+                try:
+                    from api.db.known_facts import batch_upsert_facts
+                    _res = batch_upsert_facts(
+                        _facts_to_write,
+                        actor=f"agent:{(operation_id or '')[:8]}",
+                    )
+                    log.info(
+                        "agent_observation facts: op=%s wrote=%s dropped=%d totals=%s",
+                        (operation_id or "")[:8], len(_facts_to_write), _dropped, _res,
+                    )
+                    try:
+                        from api.metrics import AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER
+                        AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER.labels(
+                            wrote_or_skipped="wrote",
+                        ).inc(len(_facts_to_write))
+                        if _dropped:
+                            AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER.labels(
+                                wrote_or_skipped="skipped_cap",
+                            ).inc(_dropped)
+                    except Exception:
+                        pass
+                except Exception as _fw_e:
+                    log.warning("agent_observation fact write failed: %s", _fw_e)
+        except Exception as _af_e:
+            log.debug("agent_observation writer top-level failed: %s", _af_e)
     finally:
         _cleanup_stale_cancel_flags()
         # Release plan lock and mark operation complete — both guaranteed to run

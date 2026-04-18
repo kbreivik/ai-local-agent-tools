@@ -229,14 +229,22 @@ def _default_source_weight(source: str) -> float:
     return _DEFAULT_SOURCE_WEIGHTS.get(source, 0.6)
 
 
-def _half_life_for_source(source: str, settings: dict | None = None, age_hours: float = 0.0) -> float:
+def _half_life_for_source(source: str, settings: dict | None = None,
+                          age_hours: float = 0.0,
+                          metadata: dict | None = None) -> float:
     """Return decay half-life in hours for a source.
 
     Manual facts use a phased schedule:
       - within 30 days of last_verified: phase1 (720h, gentle)
       - beyond 30 days: phase2 (1440h, steeper)
+
+    v2.35.2 — volatile metadata overrides source default. Facts produced by
+    short-lived probes (e.g. container_tcp_probe reachability) should age out
+    quickly even though the source weight is agent_observation.
     """
     s = settings or {}
+    if metadata and metadata.get("volatile"):
+        return float(s.get("factHalfLifeHours_agent_volatile", 2.0))
     if source == "manual":
         phase1 = float(s.get("factHalfLifeHours_manual_phase1", 720.0))
         phase2 = float(s.get("factHalfLifeHours_manual_phase2", 1440.0))
@@ -261,6 +269,7 @@ def _get_facts_settings() -> dict:
             "factInjectionThreshold", "factInjectionMaxRows",
             "factHalfLifeHours_collector", "factHalfLifeHours_agent",
             "factHalfLifeHours_manual_phase1", "factHalfLifeHours_manual_phase2",
+            "factHalfLifeHours_agent_volatile",
             "factVerifyCountCap",
         ]
         for s in _DEFAULT_SOURCE_WEIGHTS:
@@ -302,7 +311,9 @@ def compute_confidence(row: dict, settings: dict | None = None) -> float:
         last_verified = last_verified.replace(tzinfo=timezone.utc)
 
     hours_since = max(0.0, (_now() - last_verified).total_seconds() / 3600.0)
-    half_life = _half_life_for_source(source, s, age_hours=hours_since)
+    row_metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else None
+    half_life = _half_life_for_source(source, s, age_hours=hours_since,
+                                      metadata=row_metadata)
     age_factor = 0.5 ** (hours_since / half_life) if half_life > 0 else 1.0
 
     cap = int(s.get("factVerifyCountCap", 10))
@@ -487,6 +498,7 @@ def upsert_fact(
                 "last_verified": _now(),
                 "verify_count": 1,
                 "contradicts": disagreements,
+                "metadata": metadata or {},
             }
             confidence = compute_confidence(row_for_conf)
             cur.execute(
@@ -519,6 +531,7 @@ def upsert_fact(
                 "last_verified": _now(),
                 "verify_count": new_vc,
                 "contradicts": disagreements,
+                "metadata": metadata or {},
             }
             confidence = compute_confidence(row_for_conf)
             cur.execute(
@@ -547,6 +560,7 @@ def upsert_fact(
             "last_verified": _now(),
             "verify_count": 1,
             "contradicts": disagreements,
+            "metadata": metadata or {},
         }
         confidence = compute_confidence(row_for_conf)
         cur.execute(
@@ -1227,6 +1241,38 @@ def get_gauge_snapshot() -> dict:
     except Exception as e:
         log.debug("get_gauge_snapshot failed: %s", e)
     return snap
+
+
+# ── v2.35.2 agent_observation query helper (trace digest) ───────────────────
+
+def get_facts_by_operation(operation_id: str, limit: int = 200) -> list[dict]:
+    """Return agent_observation facts whose metadata.operation_id matches.
+
+    Used by the trace digest renderer to surface which facts this run wrote
+    to the known_facts store. Postgres only; safe no-op on SQLite.
+    """
+    if not _is_pg() or not operation_id:
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT fact_key, source, fact_value, last_verified, confidence, metadata "
+            "FROM known_facts_current "
+            "WHERE source = 'agent_observation' "
+            "  AND metadata ->> 'operation_id' = %s "
+            "ORDER BY last_verified DESC LIMIT %s",
+            (operation_id, int(limit)),
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("get_facts_by_operation failed: %s", e)
+        return []
 
 
 # ── v2.35.1 keyword corpus helpers ───────────────────────────────────────────

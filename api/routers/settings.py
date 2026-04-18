@@ -98,6 +98,7 @@ SETTINGS_KEYS: dict[str, dict] = {
     "factHalfLifeHours_agent":           {"env": None, "sens": False, "default": 24,   "type": "int",   "group": "Facts & Knowledge"},
     "factHalfLifeHours_manual_phase1":   {"env": None, "sens": False, "default": 720,  "type": "int",   "group": "Facts & Knowledge"},
     "factHalfLifeHours_manual_phase2":   {"env": None, "sens": False, "default": 1440, "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_agent_volatile":  {"env": None, "sens": False, "default": 2,    "type": "int",   "group": "Facts & Knowledge"},
     "factVerifyCountCap":                {"env": None, "sens": False, "default": 10,   "type": "int",   "group": "Facts & Knowledge"},
     # Age rejection — settings registered now, enforced in v2.35.3
     "factAgeRejectionMode":              {"env": None, "sens": False, "default": "medium", "type": "str",   "group": "Facts & Knowledge"},

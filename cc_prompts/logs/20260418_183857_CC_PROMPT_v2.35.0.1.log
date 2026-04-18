@@ -1,0 +1,500 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.0.1.md (v2.35.0.1)
+Theme: feat(ui): Facts tab + Dashboard widget + diff viewer + permission-gated admin
+
+Prompt content:
+
+# CC PROMPT — v2.35.0.1 — feat(ui): Facts tab + Dashboard widget + diff viewer + lock admin UI
+
+## What this does
+
+Consumes the `/api/facts*` endpoints from v2.35.0. Adds a new "Facts"
+view in MONITOR sidebar, a Dashboard status widget, a fact history diff
+viewer, and the permission-gated conflict resolution + lock management
+UI. Also implements the permission-gated backend endpoints that v2.35.0
+stubbed.
+
+Version bump: 2.35.0 → 2.35.0.1 (UI + permission-gated admin endpoints
+completing v2.35.0's scope).
+
+Design ref: `cc_prompts/PHASE_v2.35_SPEC.md` → "Dashboard status widget",
+"Conflict resolution UI — permission-gated", "Diff viewer — v2.35.0.1+",
+"Permissions — user + role model".
+
+---
+
+## Change 1 — backend permission helpers
+
+New file `api/security/facts_permissions.py`:
+
+```python
+from fastapi import HTTPException
+
+def user_has_permission(username: str, user_role: str, action: str, fact_pattern: str) -> bool:
+    """
+    Returns True if the user is allowed to perform `action` on facts
+    matching `fact_pattern`.
+
+    Logic:
+      1. sith_lord ALWAYS returns True for any action.
+      2. Look up matching rows in known_facts_permissions where
+         (grantee_type='user' AND grantee_id=username) OR
+         (grantee_type='role' AND grantee_id=user_role).
+      3. Filter to rows where revoked=FALSE and (expires_at IS NULL OR expires_at > NOW()).
+      4. Match the fact_pattern field against the requested pattern
+         (pattern-of-grants covers pattern-of-request; use SQL LIKE
+         semantics with * → %).
+      5. A user-level grant with revoked=TRUE overrides a role-level
+         allow (explicit revoke wins).
+    """
+
+def require_permission(action: str, fact_pattern: str):
+    """FastAPI dependency factory. Raises 403 if no permission."""
+    async def _check(user: str = Depends(get_current_user)):
+        # Resolve user → role from users table
+        role = get_user_role(user)
+        if not user_has_permission(user, role, action, fact_pattern):
+            raise HTTPException(403, f"Permission denied: {action} on {fact_pattern}")
+        return user
+    return _check
+
+
+def grant_permission(
+    grantee_type: str, grantee_id: str,
+    action: str, fact_pattern: str,
+    granted_by: str, expires_at=None,
+) -> int:
+    """Insert permission row. Returns new id."""
+
+def revoke_permission(permission_id: int, revoked_by: str) -> None:
+    """Mark a grant revoked + audit log."""
+
+def list_permissions(grantee_type: str | None = None, grantee_id: str | None = None) -> list[dict]:
+    """For admin UI."""
+```
+
+## Change 2 — extend `/api/facts` with admin endpoints
+
+Add to `api/routers/facts.py`:
+
+```python
+# Lock management
+
+@router.get("/locks")
+async def list_locks(user: str = Depends(get_current_user)):
+    """All current locks. Visible to any authenticated user."""
+    return {"locks": list_all_locks()}
+
+
+@router.post("/locks")
+async def create_lock(
+    body: dict,
+    user: str = Depends(require_permission("lock", "<dynamic>")),
+):
+    """
+    Body: {fact_key, locked_value, note}
+    Requires 'lock' permission on the fact_pattern matching fact_key.
+    """
+    _dynamic_permission_check(user, "lock", body["fact_key"])
+    lock = create_lock_row(body["fact_key"], body["locked_value"],
+                           body.get("note", ""), locked_by=user)
+    _audit("lock_created", fact_key=body["fact_key"], actor=user, detail=body)
+    FACTS_LOCK_EVENTS_COUNTER.labels(action="created").inc()
+    return {"ok": True, "lock": lock}
+
+
+@router.delete("/locks/{fact_key:path}")
+async def remove_lock(fact_key: str, user: str = Depends(get_current_user)):
+    _dynamic_permission_check(user, "unlock", fact_key)
+    remove_lock_row(fact_key)
+    _audit("lock_removed", fact_key=fact_key, actor=user)
+    FACTS_LOCK_EVENTS_COUNTER.labels(action="removed").inc()
+    return {"ok": True}
+
+
+# Conflict resolution
+
+@router.post("/conflicts/{conflict_id}/resolve")
+async def resolve_conflict(
+    conflict_id: int,
+    body: dict,   # {resolution: 'keep_lock'|'accept_collector'|'edit_lock', new_value?: ...}
+    user: str = Depends(get_current_user),
+):
+    conflict = get_conflict(conflict_id)
+    if not conflict:
+        raise HTTPException(404, "Conflict not found")
+    _dynamic_permission_check(user, "unlock", conflict["fact_key"])
+
+    resolution = body["resolution"]
+    if resolution == "keep_lock":
+        mark_conflict_resolved(conflict_id, user, "keep_lock")
+    elif resolution == "accept_collector":
+        # Update the lock to the collector's value AND update current row
+        update_lock(conflict["fact_key"], conflict["offered_value"], user)
+        mark_conflict_resolved(conflict_id, user, "accept_collector")
+    elif resolution == "edit_lock":
+        new_value = body.get("new_value")
+        if new_value is None:
+            raise HTTPException(400, "edit_lock requires new_value")
+        update_lock(conflict["fact_key"], new_value, user)
+        mark_conflict_resolved(conflict_id, user, "edit_lock", {"new_value": new_value})
+    else:
+        raise HTTPException(400, f"Unknown resolution: {resolution}")
+
+    _audit("conflict_resolved", fact_key=conflict["fact_key"], actor=user,
+           detail={"resolution": resolution})
+    return {"ok": True}
+
+
+# Permission management (sith_lord only for writes)
+
+@router.get("/permissions")
+async def list_perms(user: str = Depends(get_current_user)):
+    return {"permissions": list_permissions()}
+
+
+@router.post("/permissions")
+async def grant_perm(
+    body: dict,   # {grantee_type, grantee_id, action, fact_pattern, expires_at?}
+    user: str = Depends(require_role("sith_lord")),
+):
+    pid = grant_permission(
+        body["grantee_type"], body["grantee_id"],
+        body["action"], body["fact_pattern"],
+        granted_by=user, expires_at=body.get("expires_at"),
+    )
+    _audit("permission_granted", actor=user, detail=body)
+    return {"ok": True, "permission_id": pid}
+
+
+@router.delete("/permissions/{permission_id}")
+async def revoke_perm(
+    permission_id: int,
+    user: str = Depends(require_role("sith_lord")),
+):
+    revoke_permission(permission_id, revoked_by=user)
+    _audit("permission_revoked", actor=user, detail={"permission_id": permission_id})
+    return {"ok": True}
+
+
+# Manual fact refresh (re-asserts last_verified)
+
+@router.post("/key/{fact_key:path}/refresh")
+async def refresh_manual_fact(
+    fact_key: str,
+    user: str = Depends(get_current_user),
+):
+    _dynamic_permission_check(user, "manual_write", fact_key)
+    refresh_manual_fact_timestamp(fact_key, actor=user)
+    _audit("manual_refresh", fact_key=fact_key, actor=user)
+    return {"ok": True}
+
+
+# Audit log view
+
+@router.get("/audit")
+async def list_audit(
+    limit: int = Query(100, le=500),
+    user: str = Depends(get_current_user),
+):
+    return {"entries": list_audit_log(limit=limit)}
+```
+
+## Change 3 — Facts view (new GUI tab under MONITOR)
+
+New file `gui/src/components/FactsView.jsx`. Add sidebar nav item
+"Facts" in MONITOR section (below Kafka, above Memory) in
+`gui/src/components/Sidebar.jsx`.
+
+Layout: two-pane, same pattern as the Trace view shipped in v2.34.16.
+
+```
+┌─ Facts ────────────────────────────────────────────────────────────┐
+│ [Search: prod.kafka.*]  [Min confidence: ≥0.7]  [Changed recently] │
+├────────────────────────┬───────────────────────────────────────────┤
+│ FACT LIST              │ SELECTED FACT                             │
+│ ● prod.kafka.broker... │ prod.kafka.broker.3.host                  │
+│   0.95 · 2 min ago     │ ─────────────────────────────────────     │
+│ ● prod.swarm.service...│ Sources (2):                              │
+│   0.88 · 30 sec ago    │  • kafka_collector    "192.168.199.33"    │
+│ ⚠ prod.container.7ab.. │    verified 2min ago · confidence 0.95    │
+│   0.72 · CONFLICT      │  • proxmox_collector  "192.168.199.33"    │
+│   (pending admin)      │    verified 4min ago · confidence 0.88    │
+│ ● prod.manual.dns...   │                                           │
+│   0.72 · refresh ?     │ [LOCK THIS]                               │
+│                        │                                           │
+│ (scroll for 100s more) │ History (4 changes):                      │
+│                        │  ┌───────────────────────────────────┐    │
+│                        │  │ 2 days ago: "192.168.199.31" →   │    │
+│                        │  │             "192.168.199.33"     │    │
+│                        │  │ by kafka_collector               │    │
+│                        │  │ [view diff]                       │    │
+│                        │  └───────────────────────────────────┘    │
+└────────────────────────┴───────────────────────────────────────────┘
+```
+
+Components:
+
+- `FactsView.jsx` (top-level) — owns search, filter state, selection
+- `FactList.jsx` — virtual-scrolled list, confidence pill, freshness
+  indicator, conflict/lock/refresh icons
+- `FactDetail.jsx` — sources, history, lock controls
+- `FactDiffViewer.jsx` — character-level diff for strings, JSON tree
+  diff for objects
+- `FactLockModal.jsx` — create lock (permission-gated)
+- `ConflictResolveModal.jsx` — three-button resolution UI
+
+Diff viewer uses `diff` library (already in package.json for docs tab;
+if not, add to package.json). For JSON values, use a recursive tree
+diff showing added/removed/modified keys in crimson/cyan/amber.
+
+Conflict rows render with a red left border + "PENDING REVIEW" badge.
+Click opens `ConflictResolveModal` with three buttons (keep_lock,
+accept_collector, edit_lock). Non-admin users see read-only modal.
+
+## Change 4 — Dashboard Facts widget
+
+New file `gui/src/components/FactsCard.jsx`. Add to the existing
+Dashboard layout in `gui/src/components/DashboardLayout.jsx` as a new
+card in the top row.
+
+```
+┌─ FACTS & KNOWLEDGE ────────────────────────┐
+│ 842 total · 612 confident                  │
+│ ─────────────────                          │
+│ By tier:                                   │
+│   Very High (≥0.9)   408                   │
+│   High      (0.7-0.9) 204                  │
+│   Medium    (0.5-0.7)  89                  │
+│   Low       (<0.5)    141                  │
+│                                            │
+│ Last refresh: 23s ago                      │
+│ Stale (past cadence): 3 ⚠                 │
+│ Recently changed (1h): 12                  │
+│ ⚠ Pending admin reviews: 2                 │
+│                                            │
+│ [View Facts →]                             │
+└────────────────────────────────────────────┘
+```
+
+Pending admin reviews count shows a red pulse if >0. Stale count shows
+amber if >0. Click "View Facts →" navigates to the new FactsView.
+
+Data source: GET `/api/facts/summary` every 30 seconds.
+
+## Change 5 — Diff viewer
+
+`gui/src/components/FactDiffViewer.jsx`:
+
+- Props: `{priorValue, newValue, priorTimestamp, newTimestamp, source, actor}`
+- Header: "Changed at <newTimestamp> by <source>"
+- Body:
+  - If both values are strings → character-level diff with added/removed
+    highlighted
+  - If both are numbers → "23 → 42" with delta
+  - If both are arrays → show removed items in crimson, added items in
+    cyan, unchanged in muted text
+  - If both are objects → recursive tree diff, modified leaves highlighted
+
+Extensible: the diff renderer accepts a `valueType` prop so future
+config-file diffs (switch config, firewall rules) can plug in with a
+custom renderer. Note this in the component docstring.
+
+## Change 6 — Sidebar nav + routing
+
+In `gui/src/components/Sidebar.jsx`, add under MONITOR section:
+
+```jsx
+{ id: 'facts', label: 'Facts', icon: '◉', view: 'facts' }
+```
+
+In `gui/src/App.jsx` (or the main routing switch), map `view: 'facts'`
+to `<FactsView />`.
+
+Also handle a deep-link shortcut: `#/facts/<fact_key>` opens the Facts
+view with that key pre-selected, so the Dashboard widget and other links
+can navigate directly to a fact.
+
+## Change 7 — Permission admin UI (Settings page)
+
+Extend the existing Settings page with a new "Facts Permissions" section
+(under the Facts & Knowledge group):
+
+- Table: grantee type · grantee id · action · fact pattern · expires · revoke button
+- Form: grant a new permission
+- Only visible to sith_lord users (hide for non-admins via role check)
+
+Uses the `/api/facts/permissions` endpoints from Change 2.
+
+## Change 8 — tests
+
+Backend: `tests/test_facts_permissions.py`:
+- sith_lord has all permissions
+- Grant role permission, user in that role can perform action
+- Grant user permission, user can perform action
+- Revoke user grant, user cannot perform action (even if role grant exists)
+- Expired grants do not confer permission
+- 403 returned for unauthenticated attempt on permission-gated endpoint
+
+Frontend: `gui/src/components/__tests__/FactsView.test.jsx`:
+- Renders list, filters by pattern
+- Clicking a fact populates detail pane
+- Conflict badge renders when pending conflicts > 0
+- Lock button hidden for user without lock permission
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(ui): v2.35.0.1 Facts tab + Dashboard widget + diff viewer + permission-gated admin"
+git push origin main
+```
+
+## Test after deploy
+
+1. Dashboard shows "FACTS & KNOWLEDGE" widget with non-zero counts after
+   collectors have polled.
+2. MONITOR → Facts tab lists facts, filtering works.
+3. Click a fact → detail pane shows sources and history.
+4. Change a fact (reboot worker-03 or similar) → diff viewer shows the
+   before/after in the history pane.
+5. As sith_lord, create a lock on a test fact key (e.g. a harmless
+   `prod.test.canary` fact) — lock persists, appears in `/api/facts/locks`.
+6. Force a conflict: manually upsert a different value with matching key
+   via psql — conflict row appears, dashboard widget shows red pending
+   count, clicking opens resolve modal.
+7. As imperial_officer (no lock permission by default), attempt to lock
+   the same fact → 403, button visually disabled.
+8. As sith_lord, grant imperial_officer `lock` permission on `prod.test.*`
+   via Settings → Facts Permissions → retry → succeeds.
+
+## Non-goals
+
+- Full Facts editing UI (edit a manual fact value) — out of scope; use
+  the refresh button or lock mechanism for now.
+- Bulk operations (lock many, delete many) — deferred.
+- Export to CSV — deferred.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-18 18:38:57
+========================================================================
+PROMPT COMPLETE: v2.35.0.1
+[STATUS] 10m59s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  10m59s
+========================================================================

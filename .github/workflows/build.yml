@@ -58,10 +58,16 @@ jobs:
         working-directory: gui
         run: |
           VER="$(cat ../VERSION)"
+          # npm requires strict 3-segment semver; translate our 4-segment
+          # sub-version (X.Y.Z.N) by stripping the 4th segment for
+          # package.json only. VERSION file and all product surfaces
+          # (/api/health, Docker tags, Prometheus build_info) keep the
+          # 4-segment form.
+          NPM_VER="$(echo "$VER" | awk -F. '{if (NF==4) print $1"."$2"."$3; else print $0}')"
           # npm version updates BOTH package.json and package-lock.json atomically.
           # --no-git-tag-version prevents it from making a commit/tag.
           # --allow-same-version lets it succeed if already at target (idempotent).
-          npm version --no-git-tag-version --allow-same-version "$VER"
+          npm version --no-git-tag-version --allow-same-version "$NPM_VER"
 
       - name: Generate build_info.json
         run: python scripts/gen_build_info.py
