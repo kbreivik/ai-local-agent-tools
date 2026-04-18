@@ -193,8 +193,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.0.md | v2.35.0 | feat(facts): known_facts schema + collector writers + /api/facts + Settings + Prometheus | DONE (a34bd4f) |
 | CC_PROMPT_v2.35.0.1.md | v2.35.0.1 | feat(ui): Facts tab + Dashboard widget + diff viewer + permission-gated admin | DONE (d927f81) |
 | CC_PROMPT_v2.35.1.md | v2.35.1 | feat(agents): entity preflight + three-tier extractor + Preflight Panel + PREFLIGHT FACTS | DONE (e0ac5ec) |
-| CC_PROMPT_v2.35.2.md | v2.35.2 | feat(agents): in-run cross-tool contradiction detection + agent_observation fact writer | RUNNING |
-| CC_PROMPT_v2.35.3.md | v2.35.3 | feat(agents): fact-age rejection on tool results (Medium mode) | PENDING |
+| CC_PROMPT_v2.35.2.md | v2.35.2 | feat(agents): in-run cross-tool contradiction detection + agent_observation fact writer | DONE (0c6311f) |
+| CC_PROMPT_v2.35.3.md | v2.35.3 | feat(agents): fact-age rejection on tool results (Medium mode) | RUNNING |
 | CC_PROMPT_v2.35.4.md | v2.35.4 | feat(agents): runbook-based TRIAGE injection + UI editor (augment default) | PENDING |
 
 ---

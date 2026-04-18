@@ -264,6 +264,13 @@ AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER = Counter(
     ["wrote_or_skipped"],
 )
 
+# --- fact-age rejection (v2.35.3) ---
+FACT_AGE_REJECTIONS_COUNTER = Counter(
+    "deathstar_fact_age_rejections_total",
+    "Tool results modified or blocked due to disagreement with recent facts",
+    ["mode", "source_rejected"],   # mode: soft|medium|hard, source_rejected: agent_tool
+)
+
 # --- preflight (v2.35.1) ---
 PREFLIGHT_RESOLUTIONS_COUNTER = Counter(
     "deathstar_preflight_resolutions_total",

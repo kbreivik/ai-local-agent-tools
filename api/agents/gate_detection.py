@@ -28,6 +28,7 @@ GATE_DEFS = (
     "sanitizer",
     "forced_synthesis",
     "inrun_contradiction",
+    "fact_age_rejection",
 )
 
 
@@ -104,6 +105,15 @@ def detect_gates_from_steps(steps: list) -> dict:
                 gates["inrun_contradiction"]["count"] += 1
                 gates["inrun_contradiction"]["details"].append(
                     {"step": step_idx, "snippet": content[:160]}
+                )
+            # v2.35.3 — fact-age rejection on tool results
+            if (
+                "[harness] Fact-age rejection" in content
+                or "[harness] Hard fact-age rejection" in content
+            ):
+                gates["fact_age_rejection"]["count"] += 1
+                gates["fact_age_rejection"]["details"].append(
+                    {"step": step_idx, "snippet": content[:180]}
                 )
 
     fabrication_count = _count_fabrication(steps)

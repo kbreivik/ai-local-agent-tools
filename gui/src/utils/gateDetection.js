@@ -11,6 +11,7 @@ export const GATE_DEFS = [
   'sanitizer',
   'forced_synthesis',
   'inrun_contradiction',
+  'fact_age_rejection',
 ]
 
 function emptyGates() {
@@ -87,6 +88,14 @@ export function detectGates(steps) {
       if (c.includes('[harness] Contradiction detected within this run')) {
         gates.inrun_contradiction.count++
         gates.inrun_contradiction.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
+      }
+      // v2.35.3 — fact-age rejection on tool results
+      if (
+        c.includes('[harness] Fact-age rejection') ||
+        c.includes('[harness] Hard fact-age rejection')
+      ) {
+        gates.fact_age_rejection.count++
+        gates.fact_age_rejection.details.push({ step: stepIdx, snippet: c.slice(0, 180) })
       }
     }
   }

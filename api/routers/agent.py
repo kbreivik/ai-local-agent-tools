@@ -2094,6 +2094,89 @@ async def _run_single_agent_step(
                 except Exception as _ae:
                     log.debug("agent_actions write failed: %s", _ae)
 
+                # ── v2.35.3: fact-age rejection ──────────────────────────────
+                # If the tool reports a value that contradicts a high-confidence
+                # recently-verified known_fact, filter the tool result per the
+                # configured aggression mode. Real tool result is preserved in
+                # the audit trail above; only the LLM-visible copy is modified.
+                try:
+                    from api.agents.fact_age_rejection import check_and_apply_rejection
+                    from api.db.known_facts import _get_facts_settings as _gfs_far
+                    _far_settings = _gfs_far()
+                    # Pull explicit fact-age settings (floats may not have dot in value)
+                    try:
+                        from mcp_server.tools.skills.storage import get_backend as _gb_far
+                        _be_far = _gb_far()
+                        for _k, _default, _cast in (
+                            ("factAgeRejectionMode",         "medium", str),
+                            ("factAgeRejectionMaxAgeMin",    5,        int),
+                            ("factAgeRejectionMinConfidence", 0.85,    float),
+                        ):
+                            _v = _be_far.get_setting(_k)
+                            if _v is None or str(_v).strip() == "":
+                                _far_settings.setdefault(_k, _default)
+                            else:
+                                try:
+                                    _far_settings[_k] = _cast(_v)
+                                except (TypeError, ValueError):
+                                    _far_settings[_k] = _default
+                    except Exception:
+                        _far_settings.setdefault("factAgeRejectionMode", "medium")
+                        _far_settings.setdefault("factAgeRejectionMaxAgeMin", 5)
+                        _far_settings.setdefault("factAgeRejectionMinConfidence", 0.85)
+
+                    _mode_far = _far_settings.get("factAgeRejectionMode", "medium")
+                    _modified_result, _rej_msgs, _rej_failure = check_and_apply_rejection(
+                        tool_name=fn_name,
+                        args=fn_args if isinstance(fn_args, dict) else {},
+                        result=result if isinstance(result, dict) else {},
+                        settings=_far_settings,
+                    )
+                    if _rej_failure == "fact_age_rejection":
+                        # Hard mode: replace with error sentinel so the LLM sees failure
+                        result = {
+                            "status":     "error",
+                            "error_type": "fact_age_rejection",
+                            "message":    _rej_msgs[0] if _rej_msgs else "fact_age_rejection",
+                            "data":       None,
+                            "timestamp":  datetime.now(timezone.utc).isoformat(),
+                        }
+                        result_status = "error"
+                        result_msg = result["message"]
+                        for _qm in _rej_msgs:
+                            _propose_state.queued_harness_messages.append(_qm)
+                        try:
+                            from api.metrics import FACT_AGE_REJECTIONS_COUNTER
+                            FACT_AGE_REJECTIONS_COUNTER.labels(
+                                mode=str(_mode_far), source_rejected="agent_tool",
+                            ).inc()
+                        except Exception:
+                            pass
+                    elif _rej_msgs:
+                        # Soft or Medium: harness messages + possibly modified result
+                        if _modified_result is not None and _modified_result is not result:
+                            result = _modified_result
+                            if isinstance(result, dict):
+                                result_status = result.get("status", result_status)
+                                result_msg = result.get("message", result_msg)
+                        for _qm in _rej_msgs:
+                            _propose_state.queued_harness_messages.append(_qm)
+                        try:
+                            from api.metrics import FACT_AGE_REJECTIONS_COUNTER
+                            FACT_AGE_REJECTIONS_COUNTER.labels(
+                                mode=str(_mode_far), source_rejected="agent_tool",
+                            ).inc()
+                        except Exception:
+                            pass
+                        await manager.send_line(
+                            "step",
+                            f"[fact_age_rejection] {fn_name} — "
+                            f"{len(_rej_msgs)} advisory (mode={_mode_far})",
+                            tool=fn_name, status="warning", session_id=session_id,
+                        )
+                except Exception as _far_e:
+                    log.debug("fact_age_rejection check failed: %s", _far_e)
+
                 # Stream to GUI
                 await manager.send_line(
                     "tool",
