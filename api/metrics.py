@@ -216,6 +216,40 @@ AUTO_PROMOTER_SCANS = Counter(
     ["triggered_by"],
 )
 
+# --- known_facts (v2.35.0) ---
+KNOWN_FACTS_TOTAL = Gauge(
+    "deathstar_known_facts_total",
+    "Total rows in known_facts_current",
+)
+KNOWN_FACTS_CONFIDENT_TOTAL = Gauge(
+    "deathstar_known_facts_confident_total",
+    "Rows with confidence >= factInjectionThreshold",
+)
+KNOWN_FACTS_CONFLICTS_TOTAL = Gauge(
+    "deathstar_known_facts_conflicts_total",
+    "Pending unresolved conflicts",
+)
+FACTS_UPSERTED_COUNTER = Counter(
+    "deathstar_facts_upserted_total",
+    "Fact upsert actions",
+    ["source", "action"],   # action ∈ {insert, touch, change, contradict, conflict, noop}
+)
+FACTS_CONTRADICTIONS_COUNTER = Counter(
+    "deathstar_facts_contradictions_total",
+    "Cross-source contradictions detected",
+    ["source_a", "source_b"],
+)
+FACTS_LOCK_EVENTS_COUNTER = Counter(
+    "deathstar_facts_lock_events_total",
+    "Lock lifecycle events",
+    ["action"],   # created | removed | enforced | overridden
+)
+FACTS_REFRESH_STALE_GAUGE = Gauge(
+    "deathstar_facts_refresh_stale_total",
+    "Facts past expected refresh cadence",
+    ["platform"],
+)
+
 # --- build info ---
 BUILD = Info("deathstar_build", "Build metadata")
 

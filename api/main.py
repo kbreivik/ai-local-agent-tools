@@ -45,6 +45,7 @@ from api.routers.display_aliases import router as display_aliases_router
 from api.routers.docs import router as docs_router
 from api.routers.kafka_overview import router as kafka_overview_router
 from api.routers.gates import router as gates_router
+from api.routers.facts import router as facts_router
 from api.db.entity_maintenance import init_maintenance
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
@@ -193,6 +194,11 @@ async def lifespan(app: FastAPI):
         init_entity_history()
     except Exception as e:
         _log.debug("Entity history init skipped: %s", e)
+    try:
+        from api.db.known_facts import init_known_facts
+        init_known_facts()
+    except Exception as e:
+        _log.debug("known_facts init skipped: %s", e)
     try:
         from api.db.drift_events import init_drift_view
         init_drift_view()
@@ -426,6 +432,25 @@ async def lifespan(app: FastAPI):
             except Exception as _lre:
                 _log.debug("llm_traces cleanup failed: %s", _lre)
     _aio.create_task(_llm_trace_cleanup_loop())
+    # v2.35.0 — periodic refresh of known_facts Prometheus gauges
+    async def _refresh_facts_gauges_loop():
+        while True:
+            await _aio.sleep(60)
+            try:
+                from api.db.known_facts import get_gauge_snapshot
+                from api.metrics import (
+                    KNOWN_FACTS_TOTAL, KNOWN_FACTS_CONFIDENT_TOTAL,
+                    KNOWN_FACTS_CONFLICTS_TOTAL, FACTS_REFRESH_STALE_GAUGE,
+                )
+                snap = get_gauge_snapshot()
+                KNOWN_FACTS_TOTAL.set(snap.get("total", 0))
+                KNOWN_FACTS_CONFIDENT_TOTAL.set(snap.get("confident", 0))
+                KNOWN_FACTS_CONFLICTS_TOTAL.set(snap.get("pending_conflicts", 0))
+                for platform, count in (snap.get("stale_by_platform") or {}).items():
+                    FACTS_REFRESH_STALE_GAUGE.labels(platform=platform).set(count)
+            except Exception:
+                pass
+    _aio.create_task(_refresh_facts_gauges_loop())
     # Auto-promoter: weekly scan of agent_actions for repeated tool patterns
     try:
         from api.skills.auto_promoter import schedule_weekly
@@ -505,6 +530,7 @@ app.include_router(display_aliases_router)
 app.include_router(docs_router)
 app.include_router(kafka_overview_router)
 app.include_router(gates_router)
+app.include_router(facts_router)
 
 
 def _get_host_ips() -> dict:

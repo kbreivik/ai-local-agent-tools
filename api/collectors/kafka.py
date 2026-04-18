@@ -228,7 +228,7 @@ class KafkaCollector(BaseCollector):
             except Exception as _me:
                 log.debug("kafka metric_samples write failed: %s", _me)
 
-            return {
+            snapshot = {
                 "health": health,
                 "message": message,
                 "brokers": broker_data,
@@ -241,6 +241,21 @@ class KafkaCollector(BaseCollector):
                 "under_replicated_partitions": under_replicated_total,
                 "consumer_lag": group_lag,
             }
+            # v2.35.0: best-effort fact extraction
+            try:
+                from api.facts.extractors import extract_facts_from_kafka_snapshot
+                from api.db.known_facts import batch_upsert_facts
+                from api.metrics import FACTS_UPSERTED_COUNTER
+                facts = extract_facts_from_kafka_snapshot(snapshot)
+                result = batch_upsert_facts(facts, actor="collector")
+                for action, count in result.items():
+                    if count > 0:
+                        FACTS_UPSERTED_COUNTER.labels(
+                            source="kafka_collector", action=action
+                        ).inc(count)
+            except Exception as _fe:
+                log.warning("Fact extraction failed for kafka: %s", _fe)
+            return snapshot
 
         except Exception as e:
             try:

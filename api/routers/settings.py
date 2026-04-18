@@ -79,6 +79,38 @@ SETTINGS_KEYS: dict[str, dict] = {
     "kafkaOverviewCacheTTL":      {"env": None, "sens": False, "default": 30},
     # Elasticsearch: sample schema on filter-miss (0 hits but window has data)
     "elasticSchemaDiscoveryOnMiss": {"env": None, "sens": False, "default": True},
+    # --- Facts & Knowledge (v2.35.0) ---
+    # Thresholds
+    "factInjectionThreshold":            {"env": None, "sens": False, "default": 0.7,  "type": "float", "group": "Facts & Knowledge"},
+    "factInjectionMaxRows":              {"env": None, "sens": False, "default": 40,   "type": "int",   "group": "Facts & Knowledge"},
+    # Source weights
+    "factSourceWeight_manual":                 {"env": None, "sens": False, "default": 1.0,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_proxmox_collector":      {"env": None, "sens": False, "default": 0.9,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_swarm_collector":        {"env": None, "sens": False, "default": 0.9,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_docker_agent_collector": {"env": None, "sens": False, "default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_pbs_collector":          {"env": None, "sens": False, "default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_kafka_collector":        {"env": None, "sens": False, "default": 0.8,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_fortiswitch_collector":  {"env": None, "sens": False, "default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_agent_observation":      {"env": None, "sens": False, "default": 0.5,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_rag_extraction":         {"env": None, "sens": False, "default": 0.4,  "type": "float", "group": "Facts & Knowledge"},
+    # Decay
+    "factHalfLifeHours_collector":       {"env": None, "sens": False, "default": 168,  "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_agent":           {"env": None, "sens": False, "default": 24,   "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_manual_phase1":   {"env": None, "sens": False, "default": 720,  "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_manual_phase2":   {"env": None, "sens": False, "default": 1440, "type": "int",   "group": "Facts & Knowledge"},
+    "factVerifyCountCap":                {"env": None, "sens": False, "default": 10,   "type": "int",   "group": "Facts & Knowledge"},
+    # Age rejection — settings registered now, enforced in v2.35.3
+    "factAgeRejectionMode":              {"env": None, "sens": False, "default": "medium", "type": "str",   "group": "Facts & Knowledge"},
+    "factAgeRejectionMaxAgeMin":         {"env": None, "sens": False, "default": 5,        "type": "int",   "group": "Facts & Knowledge"},
+    "factAgeRejectionMinConfidence":     {"env": None, "sens": False, "default": 0.85,     "type": "float", "group": "Facts & Knowledge"},
+    # Runbook — settings registered now, enforced in v2.35.4
+    "runbookInjectionMode":              {"env": None, "sens": False, "default": "off",     "type": "str", "group": "Facts & Knowledge"},
+    "runbookClassifierMode":             {"env": None, "sens": False, "default": "keyword", "type": "str", "group": "Facts & Knowledge"},
+    # Preflight — settings registered now, consumed in v2.35.1
+    "preflightPanelMode":                {"env": None, "sens": False, "default": "always_visible", "type": "str",  "group": "Facts & Knowledge"},
+    "preflightDisambiguationTimeout":    {"env": None, "sens": False, "default": 300,              "type": "int",  "group": "Facts & Knowledge"},
+    "preflightLLMFallbackEnabled":       {"env": None, "sens": False, "default": True,             "type": "bool", "group": "Facts & Knowledge"},
+    "preflightLLMFallbackMaxTokens":     {"env": None, "sens": False, "default": 200,              "type": "int",  "group": "Facts & Knowledge"},
 }
 
 

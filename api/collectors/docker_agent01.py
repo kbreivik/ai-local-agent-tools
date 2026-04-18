@@ -232,7 +232,7 @@ class DockerAgent01Collector(BaseCollector):
             except Exception:
                 pass
 
-            return {
+            snapshot = {
                 "health": overall,
                 "containers": cards,
                 "agent01_ip": vm_ip,
@@ -240,6 +240,21 @@ class DockerAgent01Collector(BaseCollector):
                 "connection_label": connection_label,
                 "connection_host": connection_host,
             }
+            # v2.35.0: best-effort fact extraction
+            try:
+                from api.facts.extractors import extract_facts_from_docker_agent_snapshot
+                from api.db.known_facts import batch_upsert_facts
+                from api.metrics import FACTS_UPSERTED_COUNTER
+                facts = extract_facts_from_docker_agent_snapshot(snapshot)
+                result = batch_upsert_facts(facts, actor="collector")
+                for action, count in result.items():
+                    if count > 0:
+                        FACTS_UPSERTED_COUNTER.labels(
+                            source="docker_agent_collector", action=action
+                        ).inc(count)
+            except Exception as _fe:
+                log.warning("Fact extraction failed for docker_agent: %s", _fe)
+            return snapshot
 
         except DockerException as e:
             return {"health": "error", "error": str(e), "containers": [], "agent01_ip": vm_ip}

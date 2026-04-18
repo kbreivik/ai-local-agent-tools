@@ -408,7 +408,7 @@ class SwarmCollector(BaseCollector):
                     f"{len(svc_data)} services — all healthy"
                 )
 
-            return {
+            snapshot = {
                 "health": health,
                 "message": message,
                 "nodes": node_data,
@@ -421,6 +421,21 @@ class SwarmCollector(BaseCollector):
                 "degraded_services": degraded_services,
                 "failed_services": failed_services,
             }
+            # v2.35.0: best-effort fact extraction
+            try:
+                from api.facts.extractors import extract_facts_from_swarm_snapshot
+                from api.db.known_facts import batch_upsert_facts
+                from api.metrics import FACTS_UPSERTED_COUNTER
+                facts = extract_facts_from_swarm_snapshot(snapshot)
+                result = batch_upsert_facts(facts, actor="collector")
+                for action, count in result.items():
+                    if count > 0:
+                        FACTS_UPSERTED_COUNTER.labels(
+                            source="swarm_collector", action=action
+                        ).inc(count)
+            except Exception as _fe:
+                log.warning("Fact extraction failed for swarm: %s", _fe)
+            return snapshot
 
         except DockerException as e:
             try:

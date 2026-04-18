@@ -1,0 +1,405 @@
+# CC PROMPT — v2.35.2 — feat(agents): in-run cross-tool contradiction detection + agent_observation fact writer
+
+## What this does
+
+Two features that share infrastructure: both need a "fact extractor"
+that reads a tool result and emits structured facts from it.
+
+1. **In-run contradiction detection** — when two tool results in the
+   same agent run produce different values for the same fact key,
+   inject a harness message telling the agent to reconcile.
+2. **agent_observation fact writer** — successfully-synthesised facts
+   from completed agent runs get written to `known_facts` at the
+   low-confidence `agent_observation` source tier.
+
+Version bump: 2.35.1 → 2.35.2 (new subsystem, agent hot-path additions).
+
+Design ref: `cc_prompts/PHASE_v2.35_SPEC.md` → spec item #3 and bonus.
+
+---
+
+## Change 1 — tool-result fact extractors
+
+New file `api/facts/tool_extractors.py`. One extractor per common tool.
+Shape matches `api/facts/extractors.py` (collector side): takes the
+tool's result dict + args, returns a list of fact dicts.
+
+```python
+def extract_facts_from_service_placement(args: dict, result: dict) -> list[dict]:
+    """
+    service_placement(service_name='logstash_logstash') result contains
+    list of {node, vm_host_label, container_id, ...}. Emit placement +
+    container mapping facts.
+    """
+    facts = []
+    if result.get('status') != 'ok':
+        return facts
+    svc_name = args.get('service_name')
+    if not svc_name:
+        return facts
+
+    containers = result.get('data', {}).get('containers', [])
+    nodes = [c['node'] for c in containers if c.get('node')]
+    if nodes:
+        facts.append({
+            'fact_key': f'prod.swarm.service.{svc_name}.placement',
+            'source':   'agent_observation',
+            'value':    sorted(set(nodes)),
+        })
+    for c in containers:
+        if c.get('container_id'):
+            short = c['container_id'][:12]
+            facts.append({
+                'fact_key': f'prod.container.{short}.service_name',
+                'source':   'agent_observation',
+                'value':    svc_name,
+            })
+            facts.append({
+                'fact_key': f'prod.container.{short}.host',
+                'source':   'agent_observation',
+                'value':    c.get('vm_host_label'),
+            })
+    return facts
+
+
+def extract_facts_from_container_discover_by_service(args, result):
+    """Same shape as service_placement for our purposes."""
+    return extract_facts_from_service_placement(args, result)
+
+
+def extract_facts_from_kafka_broker_status(args, result):
+    facts = []
+    if result.get('status') not in ('ok', 'degraded'):
+        return facts
+    for b in result.get('data', {}).get('brokers', []):
+        fkey_base = f"prod.kafka.broker.{b['id']}"
+        facts.append({
+            'fact_key': f'{fkey_base}.host',
+            'source':   'agent_observation',
+            'value':    b.get('host'),
+        })
+        facts.append({
+            'fact_key': f'{fkey_base}.port',
+            'source':   'agent_observation',
+            'value':    b.get('port'),
+        })
+    return facts
+
+
+def extract_facts_from_container_networks(args, result):
+    facts = []
+    if result.get('status') != 'ok':
+        return facts
+    container_id = args.get('container_id', '')[:12]
+    if not container_id:
+        return facts
+    networks = result.get('data', {}).get('networks', {})
+    if networks:
+        facts.append({
+            'fact_key': f'prod.container.{container_id}.networks',
+            'source':   'agent_observation',
+            'value':    networks,
+        })
+    return facts
+
+
+def extract_facts_from_container_tcp_probe(args, result):
+    """Boolean reachability fact from probe. These facts are time-sensitive
+    so they get a short half-life via metadata."""
+    facts = []
+    if result.get('status') != 'ok':
+        return facts
+    container_id = args.get('container_id', '')[:12]
+    target = f"{args.get('target_host')}:{args.get('target_port')}"
+    if container_id and args.get('target_host'):
+        facts.append({
+            'fact_key': f'prod.container.{container_id}.reachability.{target}',
+            'source':   'agent_observation',
+            'value':    result.get('data', {}).get('reachable', False),
+            'metadata': {'volatile': True},   # marks as short half-life
+        })
+    return facts
+
+
+def extract_facts_from_proxmox_vm_power(args, result):
+    """proxmox_vm_power reports status on query action."""
+    facts = []
+    if args.get('action') != 'status' or result.get('status') != 'ok':
+        return facts
+    vm_label = args.get('vm_label')
+    if not vm_label:
+        return facts
+    status = result.get('data', {}).get('status')
+    if status:
+        facts.append({
+            'fact_key': f'prod.proxmox.vm.{vm_label}.status',
+            'source':   'agent_observation',
+            'value':    status,
+        })
+    return facts
+
+
+def extract_facts_from_swarm_node_status(args, result):
+    facts = []
+    if result.get('status') != 'ok':
+        return facts
+    for node in result.get('data', {}).get('nodes', []):
+        nm = node.get('hostname') or node.get('name')
+        if not nm:
+            continue
+        facts.append({
+            'fact_key': f'prod.swarm.node.{nm}.status',
+            'source':   'agent_observation',
+            'value':    node.get('availability'),
+        })
+    return facts
+
+
+TOOL_EXTRACTORS = {
+    'service_placement':              extract_facts_from_service_placement,
+    'container_discover_by_service':  extract_facts_from_container_discover_by_service,
+    'kafka_broker_status':            extract_facts_from_kafka_broker_status,
+    'container_networks':             extract_facts_from_container_networks,
+    'container_tcp_probe':            extract_facts_from_container_tcp_probe,
+    'proxmox_vm_power':               extract_facts_from_proxmox_vm_power,
+    'swarm_node_status':              extract_facts_from_swarm_node_status,
+}
+
+
+def extract_facts_from_tool_result(tool_name: str, args: dict, result: dict) -> list[dict]:
+    """Dispatcher. Unknown tools return [] (not an error — many tools
+    don't emit structured facts)."""
+    fn = TOOL_EXTRACTORS.get(tool_name)
+    if not fn:
+        return []
+    try:
+        return fn(args, result)
+    except Exception as e:
+        log.warning("tool fact extraction failed for %s: %s", tool_name, e)
+        return []
+```
+
+Cover the ~7 most-used tools from the last 2 weeks of trace data. Easy
+to extend later by adding a new function + registry entry.
+
+## Change 2 — in-run contradiction detection
+
+In `api/routers/agent.py` (the agent loop), extend the tool-result
+handler to track "run-local facts" and detect disagreements.
+
+```python
+# Add to AgentState (or equivalent session/state object)
+state.run_facts: dict[str, dict] = {}  # fact_key → {value, step, tool, timestamp}
+
+
+def on_tool_result(state, step_index, tool_name, args, result):
+    # Existing behaviour (log, store, etc.)
+    ...
+
+    # NEW: extract + cross-check
+    new_facts = extract_facts_from_tool_result(tool_name, args, result)
+
+    for nf in new_facts:
+        key = nf['fact_key']
+        prior = state.run_facts.get(key)
+        if prior is not None and prior['value'] != nf['value']:
+            # Contradiction within the same run
+            state.queued_harness_messages.append(
+                f"[harness] Contradiction detected within this run: "
+                f"{key} — step {prior['step']} ({prior['tool']}) said "
+                f"{json.dumps(prior['value'])[:80]}, "
+                f"step {step_index} ({tool_name}) says "
+                f"{json.dumps(nf['value'])[:80]}. "
+                f"Resolve before concluding. The {key} field in your "
+                f"EVIDENCE block must cite only ONE value or explicitly "
+                f"note the conflict."
+            )
+            INRUN_CONTRADICTION_COUNTER.labels(
+                fact_key_prefix=_prefix_of(key)
+            ).inc()
+            # Record the contradiction; later use overwrites but keep history in trace
+        state.run_facts[key] = {
+            'value':     nf['value'],
+            'step':      step_index,
+            'tool':      tool_name,
+            'timestamp': now_iso(),
+            'raw':       nf,
+        }
+```
+
+`_prefix_of` returns the first 3 dotted segments for label cardinality
+safety (e.g. `prod.kafka.broker`).
+
+## Change 3 — agent_observation fact writer
+
+Only fires on **successful completion** of an agent run. On
+`status='completed'` the terminal handler iterates `state.run_facts`
+and upserts them to `known_facts` at the `agent_observation` source.
+
+```python
+# In the agent loop's terminal handler
+async def on_run_terminal(state, terminal_status, final_answer, ...):
+    # Existing: persist operation, emit metrics, etc.
+    ...
+
+    # NEW: agent_observation fact writer
+    if terminal_status == 'completed' and state.run_facts:
+        facts_to_write = []
+        for key, info in state.run_facts.items():
+            facts_to_write.append({
+                'fact_key': key,
+                'source':   'agent_observation',
+                'value':    info['value'],
+                'metadata': {
+                    'operation_id': state.operation_id,
+                    'via_tool':     info['tool'],
+                    'step':         info['step'],
+                    **info['raw'].get('metadata', {}),
+                },
+            })
+        try:
+            res = batch_upsert_facts(facts_to_write, actor=f'agent:{state.operation_id[:8]}')
+            log.info("agent_observation facts: op=%s wrote=%s", state.operation_id[:8], res)
+        except Exception as e:
+            log.warning("agent_observation fact write failed: %s", e)
+```
+
+**Guardrails:**
+- Never write facts when `status=completed` but the run had fabrication
+  detector fires (`state.fabrication_detected_count > 0`). The run's
+  integrity is suspect — don't pollute the fact store.
+- Never write facts from a run that hit the hallucination guard's
+  `exhausted` state.
+- Never write facts from `status=failed` or `status=capped` runs.
+  Forced-synthesis text can be useful to the operator but is too likely
+  to be wrong to persist.
+- Cap at `factInjectionMaxRows × 2` (default 80) rows written per run,
+  to prevent a chatty run from spamming the store.
+- Respect volatile metadata: facts flagged `volatile=True` in the
+  extractor (e.g. reachability probes) get a short custom half-life via
+  the metadata path (add `factHalfLifeHours_agent_volatile` setting,
+  default 2 hours).
+
+## Change 4 — volatile fact half-life
+
+Extend the confidence formula in `api/db/known_facts.py`:
+
+```python
+def _half_life_for_source(source, settings, metadata: dict | None = None):
+    # NEW: volatile flag in metadata overrides source default
+    if metadata and metadata.get('volatile'):
+        return settings.get('factHalfLifeHours_agent_volatile', 2.0)
+    # Existing behaviour
+    ...
+```
+
+Register new setting:
+
+```python
+SETTINGS_KEYS["factHalfLifeHours_agent_volatile"] = {
+    "default": 2, "type": "int", "group": "Facts & Knowledge",
+}
+```
+
+## Change 5 — gate-detection expansion
+
+In `api/agents/gate_detection.py` (v2.34.16) and its JS mirror
+`gui/src/utils/gateDetection.js`, add a new gate:
+
+```python
+gates["inrun_contradiction"] = {"count": 0, "details": []}
+for s in steps:
+    for m in s.get("messages_delta", []):
+        c = m.get("content", "")
+        if "[harness] Contradiction detected within this run" in c:
+            gates["inrun_contradiction"]["count"] += 1
+            gates["inrun_contradiction"]["details"].append(
+                {"step": s["step_index"], "snippet": c[:140]}
+            )
+```
+
+Trace viewer's Gates Fired sidebar will now show
+`✓ inrun_contradiction xN` when this gate fires.
+
+## Change 6 — Prometheus
+
+```python
+INRUN_CONTRADICTION_COUNTER = Counter(
+    "deathstar_inrun_contradictions_total",
+    "Cross-tool contradictions detected within a single agent run",
+    ["fact_key_prefix"],
+)
+
+AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER = Counter(
+    "deathstar_agent_observation_facts_written_total",
+    "Facts written to known_facts from completed agent runs",
+    ["wrote_or_skipped"],  # wrote | skipped_fabrication | skipped_halluc | skipped_nonterminal | skipped_cap
+)
+```
+
+## Change 7 — tests
+
+`tests/test_tool_result_extractors.py`:
+- Each extractor given a fixture tool result + args → expected facts list
+- Unknown tool returns []
+- Malformed result (missing 'status' or 'data') returns []
+
+`tests/test_inrun_contradiction.py`:
+- Feed two tool results for the same fact key with different values
+  through `on_tool_result` → contradiction message in
+  `state.queued_harness_messages`, counter incremented
+- Same value twice → no contradiction
+
+`tests/test_agent_observation_writes.py`:
+- Terminal status `completed` + clean run → facts upserted with
+  source=agent_observation
+- Terminal status `completed` but fabrication_detected > 0 → facts NOT
+  written, counter increments on `skipped_fabrication`
+- Terminal status `capped` → no writes
+- Run with >80 facts → first 80 written, rest dropped
+
+## Change 8 — trace visibility for both features
+
+Verify that in-run contradiction harness messages and agent_observation
+write events both show up in the Logs → Trace tab. If the gate detector
+changes (Change 5) are correctly wired, the contradiction case is
+already visible.
+
+For agent_observation writes: extend the `/trace?format=digest` renderer
+to add a trailing section:
+
+```
+## Facts written to known_facts (agent_observation)
+- prod.kafka.broker.3.host = "192.168.199.33" (via kafka_broker_status, step 1)
+- prod.swarm.service.logstash_logstash.placement = ["ds-docker-worker-03"] (via service_placement, step 2)
+...
+```
+
+Fetch the list from `state.run_facts` persisted on the operation row.
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(agents): v2.35.2 in-run cross-tool contradiction detection + agent_observation fact writer"
+git push origin main
+```
+
+## Test after deploy
+
+1. Run the canonical Logstash investigate task. After completion, `/api/facts/key/prod.swarm.service.logstash_logstash.placement` shows a new row with `source=agent_observation` in addition to the collector's row. Confidence on the agent row should be lower (~0.5) than the collector's.
+2. Force a contradiction: manually craft a task that will call both `service_placement` and `container_discover_by_service` for the same service, then edit the docker collector snapshot to put the container on a different node. When the agent runs both tools, trace should show `[harness] Contradiction detected within this run` and the Gates Fired sidebar shows `inrun_contradiction x1`.
+3. Fabrication case: force a sub-agent to fabricate. After run, confirm `agent_observation` facts were NOT written from that run (counter increments on `skipped_fabrication`).
+4. `/metrics | grep inrun_contradiction` and `| grep agent_observation_facts_written` show the new series.
+
+## Non-goals
+
+- Fact writers for EVERY tool. We ship ~7 now. Add more in follow-up as needed.
+- Auto-reconciliation of contradictions (harness advisory only; the agent decides).
+- Fact writes from the forced-synthesis step (too risky).
+
+## Risk register
+
+- agent_observation writes could pollute the store if our fabrication filter misses a case. Mitigation: source weight 0.5 means these facts don't reach the 0.7 injection threshold until other sources confirm them.
+- Contradictions may fire for values that genuinely changed between tool calls within a run (e.g. a service was rescheduled mid-task). The harness message is an advisory, not a hard block — agent can explain in EVIDENCE that the value changed.
+- `fact_key_prefix` label cardinality could grow if many new entities appear. Prefix truncation to 3 dotted segments should keep it <100 distinct labels.

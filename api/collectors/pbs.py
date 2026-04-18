@@ -147,12 +147,34 @@ class PBSCollector(BaseCollector):
             if health_priority.get(h, 3) > health_priority.get(worst_health, 0):
                 worst_health = h
 
-        return {
+        # Collect last_backups from per-connection results so the fact extractor
+        # can flatten them into prod.pbs.backup.* keys.
+        merged_last_backups = []
+        for r in all_results:
+            merged_last_backups.extend(r.get("last_backups") or [])
+
+        snapshot = {
             "health": worst_health,
             "datastores": merged_datastores,
             "tasks": merged_tasks,
             "connection_count": len(conns),
+            "last_backups": merged_last_backups,
         }
+        # v2.35.0: best-effort fact extraction
+        try:
+            from api.facts.extractors import extract_facts_from_pbs_snapshot
+            from api.db.known_facts import batch_upsert_facts
+            from api.metrics import FACTS_UPSERTED_COUNTER
+            facts = extract_facts_from_pbs_snapshot(snapshot)
+            result = batch_upsert_facts(facts, actor="collector")
+            for action, count in result.items():
+                if count > 0:
+                    FACTS_UPSERTED_COUNTER.labels(
+                        source="pbs_collector", action=action
+                    ).inc(count)
+        except Exception as _fe:
+            log.warning("Fact extraction failed for pbs: %s", _fe)
+        return snapshot
 
     def _poll_one_conn(self, conn: dict) -> dict:
         host = conn.get("host", "")

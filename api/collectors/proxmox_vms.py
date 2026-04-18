@@ -119,7 +119,7 @@ class ProxmoxVMsCollector(BaseCollector):
 
         # Backward compat: expose first cluster's label/id at top level
         first = clusters[0] if clusters else {}
-        return {
+        snapshot = {
             "health": overall,
             "clusters": clusters,
             # Flat merged lists — used by to_entities() and legacy code
@@ -128,6 +128,23 @@ class ProxmoxVMsCollector(BaseCollector):
             "connection_label": first.get("connection_label", ""),
             "connection_id": first.get("connection_id", ""),
         }
+        # v2.35.0: best-effort fact extraction
+        try:
+            from api.facts.extractors import extract_facts_from_proxmox_vm_snapshot
+            from api.db.known_facts import batch_upsert_facts
+            from api.metrics import FACTS_UPSERTED_COUNTER
+            facts = extract_facts_from_proxmox_vm_snapshot(
+                snapshot, connection_label=snapshot.get("connection_label", "")
+            )
+            result = batch_upsert_facts(facts, actor="collector")
+            for action, count in result.items():
+                if count > 0:
+                    FACTS_UPSERTED_COUNTER.labels(
+                        source="proxmox_collector", action=action
+                    ).inc(count)
+        except Exception as _fe:
+            log.warning("Fact extraction failed for proxmox: %s", _fe)
+        return snapshot
 
 
 def _poll_single_connection(conn: dict) -> dict:
