@@ -1,0 +1,368 @@
+# CC PROMPT — v2.34.17 — fix(agents): boot-time sanitizer scope + forced synthesis on budget cap
+
+## Evidence
+
+Two small items surfaced during v2.34.16 verification. Both are tight,
+independent fixes. Closeout of the v2.34.14-16 observability cluster.
+
+### Finding 1 — boot-time sanitizer still runs on `version`
+
+`/api/health` returns:
+```
+{
+  "status": "ok",
+  "service": "HP1-AI-Agent",
+  "version": "[BLOCKED: JWT token]",   ← still corrupted
+  ...
+  "build_info": {
+    "commit": "4dab532",
+    "build_number": "613",
+    ...
+  }
+}
+```
+
+v2.34.15 restricted the sanitizer to LLM-inbound paths, and the fix works
+for every request-path call we checked (`/api/logs/operations`,
+`/trace`, `/metrics` — all clean). But the `version` field is populated
+once at application startup from somewhere that still runs the sanitizer
+against it.
+
+Suspect paths (one or more of these):
+
+- `api/main.py` app-startup code reads a `VERSION` file or env var and
+  calls `sanitize_for_llm` on it before caching.
+- The health-handler builds its response once from a cached settings
+  dict that was sanitized at boot.
+- A settings loader in `api/routers/settings.py` or similar runs the
+  sanitizer as part of its value-normalising pipeline.
+
+Fix: find every call site of `sanitize_for_llm` (or whatever it was
+renamed to in v2.34.15) and confirm it runs ONLY on strings that are
+about to be added to LLM messages. Remove any call that runs at startup
+or during response construction.
+
+### Finding 2 — capped run dies with empty `final_answer`
+
+Op `557f9ee1` (v2.34.16 verification) hit `status=capped, tc=16/16,
+final_answer=null`. Trace shows:
+
+- Step 3 `container_tcp_probe` returned `reachable=false` from inside the
+  Logstash container to broker-3:9094. **Smoking gun found at tool 7 of 16.**
+- Steps 4-7 drilled into `container_env`, `container_config_read`, and
+  `elastic_search_logs` — useful context, but the diagnosis was already there
+- Tool 16 hit the cap, loop exited, `final_answer` never generated
+
+Current harness behaviour: when `tool_call_count == MAX`, break the loop
+and mark `status=capped`. The model never gets a chance to say "OK, I ran
+out of tools, here's what I know."
+
+Fix: on budget exhaustion, run ONE more completion with a synthesis-only
+prompt (no tools allowed) that instructs the model to produce a
+`final_answer` from evidence already gathered. Mark `status=capped` but
+preserve the final_answer. The run isn't lost; the user sees what the
+agent learned even when the loop didn't converge.
+
+Version bump: 2.34.16 → 2.34.17 (small fixes, no architectural change).
+
+---
+
+## Change 1 — move sanitizer off application startup / response serialisation
+
+### Step 1a — find every call site
+
+```bash
+cd /d/claude_code/ai-local-agent-tools
+grep -rn 'sanitize_for_llm\|sanitize_prompt\|sanitize_response\|BLOCKED: JWT\|BLOCKED: Sensitive' api/ mcp_server/ --include='*.py'
+```
+
+Expected hits:
+
+1. One or more LEGITIMATE call sites on the LLM-inbound boundary
+   (e.g. before a tool result is added to the conversation list, or
+   before a document chunk is injected into a system prompt). **Keep these.**
+2. One or more ILLEGITIMATE sites in startup / settings / response
+   construction code. **Remove or scope.**
+
+### Step 1b — correct the boot-time corruption
+
+Most likely location is `api/main.py` startup or `api/routers/health.py`
+(or wherever the `/api/health` handler is defined). Audit those files;
+the `version` field should be populated directly from `VERSION` file read
+or `os.environ["VERSION"]` with no sanitizer call in the path.
+
+If the version is cached in a global dict or settings object that was
+populated once at startup through a pipeline that applied the sanitizer,
+rebuild that cache without the sanitizer call.
+
+### Step 1c — acceptance test
+
+After deploy, `/api/health` must return `"version": "2.34.17"` as the
+literal string. Use a fresh curl (not cached) to verify:
+
+```
+curl -s http://192.168.199.10:8000/api/health | jq .version
+# expected: "2.34.17"
+# not:     "[BLOCKED: JWT token]"
+```
+
+### Step 1d — add a regression test
+
+```python
+# tests/test_health_endpoint.py
+def test_health_version_not_sanitized(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["version"].startswith("2.")  # semver
+    assert "BLOCKED" not in data["version"]
+    assert "REDACTED" not in data["version"]
+```
+
+## Change 2 — forced synthesis step on budget cap
+
+### Step 2a — find the cap point
+
+Somewhere in `api/routers/agent.py` the loop exits when
+`tool_call_count >= MAX_TOOLS` with a status assignment like
+`status = "capped"`. Grep for `"capped"` or `MAX_TOOL_CALLS`.
+
+### Step 2b — restructure the cap handler
+
+Change the control flow from:
+
+```python
+if tool_call_count >= MAX_TOOLS:
+    state.status = "capped"
+    break   # loop exits, final_answer is whatever was last set
+```
+
+to:
+
+```python
+if tool_call_count >= MAX_TOOLS:
+    state.status = "capped"
+    # Run one forced synthesis step — no tools allowed
+    synthesis_msgs = state.messages + [
+        {"role": "system", "content": (
+            f"[harness] You have hit the tool-call budget cap "
+            f"({tool_call_count}/{MAX_TOOLS}). No more tool calls allowed. "
+            f"Produce your final_answer right now from the evidence you have "
+            f"already gathered. Format: EVIDENCE: (bullets citing actual tool "
+            f"results) / ROOT CAUSE: (if you can conclude) or UNRESOLVED: (what "
+            f"would unblock you) / NEXT STEPS: (what a human should do). "
+            f"Cite only tools that actually ran. Do NOT fabricate."
+        )},
+    ]
+
+    increment_metric(
+        FORCED_SYNTHESIS_COUNTER,
+        {"reason": "budget_cap", "agent_type": agent_type},
+    )
+
+    # One forced completion, NO tools parameter (so no tool_calls possible)
+    forced = await client.chat.completions.create(
+        model=MODEL,
+        messages=synthesis_msgs,
+        max_tokens=1500,
+        # intentionally no `tools=` — model cannot call anything
+    )
+
+    synthesis_text = forced.choices[0].message.content or ""
+
+    # Still apply fabrication detector on this forced output
+    from api.agents.fabrication_detector import is_fabrication
+    fabricated = is_fabrication(
+        synthesis_text,
+        actual_tool_calls=[tc.function.name for s in state.steps
+                           for tc in (s.response_raw.choices[0].message.tool_calls or [])],
+    )
+    if fabricated:
+        # Note the fabrication but keep the synthesis; operator sees both
+        synthesis_text = (
+            f"[HARNESS: this synthesis was generated after budget cap and "
+            f"contains tool citations that did not run. Treat as draft.]\n\n"
+            f"{synthesis_text}"
+        )
+        increment_metric(FORCED_SYNTHESIS_FABRICATED_COUNTER, {"agent_type": agent_type})
+
+    state.final_answer = synthesis_text
+
+    # Persist the forced step to the trace like any other step
+    log_llm_step(
+        operation_id=state.operation_id,
+        step_index=len(state.steps),
+        messages_delta=[{"role": "system", "content": synthesis_msgs[-1]["content"]}],
+        response_raw=forced.model_dump() if hasattr(forced, "model_dump") else dict(forced),
+        tokens_total=forced.usage.total_tokens if forced.usage else None,
+        agent_type=agent_type,
+        is_subagent=state.is_subagent,
+        parent_op_id=state.parent_op_id,
+    )
+
+    break
+```
+
+### Step 2c — new metrics
+
+```python
+# api/metrics.py
+FORCED_SYNTHESIS_COUNTER = Counter(
+    "deathstar_forced_synthesis_total",
+    "Forced-synthesis steps run after budget-cap or similar loop-exit conditions",
+    ["reason", "agent_type"],  # reason: budget_cap | wall_clock | token_cap
+)
+
+FORCED_SYNTHESIS_FABRICATED_COUNTER = Counter(
+    "deathstar_forced_synthesis_fabricated_total",
+    "Forced-synthesis outputs flagged by fabrication detector",
+    ["agent_type"],
+)
+```
+
+### Step 2d — extend to other loop-exit conditions
+
+The agent loop also exits on wall-clock timeout, token cap, and
+consecutive-failure cap (all from v2.31.8 hard caps). Apply the same
+forced-synthesis pattern to each — pass `reason=wall_clock` / `token_cap`
+/ `consecutive_failures` into the counter and the harness message.
+
+```python
+# Refactor the cap handlers to share one function:
+async def _forced_synthesis_on_exit(state, agent_type, reason, client):
+    """Run one no-tool completion to extract a final_answer from the state."""
+    ...  # body as above with reason plumbed through
+```
+
+### Step 2e — update the Trace UI gate detector
+
+The forced-synthesis step's `messages_delta` contains a `[harness] ...
+budget-cap ...` message. Add a new gate to the detector:
+
+```python
+# api/agents/gate_detection.py
+def detect_gates(steps):
+    gates = { ... existing ... }
+    gates["forced_synthesis"] = {"count": 0, "details": []}
+    for s in steps:
+        for m in s.get("messages_delta", []):
+            c = m.get("content", "")
+            if "[harness]" in c and "budget" in c and "cap" in c:
+                gates["forced_synthesis"]["count"] += 1
+                gates["forced_synthesis"]["details"].append(
+                    {"step": s["step_index"], "snippet": c[:120]}
+                )
+    return gates
+```
+
+Mirror in `gui/src/utils/gateDetection.js`. Commit both.
+
+### Step 2f — tests
+
+```python
+# tests/test_forced_synthesis.py
+async def test_budget_cap_triggers_forced_synthesis():
+    state = make_agent_state(agent_type="research", max_tools=4)
+    # Simulate 4 tool calls already made, smoking-gun evidence in context
+    ...
+    await run_agent_loop(state, client=mock_client_no_tools_capable)
+    assert state.status == "capped"
+    assert state.final_answer is not None
+    assert "EVIDENCE" in state.final_answer or "UNRESOLVED" in state.final_answer
+    # Counter should have incremented
+    assert FORCED_SYNTHESIS_COUNTER.labels(reason="budget_cap",
+                                           agent_type="research")._value.get() == 1
+
+async def test_forced_synthesis_with_no_tools_available():
+    """Forced step must not include `tools=` — model must have no way to call tools."""
+    ...
+
+async def test_forced_synthesis_fabrication_is_flagged():
+    """If the forced synthesis fabricates a tool call, output is prefixed as DRAFT."""
+    ...
+```
+
+## Change 3 — Prometheus metrics + CHANGELOG
+
+### Metrics to add
+
+Covered above in Change 2 step 2c:
+- `FORCED_SYNTHESIS_COUNTER`
+- `FORCED_SYNTHESIS_FABRICATED_COUNTER`
+
+### CHANGELOG entry
+
+```markdown
+## v2.34.17 — boot-time sanitizer scope + forced synthesis on budget cap
+
+**Fix:** `/api/health` version field was being corrupted by the prompt-injection
+sanitizer during application startup. The v2.34.15 scope restriction missed a
+call site that runs before LLM traffic begins. Now the sanitizer runs ONLY on
+strings about to be added to LLM messages.
+
+**Harness:** When an agent run hits a hard cap (budget, wall-clock, tokens, or
+consecutive failures), the loop now runs one final no-tool completion with a
+synthesis-only prompt. The agent gets one shot to say "here's what I learned"
+using evidence already in context. Runs that previously died with
+`final_answer: null` now return a useful EVIDENCE / ROOT CAUSE / NEXT STEPS
+block. Fabrication detector still applies; forced-synthesis outputs that cite
+uncalled tools are prefixed with a DRAFT warning.
+
+**Metrics:** `deathstar_forced_synthesis_total{reason, agent_type}` and
+`deathstar_forced_synthesis_fabricated_total{agent_type}`.
+
+**UI:** Trace viewer's Gates Fired sidebar gains a `forced_synthesis` row.
+```
+
+## Version bump
+
+Update `VERSION`: `2.34.16` → `2.34.17`.
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agents): v2.34.17 boot-time sanitizer scope + forced synthesis on budget cap"
+git push origin main
+```
+
+## How to test after deploy
+
+1. `/api/health` returns `"version": "2.34.17"` as plain text. NOT `[BLOCKED]`.
+2. Re-run the canonical Logstash investigate task (same as v2.34.16 verification).
+   - If the parent converges within budget: run completes with a proper
+     final_answer as before. `forced_synthesis_total` stays at 0.
+   - If the parent burns all 16 tools without proposing a subtask (the
+     557f9ee1 failure mode): run completes with `status=capped` BUT
+     `final_answer` is populated with EVIDENCE / ROOT CAUSE / NEXT STEPS.
+     `forced_synthesis_total{reason="budget_cap"}` increments by 1.
+3. Trace viewer on the capped run shows a new step (after the last tool step)
+   with no tool_calls, just the assistant synthesis text. Gates Fired sidebar
+   shows `✓ forced_synthesis x1`.
+4. Force a test: set research agent's `max_tools` temporarily to 2, run the
+   canonical task. Expect status=capped, final_answer populated with partial
+   EVIDENCE.
+5. `pytest tests/test_health_endpoint.py tests/test_forced_synthesis.py` passes.
+
+## Non-goals / deferred
+
+- Earlier-convergence prompt nudge (the underlying behaviour that made
+  557f9ee1 drill too long). Worth addressing but belongs in the v2.35
+  runbook-based TRIAGE work, not a small fix.
+- Auto-propose-subtask at 80% budget (already exists via v2.34.5
+  dynamic reserve; didn't fire on 557f9ee1 for reasons TBD).
+- Wall-clock / token-cap forced synthesis (covered structurally by
+  Change 2d but may want per-cap tuning).
+
+## Risk register
+
+- Forced synthesis doubles API cost on capped runs (~1 extra completion
+  per capped task). Acceptable trade-off for getting a useful output
+  instead of a silent failure.
+- If the LLM's forced synthesis also hits token cap mid-generation, the
+  answer will be truncated. Handle gracefully — truncated synthesis is
+  better than no synthesis.
+- The fabrication detector runs on forced-synthesis output; if it fires
+  we prefix with DRAFT but still save. An overly-aggressive detector
+  could mislabel a legitimate synthesis. Counter lets us track rate and
+  tune.
