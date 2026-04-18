@@ -729,3 +729,19 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 09:30:33
 ========================================================================
+PROMPT COMPLETE: v2.34.15
+[STATUS] 8m46s
+
+Changes landed in commit `793248a`:
+- **Change 1**: Added `render_call_example()` + `_rewrite_bare_parens()` post-processor in `api/agents/router.py:1664-1812`. RESEARCH_PROMPT now renders `kafka_consumer_lag(group='<group>')` in the KAFKA TRIAGE STEP 0 block (snapshot line 175).
+- **Change 2**: `tests/test_prompt_snapshots.py` + committed baselines under `tests/snapshots/prompts/{observe,investigate,execute,build}.txt`; conftest.py exposes `--update-snapshots`.
+- **Change 3**: `sanitize_for_llm()` wrapper + strict JWT/API-key/UUID-in-key-context patterns in `api/security/prompt_sanitiser.py`. 13 tests verify version strings, large ints, container IDs, bare UUIDs pass through; actual JWTs/API keys/UUIDs-with-key-label are redacted.
+- **Change 4**: Budget-truncation logic in `api/routers/agent.py:1239` — when the model proposes more tools than `_tool_budget - len(tools_used_names)` remain, the overflow is dropped with synthetic `"skipped"` tool_results + harness nudge, and `BUDGET_TRUNCATE_COUNTER` increments.
+- **Change 5**: Three new Prometheus counters in `api/metrics.py`.
+
+All 22 new tests + 23 existing prompt/sanitiser tests pass.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  8m47s
+========================================================================

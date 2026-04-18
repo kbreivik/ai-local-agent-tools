@@ -113,3 +113,40 @@ def test_non_dict_messages_skipped_gracefully():
     steps = [{"step_index": 0, "messages_delta": ["plain string", None, 42]}]
     g = detect_gates_from_steps(steps)
     assert all(v["count"] == 0 for v in g.values())
+
+
+def test_forced_synthesis_budget_cap_detected():
+    steps = [
+        _step(
+            9,
+            {
+                "role": "system",
+                "content": (
+                    "[harness] You have hit the tool-call budget-cap "
+                    "(16/16 tools used). No more tool calls allowed. "
+                    "Produce your final_answer right now..."
+                ),
+            },
+        )
+    ]
+    g = detect_gates_from_steps(steps)
+    assert g["forced_synthesis"]["count"] == 1
+    assert g["forced_synthesis"]["details"][0]["step"] == 9
+
+
+def test_forced_synthesis_wall_clock_detected():
+    steps = [
+        _step(
+            4,
+            {
+                "role": "system",
+                "content": (
+                    "[harness] You have hit the wall-clock cap "
+                    "(7/16 tools used). No more tool calls allowed. "
+                    "Produce your final_answer right now..."
+                ),
+            },
+        )
+    ]
+    g = detect_gates_from_steps(steps)
+    assert g["forced_synthesis"]["count"] == 1

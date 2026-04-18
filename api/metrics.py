@@ -184,6 +184,20 @@ SUBAGENT_TERMINAL_FEEDBACK_COUNTER = Counter(
     ["terminal_status"],   # completed | escalated | failed | timeout | cap_hit
 )
 
+# --- forced synthesis on loop-exit (v2.34.17) ---
+FORCED_SYNTHESIS_COUNTER = Counter(
+    "deathstar_forced_synthesis_total",
+    "Forced-synthesis steps run after budget-cap or similar loop-exit conditions",
+    # reason ∈ {budget_cap, wall_clock, token_cap, destructive_cap, tool_failures}
+    ["reason", "agent_type"],
+)
+
+FORCED_SYNTHESIS_FABRICATED_COUNTER = Counter(
+    "deathstar_forced_synthesis_fabricated_total",
+    "Forced-synthesis outputs flagged by the fabrication detector",
+    ["agent_type"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

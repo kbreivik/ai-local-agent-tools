@@ -9,6 +9,7 @@ export const GATE_DEFS = [
   'budget_truncate',
   'budget_nudge',
   'sanitizer',
+  'forced_synthesis',
 ]
 
 function emptyGates() {
@@ -70,6 +71,16 @@ export function detectGates(steps) {
       if (lc.includes('[redacted]')) {
         gates.sanitizer.count++
         gates.sanitizer.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
+      }
+      if (c.includes('[harness]') && lc.includes('cap') && (
+        lc.includes('budget-cap') ||
+        lc.includes('wall-clock cap') ||
+        lc.includes('token cap') ||
+        lc.includes('destructive-call cap') ||
+        lc.includes('consecutive-tool-failure cap')
+      )) {
+        gates.forced_synthesis.count++
+        gates.forced_synthesis.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
       }
     }
   }

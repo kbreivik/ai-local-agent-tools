@@ -189,7 +189,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | DONE (ba1a04f) |
 | CC_PROMPT_v2.34.15.md | v2.34.15 | fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots | DONE (793248a) |
 | CC_PROMPT_v2.34.16.md | v2.34.16 | feat(ui): trace viewer + gates-fired digest + propose_subtask idempotency + service_placement signature | DONE (4dab532) |
-| CC_PROMPT_v2.34.17.md | v2.34.17 | fix(agents): boot-time sanitizer scope + forced synthesis on budget cap | PENDING |
+| CC_PROMPT_v2.34.17.md | v2.34.17 | fix(agents): boot-time sanitizer scope + forced synthesis on budget cap | RUNNING |
 
 ---
 

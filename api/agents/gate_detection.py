@@ -7,6 +7,7 @@ A "gate" is any harness-initiated message injected into the LLM conversation:
 - budget_truncate      (tool_calls batch truncated)
 - budget_nudge         (70% handoff nudge → propose_subtask)
 - sanitizer            (content redacted before entering the LLM)
+- forced_synthesis     (tools-free completion after a hard-cap loop exit)
 
 The Python detector walks a list of step rows (messages_delta fields) and the
 JS detector at gui/src/utils/gateDetection.js mirrors the same logic. Keep
@@ -25,6 +26,7 @@ GATE_DEFS = (
     "budget_truncate",
     "budget_nudge",
     "sanitizer",
+    "forced_synthesis",
 )
 
 
@@ -83,6 +85,17 @@ def detect_gates_from_steps(steps: list) -> dict:
             if "[redacted]" in lowered:
                 gates["sanitizer"]["count"] += 1
                 gates["sanitizer"]["details"].append(
+                    {"step": step_idx, "snippet": content[:160]}
+                )
+            if "[harness]" in content and "cap" in lowered and (
+                "budget-cap" in lowered
+                or "wall-clock cap" in lowered
+                or "token cap" in lowered
+                or "destructive-call cap" in lowered
+                or "consecutive-tool-failure cap" in lowered
+            ):
+                gates["forced_synthesis"]["count"] += 1
+                gates["forced_synthesis"]["details"].append(
                     {"step": step_idx, "snippet": content[:160]}
                 )
 

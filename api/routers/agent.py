@@ -629,11 +629,55 @@ async def _run_single_agent_step(
                     )
                 except Exception:
                     pass
-                last_reasoning = (
-                    f"Task stopped — {reason}. Partial findings above may be "
-                    f"useful; re-run with a narrower task if needed."
+
+                # v2.34.17: run a tools-free forced synthesis so the operator
+                # still gets an EVIDENCE / ROOT CAUSE / NEXT STEPS block from
+                # whatever was already gathered, instead of a silent null.
+                _cap_reason_key = {
+                    "wall_clock":       "wall_clock",
+                    "token_cap":        "token_cap",
+                    "destructive_cap":  "destructive_cap",
+                    "tool_failures":    "tool_failures",
+                }.get(reason, reason or "wall_clock")
+                _budget_cap = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                from api.agents.forced_synthesis import run_forced_synthesis
+                synthesis_text, harness_msg, raw_resp = run_forced_synthesis(
+                    client=client,
+                    model=_lm_model(),
+                    messages=messages,
+                    agent_type=agent_type,
+                    reason=_cap_reason_key,
+                    tool_count=len(tools_used_names),
+                    budget=_budget_cap,
+                    actual_tool_names=tools_used_names,
                 )
+                if synthesis_text:
+                    last_reasoning = synthesis_text
+                else:
+                    last_reasoning = (
+                        f"Task stopped — {reason}. Partial findings above may be "
+                        f"useful; re-run with a narrower task if needed."
+                    )
                 await manager.send_line("reasoning", last_reasoning, session_id=session_id)
+
+                try:
+                    from api.logger import log_llm_step
+                    await log_llm_step(
+                        operation_id=operation_id,
+                        step_index=_trace_step_index,
+                        messages_delta=[{"role": "system", "content": harness_msg}],
+                        response_raw=raw_resp or {"forced_synthesis": {"reason": _cap_reason_key,
+                                                                        "text": synthesis_text}},
+                        agent_type=agent_type,
+                        is_subagent=_trace_is_subagent,
+                        parent_op_id=_trace_parent_op_id,
+                        temperature=0.3,
+                        model=_lm_model(),
+                    )
+                    _trace_step_index += 1
+                except Exception as _te:
+                    log.debug("forced synthesis trace log failed: %s", _te)
+
                 if is_final_step:
                     await manager.broadcast({
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
@@ -696,35 +740,43 @@ async def _run_single_agent_step(
                 await manager.send_line(
                     "step",
                     f"[budget] Tool call budget reached ({len(tools_used_names)}/{_tool_budget}) "
-                    f"— forcing summary",
+                    f"— forcing synthesis",
                     status="ok", session_id=session_id,
                 )
-                # Inject force-summary message and let the model produce final text
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"TOOL BUDGET REACHED ({len(tools_used_names)}/{_tool_budget}). "
-                        "You have used all available tool calls. "
-                        "Write your final summary NOW as plain text — no more tool calls allowed. "
-                        "Use the data you have already gathered."
-                    ),
-                })
+                final_status = "capped"
+                from api.agents.forced_synthesis import run_forced_synthesis
+                synthesis_text, harness_msg, raw_resp = run_forced_synthesis(
+                    client=client,
+                    model=_lm_model(),
+                    messages=messages,
+                    agent_type=agent_type,
+                    reason="budget_cap",
+                    tool_count=len(tools_used_names),
+                    budget=_tool_budget,
+                    actual_tool_names=tools_used_names,
+                )
+                if synthesis_text:
+                    last_reasoning = synthesis_text
+                    await manager.send_line("reasoning", synthesis_text, session_id=session_id)
+
+                # Persist the forced step to the LLM trace
                 try:
-                    force_response = client.chat.completions.create(
-                        model=_lm_model(),
-                        messages=messages,
-                        tools=None,
-                        tool_choice=None,
+                    from api.logger import log_llm_step
+                    await log_llm_step(
+                        operation_id=operation_id,
+                        step_index=_trace_step_index,
+                        messages_delta=[{"role": "system", "content": harness_msg}],
+                        response_raw=raw_resp or {"forced_synthesis": {"reason": "budget_cap",
+                                                                        "text": synthesis_text}},
+                        agent_type=agent_type,
+                        is_subagent=_trace_is_subagent,
+                        parent_op_id=_trace_parent_op_id,
                         temperature=0.3,
-                        max_tokens=800,
-                        extra_body={"min_p": 0.1},
+                        model=_lm_model(),
                     )
-                    forced_text = force_response.choices[0].message.content or ""
-                    if forced_text:
-                        last_reasoning = forced_text
-                        await manager.send_line("reasoning", forced_text, session_id=session_id)
-                except Exception as _fe:
-                    log.debug("Tool budget force summary failed: %s", _fe)
+                    _trace_step_index += 1
+                except Exception as _te:
+                    log.debug("forced synthesis trace log failed: %s", _te)
 
                 if is_final_step:
                     choices = _extract_choices(last_reasoning) if last_reasoning else None
