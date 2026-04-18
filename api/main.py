@@ -418,6 +418,53 @@ async def lifespan(app: FastAPI):
         init_llm_traces()
     except Exception as _lle:
         _log.debug("llm_traces init failed: %s", _lle)
+    # v2.35.6 — one-shot recovery: restore operations.final_answer rows
+    # nuked by the legacy [BLOCKED:...] egress sanitiser. Replays the last
+    # step's assistant content from agent_llm_traces (v2.34.14 persistence).
+    # Idempotent: after the legacy module is gone no new rows will match.
+    async def _recover_blocked_final_answers():
+        from api.db.base import get_engine as _ge_rec
+        from sqlalchemy import text as _txt_rec
+        try:
+            async with _ge_rec().begin() as _rc:
+                rows = (await _rc.execute(_txt_rec(
+                    "SELECT id FROM operations "
+                    "WHERE final_answer LIKE '[BLOCKED:%' LIMIT 1000"
+                ))).fetchall()
+            recovered = 0
+            for (op_id,) in rows:
+                try:
+                    from api.db import llm_traces as _lt
+                    trace = _lt.get_trace(op_id)
+                    steps = trace.get("steps") or []
+                    if not steps:
+                        continue
+                    last_step = steps[-1]
+                    resp = last_step.get("response_raw") or {}
+                    choices = resp.get("choices") or []
+                    if not choices:
+                        continue
+                    content = (choices[0].get("message") or {}).get("content") or ""
+                    if content and not content.startswith("[BLOCKED:"):
+                        async with _ge_rec().begin() as _rc2:
+                            await _rc2.execute(_txt_rec(
+                                "UPDATE operations SET final_answer = :fa "
+                                "WHERE id = :oid"
+                            ), {"fa": content, "oid": op_id})
+                        recovered += 1
+                except Exception:
+                    continue
+            if recovered:
+                _log.info(
+                    "final_answer recovery: restored %d row(s) from LLM traces",
+                    recovered,
+                )
+        except Exception as _re:
+            _log.debug("final_answer recovery skipped: %s", _re)
+    try:
+        await _recover_blocked_final_answers()
+    except Exception:
+        pass
     async def _llm_trace_cleanup_loop():
         while True:
             await _aio.sleep(86400)

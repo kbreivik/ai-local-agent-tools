@@ -1,0 +1,522 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.6.md (v2.35.6)
+Theme: fix(security): remove legacy [BLOCKED:...] egress sanitiser rewriting operations.final_answer
+
+Prompt content:
+
+# CC PROMPT — v2.35.6 — Eliminate legacy egress sanitiser rewriting `operations.final_answer`
+
+## What this does
+
+A legacy sanitiser module (pre-v2.34.15, output format `[BLOCKED: <Category>]`) is
+still present in the codebase and a background task invokes it on
+`operations.final_answer` rows, rewriting agent output to `[BLOCKED: Cookie/query
+string data]` / `[BLOCKED: JWT token]` / `[BLOCKED: Sensitive key]` **in the
+database, after-the-fact**. The canonical sanitiser
+(`api/security/prompt_sanitiser.py`, v2.34.15) uses `[REDACTED:<lowercase>]` and
+has tightened patterns — the `[BLOCKED:...]` format is exclusively from the
+legacy module.
+
+This prompt:
+
+1. Locates the legacy sanitiser module (grep repo for the literal string
+   `"BLOCKED:"`) and the background task that invokes it.
+2. Removes the legacy call site. If the module has no remaining legitimate
+   callers, deletes the module.
+3. Restores previously-nuked `operations.final_answer` rows from the
+   `agent_llm_traces` table where available (v2.34.14 persists the raw LLM
+   response, so we can recover many final answers by replaying the last step's
+   `response_raw.choices[0].message.content`).
+4. Adds regression tests that read `/api/logs/operations/{id}` and
+   `/api/logs/operations` after writing a final_answer containing the exact
+   patterns the legacy sanitiser triggered on (`key=value`, `<parameter=x>`,
+   UUIDs, version strings).
+
+Version bump: 2.35.5 → 2.35.6.
+
+---
+
+## Evidence gathered before this prompt was written
+
+**Observed behaviour** (captured via Chrome MCP against live agent-01 on
+2026-04-18):
+
+1. Op `2f287593-d3b7-43cf-b87b-862e39862ae1` — final LLM output was `<tool_call>\n<function=vm_exec>\n<parameter=host>\nds-docker-worker-03\n</parameter>...`  
+   - At 20:03 UTC the list endpoint `/api/logs/operations?limit=6` returned this raw text in `final_answer`.  
+   - At 20:19 UTC the same row returned `"[BLOCKED: Cookie/query string data]"` via both list AND detail endpoints.  
+   - The DB value changed between 20:03 and 20:19 — nothing else was written to this row in that window (status was already `capped`). A background job rewrote it.
+
+2. Multiple other affected endpoints I triaged:
+   - `/api/health` `version` field — intermittently shows `[BLOCKED: JWT token]` instead of `2.35.5` (version string `2.35.5` matches the legacy "JWT" pattern)
+   - `/api/agent/run` response `session_id` — shows `[BLOCKED: Sensitive key]` instead of a UUID
+   - `/api/elastic/logs` response `index` / `message` / `service` fields — intermittently `[BLOCKED: JWT token]` (matches on dotted identifiers like `hp1-logs-2026.04.18`)
+
+3. **`api/security/prompt_sanitiser.py` is NOT the offender.** Verified by reading
+   the file: it uses `_inc_block()` that produces strings like `[REDACTED:jwt]`,
+   `[REDACTED:api_key]`, `[REDACTED:uuid]` — all lowercase, hyphen-separated,
+   `REDACTED:` prefix. The production traffic shows `[BLOCKED: JWT token]`,
+   `[BLOCKED: Sensitive key]`, `[BLOCKED: Cookie/query string data]` — capitalized,
+   space-separated natural language, `BLOCKED:` prefix. Different module.
+
+4. **v2.34.15's summary explicitly describes the legacy module and its patterns:**
+   > "v2.31.7 sanitizer runs on outbound API response bodies (wrong scope) with
+   > patterns loose enough to match `2.34.14` as JWT, `10403` as 'Sensitive key',
+   > and any UUID in URL path."
+   
+   v2.34.15 added a new module (`prompt_sanitiser.py`) and said callers should
+   use it for LLM-inbound text. But the OLD v2.31.7 module was apparently
+   never deleted, and at least one background job still imports and calls it.
+
+---
+
+## Change 1 — locate and remove the legacy sanitiser
+
+Grep the repo for the exact literal string `"BLOCKED:"`:
+
+```bash
+git grep -n '"BLOCKED:' -- '*.py'
+git grep -n "'BLOCKED:" -- '*.py'
+git grep -n "Cookie/query string" -- '*.py'
+git grep -n "Sensitive key" -- '*.py'
+```
+
+Expected finds:
+- A module somewhere under `api/security/` or `api/middleware/` (name unknown —
+  possibilities include `sanitiser_legacy.py`, `egress.py`, `response_sanitiser.py`,
+  or something from the v2.31.7 era still living at `api/security/sanitiser.py`)
+  with pattern dictionaries mapping raw-regex → human-readable category label
+  (`"JWT token"`, `"Sensitive key"`, `"Cookie/query string data"`).
+- At least one `import` of that module from a background task or periodic
+  job. Candidates to audit:
+  - `api/logger.py` (final_answer writes pass through here)
+  - `api/routers/dashboard.py` (has periodic `start_auto_update` task)
+  - `api/session_store.py` (periodic cleanup loops)
+  - `api/main.py` lifespan block (several `asyncio.create_task(_*_cleanup_loop)`
+    workers — any one of them could be the culprit)
+  - `api/db/base.py` or `api/db/queries.py` (connection-level wrappers)
+
+Action:
+- **If the legacy module has zero legitimate callers after this grep** →
+  delete the module entirely. Commit message should note the v2.34.15 intent
+  to replace it was only partially executed.
+- **If there are remaining callers** → replace those calls with
+  `api.security.prompt_sanitiser.sanitize_for_llm()` at LLM-inbound boundaries
+  only. Any call site operating on DB rows, API response bodies, or WebSocket
+  broadcasts of persisted data gets removed outright (those are egress paths
+  and must not be sanitised — that's the whole point of v2.34.15).
+
+---
+
+## Change 2 — restore nuked `operations.final_answer` rows
+
+v2.34.14 persists full LLM traces in `agent_llm_traces`. For any operation row
+where `final_answer` starts with `[BLOCKED:` we can attempt recovery from the
+trace:
+
+```python
+# one-time recovery migration, added inline in api/main.py lifespan
+# immediately after the init_llm_traces() call
+async def _recover_blocked_final_answers():
+    """One-time: restore operations.final_answer rows nuked by the legacy sanitiser."""
+    from api.db.base import get_engine
+    from sqlalchemy import text
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        async with get_engine().begin() as conn:
+            # Find victim rows
+            rows = (await conn.execute(text(
+                "SELECT id FROM operations WHERE final_answer LIKE '[BLOCKED:%' LIMIT 1000"
+            ))).fetchall()
+            recovered = 0
+            for (op_id,) in rows:
+                # Pull the last step's assistant content from the trace
+                try:
+                    from api.db import llm_traces
+                    trace = llm_traces.get_trace(op_id)
+                    steps = trace.get("steps") or []
+                    if not steps:
+                        continue
+                    last_step = steps[-1]
+                    resp = last_step.get("response_raw") or {}
+                    choices = resp.get("choices") or []
+                    if not choices:
+                        continue
+                    content = (choices[0].get("message") or {}).get("content") or ""
+                    if content and not content.startswith("[BLOCKED:"):
+                        await conn.execute(text(
+                            "UPDATE operations SET final_answer = :fa WHERE id = :oid"
+                        ), {"fa": content, "oid": op_id})
+                        recovered += 1
+                except Exception:
+                    continue
+            if recovered:
+                _log.info("final_answer recovery: restored %d row(s) from LLM traces", recovered)
+    except Exception as _re:
+        _log.warning("final_answer recovery skipped: %s", _re)
+
+# Call it inside lifespan() after init_llm_traces
+try:
+    await _recover_blocked_final_answers()
+except Exception:
+    pass
+```
+
+The exact call-site integration depends on where `init_llm_traces()` lives in
+the current `lifespan()` block — CC should place the recovery call immediately
+after it. This is a one-shot idempotent migration: after the legacy sanitiser
+is gone, no new rows will need recovery, and this block becomes a no-op
+because no rows will match `LIKE '[BLOCKED:%'`.
+
+---
+
+## Change 3 — regression tests
+
+Add `tests/test_response_egress.py`:
+
+```python
+"""v2.35.6 regression tests — ensure no outbound API response sanitisation.
+
+The v2.31.7 sanitiser (format `[BLOCKED: <Category>]`) was supposed to be
+retired by v2.34.15 in favour of prompt_sanitiser.py (format `[REDACTED:...]`).
+v2.35.6 removed the last remaining legacy call site. These tests lock in the
+invariant that no outbound endpoint field ever contains `[BLOCKED:` and that
+agent output containing `key=value`-shaped content survives a DB round-trip
+unchanged.
+"""
+from __future__ import annotations
+
+import asyncio
+import pytest
+
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client():
+    from api.main import app
+    return TestClient(app)
+
+
+@pytest.fixture
+def auth_headers():
+    # Minimal stub — projects with real auth should override this.
+    # In CI, API_TOKEN_DEFAULT is wired so these requests succeed.
+    import os
+    return {"Authorization": f"Bearer {os.environ.get('API_TOKEN_DEFAULT', '')}"}
+
+
+def test_health_version_is_not_blocked(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "[BLOCKED:" not in (body.get("version") or ""), \
+        f"/api/health version was egress-sanitised: {body.get('version')!r}"
+    assert "[REDACTED:" not in (body.get("version") or ""), \
+        f"/api/health version should not pass through prompt_sanitiser either"
+
+
+def test_agent_models_endpoint_clean(client, auth_headers):
+    r = client.get("/api/agent/models", headers=auth_headers)
+    assert r.status_code == 200
+    body_text = r.text
+    assert "[BLOCKED:" not in body_text, \
+        f"/api/agent/models contains BLOCKED token: {body_text[:300]}"
+
+
+def test_operations_detail_preserves_key_value_final_answer(client, auth_headers):
+    """Regression: a final_answer containing <parameter=x>value</parameter>
+    patterns was rewritten to '[BLOCKED: Cookie/query string data]' in v2.35.5.
+    """
+    from api.db.base import get_engine
+    from api import logger as logger_mod
+    from sqlalchemy import text
+    import uuid
+
+    # Create an operation with a final_answer that matches every pattern the
+    # legacy sanitiser flagged: version string, UUID, key=value, XML-like tags.
+    op_id = asyncio.get_event_loop().run_until_complete(
+        logger_mod.log_operation(str(uuid.uuid4()), "test_egress_preservation", owner_user="test")
+    )
+    sentinel = (
+        "EVIDENCE:\n"
+        "- vm_exec(host=ds-docker-worker-03, cmd=docker ps)\n"
+        "- <parameter=host>ds-docker-worker-03</parameter>\n"
+        "- session_id=abc12345-6789-4321-8765-fedcba987654\n"
+        "- version 2.35.6\n"
+        "- key=value pairs in prose\n"
+        "ROOT CAUSE: test\n"
+    )
+    asyncio.get_event_loop().run_until_complete(
+        logger_mod.set_operation_final_answer(op_id, sentinel)
+    )
+    # Flush any async writers
+    asyncio.get_event_loop().run_until_complete(logger_mod.flush_now())
+
+    # Detail endpoint
+    r = client.get(f"/api/logs/operations/{op_id}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    op = r.json().get("operation") or {}
+    fa = op.get("final_answer") or ""
+    assert "[BLOCKED:" not in fa, f"final_answer was egress-sanitised: {fa!r}"
+    assert fa == sentinel, (
+        f"final_answer round-trip altered: sent {sentinel!r}, got {fa!r}"
+    )
+
+    # List endpoint
+    r2 = client.get("/api/logs/operations?limit=50", headers=auth_headers)
+    assert r2.status_code == 200
+    listed = next((o for o in (r2.json().get("operations") or []) if o.get("id") == op_id), None)
+    assert listed is not None, "test op not in list response"
+    assert "[BLOCKED:" not in (listed.get("final_answer") or "")
+
+
+def test_prompt_sanitiser_format_is_redacted_not_blocked():
+    """Lock in the canonical v2.34.15 sanitiser output format.
+
+    If a future commit reintroduces a '[BLOCKED:' literal anywhere in
+    api/security/, this test fails. Prevents the legacy sanitiser from
+    silently returning to the codebase.
+    """
+    from api.security.prompt_sanitiser import sanitise
+    text = "JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c and key=value"
+    out, scrubbed = sanitise(text, source_hint="test")
+    assert scrubbed is True, "JWT should have triggered a scrub"
+    assert "[REDACTED:" in out, f"Expected [REDACTED: token but got {out!r}"
+    assert "[BLOCKED:" not in out, f"Legacy [BLOCKED: token must never appear: {out!r}"
+
+
+def test_no_legacy_sanitiser_module_imports(tmp_path=None):
+    """Structural guard: no file in api/ imports a module producing [BLOCKED: ...]."""
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).parent.parent / "api"
+    # The canonical sanitiser is the ONLY module allowed to touch secret-like strings
+    # in this codebase. Any other module matching these patterns is suspect.
+    legacy_token_re = re.compile(r'\[BLOCKED:\s*(?:JWT|Sensitive|Cookie)')
+    offenders = []
+    for py in root.rglob("*.py"):
+        try:
+            txt = py.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if legacy_token_re.search(txt):
+            offenders.append(str(py.relative_to(root)))
+    assert offenders == [], (
+        f"Legacy '[BLOCKED: ...]' sanitiser format found in: {offenders}. "
+        "This module was supposed to be retired by v2.34.15 and deleted in v2.35.6. "
+        "Remove it — use api.security.prompt_sanitiser.sanitize_for_llm() instead."
+    )
+```
+
+These tests cover:
+- The live symptoms I saw today (`/api/health`, `/api/agent/models`,
+  `/api/logs/operations/{id}`, list endpoint)
+- The exact content pattern that tripped the sanitiser (`<parameter=host>`,
+  `key=value`, version string, UUID)
+- A structural guard preventing the legacy format from re-appearing in any
+  file under `api/`
+
+---
+
+## Change 4 — `VERSION`
+
+Replace file contents with exactly:
+
+```
+2.35.6
+```
+
+---
+
+## Change 5 — `cc_prompts/INDEX.md`
+
+Row and summary will be added manually by Claude Desktop before this queue
+run. After push, flip `PENDING` → `DONE (<sha>)` per protocol.
+
+---
+
+## Verify
+
+```bash
+pytest tests/test_response_egress.py -v
+pytest tests/ -v -k "sanitiser or sanitise or egress"
+```
+
+All must pass. The `test_no_legacy_sanitiser_module_imports` structural guard
+should fail with the current codebase and pass after Change 1 removes the
+legacy module / call sites.
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(security): v2.35.6 remove legacy [BLOCKED:...] egress sanitiser
+
+The v2.31.7 sanitiser (format '[BLOCKED: <Category>]') was supposed to be
+retired by v2.34.15 in favour of api/security/prompt_sanitiser.py (format
+'[REDACTED:...]'). v2.34.15 added the new module but left the old one on
+disk, and at least one background task still invoked it — rewriting
+operations.final_answer rows in the DB to '[BLOCKED: Cookie/query string
+data]' whenever the content contained key=value patterns, '[BLOCKED: JWT
+token]' on version-string / dotted-identifier matches, '[BLOCKED: Sensitive
+key]' on UUIDs.
+
+Observed in production on agent-01: agent output containing
+'<parameter=host>ds-docker-worker-03</parameter>' was permanently lost,
+replaced in the DB by the egress redaction. /api/health version field and
+/api/agent/run session_id intermittently affected too.
+
+This change removes the legacy module, rips out all remaining call sites,
+and adds a one-shot recovery migration that restores nuked final_answer
+rows from the v2.34.14 agent_llm_traces persistence. Regression tests lock
+in the invariant that no outbound API field ever contains '[BLOCKED:', and
+a structural guard prevents the legacy module from ever returning to
+api/ without tripping CI."
+git push origin main
+```
+
+---
+
+## Deploy
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+---
+
+## Smoke test (post-deploy)
+
+1. `curl -s https://192.168.199.10:8000/api/health | jq .version` →
+   should return `"2.35.6"` literally, NOT `"[BLOCKED: JWT token]"`.
+2. Run any investigate task through the UI. Wait for `status=completed` or
+   `capped`. Fetch `/api/logs/operations/<op_id>` and confirm
+   `operation.final_answer` contains the real agent output — no `[BLOCKED:`
+   prefix.
+3. Check `deathstar_sanitizer_blocks_total{pattern="*",site="*"}` on
+   `/metrics`. This counter is from `prompt_sanitiser.py` (the GOOD sanitiser);
+   its series should continue to increment for genuine LLM-inbound scrubs.
+4. Run the v2.35.5 smoke test task again — confirm the PREFLIGHT FACTS →
+   agent → final_answer chain works end-to-end AND that the final_answer is
+   readable by the operator.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-18 22:27:31
+========================================================================
