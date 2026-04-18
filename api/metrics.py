@@ -288,6 +288,13 @@ PREFLIGHT_FACTS_INJECTED = Histogram(
     buckets=(0, 1, 2, 5, 10, 20, 40, 100),
 )
 
+# Added in v2.35.5 — which resolution path produced the injected facts.
+PREFLIGHT_FACT_SOURCE_COUNTER = Counter(
+    "deathstar_preflight_fact_source_total",
+    "Which resolution path produced the facts injected at preflight",
+    ["source"],   # inventory_match | direct_entity | ambiguous_skip | no_facts_found
+)
+
 # --- runbook injection (v2.35.4) ---
 RUNBOOK_MATCHES_COUNTER = Counter(
     "deathstar_runbook_matches_total",

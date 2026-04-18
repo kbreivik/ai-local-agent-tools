@@ -257,3 +257,110 @@ def test_format_preflight_trace_only_when_no_facts():
     block = pf.format_preflight_facts_section(pre, settings={"preflightPanelMode": "always_visible"})
     assert "PREFLIGHT TRACE" in block
     assert "PREFLIGHT FACTS" not in block
+
+
+# ── v2.35.5: regression tests for preflight fact-injection fix ─────────
+
+def test_tier1_does_not_truncate_full_names():
+    """Regex must preserve full hyphen/underscore entity names.
+
+    Regression guard for a v2.35.1 rollout diagnosis that assumed the
+    regex was stripping prefixes/suffixes. It was not — full names are
+    preserved. This test locks that in.
+    """
+    cases = [
+        ("logstash_logstash",                                     "logstash_logstash"),
+        ("kafka_broker-3",                                        "kafka_broker-3"),
+        ("why did kafka_broker-3 crash after logstash_logstash",  "kafka_broker-3"),
+        ("why did kafka_broker-3 crash after logstash_logstash",  "logstash_logstash"),
+        ("check logstash_logstash:9200",                          "logstash_logstash"),
+    ]
+    for task, expected_id in cases:
+        hits = pf.tier1_regex_extract(task)
+        ids = [h.entity_id for h in hits]
+        assert expected_id in ids, (
+            f"regex did not preserve {expected_id!r} in {task!r}; got {ids}"
+        )
+
+
+def test_resolve_against_inventory_zero_match_falls_back_to_direct(monkeypatch):
+    """Zero inventory matches → fact lookup still runs on the regex-extracted id."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return []
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return [{
+            "fact_key":      "prod.kafka.broker.3.host",
+            "source":        "kafka_collector",
+            "fact_value":    "192.168.199.33",
+            "last_verified": "2026-04-18T18:00:00+00:00",
+            "confidence":    0.92,
+        }]
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="kafka_broker-3", entity_type="kafka_broker",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    resolved, facts = pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == ["kafka_broker-3"], (
+        "direct fact lookup did not run on zero-inventory-match"
+    )
+    assert len(facts) == 1
+    assert "direct fact lookup" in "\n".join(trace)
+
+
+def test_resolve_against_inventory_ambiguous_skips_direct(monkeypatch):
+    """>1 inventory matches → direct fact lookup is NOT attempted."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return [{"entity_id": "a"}, {"entity_id": "b"}]
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return []
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="worker", entity_type="generic_host",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    resolved, facts = pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == [], (
+        f"ambiguous multi-match should skip fact lookup, saw {calls['fact_lookups']}"
+    )
+    assert facts == []
+    assert "ambiguous" in "\n".join(trace)
+
+
+def test_resolve_against_inventory_single_match_uses_canonical_id(monkeypatch):
+    """Single inventory match → fact lookup uses inventory's canonical id."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return [{"entity_id": "canonical-vm-id", "display_name": "Canonical VM"}]
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return []
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="raw-host", entity_type="generic_host",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == ["canonical-vm-id"]

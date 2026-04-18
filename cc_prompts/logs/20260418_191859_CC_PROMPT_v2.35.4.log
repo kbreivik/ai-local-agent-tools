@@ -527,3 +527,12 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 19:18:59
 ========================================================================
+Pre-existing failure — `test_collectors_pbs.py` last touched in v1.27.0 and `api/collectors/pbs.py` last touched in v2.35.0, neither changed by v2.35.4. Unrelated to this prompt.
+[STATUS] 41m45s
+
+Work remains complete as reported: v2.35.4 pushed as 057d594.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  41m46s
+========================================================================

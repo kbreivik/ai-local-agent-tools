@@ -706,27 +706,85 @@ def get_confident_facts_for_entity(entity_id: str, min_confidence: float = 0.7,
 def resolve_against_inventory(candidates: list, trace: list,
                                min_confidence: float = 0.7,
                                max_facts: int = 40) -> tuple[list, list]:
+    """Resolve each candidate against infra_inventory, then pull
+    confident facts.
+
+    v2.35.5 fix: infra_inventory coverage is sparse — mostly proxmox_vms
+    and vm_hosts collectors write to it. Kafka brokers, Swarm services,
+    containers, etc. have zero inventory rows. Previously this function
+    gated fact injection on `len(matches) == 1`, so zero-inventory-match
+    entities never got facts injected even when confident facts existed
+    in known_facts.
+
+    New behaviour:
+      - 1 inventory match   → canonical entity_id from inventory → fact lookup
+      - 0 inventory matches → regex-extracted entity_id          → direct fact lookup
+      - >1 inventory matches → ambiguous, skip fact lookup
+    """
     resolved: list[dict] = []
     facts_to_inject: list[dict] = []
     for c in candidates:
         matches = lookup_inventory(c.entity_id, c.entity_type)
-        trace.append(f"'{c.entity_id}': {len(matches)} inventory matches")
+        trace.append(
+            f"'{c.entity_id}' ({c.entity_type}): {len(matches)} inventory matches"
+        )
+
+        fact_lookup_id: str | None = None
+        fact_source: str = "no_facts_found"
         if len(matches) == 1:
             m = matches[0]
+            fact_lookup_id = m.get("entity_id") or c.entity_id
+            fact_source = "inventory_match"
+        elif len(matches) == 0:
+            # v2.35.5 — fall back to direct lookup against the extracted id.
+            # known_facts is the SOT; infra_inventory coverage is sparse.
+            fact_lookup_id = c.entity_id
+            fact_source = "direct_entity"
+            trace.append(
+                f"  (no inventory match — trying direct fact lookup on "
+                f"'{c.entity_id}')"
+            )
+        else:
+            # Ambiguous. Preserve v2.35.1 behaviour: do not inject.
+            fact_source = "ambiguous_skip"
+            trace.append(
+                f"  ({len(matches)} inventory matches — ambiguous, "
+                f"skipping fact injection)"
+            )
+
+        if fact_lookup_id:
             fact_rows = get_confident_facts_for_entity(
-                m.get("entity_id") or c.entity_id,
+                fact_lookup_id,
                 min_confidence=min_confidence,
                 max_rows=max_facts,
             )
             if fact_rows:
                 facts_to_inject.extend(fact_rows)
-                trace.append(f"  → {m['entity_id']}: {len(fact_rows)} facts")
+                trace.append(f"  → {fact_lookup_id}: {len(fact_rows)} facts")
+            else:
+                # Downgrade the metric label if we found no facts even after
+                # attempting a lookup, so we can tell the two zero-fact
+                # outcomes apart (no lookup vs lookup-but-empty).
+                fact_source = "no_facts_found"
+
+        _bump_fact_source(fact_source)
         resolved.append({"candidate": c, "matches": matches})
-    # Trim + sort facts
-    facts_to_inject.sort(key=lambda r: r.get("confidence", 0.0), reverse=True)
+
+    facts_to_inject.sort(
+        key=lambda r: r.get("confidence", 0.0), reverse=True
+    )
     if len(facts_to_inject) > max_facts:
         facts_to_inject = facts_to_inject[:max_facts]
     return resolved, facts_to_inject
+
+
+def _bump_fact_source(source: str) -> None:
+    """Increment the preflight fact-source counter. Silent on import failure."""
+    try:
+        from api.metrics import PREFLIGHT_FACT_SOURCE_COUNTER
+        PREFLIGHT_FACT_SOURCE_COUNTER.labels(source=source).inc()
+    except Exception:
+        pass
 
 
 # ── Metric shims ──────────────────────────────────────────────────────

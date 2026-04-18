@@ -1,0 +1,331 @@
+# CC PROMPT — v2.35.5 — Fix v2.35.1 preflight fact-injection gap
+
+## What this does
+
+v2.35.1 gated fact injection on `len(matches) == 1` in
+`resolve_against_inventory()`. `infra_inventory` is populated mostly
+by proxmox_vms / vm_hosts collectors, so Kafka brokers, Swarm services,
+containers, etc. have zero inventory rows — meaning zero facts reached the
+agent even when confident facts existed in `known_facts`. User test with
+`logstash_logstash` + `kafka_broker-3` produced trace lines like
+`'logstash': 0 inventory matches` and zero facts were injected despite
+199 confident rows existing for those entities.
+
+This prompt:
+
+1. Makes `resolve_against_inventory()` attempt direct fact lookup against
+   the regex-extracted entity_id when inventory returns zero matches.
+   Ambiguity (>1 match) still skips direct lookup (preserves v2.35.1
+   behaviour on ambiguous references).
+2. Expands the trace line to include entity_type so regex-vs-lookup
+   failures are distinguishable at a glance.
+3. Adds a Prometheus counter `deathstar_preflight_fact_source_total`
+   with label `source` ∈ {`inventory_match`, `direct_entity`,
+   `ambiguous_skip`, `no_facts_found`} to track which path produced
+   injected facts.
+4. Adds regression tests confirming the tier-1 regex does NOT truncate
+   full hyphen/underscore names (locks in the v2.35.1 behaviour — that
+   was the misdiagnosis during rollout), and that the zero-inventory
+   direct-lookup path runs.
+
+Version bump: 2.35.4 → 2.35.5.
+
+Naming note: prompt version is v2.35.5 (the next forward step from
+VERSION=2.35.4) rather than v2.35.1.1 — VERSION can't go backwards.
+The fix itself patches the v2.35.1 subsystem (preflight).
+
+---
+
+## Change 1 — `api/agents/preflight.py`
+
+Replace the existing `resolve_against_inventory()` function in its entirety
+with the version below. Also add the `_bump_fact_source()` helper
+immediately after it.
+
+Locate the current function (the one that starts with
+`def resolve_against_inventory(candidates: list, trace: list,`) and
+replace that function + any immediately-following helper with:
+
+```python
+def resolve_against_inventory(candidates: list, trace: list,
+                               min_confidence: float = 0.7,
+                               max_facts: int = 40) -> tuple[list, list]:
+    """Resolve each candidate against infra_inventory, then pull
+    confident facts.
+
+    v2.35.5 fix: infra_inventory coverage is sparse — mostly proxmox_vms
+    and vm_hosts collectors write to it. Kafka brokers, Swarm services,
+    containers, etc. have zero inventory rows. Previously this function
+    gated fact injection on `len(matches) == 1`, so zero-inventory-match
+    entities never got facts injected even when confident facts existed
+    in known_facts.
+
+    New behaviour:
+      - 1 inventory match   → canonical entity_id from inventory → fact lookup
+      - 0 inventory matches → regex-extracted entity_id          → direct fact lookup
+      - >1 inventory matches → ambiguous, skip fact lookup
+    """
+    resolved: list[dict] = []
+    facts_to_inject: list[dict] = []
+    for c in candidates:
+        matches = lookup_inventory(c.entity_id, c.entity_type)
+        trace.append(
+            f"'{c.entity_id}' ({c.entity_type}): {len(matches)} inventory matches"
+        )
+
+        fact_lookup_id: str | None = None
+        fact_source: str = "no_facts_found"
+        if len(matches) == 1:
+            m = matches[0]
+            fact_lookup_id = m.get("entity_id") or c.entity_id
+            fact_source = "inventory_match"
+        elif len(matches) == 0:
+            # v2.35.5 — fall back to direct lookup against the extracted id.
+            # known_facts is the SOT; infra_inventory coverage is sparse.
+            fact_lookup_id = c.entity_id
+            fact_source = "direct_entity"
+            trace.append(
+                f"  (no inventory match — trying direct fact lookup on "
+                f"'{c.entity_id}')"
+            )
+        else:
+            # Ambiguous. Preserve v2.35.1 behaviour: do not inject.
+            fact_source = "ambiguous_skip"
+            trace.append(
+                f"  ({len(matches)} inventory matches — ambiguous, "
+                f"skipping fact injection)"
+            )
+
+        if fact_lookup_id:
+            fact_rows = get_confident_facts_for_entity(
+                fact_lookup_id,
+                min_confidence=min_confidence,
+                max_rows=max_facts,
+            )
+            if fact_rows:
+                facts_to_inject.extend(fact_rows)
+                trace.append(f"  → {fact_lookup_id}: {len(fact_rows)} facts")
+            else:
+                # Downgrade the metric label if we found no facts even after
+                # attempting a lookup, so we can tell the two zero-fact
+                # outcomes apart (no lookup vs lookup-but-empty).
+                fact_source = "no_facts_found"
+
+        _bump_fact_source(fact_source)
+        resolved.append({"candidate": c, "matches": matches})
+
+    facts_to_inject.sort(
+        key=lambda r: r.get("confidence", 0.0), reverse=True
+    )
+    if len(facts_to_inject) > max_facts:
+        facts_to_inject = facts_to_inject[:max_facts]
+    return resolved, facts_to_inject
+
+
+def _bump_fact_source(source: str) -> None:
+    """Increment the preflight fact-source counter. Silent on import failure."""
+    try:
+        from api.metrics import PREFLIGHT_FACT_SOURCE_COUNTER
+        PREFLIGHT_FACT_SOURCE_COUNTER.labels(source=source).inc()
+    except Exception:
+        pass
+```
+
+If the current file already has a `_bump_fact_source` or similar helper,
+reconcile — don't duplicate. The new behaviour is that the counter is
+incremented exactly once per candidate.
+
+## Change 2 — `api/metrics.py`
+
+In the `# --- preflight (v2.35.1) ---` block, **after** the existing
+`PREFLIGHT_FACTS_INJECTED = Histogram(...)` definition, add:
+
+```python
+# Added in v2.35.5 — which resolution path produced the injected facts.
+PREFLIGHT_FACT_SOURCE_COUNTER = Counter(
+    "deathstar_preflight_fact_source_total",
+    "Which resolution path produced the facts injected at preflight",
+    ["source"],   # inventory_match | direct_entity | ambiguous_skip | no_facts_found
+)
+```
+
+## Change 3 — `tests/test_preflight.py`
+
+Append to the end of the file (after the last existing test
+`test_format_preflight_trace_only_when_no_facts`):
+
+```python
+# ── v2.35.5: regression tests for preflight fact-injection fix ─────────
+
+def test_tier1_does_not_truncate_full_names():
+    """Regex must preserve full hyphen/underscore entity names.
+
+    Regression guard for a v2.35.1 rollout diagnosis that assumed the
+    regex was stripping prefixes/suffixes. It was not — full names are
+    preserved. This test locks that in.
+    """
+    cases = [
+        ("logstash_logstash",                                     "logstash_logstash"),
+        ("kafka_broker-3",                                        "kafka_broker-3"),
+        ("why did kafka_broker-3 crash after logstash_logstash",  "kafka_broker-3"),
+        ("why did kafka_broker-3 crash after logstash_logstash",  "logstash_logstash"),
+        ("check logstash_logstash:9200",                          "logstash_logstash"),
+    ]
+    for task, expected_id in cases:
+        hits = pf.tier1_regex_extract(task)
+        ids = [h.entity_id for h in hits]
+        assert expected_id in ids, (
+            f"regex did not preserve {expected_id!r} in {task!r}; got {ids}"
+        )
+
+
+def test_resolve_against_inventory_zero_match_falls_back_to_direct(monkeypatch):
+    """Zero inventory matches → fact lookup still runs on the regex-extracted id."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return []
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return [{
+            "fact_key":      "prod.kafka.broker.3.host",
+            "source":        "kafka_collector",
+            "fact_value":    "192.168.199.33",
+            "last_verified": "2026-04-18T18:00:00+00:00",
+            "confidence":    0.92,
+        }]
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="kafka_broker-3", entity_type="kafka_broker",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    resolved, facts = pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == ["kafka_broker-3"], (
+        "direct fact lookup did not run on zero-inventory-match"
+    )
+    assert len(facts) == 1
+    assert "direct fact lookup" in "\n".join(trace)
+
+
+def test_resolve_against_inventory_ambiguous_skips_direct(monkeypatch):
+    """>1 inventory matches → direct fact lookup is NOT attempted."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return [{"entity_id": "a"}, {"entity_id": "b"}]
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return []
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="worker", entity_type="generic_host",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    resolved, facts = pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == [], (
+        f"ambiguous multi-match should skip fact lookup, saw {calls['fact_lookups']}"
+    )
+    assert facts == []
+    assert "ambiguous" in "\n".join(trace)
+
+
+def test_resolve_against_inventory_single_match_uses_canonical_id(monkeypatch):
+    """Single inventory match → fact lookup uses inventory's canonical id."""
+    calls = {"fact_lookups": []}
+
+    def fake_inv(eid, etype):
+        return [{"entity_id": "canonical-vm-id", "display_name": "Canonical VM"}]
+
+    def fake_facts(eid, min_confidence=0.7, max_rows=20):
+        calls["fact_lookups"].append(eid)
+        return []
+
+    monkeypatch.setattr(pf, "lookup_inventory", fake_inv)
+    monkeypatch.setattr(pf, "get_confident_facts_for_entity", fake_facts)
+
+    cand = pf.PreflightCandidate(
+        entity_id="raw-host", entity_type="generic_host",
+        source="regex", confidence=0.9, evidence="test",
+    )
+    trace: list[str] = []
+    pf.resolve_against_inventory([cand], trace)
+    assert calls["fact_lookups"] == ["canonical-vm-id"]
+```
+
+## Change 4 — `VERSION`
+
+Replace file contents with exactly:
+
+```
+2.35.5
+```
+
+## Change 5 — `cc_prompts/INDEX.md`
+
+The row and summary paragraph for v2.35.5 have been added manually by
+Claude Desktop before this queue run. After the push succeeds, flip the
+Phase Queue row status from `PENDING` (or `RUNNING`) → `DONE (<sha>)`
+per the standard queue protocol.
+
+---
+
+## Verify
+
+```bash
+pytest tests/test_preflight.py -v
+```
+
+Expected: all previous preflight tests pass + 4 new tests pass
+(parametric regex case + 3 inventory-path cases).
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agents): v2.35.5 preflight fact injection on zero-inventory-match
+
+v2.35.1 gated fact lookup on exactly 1 inventory match. infra_inventory
+coverage is sparse (mainly vm_hosts/proxmox), so Kafka brokers, Swarm
+services, and containers got zero facts injected despite high-confidence
+rows existing in known_facts.
+
+Fix: direct fact lookup against the regex-extracted entity_id when
+inventory has zero matches; >1 matches still skip (ambiguous).
+
+Adds deathstar_preflight_fact_source_total counter (label: source ∈
+inventory_match | direct_entity | ambiguous_skip | no_facts_found) and
+regex-preservation regression tests locking in the v2.35.1 behaviour
+(regex was NOT truncating full hyphen/underscore names — that was a
+misdiagnosis of the inventory-gate bug)."
+git push origin main
+```
+
+## Deploy
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+## Smoke test (post-deploy)
+
+1. Open `https://192.168.199.10:8000/` → run an investigate task like
+   `why did kafka_broker-3 crash after logstash_logstash was restarted`.
+2. Confirm the PREFLIGHT TRACE panel now shows lines like:
+   `'kafka_broker-3' (kafka_broker): 0 inventory matches`
+   `  (no inventory match — trying direct fact lookup on 'kafka_broker-3')`
+   `  → kafka_broker-3: N facts`
+3. Confirm the system prompt contains a `═══ PREFLIGHT FACTS ═══`
+   block with real fact rows.
+4. Check `/metrics` for
+   `deathstar_preflight_fact_source_total{source="direct_entity"}` > 0.
