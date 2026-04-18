@@ -1,0 +1,529 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.4.md (v2.35.4)
+Theme: feat(agents): runbook-based TRIAGE injection + UI editor (augment default)
+
+Prompt content:
+
+# CC PROMPT — v2.35.4 — feat(agents): runbook-based TRIAGE injection + UI editor (augment mode default)
+
+## What this does
+
+Introduces runbook-based TRIAGE. Playbooks (KAFKA TRIAGE, OVERLAY
+DIAGNOSIS, CONTAINER INTROSPECT FIRST, etc.) move from hardcoded prompt
+text into DB-stored runbooks. Classifier selects the matching runbook
+by keyword match against task text. System prompt gains an
+`═══ ACTIVE RUNBOOK ═══` section with the runbook body.
+
+Rollout is staged via `runbookInjectionMode` setting: off / augment /
+replace / replace+shrink. Default for v2.35.4: **augment** — the
+runbook body is added AFTER the existing prompt section, not replacing
+it. This lets us A/B compare via trace diffs before committing to
+replacement.
+
+Version bump: 2.35.3 → 2.35.4 (new subsystem, agent hot path, UI).
+
+Design ref: `cc_prompts/PHASE_v2.35_SPEC.md` → "Runbook-based TRIAGE —
+augment-first rollout".
+
+---
+
+## Change 1 — extend runbooks schema
+
+Augment the existing `runbooks` table (seeded in v2.26.4) with fields
+for classifier routing:
+
+```sql
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS triage_keywords TEXT[] DEFAULT '{}';
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS applies_to_agent_types TEXT[] DEFAULT '{}';
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS priority INT DEFAULT 100;  -- lower = higher priority
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS body_md TEXT;              -- the content to inject
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS last_edited_by TEXT;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_runbooks_active_priority
+    ON runbooks(is_active, priority)
+    WHERE is_active = TRUE;
+```
+
+If any of these columns already exist from a prior version, the
+`IF NOT EXISTS` guards make it safe.
+
+## Change 2 — seed runbooks from existing prompt sections
+
+In `api/db/runbooks.py`, add a function `seed_triage_runbooks()` that
+extracts the current KAFKA TRIAGE / CONSUMER LAG PATH / BROKER MISSING
+PATH / OVERLAY DIAGNOSIS / CONTAINER INTROSPECT FIRST sections from
+`api/agents/router.py` and inserts them as runbook rows:
+
+```python
+TRIAGE_RUNBOOK_SEEDS = [
+    {
+        'name':  'kafka_triage',
+        'title': 'Kafka triage — STEP 0',
+        'triage_keywords': ['kafka', 'broker', 'consumer lag', 'under-replicated', 'ISR'],
+        'applies_to_agent_types': ['research', 'status'],
+        'priority': 10,
+        'body_md': """(extracted verbatim from RESEARCH_PROMPT's KAFKA TRIAGE block)""",
+    },
+    {
+        'name':  'consumer_lag_path',
+        'title': 'Consumer lag diagnostic path',
+        'triage_keywords': ['consumer lag', 'lag', 'not consuming', 'partition lag'],
+        'applies_to_agent_types': ['research'],
+        'priority': 20,
+        'body_md': """(CONSUMER LAG PATH content)""",
+    },
+    {
+        'name':  'broker_missing_path',
+        'title': 'Broker missing diagnostic path',
+        'triage_keywords': ['broker missing', 'broker down', 'unscheduled broker'],
+        'applies_to_agent_types': ['research'],
+        'priority': 20,
+        'body_md': """(BROKER MISSING PATH content)""",
+    },
+    {
+        'name':  'overlay_hairpin_diagnosis',
+        'title': 'Overlay network diagnosis',
+        'triage_keywords': ['overlay', 'hairpin', 'docker network', 'cross-network', 'tcp_probe'],
+        'applies_to_agent_types': ['research'],
+        'priority': 15,
+        'body_md': """(OVERLAY/CONTAINER INTROSPECT content)""",
+    },
+    {
+        'name':  'container_introspect_first',
+        'title': 'Container introspection — prefer typed tools',
+        'triage_keywords': ['container', 'docker exec', 'inside container'],
+        'applies_to_agent_types': ['research', 'action'],
+        'priority': 30,
+        'body_md': """(CONTAINER INTROSPECT FIRST content)""",
+    },
+]
+
+
+def seed_triage_runbooks():
+    """Idempotent seed. Only inserts if name doesn't exist."""
+    for spec in TRIAGE_RUNBOOK_SEEDS:
+        existing = get_runbook_by_name(spec['name'])
+        if existing:
+            continue
+        create_runbook(**spec, created_by='system')
+```
+
+Wire into startup init in `api/main.py` lifespan after
+`init_runbooks()`.
+
+**Important:** extract the body text by READING `api/agents/router.py`
+at seed time. Don't hardcode duplicates — rely on a programmatic
+extraction so the source-of-truth stays in one place. If extraction
+fails, log warning and skip (system still works in `off` mode).
+
+## Change 3 — runbook classifier
+
+New file `api/agents/runbook_classifier.py`.
+
+```python
+"""
+Select the best-matching runbook(s) for a task.
+
+v1: keyword match.
+  For each active runbook that applies to the current agent_type:
+    score = count of triage_keywords found in task (case-insensitive,
+             word-boundary match)
+  Pick the single highest-priority runbook with score > 0. Ties broken
+  by priority (lower number wins).
+
+Future versions (v2.35.5+):
+  - Embedding similarity against runbook titles+keywords
+  - LLM classifier for natural-language phrasing
+Settings `runbookClassifierMode` gates which mode runs.
+"""
+
+import re
+
+def select_runbook(task: str, agent_type: str, settings: dict) -> dict | None:
+    mode = settings.get('runbookClassifierMode', 'keyword')
+    if mode == 'keyword':
+        return _keyword_select(task, agent_type)
+    elif mode == 'semantic':
+        return _semantic_select(task, agent_type)  # stub for now
+    elif mode == 'llm':
+        return _llm_select(task, agent_type)       # stub for now
+    return None
+
+
+def _keyword_select(task: str, agent_type: str) -> dict | None:
+    candidates = list_active_runbooks_for_agent_type(agent_type)
+    if not candidates:
+        return None
+
+    task_lower = task.lower()
+    scored = []
+    for rb in candidates:
+        score = 0
+        matched_keywords = []
+        for kw in (rb.get('triage_keywords') or []):
+            if re.search(rf'\b{re.escape(kw.lower())}\b', task_lower):
+                score += 1
+                matched_keywords.append(kw)
+        if score > 0:
+            scored.append((score, rb['priority'], rb, matched_keywords))
+
+    if not scored:
+        return None
+
+    # Highest score first, then lowest priority number
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    best = scored[0]
+    return {
+        'runbook':  best[2],
+        'score':    best[0],
+        'matched_keywords': best[3],
+    }
+
+
+def _semantic_select(task, agent_type):
+    # Stub for v2.35.5 — embedding-based
+    return None
+
+
+def _llm_select(task, agent_type):
+    # Stub for v2.35.5 — LLM classifier
+    return None
+```
+
+## Change 4 — wire runbook into system prompt
+
+In `api/agents/router.py`, extend the system-prompt builder:
+
+```python
+def build_system_prompt(
+    agent_type: str,
+    preflight_facts: list | None = None,
+    preflight_trace: list | None = None,
+    task: str = '',           # NEW — needed for runbook classifier
+    ...
+) -> str:
+    ...
+    # Existing sections (RELEVANT PAST OUTCOMES, TOOL SIGNATURES, etc.)
+    sections = [...]
+
+    # NEW: runbook injection
+    settings = _get_facts_settings()
+    mode = settings.get('runbookInjectionMode', 'off')
+    runbook_hit = None
+    if mode != 'off' and task:
+        runbook_hit = select_runbook(task, agent_type, settings)
+
+    if runbook_hit:
+        rb = runbook_hit['runbook']
+        RUNBOOK_MATCHES_COUNTER.labels(
+            runbook_name=rb['name'], mode=mode,
+        ).inc()
+
+        section = (
+            f"\n═══ ACTIVE RUNBOOK: {rb['name']} ═══\n"
+            f"Title: {rb['title']}\n"
+            f"Triggered by keywords: {', '.join(runbook_hit['matched_keywords'])}\n"
+            f"Priority: {rb['priority']}\n\n"
+            f"{rb['body_md']}\n"
+        )
+
+        if mode == 'augment':
+            # Inject AFTER existing TRIAGE prompt content
+            sections.append(section)
+        elif mode == 'replace':
+            # Replace the matching TRIAGE section entirely
+            sections = _replace_triage_section_with_runbook(sections, rb)
+        elif mode == 'replace+shrink':
+            # Prompt becomes a thin framework + this runbook
+            sections = _build_shrunk_prompt(agent_type, rb)
+
+    return '\n'.join(sections)
+```
+
+Keep `replace` and `replace+shrink` stubbed-but-functional: they invoke
+helpers that WARN if the target section to replace isn't found. For
+v2.35.4's `augment` default behaviour they're not exercised.
+
+## Change 5 — runbook editor UI
+
+Extend the existing Runbooks view (MONITOR sidebar → Runbooks) with an
+editor. Use the existing list; add edit capability for each row:
+
+- **Edit** — modal with fields: `title`, `body_md` (monospace text
+  area, supports markdown), `triage_keywords` (chip-style tag editor),
+  `applies_to_agent_types` (multi-select), `priority`, `is_active`
+- **Preview** — renders the markdown body as it would appear in a
+  prompt
+- **Test match** — input a task string, shows the classifier result
+  (score, matched keywords, whether THIS runbook would be selected)
+- **History** — (defer to future; for v2.35.4 a last_edited_by/at
+  footer is enough)
+
+Writes require sith_lord role (existing auth). Reads available to any
+authenticated user.
+
+## Change 6 — gate-detection expansion
+
+Extend `api/agents/gate_detection.py` and its JS mirror:
+
+```python
+gates["runbook_injected"] = {"count": 0, "details": []}
+for step in steps:
+    # Look at the system prompt for this operation — runbook injection
+    # happens once at prompt build time, not per step. Check the first
+    # system message or metadata.
+    sp = _get_operation_system_prompt(operation_id)
+    if sp and '═══ ACTIVE RUNBOOK:' in sp:
+        # Parse runbook name
+        import re
+        m = re.search(r'═══ ACTIVE RUNBOOK: (\w+) ═══', sp)
+        name = m.group(1) if m else '<unknown>'
+        gates["runbook_injected"]["count"] = 1
+        gates["runbook_injected"]["details"].append({
+            "step": 0,
+            "snippet": f"runbook={name}",
+        })
+```
+
+Because runbook injection is a prompt-level event not a step-level
+event, this gate is per-operation (0 or 1), not cumulative across
+steps.
+
+## Change 7 — Prometheus
+
+```python
+RUNBOOK_MATCHES_COUNTER = Counter(
+    "deathstar_runbook_matches_total",
+    "Runbook matches by injection mode",
+    ["runbook_name", "mode"],   # mode in {augment, replace, replace+shrink}
+)
+
+RUNBOOK_SELECTION_DECISIONS_COUNTER = Counter(
+    "deathstar_runbook_selection_decisions_total",
+    "Classifier outcomes",
+    ["classifier_mode", "outcome"],   # outcome: matched | no_match | disabled
+)
+```
+
+## Change 8 — prompt snapshot regeneration
+
+Running v2.35.4 with `runbookInjectionMode=augment` changes the
+rendered system prompts. Update snapshots:
+
+```
+pytest tests/test_prompt_snapshots.py --update-snapshots
+```
+
+Only the `research` prompt (and possibly `action` depending on agent
+types covered) should diverge. Review the diff — it should show an
+ADDITION after the existing TRIAGE section, not a replacement.
+
+## Change 9 — tests
+
+`tests/test_runbook_classifier.py`:
+- Task with clear keyword → correct runbook selected
+- Task with multi-match → highest priority wins
+- Task with zero matches → None returned
+- Disabled runbook → not considered
+- Agent type filter respected
+
+`tests/test_runbook_injection.py`:
+- mode=off → no ACTIVE RUNBOOK section in rendered prompt
+- mode=augment + matching task → section appended
+- mode=augment + non-matching task → no section
+- Snapshot test for augmented prompt content
+
+`tests/test_runbook_editor_api.py`:
+- List, get, create, update, delete (sith_lord only)
+- Non-admin gets 403 on mutating calls
+- Priority accepts 0..999
+
+## Change 10 — rollout plan (documentation)
+
+Append to `cc_prompts/PHASE_v2.35_SPEC.md` → "Runbook-based TRIAGE"
+section:
+
+```markdown
+### Rollout progress
+
+- v2.35.4 ships `runbookInjectionMode=augment` as default
+- Observation window: 2-3 weeks of trace data compared against
+  `augment=off` control runs
+- Success criteria for promotion to `replace`:
+  - No degradation in final_answer quality (measured by
+    completion status: % completed vs failed/capped)
+  - No increase in `tool_signature_errors` or `fabrication_detected`
+  - No increase in halluc_guard_exhausted runs
+  - Positive or neutral change in average tool-calls-to-diagnosis
+- Promotion to `replace+shrink` requires 2 more weeks at `replace`
+- Rollback: setting flip only, no code change
+```
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(agents): v2.35.4 runbook-based TRIAGE injection + UI editor (augment default)"
+git push origin main
+```
+
+## Test after deploy
+
+1. `/api/health` → 2.35.4
+2. Settings → Facts & Knowledge → `runbookInjectionMode` defaults to
+   `augment`. Verify.
+3. MONITOR → Runbooks → list shows at least the 5 seeded triage
+   runbooks with their triage_keywords.
+4. Open editor for `kafka_triage`, make a cosmetic change, save. Verify
+   last_edited_by + last_edited_at populated.
+5. Use Test Match feature: input `"investigate kafka consumer lag"`,
+   see `kafka_triage` matches with score 2, matched_keywords
+   `[kafka, consumer lag]`.
+6. Run the canonical Logstash investigate task. Pull trace: system
+   prompt contains `═══ ACTIVE RUNBOOK: kafka_triage ═══` section
+   AFTER the existing TRIAGE section (augment mode). Gates Fired
+   sidebar shows `✓ runbook_injected xN`.
+7. Settings → `runbookInjectionMode=off` → run canonical task again →
+   no runbook section in system prompt.
+8. Prometheus:
+   - `deathstar_runbook_matches_total{runbook_name="kafka_triage",mode="augment"}` increments
+   - `deathstar_runbook_selection_decisions_total{classifier_mode="keyword",outcome="matched"}` increments
+
+## Non-goals for v2.35.4
+
+- Semantic classifier (v2.35.5+, stub left in place)
+- LLM classifier (v2.35.5+)
+- Auto-promotion from augment to replace (manual operator decision)
+- Runbook version history UI (future)
+
+## Risk register
+
+- Runbook body text quality matters. Seeded from existing prompt;
+  evolve via UI editor over time.
+- Keyword classifier is deliberately simple. Expected false-negatives
+  on vague tasks. Fallback: no runbook injected, pre-v2.35.4 behaviour.
+- `replace` mode may remove important context from the prompt. We
+  explicitly defer enabling it until augment-mode trace diffs confirm
+  the runbook body is self-sufficient.
+- Runbook content is NOT sanitised for prompt injection attacks. Since
+  only sith_lord can edit, this is acceptable for now. If role
+  permissions expand, add content sanitisation.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-18 19:18:59
+========================================================================

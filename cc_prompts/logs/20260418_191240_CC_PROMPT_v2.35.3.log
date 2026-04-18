@@ -439,3 +439,17 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 19:12:40
 ========================================================================
+PROMPT COMPLETE: v2.35.3
+[STATUS] 6m15s
+
+Shipped at `b8b93f7`:
+- `api/agents/fact_age_rejection.py` — rejection engine with off/soft/medium/hard modes, per-tool value strippers.
+- `api/routers/agent.py` — wired after audit write, before `_summarize_tool_result`; real result preserved in audit, LLM sees modified.
+- `api/agents/gate_detection.py` + `gui/src/utils/gateDetection.js` — added `fact_age_rejection` gate.
+- `api/metrics.py` — `FACT_AGE_REJECTIONS_COUNTER`.
+- `tests/test_fact_age_rejection.py` — 10 tests covering all 4 modes + agreement/stale/low-conf/agent_observation/unknown-tool pass-throughs + highest-conf-wins tiebreaker. All pass.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  6m15s
+========================================================================

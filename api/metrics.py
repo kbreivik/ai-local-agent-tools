@@ -288,6 +288,18 @@ PREFLIGHT_FACTS_INJECTED = Histogram(
     buckets=(0, 1, 2, 5, 10, 20, 40, 100),
 )
 
+# --- runbook injection (v2.35.4) ---
+RUNBOOK_MATCHES_COUNTER = Counter(
+    "deathstar_runbook_matches_total",
+    "Runbook matches by injection mode",
+    ["runbook_name", "mode"],   # mode: augment | replace | replace+shrink
+)
+RUNBOOK_SELECTION_DECISIONS_COUNTER = Counter(
+    "deathstar_runbook_selection_decisions_total",
+    "Classifier outcomes",
+    ["classifier_mode", "outcome"],   # outcome: matched | no_match | disabled
+)
+
 # --- build info ---
 BUILD = Info("deathstar_build", "Build metadata")
 

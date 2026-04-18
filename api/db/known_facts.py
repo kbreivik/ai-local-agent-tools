@@ -271,6 +271,11 @@ def _get_facts_settings() -> dict:
             "factHalfLifeHours_manual_phase1", "factHalfLifeHours_manual_phase2",
             "factHalfLifeHours_agent_volatile",
             "factVerifyCountCap",
+            # v2.35.3 — fact-age rejection
+            "factAgeRejectionMode", "factAgeRejectionMaxAgeMin",
+            "factAgeRejectionMinConfidence",
+            # v2.35.4 — runbook injection / classifier
+            "runbookInjectionMode", "runbookClassifierMode",
         ]
         for s in _DEFAULT_SOURCE_WEIGHTS:
             keys.append(f"factSourceWeight_{s}")

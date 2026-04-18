@@ -12,7 +12,10 @@ export const GATE_DEFS = [
   'forced_synthesis',
   'inrun_contradiction',
   'fact_age_rejection',
+  'runbook_injected',
 ]
+
+const RUNBOOK_MARKER = '═══ ACTIVE RUNBOOK:'
 
 function emptyGates() {
   const g = {}
@@ -44,7 +47,7 @@ function countFabrication(steps) {
   return count
 }
 
-export function detectGates(steps) {
+export function detectGates(steps, systemPrompt) {
   const gates = emptyGates()
   for (const s of steps || []) {
     const stepIdx = s?.step_index ?? 0
@@ -102,5 +105,35 @@ export function detectGates(steps) {
 
   const fab = countFabrication(steps)
   if (fab) gates.fabrication.count = fab
+
+  // v2.35.4 — runbook injection (prompt-level, 0 or 1).
+  // Scan system_prompt (authoritative) then messages_delta as fallback.
+  let rbName = null
+  const sp = asString(systemPrompt)
+  if (sp.includes(RUNBOOK_MARKER)) {
+    const re = /═══ ACTIVE RUNBOOK:\s*([^\s═]+)\s*═══/
+    const match = re.exec(sp)
+    rbName = match ? match[1] : '<unknown>'
+  }
+  if (!rbName) {
+    rbName = findInjectedRunbookName(steps)
+  }
+  if (rbName) {
+    gates.runbook_injected.count = 1
+    gates.runbook_injected.details.push({ step: 0, snippet: `runbook=${rbName}` })
+  }
   return gates
+}
+
+function findInjectedRunbookName(steps) {
+  const re = /═══ ACTIVE RUNBOOK:\s*([^\s═]+)\s*═══/
+  for (const s of steps || []) {
+    for (const m of s?.messages_delta || []) {
+      const c = asString(m?.content)
+      if (!c.includes(RUNBOOK_MARKER)) continue
+      const match = re.exec(c)
+      return match ? match[1] : '<unknown>'
+    }
+  }
+  return null
 }

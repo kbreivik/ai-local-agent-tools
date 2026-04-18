@@ -106,8 +106,8 @@ function StepList({ steps, selected, onSelect }) {
   )
 }
 
-function GatesFired({ steps, onJumpToStep }) {
-  const gates = useMemo(() => detectGates(steps), [steps])
+function GatesFired({ steps, systemPrompt, onJumpToStep }) {
+  const gates = useMemo(() => detectGates(steps, systemPrompt), [steps, systemPrompt])
   const any = Object.values(gates).some((v) => v.count > 0)
 
   return (
@@ -398,6 +398,7 @@ export default function TraceView({ operationId: propOperationId }) {
               />
               <GatesFired
                 steps={trace.steps || []}
+                systemPrompt={trace.system_prompt}
                 onJumpToStep={(idx) => {
                   const pos = (trace.steps || []).findIndex(
                     (s) => s.step_index === idx,

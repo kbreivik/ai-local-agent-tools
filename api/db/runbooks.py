@@ -23,6 +23,20 @@ CREATE TABLE IF NOT EXISTS runbooks (
 );
 CREATE INDEX IF NOT EXISTS idx_runbooks_source ON runbooks(source);
 CREATE INDEX IF NOT EXISTS idx_runbooks_tags   ON runbooks USING gin(tags);
+
+-- v2.35.4 — triage classifier routing columns
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS triage_keywords TEXT[] DEFAULT '{}';
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS applies_to_agent_types TEXT[] DEFAULT '{}';
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS priority INT DEFAULT 100;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS body_md TEXT;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS last_edited_by TEXT;
+ALTER TABLE runbooks ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runbooks_name ON runbooks(name) WHERE name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_runbooks_active_priority
+    ON runbooks(is_active, priority)
+    WHERE is_active = TRUE;
 """
 
 _initialized = False
@@ -208,6 +222,11 @@ def init_runbooks():
         log.info("runbooks table ready")
         # Seed base runbooks after table is ready
         seed_base_runbooks()
+        # v2.35.4 — seed triage-classifier runbooks (idempotent)
+        try:
+            seed_triage_runbooks()
+        except Exception as e:
+            log.debug("seed_triage_runbooks skipped: %s", e)
     except Exception as e:
         log.warning("runbooks init failed: %s", e)
 
@@ -332,3 +351,378 @@ def increment_run_count(runbook_id: str):
         conn.commit(); cur.close(); conn.close()
     except Exception:
         pass
+
+
+# ── Triage runbook helpers (v2.35.4) ──────────────────────────────────────────
+# These operate on the extended columns (name, triage_keywords, body_md, etc.)
+# Used by the runbook classifier (api/agents/runbook_classifier.py) and the
+# runbook editor UI/API.
+
+_TRIAGE_SELECT_COLS = (
+    "id, name, title, description, tags, "
+    "triage_keywords, applies_to_agent_types, is_active, priority, body_md, "
+    "last_edited_by, last_edited_at, created_by, created_at, updated_at"
+)
+
+
+def _triage_row_to_dict(r) -> dict:
+    return {
+        "id":                     r[0],
+        "name":                   r[1] or "",
+        "title":                  r[2],
+        "description":            r[3] or "",
+        "tags":                   list(r[4] or []),
+        "triage_keywords":        list(r[5] or []),
+        "applies_to_agent_types": list(r[6] or []),
+        "is_active":              bool(r[7]),
+        "priority":               int(r[8]) if r[8] is not None else 100,
+        "body_md":                r[9] or "",
+        "last_edited_by":         r[10] or "",
+        "last_edited_at":         r[11].isoformat() if r[11] else "",
+        "created_by":             r[12] or "",
+        "created_at":             r[13].isoformat() if r[13] else "",
+        "updated_at":             r[14].isoformat() if r[14] else "",
+    }
+
+
+def get_runbook_by_name(name: str) -> dict | None:
+    """Return the runbook with the given `name` column or None."""
+    if not name:
+        return None
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            f"SELECT {_TRIAGE_SELECT_COLS} FROM runbooks WHERE name=%s LIMIT 1",
+            (name,),
+        )
+        row = cur.fetchone(); cur.close(); conn.close()
+        return _triage_row_to_dict(row) if row else None
+    except Exception as e:
+        log.debug("get_runbook_by_name failed: %s", e)
+        return None
+
+
+def get_runbook_by_id(runbook_id: str) -> dict | None:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            f"SELECT {_TRIAGE_SELECT_COLS} FROM runbooks WHERE id=%s LIMIT 1",
+            (runbook_id,),
+        )
+        row = cur.fetchone(); cur.close(); conn.close()
+        return _triage_row_to_dict(row) if row else None
+    except Exception as e:
+        log.debug("get_runbook_by_id failed: %s", e)
+        return None
+
+
+def list_active_runbooks_for_agent_type(agent_type: str) -> list:
+    """Return active runbooks (with body_md set) that target agent_type."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        # PostgreSQL: `%s = ANY(column)` — use '' as sentinel for 'any agent type'
+        cur.execute(
+            f"""SELECT {_TRIAGE_SELECT_COLS}
+                FROM runbooks
+                WHERE is_active = TRUE
+                  AND body_md IS NOT NULL
+                  AND body_md <> ''
+                  AND (applies_to_agent_types = '{{}}' OR %s = ANY(applies_to_agent_types))
+                ORDER BY priority ASC, name ASC""",
+            (agent_type,),
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [_triage_row_to_dict(r) for r in rows]
+    except Exception as e:
+        log.debug("list_active_runbooks_for_agent_type failed: %s", e)
+        return []
+
+
+def list_triage_runbooks(limit: int = 200) -> list:
+    """List runbooks that have triage-classifier metadata (name set)."""
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            f"""SELECT {_TRIAGE_SELECT_COLS}
+                FROM runbooks
+                WHERE name IS NOT NULL AND name <> ''
+                ORDER BY priority ASC, name ASC
+                LIMIT %s""",
+            (limit,),
+        )
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [_triage_row_to_dict(r) for r in rows]
+    except Exception as e:
+        log.debug("list_triage_runbooks failed: %s", e)
+        return []
+
+
+def create_triage_runbook(
+    name: str,
+    title: str,
+    body_md: str,
+    triage_keywords: list | None = None,
+    applies_to_agent_types: list | None = None,
+    priority: int = 100,
+    is_active: bool = True,
+    description: str = "",
+    tags: list | None = None,
+    created_by: str = "user",
+) -> str:
+    """Insert a new triage-classifier runbook. Returns id or '' on failure."""
+    rid = str(uuid.uuid4())
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO runbooks
+               (id, name, title, description, steps, source, tags,
+                triage_keywords, applies_to_agent_types, is_active, priority,
+                body_md, created_by, last_edited_by, last_edited_at)
+               VALUES (%s,%s,%s,%s,'[]'::jsonb,'triage_seed',%s,
+                       %s,%s,%s,%s,%s,%s,%s,NOW())""",
+            (rid, name, title, description, tags or [],
+             triage_keywords or [], applies_to_agent_types or [],
+             bool(is_active), int(priority), body_md,
+             created_by, created_by),
+        )
+        conn.commit(); cur.close(); conn.close()
+        return rid
+    except Exception as e:
+        log.debug("create_triage_runbook failed: %s", e)
+        return ""
+
+
+def update_triage_runbook(
+    runbook_id: str,
+    *,
+    title: str | None = None,
+    body_md: str | None = None,
+    triage_keywords: list | None = None,
+    applies_to_agent_types: list | None = None,
+    priority: int | None = None,
+    is_active: bool | None = None,
+    description: str | None = None,
+    tags: list | None = None,
+    edited_by: str = "user",
+) -> bool:
+    """Partial update — only non-None fields are written. Touches last_edited_*."""
+    sets: list[str] = []
+    params: list = []
+    if title is not None:
+        sets.append("title=%s"); params.append(title)
+    if body_md is not None:
+        sets.append("body_md=%s"); params.append(body_md)
+    if triage_keywords is not None:
+        sets.append("triage_keywords=%s"); params.append(list(triage_keywords))
+    if applies_to_agent_types is not None:
+        sets.append("applies_to_agent_types=%s"); params.append(list(applies_to_agent_types))
+    if priority is not None:
+        sets.append("priority=%s"); params.append(int(priority))
+    if is_active is not None:
+        sets.append("is_active=%s"); params.append(bool(is_active))
+    if description is not None:
+        sets.append("description=%s"); params.append(description)
+    if tags is not None:
+        sets.append("tags=%s"); params.append(list(tags))
+    if not sets:
+        return True  # nothing to update
+
+    sets.append("last_edited_by=%s"); params.append(edited_by)
+    sets.append("last_edited_at=NOW()")
+    sets.append("updated_at=NOW()")
+    params.append(runbook_id)
+    sql = f"UPDATE runbooks SET {', '.join(sets)} WHERE id=%s"
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn(); cur = conn.cursor()
+        cur.execute(sql, tuple(params))
+        ok = cur.rowcount > 0
+        conn.commit(); cur.close(); conn.close()
+        return ok
+    except Exception as e:
+        log.debug("update_triage_runbook failed: %s", e)
+        return False
+
+
+# ── Triage runbook seeds (v2.35.4) ────────────────────────────────────────────
+# Source of truth for the content remains in api/agents/router.py section blocks.
+# We extract the body text at seed time so the runbook rows track the prompt.
+
+_TRIAGE_RUNBOOK_SPECS = [
+    {
+        "name":   "kafka_triage",
+        "title":  "Kafka triage — STEP 0",
+        "description": "Mandatory first-step triage for Kafka degradation investigations.",
+        "triage_keywords": ["kafka", "broker", "consumer lag", "under-replicated", "ISR"],
+        "applies_to_agent_types": ["research", "investigate", "status", "observe"],
+        "priority": 10,
+        "_extract_section": "kafka_triage",
+        "_fallback_body_md": (
+            "KAFKA TRIAGE — STEP 0 (MANDATORY):\n"
+            "kafka_broker_status and kafka_consumer_lag are INDEPENDENT checks.\n"
+            "Call BOTH before drawing any conclusions.\n"
+            "  Call 1: kafka_broker_status() — broker / ISR health\n"
+            "  Call 2: kafka_consumer_lag() — consumer groups\n"
+            "Only after BOTH calls can you determine the degradation type.\n"
+        ),
+    },
+    {
+        "name":   "consumer_lag_path",
+        "title":  "Consumer lag diagnostic path",
+        "description": "Step-by-step consumer-lag investigation for the Logstash consumer group.",
+        "triage_keywords": ["consumer lag", "lag", "not consuming", "partition lag"],
+        "applies_to_agent_types": ["research", "investigate"],
+        "priority": 20,
+        "_extract_section": "consumer_lag_path",
+        "_fallback_body_md": (
+            "CONSUMER LAG PATH:\n"
+            "1. container_discover_by_service(\"logstash_logstash\")\n"
+            "2. vm_exec(host=<vm_host_label>, command=\"docker logs <container_id> --tail 100\")\n"
+            "3. elastic_cluster_health()\n"
+            "4. kafka_exec(broker_label=<worker>, command=\"kafka-consumer-groups.sh ...\")\n"
+        ),
+    },
+    {
+        "name":   "broker_missing_path",
+        "title":  "Broker missing diagnostic path",
+        "description": "Investigate a kafka broker reported missing from the cluster.",
+        "triage_keywords": ["broker missing", "broker down", "unscheduled broker"],
+        "applies_to_agent_types": ["research", "investigate"],
+        "priority": 20,
+        "_extract_section": "broker_missing_path",
+        "_fallback_body_md": (
+            "BROKER MISSING PATH:\n"
+            "1. kafka_broker_status() — which broker ID is missing\n"
+            "2. swarm_node_status() — any worker node Down?\n"
+            "3. container_discover_by_service(\"kafka_broker-N\")\n"
+            "4. kafka_exec(broker_label=<node>, command=\"kafka-topics.sh ...\")\n"
+            "5. elastic_kafka_logs() — historical error patterns\n"
+        ),
+    },
+    {
+        "name":   "overlay_hairpin_diagnosis",
+        "title":  "Overlay network / hairpin diagnosis",
+        "description": "Canonical sequence for 'client container A cannot reach service on container B'.",
+        "triage_keywords": ["overlay", "hairpin", "docker network", "cross-network", "tcp_probe"],
+        "applies_to_agent_types": ["research", "investigate"],
+        "priority": 15,
+        "_extract_section": "overlay_hairpin_diagnosis",
+        "_fallback_body_md": (
+            "OVERLAY-LAYER DIAGNOSIS:\n"
+            "1. container_discover_by_service(<client>) and (<server>) — get IDs\n"
+            "2. container_networks(host, <id>) for each — compare overlay memberships\n"
+            "3. container_tcp_probe(host, <client_id>, <target>, <port>) — definitive answer\n"
+            "4. If probe fails from client netns but succeeds from host → hairpin-NAT issue\n"
+        ),
+    },
+    {
+        "name":   "container_introspect_first",
+        "title":  "Container introspection — prefer typed tools",
+        "description": "Use typed container_* tools before reaching for raw docker exec.",
+        "triage_keywords": ["container", "docker exec", "inside container"],
+        "applies_to_agent_types": ["research", "investigate", "action", "execute"],
+        "priority": 30,
+        "_extract_section": "container_introspect_first",
+        "_fallback_body_md": (
+            "CONTAINER INTROSPECT FIRST:\n"
+            "Prefer container_config_read, container_env, container_tcp_probe,\n"
+            "container_networks, container_discover_by_service over raw\n"
+            "`docker exec <id> ...` shells. They validate args up front, bypass\n"
+            "the vm_exec metachar filter, and return structured JSON.\n"
+        ),
+    },
+]
+
+
+# Header-marker mapping — used to extract body_md verbatim from router.py.
+# Start token, end token (exclusive) — pulls everything in between.
+_SECTION_MARKERS = {
+    "kafka_triage": (
+        "KAFKA TRIAGE — STEP 0 (MANDATORY):",
+        "CONSUMER LAG PATH (when message contains \"consumer lag\"):",
+    ),
+    "consumer_lag_path": (
+        "CONSUMER LAG PATH (when message contains \"consumer lag\"):",
+        "BROKER MISSING PATH (when message contains \"broker N missing\"):",
+    ),
+    "broker_missing_path": (
+        "BROKER MISSING PATH (when message contains \"broker N missing\"):",
+        "REPLICATION PATH (when message contains \"under-replicated\"):",
+    ),
+    "overlay_hairpin_diagnosis": (
+        "OVERLAY-LAYER DIAGNOSIS (canonical sequence for \"client inside",
+        "═══ CONTAINER INTROSPECTION (v2.34.12) ═══",
+    ),
+    "container_introspect_first": (
+        "═══ CONTAINER INTROSPECT FIRST — BEFORE RAW docker exec ═══",
+        "OVERLAY-LAYER DIAGNOSIS (canonical sequence for \"client inside",
+    ),
+}
+
+
+def _extract_section_from_router(section_key: str) -> str:
+    """Best-effort extractor — read api/agents/router.py and pull out the
+    text between the start and end markers for `section_key`. Returns '' on
+    miss so the caller can fall back to a baked-in body_md."""
+    markers = _SECTION_MARKERS.get(section_key)
+    if not markers:
+        return ""
+    start, end = markers
+    try:
+        import os
+        here = os.path.dirname(os.path.abspath(__file__))
+        router_path = os.path.normpath(os.path.join(here, "..", "agents", "router.py"))
+        with open(router_path, "r", encoding="utf-8") as f:
+            source = f.read()
+        s = source.find(start)
+        if s < 0:
+            return ""
+        e = source.find(end, s + len(start))
+        if e < 0:
+            return ""
+        body = source[s:e].rstrip()
+        # Strip a trailing triple-quote fragment if we happen to catch one.
+        return body
+    except Exception as ex:
+        log.debug("_extract_section_from_router(%s) failed: %s", section_key, ex)
+        return ""
+
+
+def seed_triage_runbooks() -> int:
+    """Idempotent seed. Only inserts if name doesn't exist."""
+    inserted = 0
+    for spec in _TRIAGE_RUNBOOK_SPECS:
+        try:
+            if get_runbook_by_name(spec["name"]):
+                continue
+            body_md = _extract_section_from_router(spec["_extract_section"])
+            if not body_md:
+                log.warning(
+                    "seed_triage_runbooks: extraction failed for %s — "
+                    "using fallback body", spec["name"],
+                )
+                body_md = spec["_fallback_body_md"]
+            rid = create_triage_runbook(
+                name=spec["name"],
+                title=spec["title"],
+                body_md=body_md,
+                triage_keywords=spec["triage_keywords"],
+                applies_to_agent_types=spec["applies_to_agent_types"],
+                priority=spec["priority"],
+                is_active=True,
+                description=spec["description"],
+                tags=["triage", "seed"],
+                created_by="system",
+            )
+            if rid:
+                inserted += 1
+        except Exception as e:
+            log.debug("seed_triage_runbooks[%s] failed: %s", spec.get("name"), e)
+    if inserted:
+        log.info("runbooks: seeded %d triage runbook(s)", inserted)
+    return inserted

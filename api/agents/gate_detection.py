@@ -29,7 +29,11 @@ GATE_DEFS = (
     "forced_synthesis",
     "inrun_contradiction",
     "fact_age_rejection",
+    "runbook_injected",
 )
+
+
+_RUNBOOK_MARKER = "═══ ACTIVE RUNBOOK:"
 
 
 def _empty_gates() -> dict:
@@ -42,12 +46,16 @@ def _iter_delta_messages(step: dict) -> Iterable[dict]:
             yield m
 
 
-def detect_gates_from_steps(steps: list) -> dict:
+def detect_gates_from_steps(steps: list, system_prompt: str | None = None) -> dict:
     """Scan trace steps and return a count+detail dict per gate type.
 
     Each step is expected to have at minimum: ``step_index``, ``messages_delta``.
     The detector is forgiving: missing fields default to empty, non-string
     content is coerced via str().
+
+    ``system_prompt`` (optional): the rendered system prompt for this operation.
+    Used to detect prompt-level gates (e.g. runbook_injected) that are not
+    recorded per-step in messages_delta.
     """
     gates = _empty_gates()
     for s in steps or []:
@@ -119,7 +127,42 @@ def detect_gates_from_steps(steps: list) -> dict:
     fabrication_count = _count_fabrication(steps)
     if fabrication_count:
         gates["fabrication"]["count"] = fabrication_count
+
+    # v2.35.4 — runbook injection is a prompt-level event, so it's 0 or 1 per
+    # operation. Scan system_prompt first (authoritative), then messages for
+    # backward-compat with traces that captured the system message in-line.
+    runbook_name = None
+    if isinstance(system_prompt, str) and _RUNBOOK_MARKER in system_prompt:
+        import re
+        m = re.search(r"═══ ACTIVE RUNBOOK:\s*([^\s═]+)\s*═══", system_prompt)
+        runbook_name = m.group(1) if m else "<unknown>"
+    if not runbook_name:
+        runbook_name = _find_injected_runbook_name(steps)
+    if runbook_name:
+        gates["runbook_injected"]["count"] = 1
+        gates["runbook_injected"]["details"].append(
+            {"step": 0, "snippet": f"runbook={runbook_name}"}
+        )
     return gates
+
+
+def _find_injected_runbook_name(steps: list) -> str | None:
+    """Scan all messages across all steps for the ACTIVE RUNBOOK marker.
+    Returns the runbook name on first hit, else None."""
+    import re
+    pattern = re.compile(r"═══ ACTIVE RUNBOOK:\s*([^\s═]+)\s*═══")
+    for s in steps or []:
+        for m in _iter_delta_messages(s):
+            content = m.get("content")
+            if not isinstance(content, str):
+                content = str(content or "")
+            if _RUNBOOK_MARKER not in content:
+                continue
+            match = pattern.search(content)
+            if match:
+                return match.group(1)
+            return "<unknown>"
+    return None
 
 
 def _count_fabrication(steps: list) -> int:

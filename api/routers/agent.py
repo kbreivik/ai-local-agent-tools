@@ -2972,6 +2972,16 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
     system_prompt = get_prompt(first_intent)
 
+    # v2.35.4 — runbook-based TRIAGE injection. Classifier selects a matching
+    # runbook by keyword; the helper honours the `runbookInjectionMode` setting
+    # (off | augment | replace | replace+shrink) and is a no-op when 'off' or
+    # no runbook matches.
+    try:
+        from api.agents.router import maybe_inject_runbook as _mir
+        system_prompt = _mir(system_prompt, task, first_intent)
+    except Exception as _rb_e:
+        log.debug("runbook injection skipped: %s", _rb_e)
+
     # v2.35.1 — preflight resolution (regex → keyword_db → optional LLM fallback).
     # Resolves entity references against infra_inventory + known_facts and builds
     # a PREFLIGHT FACTS section to inject into the system prompt. Never raises.
@@ -3318,6 +3328,13 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             step_agent_type = "execute"
 
         step_system_prompt = get_prompt(step_agent_type)
+
+        # v2.35.4 — runbook injection per step (honours runbookInjectionMode setting)
+        try:
+            from api.agents.router import maybe_inject_runbook as _mir_step
+            step_system_prompt = _mir_step(step_system_prompt, step_task or task, step_agent_type)
+        except Exception:
+            pass
 
         # v2.34.9: inject MCP tool signatures for this step's allowlist
         try:

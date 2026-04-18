@@ -1,5 +1,8 @@
 """Task classifier and agent routing for 4-agent architecture."""
+import logging
 import re
+
+log = logging.getLogger(__name__)
 
 # ── Keyword sets ──────────────────────────────────────────────────────────────
 
@@ -1542,6 +1545,166 @@ def get_prompt(agent_type: str) -> str:
         'build':       BUILD_PROMPT,
         'ambiguous':   STATUS_PROMPT,  # ambiguous: gather info first, ask clarifying_question
     }.get(agent_type, STATUS_PROMPT)
+
+
+# ── Runbook injection (v2.35.4) ───────────────────────────────────────────────
+# A classifier (api/agents/runbook_classifier.py) picks the best-matching
+# runbook for a task; this helper turns that decision into a prompt fragment
+# and applies it to an existing system prompt. Gated by the
+# ``runbookInjectionMode`` setting (off | augment | replace | replace+shrink).
+
+def _format_runbook_section(runbook: dict, matched_keywords: list[str]) -> str:
+    """Render the ACTIVE RUNBOOK block that gets appended to the prompt."""
+    return (
+        "\n═══ ACTIVE RUNBOOK: {name} ═══\n"
+        "Title: {title}\n"
+        "Triggered by keywords: {kws}\n"
+        "Priority: {prio}\n\n"
+        "{body}\n"
+    ).format(
+        name=runbook.get("name") or "<unnamed>",
+        title=runbook.get("title") or "",
+        kws=", ".join(matched_keywords) if matched_keywords else "",
+        prio=runbook.get("priority", 100),
+        body=(runbook.get("body_md") or "").rstrip(),
+    )
+
+
+def _replace_triage_section_with_runbook(prompt: str, runbook: dict,
+                                         matched_keywords: list[str]) -> str:
+    """Replace the matching hardcoded TRIAGE section with the runbook body.
+
+    Stubbed-but-functional: locates a section header by runbook name and, if
+    found, replaces that section's content through the next ═══ marker with
+    the runbook body. If no target header is found, logs a warning and falls
+    back to appending (same behaviour as augment).
+    """
+    TARGET_HEADERS = {
+        "kafka_triage":               "═══ KAFKA TRIAGE ORDER ═══",
+        "consumer_lag_path":          "CONSUMER LAG PATH (when message contains \"consumer lag\"):",
+        "broker_missing_path":        "BROKER MISSING PATH (when message contains \"broker N missing\"):",
+        "overlay_hairpin_diagnosis":  "OVERLAY-LAYER DIAGNOSIS (canonical sequence for \"client inside",
+        "container_introspect_first": "═══ CONTAINER INTROSPECT FIRST — BEFORE RAW docker exec ═══",
+    }
+    header = TARGET_HEADERS.get(runbook.get("name") or "")
+    section = _format_runbook_section(runbook, matched_keywords)
+    if not header:
+        log.warning("runbook replace: no target header mapped for %s — falling back to augment",
+                    runbook.get("name"))
+        return prompt + section
+    s = prompt.find(header)
+    if s < 0:
+        log.warning("runbook replace: header '%s' not found — falling back to augment",
+                    header[:40])
+        return prompt + section
+    # End of section = next ═══ marker, or end of prompt
+    e = prompt.find("═══", s + len(header))
+    if e < 0:
+        e = len(prompt)
+    return prompt[:s] + section + prompt[e:]
+
+
+def _build_shrunk_prompt(agent_type: str, runbook: dict,
+                        matched_keywords: list[str]) -> str:
+    """Minimal-framework prompt that carries only role/environment + the runbook.
+
+    Stubbed-but-functional. Not enabled by default in v2.35.4.
+    """
+    base = get_prompt(agent_type)
+    role_env = _extract_sections(base, ["ROLE", "ENVIRONMENT", "CONSTRAINTS"])
+    if not role_env:
+        log.warning("runbook replace+shrink: could not extract ROLE/ENVIRONMENT — "
+                    "falling back to augment")
+        return base + _format_runbook_section(runbook, matched_keywords)
+    return role_env + _format_runbook_section(runbook, matched_keywords)
+
+
+def maybe_inject_runbook(prompt: str, task: str, agent_type: str) -> str:
+    """Inject an ACTIVE RUNBOOK section into a built system prompt.
+
+    Honours the ``runbookInjectionMode`` setting. Safe no-op when the setting
+    is ``off``, the task is empty, or no runbook matches. Never raises — on
+    any failure the original prompt is returned unchanged.
+    """
+    if not prompt or not task:
+        return prompt
+    try:
+        from api.db.known_facts import _get_facts_settings
+        settings = _get_facts_settings() or {}
+    except Exception:
+        settings = {}
+
+    mode = (settings.get("runbookInjectionMode") or "off").strip()
+    classifier_mode = (settings.get("runbookClassifierMode") or "keyword").strip()
+
+    try:
+        from api.metrics import (
+            RUNBOOK_MATCHES_COUNTER,
+            RUNBOOK_SELECTION_DECISIONS_COUNTER,
+        )
+    except Exception:
+        RUNBOOK_MATCHES_COUNTER = None
+        RUNBOOK_SELECTION_DECISIONS_COUNTER = None
+
+    if mode == "off":
+        if RUNBOOK_SELECTION_DECISIONS_COUNTER is not None:
+            try:
+                RUNBOOK_SELECTION_DECISIONS_COUNTER.labels(
+                    classifier_mode=classifier_mode, outcome="disabled",
+                ).inc()
+            except Exception:
+                pass
+        return prompt
+
+    try:
+        from api.agents.runbook_classifier import select_runbook
+        hit = select_runbook(task, agent_type, settings)
+    except Exception as e:
+        log.debug("runbook classifier failed: %s", e)
+        return prompt
+
+    if not hit or not hit.get("runbook"):
+        if RUNBOOK_SELECTION_DECISIONS_COUNTER is not None:
+            try:
+                RUNBOOK_SELECTION_DECISIONS_COUNTER.labels(
+                    classifier_mode=classifier_mode, outcome="no_match",
+                ).inc()
+            except Exception:
+                pass
+        return prompt
+
+    rb = hit["runbook"]
+    matched = hit.get("matched_keywords") or []
+
+    if RUNBOOK_MATCHES_COUNTER is not None:
+        try:
+            RUNBOOK_MATCHES_COUNTER.labels(
+                runbook_name=rb.get("name") or "<unknown>",
+                mode=mode,
+            ).inc()
+        except Exception:
+            pass
+    if RUNBOOK_SELECTION_DECISIONS_COUNTER is not None:
+        try:
+            RUNBOOK_SELECTION_DECISIONS_COUNTER.labels(
+                classifier_mode=classifier_mode, outcome="matched",
+            ).inc()
+        except Exception:
+            pass
+
+    try:
+        if mode == "augment":
+            return prompt + _format_runbook_section(rb, matched)
+        if mode == "replace":
+            return _replace_triage_section_with_runbook(prompt, rb, matched)
+        if mode == "replace+shrink":
+            return _build_shrunk_prompt(agent_type, rb, matched)
+    except Exception as e:
+        log.debug("runbook injection render failed: %s", e)
+        return prompt
+
+    # Unknown mode → treat as augment for safety
+    return prompt + _format_runbook_section(rb, matched)
 
 
 # ── Tool signature injection (v2.34.9) ────────────────────────────────────────

@@ -253,6 +253,20 @@ embedding-based semantic match.
 Runbooks are DB-editable (UI in v2.35.4) so prompt-layer tweaks don't
 need code deploys.
 
+### Rollout progress
+
+- v2.35.4 ships `runbookInjectionMode=augment` as default
+- Observation window: 2-3 weeks of trace data compared against
+  `augment=off` control runs
+- Success criteria for promotion to `replace`:
+  - No degradation in final_answer quality (measured by
+    completion status: % completed vs failed/capped)
+  - No increase in `tool_signature_errors` or `fabrication_detected`
+  - No increase in halluc_guard_exhausted runs
+  - Positive or neutral change in average tool-calls-to-diagnosis
+- Promotion to `replace+shrink` requires 2 more weeks at `replace`
+- Rollback: setting flip only, no code change
+
 ---
 
 ## Settings → Facts & Knowledge (new group)
