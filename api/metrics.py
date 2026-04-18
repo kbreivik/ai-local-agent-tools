@@ -149,6 +149,27 @@ LLM_TRACES_WRITTEN_COUNTER = Counter(
     ["step_type"],   # "root" | "subagent"
 )
 
+# --- prompt rendering + sanitizer + budget (v2.34.15) ---
+SANITIZER_BLOCKS_COUNTER = Counter(
+    "deathstar_sanitizer_blocks_total",
+    "Times the LLM-inbound sanitizer redacted content",
+    # pattern ∈ {jwt, uuid_key_ctx, api_key, injection, role_tag, length_cap}
+    # site    ∈ {tool_result, system_prompt, entity_history, entity_ask, rag, other}
+    ["pattern", "site"],
+)
+
+BUDGET_TRUNCATE_COUNTER = Counter(
+    "deathstar_agent_budget_truncate_total",
+    "Tool-call batches truncated to fit within the remaining per-run budget",
+    ["agent_type"],
+)
+
+PROMPT_SNAPSHOT_DIVERGED_COUNTER = Counter(
+    "deathstar_prompt_snapshot_diverged_total",
+    "Agent prompt rendered at startup differs from the committed snapshot",
+    ["prompt_name"],
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

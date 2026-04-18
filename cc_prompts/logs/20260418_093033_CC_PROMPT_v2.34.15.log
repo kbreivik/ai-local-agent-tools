@@ -1,0 +1,731 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.34.15.md (v2.34.15)
+Theme: fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots
+
+Prompt content:
+
+# CC PROMPT — v2.34.15 — fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots
+
+## Evidence
+
+The v2.34.14 trace endpoint (finally built, finally working) let us inspect
+the exact system prompt the model saw in operation `828c07ba`. Three
+independent findings, all in one run.
+
+### Finding 1 — kafka_consumer_lag(empty) regression, confirmed as prompt-layer
+
+`/api/logs/operations/828c07ba.../trace` step 0 tool calls:
+```
+runbook_search({"query":"..."})
+kafka_broker_status({})
+kafka_consumer_lag({})          ← TypeError: missing 'group'
+elastic_cluster_health({})
+```
+
+The system prompt (29855 chars, 10 tools exposed) contains BOTH:
+
+1. `TOOL SIGNATURES` section at char 27374 with the correct shape:
+   `kafka_consumer_lag(group: str)` — present, required arg clearly marked.
+
+2. `KAFKA TRIAGE — STEP 0 (MANDATORY)` section at char 9591 with bare parens:
+   ```
+   Call 2: kafka_consumer_lag()
+     → high lag in any consumer group → CONSUMER LAG PATH
+     → call this REGARDLESS of kafka_broker_status result
+   ```
+
+The model follows the prescriptive example. The reference signature 18000
+characters later is ignored until the TypeError response comes back, at
+which point step 1 self-corrects to `kafka_consumer_lag({"group":"logstash"})`.
+
+This is the same pattern as v2.34.13 (TRIAGE examples beat reference sections).
+v2.34.9 signature injection was necessary but not sufficient — it fixes the
+"tool signatures page" in the reference material, but any in-prompt call
+example that contradicts it silently wins.
+
+### Finding 2 — budget off-by-one
+
+Same operation: `tool_call_count = 17` with investigate budget = 16. Step 6
+made 2 tool calls when the parent had already used 15. No guard checked
+whether the proposed batch would fit in the remaining budget; dispatch
+happened for all 2, bringing total to 17.
+
+### Finding 3 — sanitizer false positives on outbound responses
+
+The v2.31.7 prompt injection sanitizer was designed to scrub LLM-bound
+**input** (tool results going into the prompt). Somewhere it's also running
+on **outbound** API response bodies, where it's both (a) doing nothing useful
+and (b) corrupting debugging output:
+
+```
+GET /api/health       → "version": "[BLOCKED: JWT token]"        (for "2.34.14")
+GET /trace            → "tokens_total": "[BLOCKED: Sensitive key]" (for an int)
+GET /session/{uuid}   → body = "[BLOCKED: Sensitive key]"           (for a UUID)
+```
+
+The patterns are too loose (match on `\d+\.\d+\.\d+`, any long integer, any
+UUID-shaped hex) and the scope is wrong (responses to the browser are not
+the LLM attack surface).
+
+### Meta-finding — no way to review prompt changes
+
+Every bug this week (v2.34.13, v2.34.14, v2.34.15) has been a prompt-layer
+bug masquerading as an agent-layer bug. There is no snapshot of the rendered
+RESEARCH/STATUS/ACTION prompts committed to the repo, so PRs that touch
+`api/agents/router.py` can silently change what the model sees without any
+diff surfaced in review. Today's fix adds a snapshot-and-diff CI guard so
+the next class of prompt regressions is visible at PR time.
+
+Version bump: 2.34.14 → 2.34.15 (multiple subsystems: prompt rendering,
+sanitizer, budget check, CI — architectural).
+
+---
+
+## Change 1 — Option B: auto-generate KAFKA TRIAGE example call shapes from signatures
+
+The existing v2.34.9 signature helper (find it in `api/agents/router.py` or
+`api/agents/signatures.py` — grep for `inspect.signature` + `kafka_consumer_lag`)
+renders `TOOL SIGNATURES` section content. Reuse it to render TRIAGE
+call examples at prompt build time.
+
+### Step 1a — extract a render helper
+
+Find the signature-rendering function (v2.34.9 added it; may be called
+`_render_tool_signature` or similar). Make sure it exposes a public function
+like:
+
+```python
+def render_call_example(
+    tool_name: str,
+    hint_args: dict | None = None,   # override placeholder text per arg
+) -> str:
+    """Render a canonical call example for an agent prompt.
+
+    Examples:
+      render_call_example("kafka_consumer_lag")
+        → "kafka_consumer_lag(group='<consumer_group>')"
+
+      render_call_example("elastic_search_logs",
+                          hint_args={"service": "'logstash'", "minutes_ago": "60"})
+        → "elastic_search_logs(service='logstash', minutes_ago=60, ...)"
+
+      render_call_example("kafka_broker_status")   # no required args
+        → "kafka_broker_status()"
+    """
+```
+
+Rules:
+- Required args → render with a placeholder like `'<arg_name>'` (quotes for
+  strings, no quotes for ints/floats, `True`/`False` for bools).
+- Optional args → omit unless caller provides via `hint_args`.
+- Strings always single-quoted for consistency with Python convention.
+
+Add unit tests covering: no-arg tool, single-required-arg tool, multi-required
+tool, tool with mix of required+optional, tool with only optional args.
+
+### Step 1b — replace bare-parens examples in RESEARCH_PROMPT
+
+In `api/agents/router.py`, find the `KAFKA TRIAGE — STEP 0 (MANDATORY)`
+block and the `CONSUMER LAG PATH` / `BROKER MISSING PATH` sub-blocks.
+Convert the inline call examples to f-string renders.
+
+Before (source with bare parens):
+```python
+RESEARCH_PROMPT = """
+...
+KAFKA TRIAGE — STEP 0 (MANDATORY):
+kafka_broker_status and kafka_consumer_lag are INDEPENDENT checks.
+Call BOTH before drawing any conclusions:
+
+  Call 1: kafka_broker_status()
+    → "N/M brokers alive" or "broker N missing" → BROKER MISSING PATH
+    → "under-replicated partitions" → REPLICATION PATH
+    → "healthy" → brokers fine, but lag may still be the issue
+
+  Call 2: kafka_consumer_lag()
+    → high lag in any consumer group → CONSUMER LAG PATH
+    → call this REGARDLESS of kafka_broker_status result
+
+  Only after BOTH calls can you determine the degradation type.
+...
+"""
+```
+
+After (rendered at build time):
+```python
+def _build_research_prompt() -> str:
+    kbs = render_call_example("kafka_broker_status")
+    kcl = render_call_example("kafka_consumer_lag")
+    sp_broker = render_call_example("service_placement",
+                                     hint_args={"service_name": "'kafka_broker-N'"})
+    ke = render_call_example("kafka_exec",
+                              hint_args={"broker_label": "'ds-docker-worker-01'",
+                                         "command": "'...'"})
+    # ... one per example used in the prompt
+    return f"""
+...
+KAFKA TRIAGE — STEP 0 (MANDATORY):
+kafka_broker_status and kafka_consumer_lag are INDEPENDENT checks.
+Call BOTH before drawing any conclusions:
+
+  Call 1: {kbs}
+    → "N/M brokers alive" or "broker N missing" → BROKER MISSING PATH
+    → "under-replicated partitions" → REPLICATION PATH
+    → "healthy" → brokers fine, but lag may still be the issue
+
+  Call 2: {kcl}
+    → high lag in any consumer group → CONSUMER LAG PATH
+    → call this REGARDLESS of kafka_broker_status result
+    → if you don't know the group name, check kafka_topic_inspect output
+      or kafka_exec(command='kafka-consumer-groups.sh --bootstrap-server
+      localhost:9092 --list') first.
+...
+"""
+
+RESEARCH_PROMPT = _build_research_prompt()
+```
+
+Do the same for CONSUMER LAG PATH and BROKER MISSING PATH steps. Render
+every `tool_name(...)` example in these sections via `render_call_example`.
+
+### Step 1c — scan other prompts for the same shorthand
+
+In `api/agents/router.py`, search STATUS_PROMPT and ACTION_PROMPT for the
+regex `[a-z_]+\(\s*\)` that matches a known tool name. For each hit:
+
+- If the tool has NO required args (kafka_broker_status, swarm_node_status,
+  swarm_status, etc.) → leave bare `tool_name()`, it's correct.
+- If the tool HAS required args → replace with `render_call_example(...)`.
+
+Known tools with required args (partial list, verify with signature helper
+introspection):
+
+```
+kafka_consumer_lag(group)
+service_placement(service_name)
+kafka_exec(broker_label, command)
+kafka_topic_health(topic)
+vm_exec(host, command)
+container_discover_by_service(service_name)
+container_networks(host, container_id)
+container_tcp_probe(host, container_id, target_host, target_port)
+container_config_read(host, container_id, path)
+container_env(host, container_id)
+proxmox_vm_power(vm_label, action)
+swarm_service_force_update(service_name)
+elastic_correlate_operation(operation_id)
+runbook_search(query)
+result_fetch(ref)
+result_query(ref)
+escalate(reason)
+plan_action(...)   # many required depending on schema
+```
+
+## Change 2 — prompt snapshot CI guard
+
+Add a small test harness that renders each of the four agent prompts
+(observe/investigate/execute/build) at startup and writes them to text
+files under `tests/snapshots/prompts/`. On CI, compare the just-rendered
+version against the committed snapshot; fail if changed without explicit
+update.
+
+### New file `tests/test_prompt_snapshots.py`:
+
+```python
+"""Snapshot tests for agent system prompts.
+
+If a PR changes the rendered prompt text (directly or via signature changes,
+tool allowlist changes, etc.), this test fails. The diff is printed so the
+reviewer can see exactly what the LLM will now see.
+
+To update snapshots intentionally:
+    python -m pytest tests/test_prompt_snapshots.py --update-snapshots
+
+Snapshots live in tests/snapshots/prompts/*.txt — commit them with the PR.
+"""
+import os
+import pathlib
+import pytest
+
+SNAPSHOT_DIR = pathlib.Path(__file__).parent / "snapshots" / "prompts"
+SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _render_all():
+    """Render the four agent prompts + any other system-prompt-shape strings.
+    Returns a dict {name: rendered_text}."""
+    from api.agents.router import (
+        STATUS_PROMPT, RESEARCH_PROMPT, ACTION_PROMPT, BUILD_PROMPT,
+    )
+    return {
+        "observe": STATUS_PROMPT,
+        "investigate": RESEARCH_PROMPT,
+        "execute": ACTION_PROMPT,
+        "build": BUILD_PROMPT,
+    }
+
+
+@pytest.fixture
+def update_snapshots(request):
+    return request.config.getoption("--update-snapshots", default=False)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--update-snapshots", action="store_true",
+                     help="Rewrite prompt snapshot files from current code")
+
+
+@pytest.mark.parametrize("name,rendered", list(_render_all().items()))
+def test_prompt_snapshot(name, rendered, update_snapshots):
+    snapshot_path = SNAPSHOT_DIR / f"{name}.txt"
+    if update_snapshots or not snapshot_path.exists():
+        snapshot_path.write_text(rendered, encoding="utf-8")
+        pytest.skip(f"Snapshot written: {snapshot_path}")
+
+    expected = snapshot_path.read_text(encoding="utf-8")
+    if expected == rendered:
+        return
+
+    # Show a readable diff
+    import difflib
+    diff = "\n".join(difflib.unified_diff(
+        expected.splitlines(),
+        rendered.splitlines(),
+        fromfile=f"snapshot: {name}.txt",
+        tofile=f"rendered: {name}",
+        lineterm="",
+    ))
+    pytest.fail(
+        f"Prompt '{name}' diverges from committed snapshot.\n"
+        f"Review the diff below. If intentional, run:\n"
+        f"  pytest tests/test_prompt_snapshots.py --update-snapshots\n"
+        f"and commit tests/snapshots/prompts/{name}.txt.\n\n"
+        f"{diff}"
+    )
+```
+
+### Committing initial snapshots
+
+First run after this change lands, CC should run:
+```
+python -m pytest tests/test_prompt_snapshots.py --update-snapshots
+git add tests/snapshots/prompts/
+```
+
+Commit these snapshots as part of the v2.34.15 commit. Future PRs that
+change prompts will either fail CI (prompt changed without snapshot update)
+or show the rendered diff in the snapshot file itself in the PR (prompt
+changed WITH snapshot update, reviewer sees exactly what changed).
+
+## Change 3 — fix sanitizer scope + patterns
+
+Find the sanitizer — likely `api/security/sanitizer.py` or
+`api/middleware/sanitizer.py` or similar (grep for `BLOCKED:` or
+`Sensitive key`).
+
+### Step 3a — scope it to LLM-inbound only
+
+The sanitizer should run ONLY on strings that will be included in an LLM
+system prompt or tool result passed to the LLM. It must NOT run on outbound
+API response bodies.
+
+Audit call sites. Likely wrong places:
+- FastAPI response middleware that processes every response body
+- Serializers for dashboard / ops / trace endpoints
+- Any `response_model` or json_encoder that string-scrubs
+
+Correct places (keep these):
+- Before appending a tool result string to the conversation messages list
+- Before rendering operation context into a new agent's system prompt
+- Before feeding document content into RAG retrieval output
+
+If the sanitizer is currently a middleware, remove it from the middleware
+chain entirely. Introduce an explicit `sanitize_for_llm(text: str) -> str`
+function that callers invoke at the boundary.
+
+### Step 3b — tighten patterns
+
+Replace any loose patterns with these strict versions. Document each.
+
+```python
+# JWT: three base64url segments separated by dots, prefixed "eyJ" (header).
+# Rejects version strings like "2.34.15".
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+
+# UUID: standard 8-4-4-4-12 hex, but only redact when it's in a key-like
+# context (preceded by "token", "secret", "key", "auth", "password" within
+# ~40 chars). Bare UUIDs in logs are fine — they're identifiers.
+UUID_IN_KEY_CTX_RE = re.compile(
+    r"(?i)(?:token|secret|key|auth|password|bearer)[\s=:\"']{1,10}"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+)
+
+# API keys: common prefixes (sk-, xoxb-, ghp_, gho_, Bearer + 20+ chars).
+API_KEY_RE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|"
+    r"gh[po]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b"
+)
+
+# REMOVE any pattern that matches:
+#   - bare integers (e.g. r"\d{6,}")  — these break token counts, IDs, ports
+#   - version-like triples (e.g. r"\d+\.\d+\.\d+") — breaks version strings
+#   - bare hex strings (e.g. r"[0-9a-f]{32,}") — breaks hashes, container IDs
+```
+
+### Step 3c — Prometheus counter + structured log
+
+```python
+SANITIZER_BLOCKS_COUNTER = Counter(
+    "deathstar_sanitizer_blocks_total",
+    "Times the sanitizer redacted content",
+    ["pattern", "site"],   # pattern ∈ {jwt, uuid_key_ctx, api_key}; site ∈ {tool_result, system_prompt, rag}
+)
+```
+
+Log at INFO with redacted preview: `sanitizer redacted pattern=jwt site=tool_result
+preview="Authorization: Bearer [REDACTED]"`. Operators can audit false-positive
+rate from Prometheus.
+
+### Step 3d — tests
+
+`tests/test_sanitizer.py`:
+
+```python
+import pytest
+from api.security.sanitizer import sanitize_for_llm  # or wherever it lives
+
+class TestSanitizerAllowsLegitimate:
+    def test_version_string(self):
+        assert sanitize_for_llm("version 2.34.15") == "version 2.34.15"
+
+    def test_large_integer(self):
+        assert sanitize_for_llm("tokens_total: 10403") == "tokens_total: 10403"
+
+    def test_container_id(self):
+        # Docker short ID, 12 hex chars
+        assert sanitize_for_llm("container f3ef70283135") == "container f3ef70283135"
+
+    def test_bare_uuid_in_log(self):
+        # UUIDs in log lines are identifiers, not secrets
+        assert sanitize_for_llm("operation_id=bf3a71ea-c232-485e-bb8b-e3c9e0f153f5") \
+            == "operation_id=bf3a71ea-c232-485e-bb8b-e3c9e0f153f5"
+
+
+class TestSanitizerBlocksActualSecrets:
+    def test_jwt(self):
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.abc123def456"
+        assert "[REDACTED]" in sanitize_for_llm(text)
+        assert "eyJhbGciOiJIUzI1NiJ9" not in sanitize_for_llm(text)
+
+    def test_openai_key(self):
+        text = "OPENAI_API_KEY=sk-abc123def456ghi789jklmno012pqr"
+        assert "sk-abc123def456" not in sanitize_for_llm(text)
+
+    def test_uuid_in_token_context(self):
+        text = 'token="bf3a71ea-c232-485e-bb8b-e3c9e0f153f5"'
+        result = sanitize_for_llm(text)
+        assert "bf3a71ea" not in result
+```
+
+## Change 4 — budget off-by-one
+
+Find the agent loop dispatch point in `api/routers/agent.py` (search for
+where tool_calls from the model are executed, likely inside the step loop
+after `client.chat.completions.create`).
+
+Current shape is roughly:
+```python
+for tc in message.tool_calls:
+    result = execute_tool(tc)
+    tool_call_count += 1
+    # ...
+```
+
+This dispatches every proposed tool_call in the batch even when the batch
+exceeds the budget. Fix:
+
+```python
+MAX_TOOLS = _MAX_TOOL_CALLS_BY_TYPE[agent_type]
+proposed = list(message.tool_calls or [])
+remaining = MAX_TOOLS - tool_call_count
+
+if remaining <= 0:
+    # Already at cap — inject a harness message and break
+    inject_harness_message(
+        f"[harness] Tool budget exhausted ({tool_call_count}/{MAX_TOOLS}). "
+        "Produce your final_answer now based on evidence gathered, or call "
+        "escalate() if you cannot.",
+        role="system",
+    )
+    break  # out of the step loop; model gets one more chance to synthesise
+
+if len(proposed) > remaining:
+    # Truncate the batch to fit within budget; log the truncation
+    dropped = proposed[remaining:]
+    proposed = proposed[:remaining]
+    log.warning(
+        "budget truncate operation=%s proposed=%d remaining=%d dropped_tools=%s",
+        operation_id, len(message.tool_calls), remaining,
+        [t.function.name for t in dropped],
+    )
+    increment_metric(BUDGET_TRUNCATE_COUNTER, {"agent_type": agent_type})
+    # Don't silently drop — tell the model
+    inject_harness_message(
+        f"[harness] You proposed {len(message.tool_calls)} tool calls but only "
+        f"{remaining} fit within your remaining budget. I executed the first "
+        f"{remaining}: {[t.function.name for t in proposed]}. "
+        f"Skipped: {[t.function.name for t in dropped]}. Continue with what you have.",
+        role="system",
+    )
+
+for tc in proposed:
+    result = execute_tool(tc)
+    tool_call_count += 1
+    # ...
+```
+
+Add metric:
+```python
+BUDGET_TRUNCATE_COUNTER = Counter(
+    "deathstar_agent_budget_truncate_total",
+    "Tool-call batches truncated to fit within remaining budget",
+    ["agent_type"],
+)
+```
+
+Add test in `tests/test_agent_budget.py`:
+
+```python
+def test_budget_truncate_drops_overflow():
+    # Stub: parent at 15/16, model proposes 3 tools
+    # Expect: 1 tool executed (remaining), 2 dropped, harness message appended
+    ...
+
+def test_budget_exhausted_ends_loop():
+    # Stub: parent at 16/16, model proposes 2 tools
+    # Expect: 0 tools executed, harness nudge for final_answer, loop breaks
+    ...
+```
+
+## Change 5 — Prometheus metrics for new guards
+
+Add to `api/metrics.py`:
+
+```python
+SANITIZER_BLOCKS_COUNTER = Counter(...)  # defined in Change 3
+BUDGET_TRUNCATE_COUNTER  = Counter(...)  # defined in Change 4
+
+PROMPT_SNAPSHOT_DIVERGED_COUNTER = Counter(
+    "deathstar_prompt_snapshot_diverged_total",
+    "Agent prompt rendered at startup differs from committed snapshot",
+    ["prompt_name"],
+)
+```
+
+Wire the snapshot counter into startup: when the app boots, render each
+prompt and compare to the committed snapshot file; increment the counter
+per divergent prompt. This is a canary — it should be 0 in production;
+non-zero means someone shipped a prompt change without updating the snapshot.
+
+## Change 6 — tests + run instructions in CHANGELOG
+
+Append to the v2.34.15 entry in `CHANGELOG.md` (or equivalent):
+
+```
+## v2.34.15 — prompt rendering + sanitizer scope + budget truncation + snapshots
+
+Breaking for reviewers: PRs touching api/agents/router.py or any file that
+feeds into a system prompt now REQUIRE a corresponding update to
+tests/snapshots/prompts/*.txt. Run:
+
+    pytest tests/test_prompt_snapshots.py --update-snapshots
+
+to regenerate snapshots after an intentional prompt change, and include
+the updated snapshot files in the PR.
+
+Breaking for integrators: the sanitizer no longer runs on outbound API
+responses. If you relied on the sanitizer to redact secrets in responses,
+add redaction explicitly in your serializer.
+```
+
+## Version bump
+
+Update `VERSION`: `2.34.14` → `2.34.15`.
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agents): v2.34.15 prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots"
+git push origin main
+```
+
+## How to test after push
+
+1. Redeploy `hp1_agent`, pull new image.
+2. `/api/health` → version = `"2.34.15"` (NOT `[BLOCKED: JWT token]`).
+3. Run the canonical Logstash task:
+   > Investigate why Logstash is not writing to Elasticsearch. Check Kafka
+   > broker reachability from Logstash, including a network probe (nc -zv)
+   > to broker 3 on port 9094, and correlate with consumer lag and cluster
+   > health.
+4. Pull `/api/logs/operations/{id}/trace` — step 0 should show:
+   - `kafka_consumer_lag({"group":"<...>"})` — WITH group arg, no TypeError
+   - `tokens_total: <actual integer>` — not `[BLOCKED: Sensitive key]`
+5. Prometheus:
+   - `deathstar_tool_signature_errors_total{tool_name="kafka_consumer_lag"}` — no new increment from this run
+   - `deathstar_agent_budget_truncate_total` — watch; should stay 0 on a task that doesn't hit cap
+   - `deathstar_sanitizer_blocks_total` — will increment if any real secret flows through; should be 0 on this run
+6. Snapshot CI:
+   - `pytest tests/test_prompt_snapshots.py` — passes (snapshots committed)
+   - Hand-edit `RESEARCH_PROMPT` adding a space, run tests → FAILS with a unified diff
+   - Revert, re-run → passes
+7. Force the budget truncate path: temporarily lower `_MAX_TOOL_CALLS_BY_TYPE["research"]` to 4, re-run canonical task. Expect `budget_truncate_total` to increment and a harness message in the trace.
+
+## Non-goals / deferred to v2.34.16+
+
+- Trace viewer in Logs UI (v2.34.16)
+- "Gates fired" section in trace digest renderer (v2.34.16)
+- known_facts table with confidence scoring (v2.35 phase kickoff)
+- Runbook-based TRIAGE extraction (v2.35)
+- Entity preflight against infra_inventory (v2.35)
+- Cross-tool contradiction detection in-run (v2.35)
+- Fact-age rejection (v2.35)
+
+## Risk register
+
+- Snapshot CI guard may produce noisy diffs when unrelated code triggers a
+  change in tool introspection (e.g. adding a new optional arg to a tool
+  that gets signature-injected). Mitigation: the diff in the test failure
+  output is the PR review artifact — reviewer sees what changed and updates
+  the snapshot as part of the PR. This is the intended workflow, not noise.
+
+- render_call_example() producing `<consumer_group>` placeholders might
+  confuse the model into treating the placeholder as a literal string.
+  Mitigation: the tests should assert that when the model sees the rendered
+  prompt and is asked to call the tool, the actual call contains a real
+  group name (not the literal `<consumer_group>`). If this fails in
+  practice, switch placeholders to more clearly instructional strings like
+  `"REPLACE_WITH_GROUP_NAME"` with a note in the prompt.
+
+- Removing the outbound sanitizer is a soft API change. Any downstream
+  consumer that depends on the sanitizer silently redacting UUIDs in
+  responses will see them now. No known consumers in this project, but
+  flag in CHANGELOG.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-18 09:30:33
+========================================================================

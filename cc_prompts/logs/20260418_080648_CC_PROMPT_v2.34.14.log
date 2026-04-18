@@ -920,3 +920,12 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 08:06:48
 ========================================================================
+PROMPT COMPLETE: v2.34.14
+[STATUS] 9m05s
+
+Summary: Implemented hallucination hardening + LLM trace persistence across 6 new/changed modules. Guard now retries up to 3 attempts and fails loudly (no `[HARNESS WARNING]` escape hatch). Fabrication detector scans final_answer text for uncalled-tool citations. Parent receives distrust signal when sub-agent output is flagged. Every LLM round-trip is persisted to `agent_llm_traces` with a new `/api/logs/operations/{id}/trace` endpoint (structured + digest formats). 29/29 tests pass. Commit ba1a04f pushed to main.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  9m05s
+========================================================================

@@ -1235,8 +1235,83 @@ async def _run_single_agent_step(
                 messages.append({"role": "user", "content": block_msg})
                 continue
 
+            # v2.34.15: budget truncation — the step-level budget check above
+            # stops us entering a fresh step at cap, but it did not stop us
+            # executing a *batch* that overflows cap. If the model proposes
+            # N tool calls and only K fit within the remaining budget, execute
+            # the first K, drop the rest with a harness nudge, and synthesise
+            # tool_result placeholders for the dropped ones so the OpenAI
+            # tool_call_id contract is preserved on the next turn.
+            _proposed_tcs = list(msg.tool_calls or [])
+            _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            _remaining = _tool_budget - len(tools_used_names)
+            _dropped_tcs: list = []
+            if _remaining <= 0:
+                _dropped_tcs = _proposed_tcs
+                _proposed_tcs = []
+            elif len(_proposed_tcs) > _remaining:
+                _dropped_tcs = _proposed_tcs[_remaining:]
+                _proposed_tcs = _proposed_tcs[:_remaining]
+
+            if _dropped_tcs:
+                _dropped_names = [t.function.name for t in _dropped_tcs]
+                _kept_names = [t.function.name for t in _proposed_tcs]
+                log.warning(
+                    "budget truncate operation=%s proposed=%d remaining=%d "
+                    "kept=%s dropped=%s",
+                    operation_id, len(msg.tool_calls or []), _remaining,
+                    _kept_names, _dropped_names,
+                )
+                try:
+                    from api.metrics import BUDGET_TRUNCATE_COUNTER
+                    BUDGET_TRUNCATE_COUNTER.labels(agent_type=agent_type).inc()
+                except Exception:
+                    pass
+                await manager.send_line(
+                    "step",
+                    f"[budget] Truncated batch: kept {len(_kept_names)}/"
+                    f"{len(_dropped_tcs) + len(_kept_names)} tools — "
+                    f"dropped {_dropped_names}",
+                    status="ok", session_id=session_id,
+                )
+                # Emit synthetic tool_result for every dropped call so the
+                # next LLM turn sees a response for each tool_call_id it
+                # proposed. (OpenAI schema: every tool_call_id must have a
+                # corresponding tool-role message.)
+                for _dtc in _dropped_tcs:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": _dtc.id,
+                        "content": json.dumps({
+                            "status": "skipped",
+                            "message": (
+                                f"Tool '{_dtc.function.name}' dropped — "
+                                f"batch exceeded remaining tool budget "
+                                f"({_remaining}). Continue with the evidence "
+                                f"already gathered; do not retry."
+                            ),
+                        }),
+                    })
+                # Harness nudge so the model understands what happened.
+                if _proposed_tcs:
+                    _nudge = (
+                        f"[harness] You proposed {len(msg.tool_calls)} tool "
+                        f"calls but only {_remaining} fit within your "
+                        f"remaining budget. Executed: {_kept_names}. "
+                        f"Skipped: {_dropped_names}. Continue with what you "
+                        f"have — do not re-propose the skipped tools."
+                    )
+                else:
+                    _nudge = (
+                        f"[harness] Tool budget exhausted "
+                        f"({len(tools_used_names)}/{_tool_budget}). Produce "
+                        f"your final_answer now based on evidence gathered, "
+                        f"or call escalate() if you cannot."
+                    )
+                messages.append({"role": "user", "content": _nudge})
+
             halt = False
-            for tc in msg.tool_calls:
+            for tc in _proposed_tcs:
                 fn_name = tc.function.name
                 tools_used_names.append(fn_name)
                 if fn_name not in META_TOOLS:

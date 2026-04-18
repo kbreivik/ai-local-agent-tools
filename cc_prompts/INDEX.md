@@ -186,7 +186,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | DONE (b76839f) |
 | CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | DONE (8e7adaa) |
 | CC_PROMPT_v2.34.13.md | v2.34.13 | fix(agents): retarget prompts to prefer container_introspect over raw docker exec | DONE (d3c14b8) |
-| CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | RUNNING |
+| CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | DONE (ba1a04f) |
+| CC_PROMPT_v2.34.15.md | v2.34.15 | fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots | RUNNING |
 
 ---
 
@@ -340,6 +341,9 @@ v2.34.12 shipped the five container_* tools correctly registered, allowlisted, a
 **v2.34.14** — fix(agents): hallucination hardening + fabrication detection + LLM trace persistence.
 Session c97014a8 (parent, 10 tools, "completed" but WRONG) + bf3a71ea (sub-agent, 0 tools, emitted fabricated EVIDENCE block with invented container IDs x7k9a/y8m2b, invented IPs, invented hostname `elastic-ingress.internal`). v2.34.8 hallucination guard fired but its "fire once + accept with [HARNESS WARNING] prefix" design let the sub-agent win on re-emit. Parent then TRUSTED the fabrication and reversed its own earlier service_placement evidence (worker-03 → "actually worker-01 and worker-02"). Operation status "completed" + confidently wrong answer = worst failure mode. Fix: (1) hallucination guard rewritten to reject up to N times then status=failed/reason=hallucination_guard_exhausted, no [HARNESS WARNING] escape hatch; (2) new fabrication_detector scans final_answer for tool-call-shaped citations against actual tool_calls, rejects when ≥3 cited tools don't match; (3) parent-side distrust: sub-agent output flagged by guard/detector triggers `[harness] do NOT synthesise from this` injection to parent; (4) new agent_llm_traces + agent_llm_system_prompts tables persist full LLM messages + response for every step (system prompt stored once per operation, Postgres TOAST handles compression), 7-day retention default; (5) new `/api/logs/operations/{id}/trace?format=structured|digest` endpoint for debugging. New tests anchor on canonical bf3a71ea fabrication. Marks kafka_consumer_lag kwarg error (v2.34.9 regression) as known issue for v2.34.15.
 
+**v2.34.15** — fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots.
+The v2.34.14 /trace endpoint let us inspect the exact system prompt of operation 828c07ba and prove three bugs were all prompt-layer. (1) kafka_consumer_lag({}) regression is NOT a signature-injection gap — signatures ARE present at char 27374. Root cause: KAFKA TRIAGE section at char 9591 shows the LLM `Call 2: kafka_consumer_lag()` (bare parens) as a prescriptive example, and the example wins over the reference section 18000 chars later. Fix: Option B — extract render_call_example() helper from v2.34.9 signature code and use f-strings to generate all TRIAGE call examples from the real tool signatures at prompt build time. Also scan STATUS/ACTION prompts for `tool_name()` shorthand on tools that have required args. (2) Budget off-by-one: investigate budget=16 but op 828c07ba ran 17 tool calls because step 6 dispatched a 2-call batch when only 1 slot remained. Fix: truncate proposed tool_calls to remaining budget, inject harness message naming dropped tools, add BUDGET_TRUNCATE_COUNTER. (3) Sanitizer false positives: v2.31.7 sanitizer runs on outbound API response bodies (wrong scope) with patterns loose enough to match `2.34.14` as JWT, `10403` as "Sensitive key", and any UUID in URL path. Fix: restrict sanitizer to LLM-inbound paths only via explicit sanitize_for_llm() calls at boundaries, tighten JWT to `eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`, tighten UUID to context-gated (preceded by `token|secret|key|auth` within 40 chars), remove bare-integer and version-string patterns entirely. Add SANITIZER_BLOCKS_COUNTER with {pattern, site} labels. (4) Prompt snapshot CI guard: new tests/test_prompt_snapshots.py renders STATUS/RESEARCH/ACTION/BUILD prompts at test time, diffs against committed tests/snapshots/prompts/*.txt files, fails on divergence with unified diff. Reviewers see exactly what the LLM will now see when prompt-touching PRs come in. New PROMPT_SNAPSHOT_DIVERGED_COUNTER canary at startup.
+
 ---
 
 ## Key file paths
@@ -380,7 +384,9 @@ api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.2
 gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
 api/db/metric_samples.py                  — time-series metrics (v2.21.0)
 mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
-api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10, v2.34.14)
+api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10, v2.34.14, v2.34.15)
 api/agents/fabrication_detector.py        — citation extraction + fabrication scoring (v2.34.14)
 api/db/llm_trace_retention.py             — nightly purge (v2.34.14)
+tests/snapshots/prompts/*.txt             — committed rendered agent prompts, CI-diffed (v2.34.15)
+tests/test_prompt_snapshots.py            — snapshot CI guard (v2.34.15)
 ```

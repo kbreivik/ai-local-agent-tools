@@ -1661,6 +1661,158 @@ def format_tool_signatures_section(allowlist: list[str]) -> str:
     return block
 
 
+# ── Per-tool call example rendering (v2.34.15) ───────────────────────────────
+# Earlier signature injection surfaced canonical signatures in a dedicated
+# TOOL SIGNATURES block, but any inline prose example like `tool_name()`
+# still silently won when the signature block was 18 000 chars away. Use
+# this helper to render call shapes at prompt build time — the required
+# args appear next to the triage instructions, so the model cannot call
+# `kafka_consumer_lag()` without the `group=` arg present in the same line.
+
+def _placeholder_for(pname: str, ptype: str) -> str:
+    """Return a single-quoted or bare placeholder appropriate for the type."""
+    t = (ptype or "").lower()
+    if "int" in t or "float" in t or "number" in t:
+        return f"<{pname}>"
+    if "bool" in t:
+        return "True"
+    if "list" in t or "dict" in t or "[" in t:
+        return f"<{pname}>"
+    # default → str
+    return f"'<{pname}>'"
+
+
+def render_call_example(
+    tool_name: str,
+    hint_args: dict | None = None,
+) -> str:
+    """Render a canonical call example for an agent prompt.
+
+    Required args → rendered with `'<arg_name>'`-style placeholders.
+    Optional args → omitted unless the caller supplies a hint in ``hint_args``.
+    ``hint_args`` values are passed through as-is (already-formatted snippets).
+
+    Examples:
+      render_call_example("kafka_consumer_lag")
+        → "kafka_consumer_lag(group='<group>')"
+      render_call_example("kafka_broker_status")
+        → "kafka_broker_status()"
+      render_call_example("elastic_search_logs",
+                          hint_args={"service": "'logstash'", "minutes_ago": "60"})
+        → "elastic_search_logs(service='logstash', minutes_ago=60)"
+    """
+    hint_args = hint_args or {}
+    try:
+        from api.tool_registry import get_registry
+        registry = get_registry()
+    except Exception:
+        # Registry unavailable — fall back to the tool name plus any hints
+        if hint_args:
+            body = ", ".join(f"{k}={v}" for k, v in hint_args.items())
+            return f"{tool_name}({body})"
+        return f"{tool_name}(...)"
+
+    entry = next((e for e in registry if e.get("name") == tool_name), None)
+    if entry is None:
+        if hint_args:
+            body = ", ".join(f"{k}={v}" for k, v in hint_args.items())
+            return f"{tool_name}({body})"
+        return f"{tool_name}(...)"
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    for p in entry.get("params", []):
+        pname = p.get("name", "")
+        if not pname or pname in ("self", "ctx", "context"):
+            continue
+        if pname in hint_args:
+            parts.append(f"{pname}={hint_args[pname]}")
+            seen.add(pname)
+            continue
+        if p.get("required", False):
+            ann = (p.get("type") or "str").strip() or "str"
+            parts.append(f"{pname}={_placeholder_for(pname, ann)}")
+            seen.add(pname)
+    # Append any hint_args that don't correspond to a known param last
+    for k, v in hint_args.items():
+        if k in seen:
+            continue
+        parts.append(f"{k}={v}")
+    return f"{tool_name}({', '.join(parts)})"
+
+
+# Tool-name regex used by the bare-parens post-processor. Underscored lowercase
+# identifier, word-boundary on both sides, followed by `()`.
+_BARE_PARENS_RE = re.compile(r"\b([a-z_][a-z0-9_]*)\(\)")
+
+
+def _rewrite_bare_parens(prompt: str, tools_with_required_args: set[str]) -> str:
+    """Replace `tool_name()` with `render_call_example(tool_name)` for every
+    tool in ``tools_with_required_args``. Tools with no required args are left
+    alone — `kafka_broker_status()` is a correct shape.
+    """
+    def _sub(m: re.Match) -> str:
+        name = m.group(1)
+        if name in tools_with_required_args:
+            return render_call_example(name)
+        return m.group(0)
+    return _BARE_PARENS_RE.sub(_sub, prompt)
+
+
+def _tools_with_required_args() -> set[str]:
+    """Introspect the tool registry and return names of tools that have
+    at least one required argument. Used by the prompt post-processor.
+
+    Falls back to a curated set if the registry is unavailable so the
+    patch still helps in degraded startup modes.
+    """
+    try:
+        from api.tool_registry import get_registry
+        registry = get_registry()
+    except Exception:
+        registry = None
+
+    if not registry:
+        return {
+            "kafka_consumer_lag", "service_placement", "kafka_exec",
+            "kafka_topic_health", "vm_exec", "container_discover_by_service",
+            "container_networks", "container_tcp_probe", "container_config_read",
+            "container_env", "proxmox_vm_power", "swarm_service_force_update",
+            "elastic_correlate_operation", "runbook_search", "result_fetch",
+            "result_query", "escalate", "plan_action",
+        }
+
+    names: set[str] = set()
+    for entry in registry:
+        name = entry.get("name", "")
+        if not name:
+            continue
+        for p in entry.get("params", []):
+            if p.get("name") in ("self", "ctx", "context"):
+                continue
+            if p.get("required", False):
+                names.add(name)
+                break
+    return names
+
+
+def _apply_bare_parens_rewrite() -> None:
+    """Post-process STATUS/RESEARCH/ACTION prompts at module load to replace
+    bare-parens inline examples for any tool with required args. Idempotent."""
+    global STATUS_PROMPT, RESEARCH_PROMPT, ACTION_PROMPT
+    global OBSERVE_PROMPT, INVESTIGATE_PROMPT
+    required = _tools_with_required_args()
+    STATUS_PROMPT = _rewrite_bare_parens(STATUS_PROMPT, required)
+    RESEARCH_PROMPT = _rewrite_bare_parens(RESEARCH_PROMPT, required)
+    ACTION_PROMPT = _rewrite_bare_parens(ACTION_PROMPT, required)
+    # Keep the aliases consistent with post-processed originals
+    OBSERVE_PROMPT = STATUS_PROMPT
+    INVESTIGATE_PROMPT = RESEARCH_PROMPT
+
+
+_apply_bare_parens_rewrite()
+
+
 # ── Prompt override support ───────────────────────────────────────────────────
 
 def _extract_sections(prompt: str, section_names: list[str]) -> str:

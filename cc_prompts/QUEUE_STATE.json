@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-18T08:06:48",
+  "updated_at": "2026-04-18T09:30:33",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2197,10 +2197,26 @@
       "filename": "CC_PROMPT_v2.34.14.md",
       "version": "v2.34.14",
       "theme": "fix(agents): hallucination hardening + fabrication detection + LLM trace persistence",
+      "runner_status": "DONE",
+      "commit_sha": "ba1a04f",
+      "error": "",
+      "started_at": "2026-04-18T08:06:48",
+      "finished_at": "2026-04-18T08:15:53",
+      "duration_s": 545.3434576999935,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260418_080648_CC_PROMPT_v2.34.14.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.34.15.md",
+      "version": "v2.34.15",
+      "theme": "fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-18T08:06:48",
+      "started_at": "2026-04-18T09:30:33",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
