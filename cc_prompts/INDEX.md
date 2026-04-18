@@ -187,7 +187,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | DONE (8e7adaa) |
 | CC_PROMPT_v2.34.13.md | v2.34.13 | fix(agents): retarget prompts to prefer container_introspect over raw docker exec | DONE (d3c14b8) |
 | CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | DONE (ba1a04f) |
-| CC_PROMPT_v2.34.15.md | v2.34.15 | fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots | RUNNING |
+| CC_PROMPT_v2.34.15.md | v2.34.15 | fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots | DONE (793248a) |
+| CC_PROMPT_v2.34.16.md | v2.34.16 | feat(ui): trace viewer + gates-fired digest + propose_subtask idempotency + service_placement signature | DONE (4dab532) |
 
 ---
 
@@ -344,6 +345,20 @@ Session c97014a8 (parent, 10 tools, "completed" but WRONG) + bf3a71ea (sub-agent
 **v2.34.15** — fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots.
 The v2.34.14 /trace endpoint let us inspect the exact system prompt of operation 828c07ba and prove three bugs were all prompt-layer. (1) kafka_consumer_lag({}) regression is NOT a signature-injection gap — signatures ARE present at char 27374. Root cause: KAFKA TRIAGE section at char 9591 shows the LLM `Call 2: kafka_consumer_lag()` (bare parens) as a prescriptive example, and the example wins over the reference section 18000 chars later. Fix: Option B — extract render_call_example() helper from v2.34.9 signature code and use f-strings to generate all TRIAGE call examples from the real tool signatures at prompt build time. Also scan STATUS/ACTION prompts for `tool_name()` shorthand on tools that have required args. (2) Budget off-by-one: investigate budget=16 but op 828c07ba ran 17 tool calls because step 6 dispatched a 2-call batch when only 1 slot remained. Fix: truncate proposed tool_calls to remaining budget, inject harness message naming dropped tools, add BUDGET_TRUNCATE_COUNTER. (3) Sanitizer false positives: v2.31.7 sanitizer runs on outbound API response bodies (wrong scope) with patterns loose enough to match `2.34.14` as JWT, `10403` as "Sensitive key", and any UUID in URL path. Fix: restrict sanitizer to LLM-inbound paths only via explicit sanitize_for_llm() calls at boundaries, tighten JWT to `eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`, tighten UUID to context-gated (preceded by `token|secret|key|auth` within 40 chars), remove bare-integer and version-string patterns entirely. Add SANITIZER_BLOCKS_COUNTER with {pattern, site} labels. (4) Prompt snapshot CI guard: new tests/test_prompt_snapshots.py renders STATUS/RESEARCH/ACTION/BUILD prompts at test time, diffs against committed tests/snapshots/prompts/*.txt files, fails on divergence with unified diff. Reviewers see exactly what the LLM will now see when prompt-touching PRs come in. New PROMPT_SNAPSHOT_DIVERGED_COUNTER canary at startup.
 
+**v2.34.16** — feat(ui): trace viewer + gates-fired digest + propose_subtask idempotency + service_placement signature.
+v2.34.15 verification run (op 00379abc) surfaced three more findings via the now-working /trace endpoint. (1) service_placement has the same signature regression as kafka_consumer_lag: position 9313 of RESEARCH_PROMPT shows `service_placement(kafka_broker-N)` — positional-arg-style, no quotes. Agent hit TypeError 2×. Fix: expand v2.34.15 render_call_example() pass to cover ALL prescriptive examples across RESEARCH/STATUS/ACTION prompts. (2) Parent called propose_subtask 4× with identical args in 3 consecutive steps (op 00379abc, steps 4/5/6/6). No harness dedup; no immediate feedback when sub-agent terminates. Fix: SHA1-hash (task, executable_steps, manual_steps) as dedup key within parent run; reject duplicates with a harness message offering 4 clear next options. Also: when a sub-agent reaches terminal state (completed/escalated/failed), queue an immediate harness system message for the parent's next turn so it sees the outcome + any fabrication/halluc-guard findings. New PROPOSE_DUPLICATE_COUNTER + SUBAGENT_TERMINAL_FEEDBACK_COUNTER. (3) New Trace subtab under Logs: step-list + selected-step detail (assistant text, tool_calls with parsed args, tool_results collapsible, harness injections). Gates Fired summary in sidebar aggregates halluc_guard_attempts, fabrication_detected, subagent_distrust_injected, budget_nudges, budget_truncate, sanitizer_blocks. Copy system prompt + Download full JSON buttons. Server-side /trace?format=digest gets a matching "Gates fired" section at top. (4) Celebration note: v2.34.14's fabrication detector + parent-side distrust fired end-to-end in production on op 00379abc's sub-agent c32d2fe2 (fabricated broker IP 10.0.4.17 / port 9092). Parent correctly ignored the fabrication and synthesised from its own step 1-4 evidence (overlay hairpin NAT on 192.168.199.33:9094). No code change for this — it already works.
+
+---
+
+### ✓ Phase milestone — Harness observability (v2.34.14 – v2.34.16)
+
+Trace persistence → UI viewer → server digest, combined with fabrication
+detection and propose_subtask idempotency, closes the harness observability
+loop. Every agent run is inspectable, fact-checkable, and diff-able.
+Future bugs become grep-and-fix instead of mystery hallucinations.
+
+Tagged as `harness-observability-v2.34.16` at commit `4dab532`.
+
 ---
 
 ## Key file paths
@@ -384,9 +399,12 @@ api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.2
 gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
 api/db/metric_samples.py                  — time-series metrics (v2.21.0)
 mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
-api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10, v2.34.14, v2.34.15)
+api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10, v2.34.14, v2.34.15, v2.34.16)
 api/agents/fabrication_detector.py        — citation extraction + fabrication scoring (v2.34.14)
 api/db/llm_trace_retention.py             — nightly purge (v2.34.14)
 tests/snapshots/prompts/*.txt             — committed rendered agent prompts, CI-diffed (v2.34.15)
 tests/test_prompt_snapshots.py            — snapshot CI guard (v2.34.15)
+api/agents/gate_detection.py              — shared gate detection logic for /trace digest + UI (v2.34.16)
+gui/src/components/TraceView.jsx          — Logs → Trace tab, step list + detail + Gates Fired (v2.34.16)
+gui/src/utils/gateDetection.js            — JS mirror of api/agents/gate_detection.py (v2.34.16)
 ```
