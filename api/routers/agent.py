@@ -521,6 +521,10 @@ async def _run_single_agent_step(
     ]
 
     # ── Per-run feedback accumulators ─────────────────────────────────────────
+    # v2.34.16: dedup state for propose_subtask + queued sub-agent terminal
+    # feedback. Parent-run scoped; does NOT persist across runs.
+    from api.agents.propose_dedup import ProposeState
+    _propose_state = ProposeState()
     tools_used_names: list = []
     tool_history: list = []  # v2.33.13: full per-call log for contradiction detection
     substantive_tool_calls: int = 0  # v2.34.8: non-META tool calls (hallucination guard)
@@ -757,6 +761,15 @@ async def _run_single_agent_step(
 
             import time as _time
             _step_t0 = _time.monotonic()
+
+            # v2.34.16 — flush any queued harness messages (sub-agent terminal
+            # feedback) BEFORE the next completion call, so the parent sees
+            # the outcome right away instead of learning about it later.
+            if _propose_state.queued_harness_messages:
+                for _qm in _propose_state.queued_harness_messages:
+                    messages.append({"role": "system", "content": _qm})
+                _propose_state.queued_harness_messages.clear()
+
             try:
                 response = client.chat.completions.create(
                     model=_lm_model(),
@@ -1564,6 +1577,58 @@ async def _run_single_agent_step(
                         _pst_exec_steps  = _pst_args.get("executable_steps", []) or []
                         _pst_manual_steps = _pst_args.get("manual_steps", []) or []
 
+                        # v2.34.16 — dedup identical proposals within this run
+                        from api.agents.propose_dedup import (
+                            handle_propose_subtask as _handle_pst,
+                            mark_spawned as _mark_spawned,
+                            mark_rejected as _mark_rejected,
+                        )
+                        _dedup = _handle_pst(
+                            _pst_args, _propose_state, step_index=step,
+                        )
+                        _pst_dedup_key = _dedup.get("key")
+                        if _dedup.get("status") == "duplicate_proposal":
+                            messages.append({
+                                "role":    "system",
+                                "content": _dedup.get("harness_message", ""),
+                            })
+                            _dup_result = {
+                                "status":    "duplicate_proposal",
+                                "key":       _pst_dedup_key,
+                                "prior":     _dedup.get("prior") or {},
+                                "message": (
+                                    "Duplicate propose_subtask rejected by harness. "
+                                    "See the harness note above and pick a different "
+                                    "next step."
+                                ),
+                            }
+                            messages.append({
+                                "role": "assistant", "content": None, "tool_calls": [tc],
+                            })
+                            messages.append({
+                                "role":         "tool",
+                                "tool_call_id": tc.id,
+                                "content":      json.dumps(_dup_result),
+                            })
+                            await logger_mod.log_tool_call(
+                                operation_id=operation_id, tool_name="propose_subtask",
+                                params=_pst_args, result=_dup_result, model_used=_lm_model(),
+                                duration_ms=0, status="ok",
+                            )
+                            tools_used_names.append("propose_subtask")
+                            try:
+                                AGENT_TOOL_CALLS.labels(
+                                    agent_type=agent_type, tool="propose_subtask"
+                                ).inc()
+                            except Exception:
+                                pass
+                            await manager.send_line(
+                                "step",
+                                f"[subtask] duplicate proposal rejected (key={_pst_dedup_key})",
+                                status="warning", session_id=session_id,
+                            )
+                            continue
+
                         # v2.34.0 in-band spawn fields
                         _pst_objective   = (_pst_args.get("objective") or "").strip()
                         _pst_sub_type    = (_pst_args.get("agent_type") or "").strip().lower()
@@ -1656,6 +1721,33 @@ async def _run_single_agent_step(
                                         "findings. Write your final summary now."
                                     ),
                                 }
+                                # v2.34.16 — dedup map: spawned → terminal
+                                try:
+                                    _mark_spawned(
+                                        _propose_state, _pst_dedup_key,
+                                        _spawn.get("sub_task_id") or "",
+                                    )
+                                    from api.agents.propose_dedup import (
+                                        on_subagent_terminal as _on_sub_term,
+                                    )
+                                    _fab_detail = _sub_guard.get("fabrication_detail")
+                                    _guard_detail = {
+                                        "fired":    bool(_sub_guard.get("halluc_guard_fired")),
+                                        "attempts": _sub_guard.get("halluc_guard_attempts") or 1,
+                                    } if _sub_guard.get("halluc_guard_fired") else None
+                                    _on_sub_term(
+                                        sub_op_id=_spawn.get("sub_task_id") or "",
+                                        terminal_status=(_spawn.get("terminal_status") or ""),
+                                        final_answer=_spawn.get("final_answer", ""),
+                                        fabrication_detail=(
+                                            _fab_detail if isinstance(_fab_detail, dict) else None
+                                        ),
+                                        halluc_guard_detail=_guard_detail,
+                                        state=_propose_state,
+                                        dedup_key=_pst_dedup_key,
+                                    )
+                                except Exception as _dse:
+                                    log.debug("propose_dedup terminal hook failed: %s", _dse)
                                 await manager.send_line(
                                     "step",
                                     f"[subagent] done — {_spawn.get('terminal_status')} "
@@ -1740,6 +1832,13 @@ async def _run_single_agent_step(
                                     if _budget_nudge_fired:
                                         BUDGET_NUDGE_COUNTER.labels(
                                             outcome="proposed_and_refused").inc()
+                                except Exception:
+                                    pass
+                                # v2.34.16 — dedup map: rejected
+                                try:
+                                    _mark_rejected(
+                                        _propose_state, _pst_dedup_key, _outcome,
+                                    )
                                 except Exception:
                                     pass
 

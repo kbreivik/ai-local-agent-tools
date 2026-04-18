@@ -1745,6 +1745,16 @@ def render_call_example(
 # identifier, word-boundary on both sides, followed by `()`.
 _BARE_PARENS_RE = re.compile(r"\b([a-z_][a-z0-9_]*)\(\)")
 
+# v2.34.16 — positional-bare-arg pattern: `tool_name(ident)` where `ident` is
+# an UNQUOTED identifier (letters/digits/_/-). Catches `service_placement(
+# kafka_broker-N)` which v2.34.15's bare-parens pass missed. Stops at the
+# first close-paren; we explicitly require the arg body to start with a
+# word char (not a quote, number, or '{' / '[' which would indicate a
+# deliberate literal).
+_BARE_POSITIONAL_RE = re.compile(
+    r"\b([a-z_][a-z0-9_]*)\(([A-Za-z_][A-Za-z0-9_\-]*)\)"
+)
+
 
 def _rewrite_bare_parens(prompt: str, tools_with_required_args: set[str]) -> str:
     """Replace `tool_name()` with `render_call_example(tool_name)` for every
@@ -1757,6 +1767,51 @@ def _rewrite_bare_parens(prompt: str, tools_with_required_args: set[str]) -> str
             return render_call_example(name)
         return m.group(0)
     return _BARE_PARENS_RE.sub(_sub, prompt)
+
+
+def _first_required_param_name(tool_name: str) -> str | None:
+    """Return the first required parameter name for ``tool_name``, or None
+    if the tool is zero-arg or unknown.
+    """
+    try:
+        from api.tool_registry import get_registry
+        registry = get_registry()
+    except Exception:
+        return None
+    entry = next((e for e in (registry or []) if e.get("name") == tool_name), None)
+    if entry is None:
+        return None
+    for p in entry.get("params", []):
+        name = p.get("name")
+        if name in ("self", "ctx", "context") or not name:
+            continue
+        if p.get("required", False):
+            return name
+    return None
+
+
+def _rewrite_bare_positional_args(
+    prompt: str, tools_with_required_args: set[str]
+) -> str:
+    """Replace `tool_name(bare_ident)` with a rendered call example that
+    quotes the argument against the first required parameter name.
+
+    Example: ``service_placement(kafka_broker-N)`` →
+             ``service_placement(service_name='kafka_broker-N')``
+
+    Only rewrites tools in ``tools_with_required_args`` so zero-arg tools and
+    unrelated code shapes stay intact.
+    """
+    def _sub(m: re.Match) -> str:
+        name = m.group(1)
+        arg  = m.group(2)
+        if name not in tools_with_required_args:
+            return m.group(0)
+        pname = _first_required_param_name(name)
+        if not pname:
+            return m.group(0)
+        return render_call_example(name, hint_args={pname: f"'{arg}'"})
+    return _BARE_POSITIONAL_RE.sub(_sub, prompt)
 
 
 def _tools_with_required_args() -> set[str]:
@@ -1798,13 +1853,16 @@ def _tools_with_required_args() -> set[str]:
 
 def _apply_bare_parens_rewrite() -> None:
     """Post-process STATUS/RESEARCH/ACTION prompts at module load to replace
-    bare-parens inline examples for any tool with required args. Idempotent."""
+    bare-parens AND bare-positional-arg inline examples for any tool with
+    required args. Idempotent."""
     global STATUS_PROMPT, RESEARCH_PROMPT, ACTION_PROMPT
     global OBSERVE_PROMPT, INVESTIGATE_PROMPT
     required = _tools_with_required_args()
-    STATUS_PROMPT = _rewrite_bare_parens(STATUS_PROMPT, required)
-    RESEARCH_PROMPT = _rewrite_bare_parens(RESEARCH_PROMPT, required)
-    ACTION_PROMPT = _rewrite_bare_parens(ACTION_PROMPT, required)
+    for pname in ("STATUS_PROMPT", "RESEARCH_PROMPT", "ACTION_PROMPT"):
+        p = globals()[pname]
+        p = _rewrite_bare_parens(p, required)
+        p = _rewrite_bare_positional_args(p, required)
+        globals()[pname] = p
     # Keep the aliases consistent with post-processed originals
     OBSERVE_PROMPT = STATUS_PROMPT
     INVESTIGATE_PROMPT = RESEARCH_PROMPT

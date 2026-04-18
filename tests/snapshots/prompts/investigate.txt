@@ -70,7 +70,7 @@ tools does the same job with typed arguments and no metachar filter:
   docker exec <id> nc -zv H P              → container_tcp_probe(host, id, H, P)
   docker exec <id> bash -c '</dev/tcp/H/P' → container_tcp_probe(host, id, H, P)
   docker inspect <id> --format '{{...}}'   → container_networks(host, id)
-  docker ps --filter name=X --format ...   → container_discover_by_service(X)
+  docker ps --filter name=X --format ...   → container_discover_by_service(service_name='X')
 
 Reasons to prefer them:
 - Arguments are validated per-tool, so none of these hit the vm_exec
@@ -134,13 +134,13 @@ vm_exec metachar/allowlist filters by validating arguments up front:
       </dev/tcp/...> — no nc/curl required. This is the definitive test
       for "can container A reach container B".
 
-  container_discover_by_service(service_name)
+  container_discover_by_service(service_name='service_name')
       Swarm service → [{node, vm_host_label, container_id, container_name}].
       Replaces docker ps + parse. Call once and use the returned IDs
       directly in the four tools above.
 
 Standard overlay-diagnosis pattern:
-  1. container_discover_by_service(service_name) — get container IDs
+  1. container_discover_by_service(service_name='service_name') — get container IDs
   2. container_networks(host, container_id) for EACH container involved —
      compare overlay network memberships
   3. container_tcp_probe(host, container_id, target_host, target_port) —
@@ -160,7 +160,7 @@ Standard overlay-diagnosis pattern:
 1. kafka_topic_inspect (no args, or topic=X for focused) — FIRST call for any
    kafka issue. Returns structured broker/partition/ISR state in one call.
 2. kafka_consumer_lag — ONLY after step 1, if lag is suspected.
-3. service_placement(kafka_broker-N) — map broker id to Swarm node.
+3. service_placement(service_name='kafka_broker-N') — map broker id to Swarm node.
 4. kafka_exec — last resort for deep-dives beyond what the above provide.
 
 KAFKA TRIAGE — STEP 0 (MANDATORY):

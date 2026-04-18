@@ -7,6 +7,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { ToolCallsView, OpsView, EscView, StatsView, SessionOutputView } from './LogTable'
 import AgentActionsTab from './AgentActionsTab'
+import TraceView from './TraceView'
 import { createUnifiedLogStream, authHeaders, fetchResultRefs, fetchResultRef, fetchPipelineHealth } from '../api'
 
 const _CONN_BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -622,7 +623,7 @@ function DataHealthView() {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Escalations', 'Stats', 'Result Refs', 'Data Health', 'Actions']
+const TABS = ['Live Logs', 'Tool Calls', 'Operations', 'Trace', 'Escalations', 'Stats', 'Result Refs', 'Data Health', 'Actions']
 
 // Module-level holder so the pending session survives the race window between
 // the Commands-panel event dispatch and LogsPanel mounting its listener.
@@ -699,6 +700,7 @@ export default function LogsPanel() {
         {tab === 'Live Logs'      && <LiveLogsView />}
         {tab === 'Tool Calls'     && <ToolCallsView refreshTick={0} />}
         {tab === 'Operations'     && <OpsView refreshTick={0} highlightSessionId={highlightSessionId} />}
+        {tab === 'Trace'          && <TraceView operationId={highlightSessionId || null} />}
         {tab === 'Escalations'    && <EscView refreshTick={0} />}
         {tab === 'Stats'          && <StatsView />}
         {tab === 'Result Refs'    && <ResultRefsView />}

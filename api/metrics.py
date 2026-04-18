@@ -170,6 +170,20 @@ PROMPT_SNAPSHOT_DIVERGED_COUNTER = Counter(
     ["prompt_name"],
 )
 
+# --- propose_subtask idempotency + sub-agent terminal feedback (v2.34.16) ---
+PROPOSE_DUPLICATE_COUNTER = Counter(
+    "deathstar_propose_subtask_duplicate_total",
+    "propose_subtask calls rejected as duplicates of an earlier proposal in the same parent run. "
+    "prior_status reflects where the earlier proposal was in its lifecycle when the duplicate landed.",
+    ["prior_status"],   # pending | spawned | rejected_budget | completed | escalated | failed
+)
+
+SUBAGENT_TERMINAL_FEEDBACK_COUNTER = Counter(
+    "deathstar_subagent_terminal_feedback_total",
+    "Harness feedback messages injected into parent after a sub-agent terminated",
+    ["terminal_status"],   # completed | escalated | failed | timeout | cap_hit
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

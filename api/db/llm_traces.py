@@ -275,6 +275,27 @@ def render_digest(trace: dict) -> str:
             f"chars, {trace.get('tools_count') or 0} tools exposed"
         )
         lines.append("")
+
+    # v2.34.16 — Gates fired summary, rendered near the top so operators see
+    # at a glance whether harness interventions fired on this run.
+    try:
+        from api.agents.gate_detection import detect_gates_from_steps
+        gates = detect_gates_from_steps(trace.get("steps", []))
+        if any(g.get("count", 0) > 0 for g in gates.values()):
+            lines.append("## Gates fired")
+            for name, info in gates.items():
+                cnt = info.get("count", 0)
+                if cnt <= 0:
+                    continue
+                step_refs = ", ".join(
+                    str(d.get("step")) for d in info.get("details", [])[:5]
+                )
+                tail = f" (steps: {step_refs})" if step_refs else ""
+                lines.append(f"- **{name}**: {cnt}×{tail}")
+            lines.append("")
+    except Exception as _e:
+        log.debug("gate detection failed during digest render: %s", _e)
+
     for r in trace.get("steps", []):
         lines.append(
             f"## Step {r['step_index']} — finish={r.get('finish_reason','')} "
