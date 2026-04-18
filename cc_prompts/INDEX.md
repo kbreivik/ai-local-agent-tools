@@ -189,7 +189,30 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | DONE (ba1a04f) |
 | CC_PROMPT_v2.34.15.md | v2.34.15 | fix(agents): prompt signature rendering + sanitizer scope + budget off-by-one + prompt snapshots | DONE (793248a) |
 | CC_PROMPT_v2.34.16.md | v2.34.16 | feat(ui): trace viewer + gates-fired digest + propose_subtask idempotency + service_placement signature | DONE (4dab532) |
-| CC_PROMPT_v2.34.17.md | v2.34.17 | fix(agents): boot-time sanitizer scope + forced synthesis on budget cap | RUNNING |
+| CC_PROMPT_v2.34.17.md | v2.34.17 | fix(agents): boot-time sanitizer scope + forced synthesis on budget cap | DONE (7628b84) |
+| CC_PROMPT_v2.35.0.md | v2.35.0 | feat(facts): known_facts schema + collector writers + /api/facts + Settings + Prometheus | DONE (a34bd4f) |
+| CC_PROMPT_v2.35.0.1.md | v2.35.0.1 | feat(ui): Facts tab + Dashboard widget + diff viewer + permission-gated admin | RUNNING |
+| CC_PROMPT_v2.35.1.md | v2.35.1 | feat(agents): entity preflight + three-tier extractor + Preflight Panel + PREFLIGHT FACTS | PENDING |
+| CC_PROMPT_v2.35.2.md | v2.35.2 | feat(agents): in-run cross-tool contradiction detection + agent_observation fact writer | PENDING |
+| CC_PROMPT_v2.35.3.md | v2.35.3 | feat(agents): fact-age rejection on tool results (Medium mode) | PENDING |
+| CC_PROMPT_v2.35.4.md | v2.35.4 | feat(agents): runbook-based TRIAGE injection + UI editor (augment default) | PENDING |
+
+---
+
+## Phase v2.35 — Facts, not just tools
+
+**Design spec:** `PHASE_v2.35_SPEC.md`  (doc-coauthored before any CC prompt is written)
+
+| Prompt | Theme | Status |
+|---|---|---|
+| v2.35.0 | DB: known_facts schema + collector writers + /api/facts + Settings + Prometheus | PENDING |
+| v2.35.0.1 | UI: Facts tab + Dashboard widget + diff viewer + permission-gated admin | PENDING |
+| v2.35.1 | Entity preflight: three-tier extractor + Preflight Panel + PREFLIGHT FACTS | PENDING |
+| v2.35.2 | In-run cross-tool contradiction detection + agent_observation fact writer | PENDING |
+| v2.35.3 | Fact-age rejection on tool results (Medium mode) | PENDING |
+| v2.35.4 | Runbook-based TRIAGE injection + UI editor (augment default) | PENDING |
+
+**All 6 CC prompts drafted and ready for queue execution.** Sequence: v2.35.0 → v2.35.0.1 → v2.35.1 → v2.35.2 → v2.35.3 → v2.35.4. Each independently deployable, each verifiable via `/metrics`, `/api/facts*`, and the Trace viewer.
 
 ---
 
@@ -365,6 +388,30 @@ Tagged as `harness-observability-v2.34.16` at commit `4dab532`.
 
 ---
 
+## Phase: v2.35.x — Facts, not just tools
+
+Full spec in `PHASE_v2.35_SPEC.md`. Shifts the agent from "rediscover the world on every task" to "start from facts, verify only what's uncertain." Introduces persistent, weighted, contradiction-aware knowledge store (`known_facts`) with collector-sourced writes, preflight resolution of task references, in-run contradiction detection, fact-age rejection on tool results, and runbook-based TRIAGE injection. All behaviour gated via Settings → Facts & Knowledge group.
+
+**v2.35.0** — feat(facts): known_facts schema + collector writers + /api/facts + Settings group + Prometheus.
+Foundation of the phase. New tables: known_facts_current (live value per (fact_key, source)), known_facts_history (append-only, only on value change — deduplicates identical polls), known_facts_locks (admin-asserted "don't overwrite"), known_facts_conflicts (collector contradicts lock), known_facts_permissions (user + role grants, sith_lord implicit full, expires_at + revoked), known_facts_refresh_schedule (per-pattern cadence, seeded: proxmox.vm.*.status=60s, swarm.service.*.placement=30s, kafka.broker.*.host=3600s, container.*.ip=300s, manual.*=86400s, default 300s), facts_audit_log. Confidence formula: base × age_factor + verify_boost − contradiction_penalty, clamped [0,1]; 5-level ladder (Very High 0.9-1.0 / High 0.7-0.89 INJECTION THRESHOLD / Medium 0.5-0.69 / Low 0.3-0.49 / Reject 0.0-0.29). Source weights: manual=1.0, collectors=0.8-0.9, agent_observation=0.5, rag=0.4 — all tunable. Manual facts never expire; decay phased (30d full, 60d→0.7, 60d+ slow fade). Fact keys use `prod.` scope prefix. Array values for multi-valued facts. Collector fact extractors in api/facts/extractors.py for Proxmox, Swarm, docker_agent, Kafka, PBS, FortiSwitch — wired into existing poll loops as best-effort (try/except). Change-detection via change_detected + change_flagged_at. /api/facts/ read endpoints + /settings/preview for live-scored sample. New Settings group "Facts & Knowledge" with all weights, thresholds, half-lives, verify cap. Prometheus: known_facts_total, _confident_total, _conflicts_total, facts_upserted_total{source,action}, _contradictions_total, _lock_events_total, _refresh_stale_total. No agent behaviour change.
+
+**v2.35.0.1** — feat(ui): Facts tab + Dashboard widget + diff viewer + permission-gated admin.
+Consumes v2.35.0 API. New api/security/facts_permissions.py implements user_has_permission with sith_lord=all, user-revoke overrides role-allow, expiry support. Extends /api/facts with /locks POST DELETE, /conflicts/{id}/resolve POST (keep_lock/accept_collector/edit_lock), /permissions CRUD (sith_lord only), /key/{key}/refresh POST, /audit. New MONITOR sidebar → Facts tab: two-pane list+detail, confidence pills, freshness indicators, conflict/lock/refresh icons. FactDiffViewer with string character-diff + JSON tree diff (extensible to switch/firewall config diffs later). FactLockModal + ConflictResolveModal both permission-gated. Dashboard FACTS & KNOWLEDGE card: total + per-tier counts, last refresh, stale count (amber), pending admin reviews (red pulse), recently changed. Settings page gains Facts Permissions admin table (sith_lord only).
+
+**v2.35.1** — feat(agents): entity preflight + three-tier extractor + Preflight Panel + PREFLIGHT FACTS injection.
+First behaviour change. New api/agents/preflight.py with three-tier pipeline: Tier 1 regex (kafka_broker-N, ds-docker-worker-N, hp1-prod-*, service names, container short IDs), Tier 2 keyword+time-window DB lookup (KEYWORD_RESOLVERS maps restarted/rebooted/degraded/failing/offline/crashed/alerting/deployed/scaled to DB functions against agent_actions/entity_history/alerts/logs, TIME_HINTS maps just/recently/today/last hour to minutes), Tier 3 bounded LLM fallback (~200 tokens, gated by preflightLLMFallbackEnabled). New known_facts_keywords table (DB-editable, seeded from defaults) + known_facts_keyword_suggestions (auto-propose when Tier 3 catches what Tier 1+2 missed). Resolver results merge with infra_inventory matches. Ambiguous tasks (>1 candidate) block agent loop with status='awaiting_clarification' — new /api/agent/operations/{id}/clarify endpoint resumes with selected_entity_id or refined_task. Background task auto-cancels idle clarifications after preflightDisambiguationTimeout (default 300s). System prompt gains ═══ PREFLIGHT FACTS ═══ section before RELEVANT PAST OUTCOMES, capped at factInjectionMaxRows, sorted by confidence desc. PreflightPanel.jsx: always-visible panel (collapsed when no ambiguity), shows classifier + extracted entities + time-window + keywords + candidate matches (radio-pick UI) + facts-to-inject count; auto-cancel countdown visible; Pick/Edit/Cancel buttons. Prometheus: preflight_resolutions_total{outcome}, _disambiguation_outcome_total{result}, _facts_injected_count histogram. Prompt snapshots regenerated.
+
+**v2.35.2** — feat(agents): in-run cross-tool contradiction detection + agent_observation fact writer.
+Shared infrastructure. New api/facts/tool_extractors.py with per-tool extractors for service_placement, container_discover_by_service, kafka_broker_status, container_networks, container_tcp_probe, proxmox_vm_power, swarm_node_status — dispatcher returns [] for unknown tools. Agent loop tool-result handler extended: state.run_facts dict caches per-run extracted facts; when same fact_key emerges with a different value across steps, inject `[harness] Contradiction detected within this run` message listing step/tool/value for both, agent must reconcile before concluding. Terminal handler on status='completed' upserts state.run_facts to known_facts at source='agent_observation'. Guardrails: never write if fabrication_detected_count>0, halluc_guard_exhausted, status!=completed; cap 80 rows/run; volatile metadata flag (e.g. tcp_probe reachability) gets 2h half-life via new factHalfLifeHours_agent_volatile setting. gate_detection gains inrun_contradiction + shown in Trace viewer Gates Fired sidebar. /trace?format=digest appends "Facts written to known_facts" section. Prometheus: inrun_contradictions_total{fact_key_prefix} (3-segment prefix for cardinality safety), agent_observation_facts_written_total{wrote_or_skipped}.
+
+**v2.35.3** — feat(agents): fact-age rejection on tool results (Medium mode).
+New api/agents/fact_age_rejection.py with 4 modes: off (pass-through), soft (advisory harness only), medium (strip conflicting value, add _rejected_by_fact_age transparency field, harness advisory — DEFAULT), hard (mark tool call failed, error_type=fact_age_rejection). Fires when tool result extracts a fact disagreeing with known_facts_current row where source≠agent_observation, confidence≥factAgeRejectionMinConfidence (0.85), age≤factAgeRejectionMaxAgeMin (5). Medium-mode stripping is best-effort per-tool via structured-shape knowledge; unknown shapes fall back to advisory-only. Wired before on_tool_result so v2.35.2 contradiction detection sees the modified result (rejected facts don't pollute run_facts). gate_detection gains fact_age_rejection. Trace viewer tool-result pane shows "Why was this stripped?" banner when _rejected_by_fact_age present. Prometheus: fact_age_rejections_total{mode, source_rejected}. All three thresholds in Settings → Facts & Knowledge, already declared in v2.35.0, first enforced here.
+
+**v2.35.4** — feat(agents): runbook-based TRIAGE injection + UI editor (augment default).
+Final item of the phase. Extends runbooks table: triage_keywords TEXT[], applies_to_agent_types TEXT[], is_active BOOL, priority INT, body_md TEXT, last_edited_by/at. seed_triage_runbooks() extracts KAFKA TRIAGE, CONSUMER LAG PATH, BROKER MISSING PATH, OVERLAY DIAGNOSIS, CONTAINER INTROSPECT FIRST verbatim from api/agents/router.py into DB rows at first init (programmatic extraction, not duplication). New api/agents/runbook_classifier.py with v1 keyword match (score=matched-keywords-count, tiebreak by priority asc); _semantic_select and _llm_select stubbed for v2.35.5+. System prompt builder gains runbookInjectionMode switch: off (pre-v2.35.4 behaviour), augment (DEFAULT — inject after existing TRIAGE section with ═══ ACTIVE RUNBOOK: <name> ═══ header), replace (replace matching section), replace+shrink (thin framework + runbook). Rollout plan: 2-3 weeks on augment, promote to replace via Settings flip when trace diffs show no regression, then replace+shrink after 2 more weeks. Runbooks view gains editor: fields for title/body_md/keywords/agent_types/priority/active, markdown preview, Test Match feature (input task → shows classifier score + matched keywords). Writes require sith_lord. gate_detection gains runbook_injected (per-operation, 0 or 1). Prometheus: runbook_matches_total{runbook_name, mode}, runbook_selection_decisions_total{classifier_mode, outcome}. Prompt snapshots regenerated; diff should show only the ACTIVE RUNBOOK addition.
+
+---
+
 ## Key file paths
 
 ```
@@ -408,7 +455,21 @@ api/agents/fabrication_detector.py        — citation extraction + fabrication 
 api/db/llm_trace_retention.py             — nightly purge (v2.34.14)
 tests/snapshots/prompts/*.txt             — committed rendered agent prompts, CI-diffed (v2.34.15)
 tests/test_prompt_snapshots.py            — snapshot CI guard (v2.34.15)
-api/agents/gate_detection.py              — shared gate detection logic for /trace digest + UI (v2.34.16)
+api/agents/gate_detection.py              — shared gate detection logic for /trace digest + UI (v2.34.16, v2.35.2, v2.35.3, v2.35.4)
 gui/src/components/TraceView.jsx          — Logs → Trace tab, step list + detail + Gates Fired (v2.34.16)
 gui/src/utils/gateDetection.js            — JS mirror of api/agents/gate_detection.py (v2.34.16)
+api/db/known_facts.py                     — schema, upsert_fact, batch_upsert_facts, confidence formula, gauge snapshot (v2.35.0)
+api/facts/extractors.py                   — collector-side fact extractors per platform (v2.35.0)
+api/facts/tool_extractors.py              — per-tool fact extractors for in-run contradiction + agent_observation (v2.35.2)
+api/routers/facts.py                      — /api/facts/* endpoints (v2.35.0 read paths, v2.35.0.1 admin paths)
+api/security/facts_permissions.py         — user + role permission model, sith_lord implicit (v2.35.0.1)
+api/agents/preflight.py                   — three-tier entity resolver (regex + keyword-DB + LLM fallback) (v2.35.1)
+api/agents/fact_age_rejection.py          — soft/medium/hard rejection engine (v2.35.3)
+api/agents/runbook_classifier.py          — keyword match v1 (semantic/LLM stubbed) (v2.35.4)
+gui/src/components/FactsView.jsx          — Facts tab main view (v2.35.0.1)
+gui/src/components/FactsCard.jsx          — Dashboard FACTS & KNOWLEDGE widget (v2.35.0.1)
+gui/src/components/FactDiffViewer.jsx     — character / JSON-tree diff, extensible to config diffs (v2.35.0.1)
+gui/src/components/FactLockModal.jsx      — lock creation (permission-gated) (v2.35.0.1)
+gui/src/components/ConflictResolveModal.jsx — three-button conflict resolution (v2.35.0.1)
+gui/src/components/PreflightPanel.jsx     — always-visible preflight with disambiguation UI (v2.35.1)
 ```

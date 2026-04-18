@@ -1,0 +1,914 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.0.md (v2.35.0)
+Theme: feat(facts): known_facts schema + collector writers + /api/facts + Settings + Prometheus
+
+Prompt content:
+
+# CC PROMPT — v2.35.0 — feat(facts): known_facts schema + collector writers + /api/facts + Settings group
+
+## What this does
+
+Kicks off the v2.35 "Facts, not just tools" phase. Introduces a persistent,
+weighted, contradiction-aware knowledge store that collectors populate on
+every successful poll. Exposes read-only API + Prometheus. No agent
+behaviour change in this prompt — agent loop unchanged. Agent prompts
+unchanged. Existing functionality untouched.
+
+Full design in `cc_prompts/PHASE_v2.35_SPEC.md`. Read that file first
+before implementing — it answers every "why did we choose X over Y"
+question.
+
+Version bump: 2.34.17 → 2.35.0 (new subsystem, multi-file architectural).
+
+---
+
+## Change 1 — schema
+
+New file `api/db/known_facts.py`. Create these tables + indexes on startup:
+
+```sql
+-- Current live value, 1 row per (fact_key, source)
+CREATE TABLE IF NOT EXISTS known_facts_current (
+    fact_key         TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    fact_value       JSONB NOT NULL,
+    first_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_verified    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    verify_count     INT NOT NULL DEFAULT 1,
+    contradicts      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    confidence       FLOAT NOT NULL DEFAULT 0.5,
+    metadata         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    change_detected  BOOLEAN NOT NULL DEFAULT FALSE,
+    change_flagged_at TIMESTAMPTZ,
+    PRIMARY KEY (fact_key, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_known_facts_current_key
+    ON known_facts_current(fact_key);
+CREATE INDEX IF NOT EXISTS idx_known_facts_current_confidence
+    ON known_facts_current(confidence DESC)
+    WHERE confidence >= 0.5;
+CREATE INDEX IF NOT EXISTS idx_known_facts_current_last_verified
+    ON known_facts_current(last_verified DESC);
+CREATE INDEX IF NOT EXISTS idx_known_facts_current_change_detected
+    ON known_facts_current(change_flagged_at DESC)
+    WHERE change_detected = TRUE;
+
+-- Append-only history, only writes on value change
+CREATE TABLE IF NOT EXISTS known_facts_history (
+    id           BIGSERIAL PRIMARY KEY,
+    fact_key     TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    prior_value  JSONB NOT NULL,
+    new_value    JSONB NOT NULL,
+    changed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by   TEXT NOT NULL DEFAULT 'collector',  -- 'collector' | 'manual:<user>' | 'agent_observation'
+    metadata     JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_known_facts_history_key
+    ON known_facts_history(fact_key, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_known_facts_history_changed_at
+    ON known_facts_history(changed_at DESC);
+
+-- Locks: admin-asserted "don't overwrite" on specific keys
+CREATE TABLE IF NOT EXISTS known_facts_locks (
+    fact_key       TEXT PRIMARY KEY,
+    locked_value   JSONB NOT NULL,
+    locked_by      TEXT NOT NULL,
+    locked_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    note           TEXT NOT NULL DEFAULT '',
+    last_ack_by    TEXT,
+    last_ack_at    TIMESTAMPTZ
+);
+
+-- Conflicts: collector value != locked value, pending admin review
+CREATE TABLE IF NOT EXISTS known_facts_conflicts (
+    id             BIGSERIAL PRIMARY KEY,
+    fact_key       TEXT NOT NULL,
+    locked_value   JSONB NOT NULL,
+    offered_source TEXT NOT NULL,
+    offered_value  JSONB NOT NULL,
+    offered_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at    TIMESTAMPTZ,
+    resolved_by    TEXT,
+    resolution     TEXT,     -- 'keep_lock' | 'accept_collector' | 'edit_lock'
+    notes          TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_known_facts_conflicts_pending
+    ON known_facts_conflicts(offered_at DESC)
+    WHERE resolved_at IS NULL;
+
+-- Permissions: user + role grants for admin ops
+CREATE TABLE IF NOT EXISTS known_facts_permissions (
+    id            BIGSERIAL PRIMARY KEY,
+    grantee_type  TEXT NOT NULL CHECK (grantee_type IN ('user','role')),
+    grantee_id    TEXT NOT NULL,
+    action        TEXT NOT NULL,
+    fact_pattern  TEXT NOT NULL,
+    granted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    granted_by    TEXT NOT NULL,
+    expires_at    TIMESTAMPTZ,
+    revoked       BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_known_facts_permissions_grantee
+    ON known_facts_permissions(grantee_type, grantee_id)
+    WHERE revoked = FALSE;
+
+-- Refresh schedule per fact-key pattern
+CREATE TABLE IF NOT EXISTS known_facts_refresh_schedule (
+    pattern       TEXT PRIMARY KEY,     -- e.g. 'prod.proxmox.vm.*.status'
+    cadence_sec   INT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by    TEXT NOT NULL DEFAULT 'system'
+);
+
+-- Seed defaults on first init:
+INSERT INTO known_facts_refresh_schedule (pattern, cadence_sec, description) VALUES
+    ('prod.proxmox.vm.*.status',        60,   'VM status changes fast'),
+    ('prod.proxmox.vm.*.node',          300,  'VM placement changes occasionally'),
+    ('prod.swarm.service.*.placement',  30,   'Orchestrator moves services'),
+    ('prod.swarm.service.*.replicas',   30,   'Scale events'),
+    ('prod.kafka.broker.*.host',        3600, 'Rarely changes'),
+    ('prod.kafka.broker.*.port',        3600, 'Rarely changes'),
+    ('prod.kafka.topic.*.partitions',   600,  'Topic topology stable'),
+    ('prod.container.*.ip',             300,  'DHCP rare'),
+    ('prod.container.*.id',             86400,'Event-driven; poll only for GC'),
+    ('prod.manual.*',                   86400,'Refresh reminder only'),
+    ('*',                               300,  'Default fallback')
+ON CONFLICT (pattern) DO NOTHING;
+
+-- Audit log for fact-related admin actions
+CREATE TABLE IF NOT EXISTS facts_audit_log (
+    id           BIGSERIAL PRIMARY KEY,
+    action       TEXT NOT NULL,
+    fact_key     TEXT,
+    actor        TEXT NOT NULL,
+    at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    detail       JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_audit_log_at
+    ON facts_audit_log(at DESC);
+```
+
+In `api/db/known_facts.py`, expose:
+
+```python
+def init_known_facts() -> None:
+    """Create tables + seed refresh schedule defaults."""
+
+def upsert_fact(
+    fact_key: str,
+    source: str,
+    value,                          # JSON-serialisable
+    metadata: dict | None = None,
+    actor: str = "collector",
+) -> dict:
+    """
+    Upsert a single fact. Returns {action, prior_value, new_value, confidence}.
+
+    Logic:
+      1. Check known_facts_locks. If locked with different value,
+         write to known_facts_conflicts, return {action: 'conflict'}.
+      2. SELECT existing row by (fact_key, source).
+      3. If missing: INSERT with verify_count=1, initial confidence.
+         Return {action: 'insert'}.
+      4. If present and value unchanged: UPDATE last_verified,
+         verify_count++, recompute confidence. Return {action: 'touch'}.
+      5. If present and value changed: WRITE history row, UPDATE current
+         with new value + verify_count=1 + change_detected=TRUE +
+         change_flagged_at=NOW. Return {action: 'change'}.
+      6. If conflicting with another SOURCE's current value (different
+         source, same fact_key): append to each row's `contradicts`
+         array. Return {action: 'contradict'} in addition to insert/change.
+    """
+
+def batch_upsert_facts(facts: list[dict], actor: str = "collector") -> dict:
+    """Batch version. Returns totals per action kind."""
+
+def get_fact(fact_key: str, min_confidence: float = 0.0) -> list[dict]:
+    """Return all rows for a fact_key across sources, above min_confidence."""
+
+def get_confident_facts(
+    pattern: str | None = None,
+    min_confidence: float = 0.7,
+    max_rows: int = 40,
+) -> list[dict]:
+    """Return top rows by confidence. Pattern uses SQL LIKE semantics
+    with * → %."""
+
+def get_pending_conflicts() -> list[dict]:
+    """Return unresolved conflicts for the Dashboard badge + UI."""
+
+def get_recently_changed(hours: int = 24) -> list[dict]:
+    """Rows with change_detected=TRUE and change_flagged_at within window."""
+
+def compute_confidence(row: dict) -> float:
+    """Deterministic confidence scoring. See formula below."""
+
+def clear_change_flag(fact_key: str, source: str) -> None:
+    """Reset change_detected after UI ack or after TTL expiry."""
+
+def get_stale_facts(pattern: str | None = None) -> list[dict]:
+    """Facts past their refresh cadence. Uses known_facts_refresh_schedule."""
+```
+
+### Confidence formula — deterministic
+
+```python
+import math
+from datetime import datetime, timezone
+
+def compute_confidence(row: dict, settings: dict | None = None) -> float:
+    """
+    Compute confidence score in [0.0, 1.0].
+
+    Inputs (all from row):
+      - source:          str
+      - last_verified:   datetime
+      - verify_count:    int
+      - contradicts:     list of {source, value, seen_at}
+
+    Settings (falls back to spec defaults if None):
+      - factSourceWeight_<source>: float
+      - factHalfLifeHours_<source_class>: float
+      - factVerifyCountCap: int
+    """
+    settings = settings or _get_facts_settings()
+
+    # Source weight, with per-source override
+    weight_key = f"factSourceWeight_{row['source']}"
+    base = settings.get(weight_key, _default_source_weight(row['source']))
+
+    # Age decay (exponential, half-life driven)
+    hours_since = (_now() - row["last_verified"]).total_seconds() / 3600
+    half_life = _half_life_for_source(row["source"], settings)
+    age_factor = 0.5 ** (hours_since / half_life) if half_life > 0 else 1.0
+
+    # Verify count boost (logarithmic, diminishing returns)
+    cap = settings.get("factVerifyCountCap", 10)
+    vc = min(row.get("verify_count", 1), cap)
+    verify_boost = min(0.2, 0.05 * math.log2(vc + 1))
+
+    # Contradiction penalty (largest weighted disagreement counts)
+    penalty = 0.0
+    for c in row.get("contradicts", []):
+        c_weight = settings.get(
+            f"factSourceWeight_{c.get('source','unknown')}",
+            0.5,
+        )
+        penalty = max(penalty, 0.1 * c_weight)
+
+    return max(0.0, min(1.0, base * age_factor + verify_boost - penalty))
+
+
+_DEFAULT_SOURCE_WEIGHTS = {
+    "manual":                 1.0,
+    "proxmox_collector":      0.9,
+    "swarm_collector":        0.9,
+    "docker_agent_collector": 0.85,
+    "pbs_collector":          0.85,
+    "fortiswitch_collector":  0.85,
+    "kafka_collector":        0.8,
+    "agent_observation":      0.5,
+    "rag_extraction":         0.4,
+}
+
+_DEFAULT_HALF_LIVES = {
+    "manual":            720.0,      # 30d phase-1 shelf
+    "agent_observation": 24.0,
+    "rag_extraction":    720.0,
+    # collectors default to 168h (7d) via _half_life_for_source fallback
+}
+```
+
+Manual facts: the spec defines a phased decay. Implement as:
+- `last_verified` within 30d: half-life = 720h (decay is gentle in that window)
+- `last_verified` 30-60d old: half-life = 1440h (decay steepens)
+- `last_verified` > 60d: half-life = 1440h (continues to fade but never disappears)
+
+Don't try to be fancy; two conditional half-lives based on age is fine.
+
+## Change 2 — collector-side fact extractors
+
+New file `api/facts/extractors.py`. One function per collector. Each
+takes the collector's snapshot dict and returns a list of fact dicts
+ready for `batch_upsert_facts()`.
+
+```python
+def extract_facts_from_proxmox_vm_snapshot(snapshot: dict, connection_label: str) -> list[dict]:
+    """From proxmox_vms collector snapshot → fact list."""
+    facts = []
+    for vm in snapshot.get("vms", []):
+        fkey_base = f"prod.proxmox.vm.{vm['name']}"
+        facts.append({
+            "fact_key": f"{fkey_base}.status",
+            "source":   "proxmox_collector",
+            "value":    vm["status"],
+            "metadata": {"vmid": vm["vmid"], "connection": connection_label},
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.node",
+            "source":   "proxmox_collector",
+            "value":    vm["node"],
+            "metadata": {"vmid": vm["vmid"]},
+        })
+        if vm.get("ip_address"):
+            facts.append({
+                "fact_key": f"{fkey_base}.ip",
+                "source":   "proxmox_collector",
+                "value":    vm["ip_address"],
+            })
+        # Add: cpu_count, memory_mb, disk_gb if present in snapshot
+    return facts
+
+
+def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
+    facts = []
+    for svc in snapshot.get("services", []):
+        fkey_base = f"prod.swarm.service.{svc['name']}"
+        facts.append({
+            "fact_key": f"{fkey_base}.replicas.desired",
+            "source":   "swarm_collector",
+            "value":    svc.get("replicas_desired"),
+            "metadata": {"service_id": svc.get("id")},
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.replicas.running",
+            "source":   "swarm_collector",
+            "value":    svc.get("replicas_running"),
+        })
+        if svc.get("placement"):
+            facts.append({
+                "fact_key": f"{fkey_base}.placement",
+                "source":   "swarm_collector",
+                "value":    svc["placement"],  # list of node names
+            })
+        if svc.get("image"):
+            facts.append({
+                "fact_key": f"{fkey_base}.image",
+                "source":   "swarm_collector",
+                "value":    svc["image"],
+            })
+    return facts
+
+
+def extract_facts_from_docker_agent_snapshot(snapshot: dict) -> list[dict]:
+    """Local agent-01 docker collector."""
+    facts = []
+    for c in snapshot.get("containers", []):
+        if not c.get("id"):
+            continue
+        fkey_base = f"prod.container.{c['id'][:12]}"  # short ID
+        facts.append({
+            "fact_key": f"{fkey_base}.service_name",
+            "source":   "docker_agent_collector",
+            "value":    c.get("name") or c.get("service_name"),
+        })
+        if c.get("image"):
+            facts.append({
+                "fact_key": f"{fkey_base}.image",
+                "source":   "docker_agent_collector",
+                "value":    c["image"],
+            })
+        if c.get("state"):
+            facts.append({
+                "fact_key": f"{fkey_base}.state",
+                "source":   "docker_agent_collector",
+                "value":    c["state"],
+            })
+        if c.get("networks"):
+            facts.append({
+                "fact_key": f"{fkey_base}.networks",
+                "source":   "docker_agent_collector",
+                "value":    c["networks"],  # dict of network → IP
+            })
+    return facts
+
+
+def extract_facts_from_kafka_snapshot(snapshot: dict) -> list[dict]:
+    facts = []
+    for b in snapshot.get("brokers", []):
+        fkey_base = f"prod.kafka.broker.{b['id']}"
+        facts.append({
+            "fact_key": f"{fkey_base}.host",
+            "source":   "kafka_collector",
+            "value":    b["host"],
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.port",
+            "source":   "kafka_collector",
+            "value":    b["port"],
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.is_controller",
+            "source":   "kafka_collector",
+            "value":    b.get("is_controller", False),
+        })
+    for t in snapshot.get("topics", []):
+        facts.append({
+            "fact_key": f"prod.kafka.topic.{t['name']}.partitions",
+            "source":   "kafka_collector",
+            "value":    t.get("partition_count"),
+        })
+        facts.append({
+            "fact_key": f"prod.kafka.topic.{t['name']}.replication_factor",
+            "source":   "kafka_collector",
+            "value":    t.get("replication_factor"),
+        })
+    return facts
+
+
+def extract_facts_from_pbs_snapshot(snapshot: dict) -> list[dict]:
+    facts = []
+    for backup in snapshot.get("backups", []):
+        fkey_base = f"prod.pbs.backup.{backup['id']}"
+        if backup.get("last_success_ts"):
+            facts.append({
+                "fact_key": f"{fkey_base}.last_success_ts",
+                "source":   "pbs_collector",
+                "value":    backup["last_success_ts"],
+            })
+        facts.append({
+            "fact_key": f"{fkey_base}.vm_id",
+            "source":   "pbs_collector",
+            "value":    backup.get("vm_id"),
+        })
+    return facts
+
+
+def extract_facts_from_fortiswitch_snapshot(snapshot: dict) -> list[dict]:
+    facts = []
+    for sw in snapshot.get("switches", []):
+        fkey_base = f"prod.fortiswitch.{sw['serial']}"
+        facts.append({
+            "fact_key": f"{fkey_base}.model",
+            "source":   "fortiswitch_collector",
+            "value":    sw.get("model"),
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.firmware",
+            "source":   "fortiswitch_collector",
+            "value":    sw.get("firmware"),
+        })
+        facts.append({
+            "fact_key": f"{fkey_base}.mac_addresses",
+            "source":   "fortiswitch_collector",
+            "value":    sw.get("mac_addresses", []),
+        })
+    return facts
+```
+
+## Change 3 — wire extractors into existing collectors
+
+Find each collector's existing poll loop and add a fact-write step AFTER
+the successful snapshot is produced, before the function returns. Pattern:
+
+```python
+# Inside each collector's poll function, at the END of a successful poll:
+try:
+    from api.facts.extractors import extract_facts_from_<platform>_snapshot
+    from api.db.known_facts import batch_upsert_facts
+    from api.metrics import FACTS_UPSERTED_COUNTER
+    facts = extract_facts_from_<platform>_snapshot(snapshot, connection_label=...)
+    result = batch_upsert_facts(facts, actor="collector")
+    for action, count in result.items():
+        if count > 0:
+            FACTS_UPSERTED_COUNTER.labels(
+                source="<platform>_collector",
+                action=action,
+            ).inc(count)
+except Exception as e:
+    log.warning("Fact extraction failed for <platform>: %s", e)
+```
+
+**Critical:** the try/except is non-optional. A bug in fact extraction
+must never break an otherwise-successful collector poll. Fact writes are
+best-effort additions.
+
+Collectors to instrument:
+- `api/collectors/proxmox_vms.py`
+- `api/collectors/swarm.py` (or wherever swarm service snapshots are built)
+- `api/collectors/docker_agent01.py`
+- `api/collectors/kafka.py` (or wherever kafka broker/topic polls live)
+- `api/collectors/pbs.py`
+- `api/collectors/fortiswitch.py` (if it exists — if not, skip and note)
+
+Grep for each collector's main poll function; the snapshot is usually
+returned or stored in `collector_manager`. Follow the existing
+entity_history write pattern — fact extraction goes in the same place.
+
+## Change 4 — `/api/facts` router
+
+New file `api/routers/facts.py`. All endpoints require authenticated user.
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import get_current_user
+
+router = APIRouter(prefix="/api/facts", tags=["facts"])
+
+
+@router.get("/")
+async def list_facts(
+    pattern: str | None = Query(None, description="LIKE-style pattern with * wildcards"),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    max_rows: int = Query(200, le=1000),
+    user: str = Depends(get_current_user),
+):
+    """List facts, optionally filtered."""
+    rows = get_confident_facts(pattern=pattern, min_confidence=min_confidence, max_rows=max_rows)
+    return {"facts": rows, "count": len(rows)}
+
+
+@router.get("/key/{fact_key:path}")
+async def get_fact_detail(fact_key: str, user: str = Depends(get_current_user)):
+    """All rows for one fact_key, across sources. Includes history."""
+    current_rows = get_fact(fact_key)
+    history = get_fact_history(fact_key, limit=50)
+    lock = get_lock(fact_key)
+    return {"fact_key": fact_key, "sources": current_rows, "history": history, "lock": lock}
+
+
+@router.get("/conflicts")
+async def list_conflicts(user: str = Depends(get_current_user)):
+    """Pending conflicts (Dashboard badge, review UI)."""
+    return {"conflicts": get_pending_conflicts()}
+
+
+@router.get("/changed")
+async def list_recent_changes(
+    hours: int = Query(24, ge=1, le=168),
+    user: str = Depends(get_current_user),
+):
+    """Facts with change_detected=TRUE within window."""
+    return {"changes": get_recently_changed(hours)}
+
+
+@router.get("/stale")
+async def list_stale_facts(user: str = Depends(get_current_user)):
+    """Facts past their expected refresh cadence."""
+    return {"stale": get_stale_facts()}
+
+
+@router.get("/summary")
+async def facts_summary(user: str = Depends(get_current_user)):
+    """Dashboard widget payload: counts by tier + last refresh + top changed."""
+    from api.db.known_facts import get_summary_stats
+    return get_summary_stats()
+
+
+@router.get("/schedule")
+async def list_refresh_schedule(user: str = Depends(get_current_user)):
+    """Refresh cadence table for Settings UI."""
+    return {"schedule": list_refresh_schedule_rows()}
+
+
+@router.post("/settings/preview")
+async def preview_confidence(
+    body: dict,
+    user: str = Depends(get_current_user),
+):
+    """
+    Body: {settings: {factSourceWeight_...: float, ...}}
+    Returns: same 10 sample facts scored under the hypothetical settings,
+    so Settings UI can show live preview before save.
+    """
+    sample_facts = sample_fact_rows(n=10)
+    hypothetical_settings = body.get("settings", {})
+    scored = [
+        {**row, "confidence": compute_confidence(row, hypothetical_settings)}
+        for row in sample_facts
+    ]
+    return {"preview": scored}
+```
+
+Register the router in `api/main.py` alongside the others.
+
+Note: endpoints for locks, permissions, and conflict resolution WILL
+exist but permission-gate them from day 1. If you implement them now,
+use the existing `auth.get_current_user` + role check pattern (see
+`api/routers/agent_actions_api.py` for role gating). Otherwise, stub
+them as `501 Not Implemented` and add a TODO — v2.35.0.1 ships the UI
+that consumes them.
+
+## Change 5 — Settings group "Facts & Knowledge"
+
+Register new setting keys in `api/routers/settings.py` under the
+existing `SETTINGS_KEYS` registry. Group label: `"Facts & Knowledge"`.
+
+```python
+SETTINGS_KEYS.update({
+    # Thresholds
+    "factInjectionThreshold":            {"default": 0.7,  "type": "float", "group": "Facts & Knowledge"},
+    "factInjectionMaxRows":              {"default": 40,   "type": "int",   "group": "Facts & Knowledge"},
+    # Source weights
+    "factSourceWeight_manual":           {"default": 1.0,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_proxmox_collector":{"default": 0.9,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_swarm_collector":  {"default": 0.9,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_docker_agent_collector": {"default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_pbs_collector":    {"default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_kafka_collector":  {"default": 0.8,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_fortiswitch_collector": {"default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_agent_observation":{"default": 0.5,  "type": "float", "group": "Facts & Knowledge"},
+    "factSourceWeight_rag_extraction":   {"default": 0.4,  "type": "float", "group": "Facts & Knowledge"},
+    # Decay
+    "factHalfLifeHours_collector":       {"default": 168,  "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_agent":           {"default": 24,   "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_manual_phase1":   {"default": 720,  "type": "int",   "group": "Facts & Knowledge"},
+    "factHalfLifeHours_manual_phase2":   {"default": 1440, "type": "int",   "group": "Facts & Knowledge"},
+    "factVerifyCountCap":                {"default": 10,   "type": "int",   "group": "Facts & Knowledge"},
+    # Age rejection — not enforced in v2.35.0, settings shipped for v2.35.3
+    "factAgeRejectionMode":              {"default": "medium", "type": "str",  "group": "Facts & Knowledge"},
+    "factAgeRejectionMaxAgeMin":         {"default": 5,    "type": "int",   "group": "Facts & Knowledge"},
+    "factAgeRejectionMinConfidence":     {"default": 0.85, "type": "float", "group": "Facts & Knowledge"},
+    # Runbook — not enforced in v2.35.0, shipped for v2.35.4
+    "runbookInjectionMode":              {"default": "off", "type": "str",   "group": "Facts & Knowledge"},
+    "runbookClassifierMode":             {"default": "keyword", "type": "str", "group": "Facts & Knowledge"},
+    # Preflight — shipped for v2.35.1
+    "preflightPanelMode":                {"default": "always_visible", "type": "str", "group": "Facts & Knowledge"},
+    "preflightDisambiguationTimeout":    {"default": 300,  "type": "int",   "group": "Facts & Knowledge"},
+    "preflightLLMFallbackEnabled":       {"default": True, "type": "bool",  "group": "Facts & Knowledge"},
+    "preflightLLMFallbackMaxTokens":     {"default": 200,  "type": "int",   "group": "Facts & Knowledge"},
+})
+```
+
+All v2.35.0 settings are consumed by this prompt; the others are
+registered so the Settings UI shows the full Facts & Knowledge page
+from day 1 (they simply aren't enforced yet — the flags land in later
+prompts).
+
+## Change 6 — Prometheus metrics
+
+Add to `api/metrics.py`:
+
+```python
+KNOWN_FACTS_TOTAL = Gauge(
+    "deathstar_known_facts_total",
+    "Total rows in known_facts_current",
+)
+KNOWN_FACTS_CONFIDENT_TOTAL = Gauge(
+    "deathstar_known_facts_confident_total",
+    "Rows with confidence >= factInjectionThreshold",
+)
+KNOWN_FACTS_CONFLICTS_TOTAL = Gauge(
+    "deathstar_known_facts_conflicts_total",
+    "Pending unresolved conflicts",
+)
+FACTS_UPSERTED_COUNTER = Counter(
+    "deathstar_facts_upserted_total",
+    "Fact upsert actions",
+    ["source", "action"],  # action in {insert, touch, change, contradict, conflict}
+)
+FACTS_CONTRADICTIONS_COUNTER = Counter(
+    "deathstar_facts_contradictions_total",
+    "Cross-source contradictions detected",
+    ["source_a", "source_b"],
+)
+FACTS_LOCK_EVENTS_COUNTER = Counter(
+    "deathstar_facts_lock_events_total",
+    "Lock lifecycle events",
+    ["action"],  # created, removed, enforced, overridden
+)
+FACTS_REFRESH_STALE_GAUGE = Gauge(
+    "deathstar_facts_refresh_stale_total",
+    "Facts past expected refresh cadence",
+    ["platform"],
+)
+```
+
+Background task in `api/main.py` lifespan (or similar scheduler location)
+that refreshes the gauges every 60s:
+
+```python
+async def _refresh_facts_gauges_loop():
+    while True:
+        await asyncio.sleep(60)
+        try:
+            from api.db.known_facts import get_gauge_snapshot
+            snap = get_gauge_snapshot()
+            KNOWN_FACTS_TOTAL.set(snap["total"])
+            KNOWN_FACTS_CONFIDENT_TOTAL.set(snap["confident"])
+            KNOWN_FACTS_CONFLICTS_TOTAL.set(snap["pending_conflicts"])
+            for platform, count in snap["stale_by_platform"].items():
+                FACTS_REFRESH_STALE_GAUGE.labels(platform=platform).set(count)
+        except Exception:
+            pass
+```
+
+## Change 7 — tests
+
+`tests/test_known_facts.py`:
+
+- Upsert new fact → row exists, confidence computed, action=insert
+- Upsert same fact same value → action=touch, verify_count incremented
+- Upsert same fact different value → history row, current updated,
+  change_detected=TRUE, action=change
+- Upsert conflicting sources → contradicts array populated on BOTH rows
+- Upsert against locked fact → conflict row created, current unchanged
+- Confidence formula: deterministic given fixed inputs (freeze clock via
+  monkeypatch)
+- Confidence > 0.7 with collector source + fresh verify
+- Confidence < 0.5 with agent_observation source after 48h of age
+- Stale detection: fact past its cadence appears in get_stale_facts
+- Permission helper: sith_lord has all grants implicit; other users require
+  explicit row
+
+`tests/test_facts_extractors.py`:
+
+- For each collector's extractor, feed a fixture snapshot, assert
+  expected fact keys and shape
+
+`tests/test_facts_api.py`:
+
+- GET `/api/facts` requires auth
+- GET `/api/facts?pattern=prod.kafka.*` filters correctly
+- GET `/api/facts/key/prod.kafka.broker.3.host` returns sources + history
+- POST `/api/facts/settings/preview` returns scored samples
+
+## Change 8 — initialisation order
+
+In `api/main.py` lifespan, register `init_known_facts()` in the same
+startup block as `init_maintenance`, `init_entity_history`, etc. Order
+matters only in that it runs AFTER `init_db()` and AFTER the settings
+seed — make sure both are done first.
+
+Register the `_refresh_facts_gauges_loop` coroutine task alongside the
+existing cleanup loops.
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(facts): v2.35.0 known_facts schema + collector writers + API + Settings + Prometheus"
+git push origin main
+```
+
+## Test after deploy
+
+1. `/api/health` → version 2.35.0
+2. `/metrics | grep known_facts` shows `_total`, `_confident_total`,
+   `_conflicts_total` gauges. Non-zero `_total` once a collector has polled.
+3. `curl http://192.168.199.10:8000/api/facts?pattern=prod.kafka.*` returns
+   facts for Kafka brokers and topics.
+4. `curl http://192.168.199.10:8000/api/facts/key/prod.kafka.broker.3.host`
+   returns the single current row, history (likely empty on fresh deploy),
+   and null lock.
+5. Wait for a change: reboot worker-03 (or similar), wait 2 min, check
+   `/api/facts/changed` — the affected facts appear.
+6. `/api/facts/stale` returns any facts past cadence (should be near-empty
+   shortly after deploy, grows over idle time).
+7. Force a contradiction by manually inserting a second-source row with
+   a different value (via psql) — `/api/facts/key/<key>` shows
+   `contradicts` array populated.
+8. Settings UI shows a new "Facts & Knowledge" group with all defined
+   keys and a Preview panel.
+
+## Non-goals for v2.35.0 (shipped in later prompts)
+
+- Facts UI tab (v2.35.0.1)
+- Dashboard status widget (v2.35.0.1)
+- Diff viewer (v2.35.0.1)
+- agent_observation fact writes (v2.35.2)
+- Preflight injection into agent prompts (v2.35.1)
+- Age rejection enforcement (v2.35.3)
+- Runbook injection enforcement (v2.35.4)
+
+## Risk register
+
+- Collectors that currently don't produce a well-structured snapshot may
+  need a small adapter. If so, the extractor returns an empty list and
+  we note which collector was shallow.
+- Schedule cadence table seed may conflict with future settings sync
+  (the seed runs once on init). Idempotent via `ON CONFLICT DO NOTHING`.
+- First deploy will emit a burst of `facts_upserted_total{action="insert"}`
+  as all collectors populate on their first poll. Expected; do not
+  interpret as volume.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-18 18:30:04
+========================================================================
+PROMPT COMPLETE: v2.35.0
+[STATUS] 8m49s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  8m49s
+========================================================================

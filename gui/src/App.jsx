@@ -26,6 +26,8 @@ import LockBadge from './components/LockBadge'
 import IngestPanel from './components/IngestPanel'
 import DocsTab from './components/DocsTab'
 import KafkaTab from './components/KafkaTab'
+import FactsView from './components/FactsView'
+import FactsCard from './components/FactsCard'
 import SkillsPanel from './components/SkillsPanel'
 import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
@@ -1327,6 +1329,9 @@ function DashboardView({ activeFilters, onToggleFilter, onToggleAll, onTab, onEn
 
       <div className="flex-1 overflow-auto min-h-0">
         <AlertsPanel />
+        <div style={{ padding: '10px 12px 0' }}>
+          <FactsCard onNavigate={onTab} />
+        </div>
         <DashboardLayout
           layout={layout}
           onRowsChange={updateRows}
@@ -1396,6 +1401,16 @@ function AppShell() {
     const handler = () => setActiveTab('Logs')
     window.addEventListener('navigate-to-logs', handler)
     return () => window.removeEventListener('navigate-to-logs', handler)
+  }, [])
+
+  // Deep-link: #/facts or #/facts/<fact_key> opens the Facts tab.
+  useEffect(() => {
+    const maybeSwitchToFacts = () => {
+      if (window.location.hash.startsWith('#/facts')) setActiveTab('Facts')
+    }
+    maybeSwitchToFacts()
+    window.addEventListener('hashchange', maybeSwitchToFacts)
+    return () => window.removeEventListener('hashchange', maybeSwitchToFacts)
   }, [])
 
   const addToCompare = (entity) => {
@@ -1575,6 +1590,14 @@ function AppShell() {
             </div>
           )}
 
+          {activeTab === 'Facts' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
+                <FactsView userRole={userRole} />
+              </div>
+            </div>
+          )}
+
           {activeTab === 'Gates' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
@@ -1642,7 +1665,7 @@ function AppShell() {
           {activeTab === 'Settings' && (
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: 'var(--bg-0)' }}>
-                <SettingsPage initialTab={settingsTab} layoutState={layoutState} />
+                <SettingsPage initialTab={settingsTab} layoutState={layoutState} userRole={userRole} />
               </div>
             </div>
           )}

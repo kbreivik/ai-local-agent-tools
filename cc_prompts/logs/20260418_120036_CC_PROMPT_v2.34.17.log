@@ -489,3 +489,18 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 12:00:36
 ========================================================================
+Pushed as `7628b84`. Summary of v2.34.17:
+[STATUS] 7m21s
+
+- **Sanitizer audit**: all 4 `sanitise()` call sites are in `api/routers/agent.py` LLM-inbound boundaries. No boot-time or response-serialisation calls remain; `APP_VERSION` comes directly from `VERSION` via `api/constants.py`.
+- **Forced synthesis**: new `api/agents/forced_synthesis.py` builds a `[harness]` prompt, runs a tools-free completion, and the fabrication detector prefixes draft warnings. Wired into both cap paths in `agent.py` (tool-budget + `_cap_exceeded`). Trace step persisted via `log_llm_step`.
+- **Metrics**: `FORCED_SYNTHESIS_COUNTER{reason, agent_type}` and `FORCED_SYNTHESIS_FABRICATED_COUNTER{agent_type}`.
+- **Gates**: `forced_synthesis` added to Python + JS detectors; Trace UI picks it up automatically.
+- **Tests**: 15 forced-synthesis/gate + 1 health endpoint test — all passing.
+
+PROMPT COMPLETE: v2.34.17
+
+========================================================================
+EXIT CODE: 0
+DURATION:  7m21s
+========================================================================

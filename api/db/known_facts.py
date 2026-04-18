@@ -909,6 +909,226 @@ def get_summary_stats() -> dict:
                 "recently_changed": [], "last_refresh": None}
 
 
+# ── v2.35.0.1 admin helpers ──────────────────────────────────────────────────
+
+
+def list_all_locks() -> list[dict]:
+    """Return all current locks (admin UI)."""
+    if not _is_pg():
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT fact_key, locked_value, locked_by, locked_at, note, "
+            "last_ack_by, last_ack_at FROM known_facts_locks "
+            "ORDER BY locked_at DESC"
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("list_all_locks failed: %s", e)
+        return []
+
+
+def create_lock_row(fact_key: str, locked_value, note: str, locked_by: str) -> dict:
+    """Create or replace a lock on fact_key."""
+    if not _is_pg() or not fact_key:
+        return {}
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return {}
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO known_facts_locks (fact_key, locked_value, locked_by, note) "
+            "VALUES (%s, %s::jsonb, %s, %s) "
+            "ON CONFLICT (fact_key) DO UPDATE SET "
+            " locked_value = EXCLUDED.locked_value, "
+            " locked_by = EXCLUDED.locked_by, "
+            " locked_at = NOW(), "
+            " note = EXCLUDED.note",
+            (fact_key, _json_dumps(locked_value), locked_by, note or ""),
+        )
+        conn.commit()
+        result = _fetch_lock(cur, fact_key) or {}
+        cur.close(); conn.close()
+        return result
+    except Exception as e:
+        log.warning("create_lock_row failed: %s", e)
+        return {}
+
+
+def remove_lock_row(fact_key: str) -> None:
+    if not _is_pg() or not fact_key:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute("DELETE FROM known_facts_locks WHERE fact_key=%s", (fact_key,))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("remove_lock_row failed: %s", e)
+
+
+def update_lock(fact_key: str, new_value, actor: str) -> None:
+    """Update an existing lock's value + current row to new_value."""
+    if not _is_pg() or not fact_key:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE known_facts_locks SET locked_value=%s::jsonb, locked_by=%s, "
+            "locked_at=NOW() WHERE fact_key=%s",
+            (_json_dumps(new_value), actor, fact_key),
+        )
+        # Also reflect into current rows so agents see the reconciled value.
+        cur.execute(
+            "UPDATE known_facts_current SET fact_value=%s::jsonb, "
+            "last_verified=NOW(), change_detected=TRUE, change_flagged_at=NOW() "
+            "WHERE fact_key=%s",
+            (_json_dumps(new_value), fact_key),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("update_lock failed: %s", e)
+
+
+def get_conflict(conflict_id: int) -> dict | None:
+    if not _is_pg() or not conflict_id:
+        return None
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, fact_key, locked_value, offered_source, offered_value, "
+            "offered_at, resolved_at, resolved_by, resolution, notes "
+            "FROM known_facts_conflicts WHERE id=%s",
+            (conflict_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return None
+        cols = [d[0] for d in cur.description]
+        out = dict(zip(cols, row))
+        for k, v in list(out.items()):
+            if hasattr(v, "isoformat"):
+                out[k] = v.isoformat()
+        cur.close(); conn.close()
+        return out
+    except Exception as e:
+        log.debug("get_conflict failed: %s", e)
+        return None
+
+
+def mark_conflict_resolved(
+    conflict_id: int,
+    actor: str,
+    resolution: str,
+    extra: dict | None = None,
+) -> None:
+    if not _is_pg() or not conflict_id:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE known_facts_conflicts SET resolved_at=NOW(), "
+            "resolved_by=%s, resolution=%s, notes=%s WHERE id=%s",
+            (actor, resolution, _json_dumps(extra or {}), conflict_id),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("mark_conflict_resolved failed: %s", e)
+
+
+def refresh_manual_fact_timestamp(fact_key: str, actor: str) -> None:
+    """Re-assert last_verified for a manual fact (UI refresh button)."""
+    if not _is_pg() or not fact_key:
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE known_facts_current SET last_verified=NOW(), "
+            "verify_count = verify_count + 1 "
+            "WHERE fact_key=%s AND source='manual'",
+            (fact_key,),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("refresh_manual_fact_timestamp failed: %s", e)
+
+
+def write_audit(action: str, fact_key: str | None, actor: str, detail: dict | None = None) -> None:
+    """Append an entry to facts_audit_log."""
+    if not _is_pg():
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO facts_audit_log (action, fact_key, actor, detail) "
+            "VALUES (%s, %s, %s, %s::jsonb)",
+            (action, fact_key, actor, _json_dumps(detail or {})),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.debug("write_audit failed: %s", e)
+
+
+def list_audit_log(limit: int = 100) -> list[dict]:
+    if not _is_pg():
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, action, fact_key, actor, at, detail "
+            "FROM facts_audit_log ORDER BY at DESC LIMIT %s",
+            (int(limit),),
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("list_audit_log failed: %s", e)
+        return []
+
+
 def get_gauge_snapshot() -> dict:
     """Return the facts-related gauge values for Prometheus refresh loop."""
     snap = {

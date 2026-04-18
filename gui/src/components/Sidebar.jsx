@@ -13,6 +13,7 @@ const NAV = [
     { key: 'Cluster',     icon: '◈' },
     { key: 'Logs',        icon: '≡' },
     { key: 'Kafka',       icon: '◉' },
+    { key: 'Facts',       icon: '◉' },
     { key: 'Gates',       icon: '⛨' },
     { key: 'Memory',      icon: '◎' },
     { key: 'Discovered',  icon: '⊕' },
@@ -41,6 +42,7 @@ const NAV = [
   { section: 'SECURITY', items: [
     { key: 'Settings',  icon: '⊞', label: 'Allowlist',  settingsTab: 'Allowlist'  },
     { key: 'Settings',  icon: '⊞', label: 'Permissions',settingsTab: 'Permissions'},
+    { key: 'Settings',  icon: '◉', label: 'Facts Permissions',settingsTab: 'Facts Permissions'},
     { key: 'Settings',  icon: '◎', label: 'Access',     settingsTab: 'Access'     },
   ]},
 ]

@@ -12,7 +12,7 @@ import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, DEFAULT_TEMPLATES } from '../sc
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Allowlist', 'Permissions', 'Access', 'Naming', 'Appearance', 'Notifications', 'Layouts']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Allowlist', 'Permissions', 'Facts Permissions', 'Access', 'Naming', 'Appearance', 'Notifications', 'Layouts']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 

@@ -12,10 +12,11 @@ import {
   DisplayTab, NotificationsTab, UpdateStatus, TABS,
 } from './OptionsModal'
 import LayoutsTab from './LayoutsTab'
+import FactsPermissionsTab from './FactsPermissionsTab'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export default function SettingsPage({ initialTab, layoutState }) {
+export default function SettingsPage({ initialTab, layoutState, userRole }) {
   const options = useOptions()
   const { serverLoaded } = options
   const [tab, setTab] = useState(initialTab || 'General')
@@ -92,6 +93,7 @@ export default function SettingsPage({ initialTab, layoutState }) {
             {tab === 'AI Services'    && <AIServicesTab     draft={draft} update={update} />}
             {tab === 'Connections'    && <ConnectionsTab />}
             {tab === 'Permissions'    && <PermissionsTab />}
+            {tab === 'Facts Permissions' && <FactsPermissionsTab userRole={userRole} />}
             {tab === 'Access'        && <AccessTab />}
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {(tab === 'Appearance' || tab === 'Display') && <DisplayTab draft={draft} update={update} />}
@@ -116,7 +118,7 @@ export default function SettingsPage({ initialTab, layoutState }) {
       </div>
 
       {/* Footer — save button (hidden on Connections tab) */}
-      {!['Connections', 'Allowlist', 'Permissions', 'Access', 'Layouts'].includes(tab) && (
+      {!['Connections', 'Allowlist', 'Permissions', 'Facts Permissions', 'Access', 'Layouts'].includes(tab) && (
         <div className="flex items-center justify-end gap-3 px-5 py-3 border-t shrink-0" style={{ borderColor: 'var(--border)' }}>
           {saveMsg && (
             <span className={`text-xs mr-auto ${saveMsg.includes('saved') ? 'text-green-400' : 'text-red-400'}`}>{saveMsg}</span>
