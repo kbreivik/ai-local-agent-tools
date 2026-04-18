@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-18T00:00:01",
+  "updated_at": "2026-04-18T08:06:48",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2181,10 +2181,26 @@
       "filename": "CC_PROMPT_v2.34.13.md",
       "version": "v2.34.13",
       "theme": "fix(agents): retarget prompts to prefer container_introspect over raw docker exec",
+      "runner_status": "DONE",
+      "commit_sha": "d3c14b8",
+      "error": "",
+      "started_at": "2026-04-18T00:00:01",
+      "finished_at": "2026-04-18T00:06:09",
+      "duration_s": 367.7852699000032,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260418_000001_CC_PROMPT_v2.34.13.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.34.14.md",
+      "version": "v2.34.14",
+      "theme": "fix(agents): hallucination hardening + fabrication detection + LLM trace persistence",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-18T00:00:01",
+      "started_at": "2026-04-18T08:06:48",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -86,29 +86,27 @@ def test_hallucination_guard_block_is_present():
     """
     src = _agent_src()
     # Key guard markers
-    assert "_hallucination_block_fired" in src
     assert 'MIN_SUBSTANTIVE_BY_TYPE.get(agent_type' in src
     assert '"hallucination_block"' in src, (
         "WebSocket event type missing — GUI banner will never render."
     )
     assert "halluc-guard" in src
-    # Second-attempt fallback keeps the loop from spinning forever
-    assert "fallback_accepted" in src
-    assert "[HARNESS WARNING]" in src
+    # v2.34.14: guard now retries + fails loudly instead of the old
+    # "fire once → accept with HARNESS WARNING" fallback.
+    assert "_halluc_guard_attempts" in src
+    assert "AGENT_HALLUC_GUARD_MAX_ATTEMPTS" in src
+    assert "hallucination_guard_exhausted" in src
 
 
-def test_guard_fires_at_most_once_per_task():
-    """Second attempt must be accepted (with a HARNESS WARNING) to prevent
-    infinite loops when data is genuinely unavailable.
+def test_guard_retries_then_fails_loudly():
+    """v2.34.14: guard must retry up to N times before failing the task —
+    never silently accept fabricated evidence.
     """
     src = _agent_src()
-    # The block_fired flag is set to True before we inject the retry message
-    assert "_hallucination_block_fired = True" in src
-    # And the `else` branch accepts the fallback
-    fragment = (
-        "if not _hallucination_block_fired:\n"
-    )
-    assert fragment in src or "if not _hallucination_block_fired:" in src
+    assert "_halluc_guard_attempts += 1" in src
+    assert "_halluc_guard_max" in src
+    # Ensure there is a branch that breaks the loop with failure status
+    assert "final_status = \"failed\"" in src
 
 
 def test_hallucination_counter_is_exported():

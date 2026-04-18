@@ -102,6 +102,36 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         # migration — on SQLite the statement is a no-op fallback.
         "ALTER TABLE subagent_runs ADD COLUMN IF NOT EXISTS substantive_tool_calls INTEGER DEFAULT 0",
     ]),
+    (10, "v2.34.14 — agent_llm_traces + agent_llm_system_prompts for LLM trace persistence", [
+        """CREATE TABLE IF NOT EXISTS agent_llm_traces (
+            operation_id    TEXT NOT NULL,
+            step_index      INTEGER NOT NULL,
+            timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            agent_type      TEXT,
+            is_subagent     BOOLEAN NOT NULL DEFAULT FALSE,
+            parent_op_id    TEXT,
+            messages_delta  JSONB NOT NULL,
+            response_raw    JSONB NOT NULL,
+            tokens_prompt     INTEGER,
+            tokens_completion INTEGER,
+            tokens_total      INTEGER,
+            temperature       REAL,
+            model             TEXT,
+            finish_reason     TEXT,
+            tool_calls_count  INTEGER DEFAULT 0,
+            PRIMARY KEY (operation_id, step_index)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_llm_traces_parent ON agent_llm_traces (parent_op_id) WHERE parent_op_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_llm_traces_ts ON agent_llm_traces (timestamp DESC)",
+        """CREATE TABLE IF NOT EXISTS agent_llm_system_prompts (
+            operation_id    TEXT PRIMARY KEY,
+            system_prompt   TEXT NOT NULL,
+            tools_manifest  JSONB NOT NULL,
+            prompt_chars    INTEGER,
+            tools_count     INTEGER,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+    ]),
 ]
 
 

@@ -500,6 +500,7 @@ async def _run_single_agent_step(
     client,
     is_final_step: bool = True,
     plan_already_approved: bool = False,
+    parent_session_id: str = "",
 ) -> dict:
     """Run one agent loop iteration. Returns dict with output and feedback stats.
 
@@ -533,7 +534,34 @@ async def _run_single_agent_step(
     _last_blocked_tool = None    # name of most recently blocked tool
     _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
     _budget_nudge_fired = False  # v2.33.3: ensure 70% handoff nudge fires at most once
-    _hallucination_block_fired = False  # v2.34.8: fire guard at most once per task
+    _hallucination_block_fired = False  # v2.34.8: legacy flag retained for downstream inspection
+    # v2.34.14: hallucination guard now retries up to MAX_GUARD_ATTEMPTS before
+    # failing loudly, instead of "fire once then accept with warning". Fabrication
+    # detector shares this counter — a detected fabrication costs one attempt.
+    _halluc_guard_attempts = 0
+    _halluc_guard_max = int(os.environ.get("AGENT_HALLUC_GUARD_MAX_ATTEMPTS", "3"))
+    _fabrication_min_cites = int(os.environ.get("AGENT_FABRICATION_MIN_CITES", "3"))
+    _fabrication_score_threshold = float(
+        os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5")
+    )
+    _fabrication_detected_once = False  # whether guard_attempts was bumped by fab detector
+    # v2.34.14: LLM trace persistence — track delta index so we only store new messages per step
+    _trace_prev_msg_count = 0
+    _trace_step_index = 0
+    _trace_is_subagent = bool(parent_session_id)
+    _trace_parent_op_id: str | None = None
+    if _trace_is_subagent and parent_session_id:
+        try:
+            from api.db.base import get_engine as _get_eng_for_trace
+            from api.db import queries as _q_for_trace
+            async with _get_eng_for_trace().connect() as _c_for_trace:
+                _parent_op = await _q_for_trace.get_operation_by_session(
+                    _c_for_trace, parent_session_id
+                )
+                if _parent_op:
+                    _trace_parent_op_id = _parent_op.get("id")
+        except Exception:
+            _trace_parent_op_id = None
     # v2.33.12: zero-result pivot detection — per-tool tracking for the current task
     _zero_streaks: dict[str, int] = {}       # tool_name -> consecutive zero count
     _nonzero_seen: dict[str, int] = {}       # tool_name -> best non-zero count seen
@@ -755,6 +783,64 @@ async def _run_single_agent_step(
             msg = response.choices[0].message
             finish = response.choices[0].finish_reason
 
+            # ── v2.34.14 LLM trace persistence ────────────────────────────
+            # Store the new messages added since the previous step (the
+            # "delta") plus the raw response dict so every completion is
+            # recoverable post-hoc. System prompt is written once on step 0.
+            try:
+                _msgs_delta = messages[_trace_prev_msg_count:]
+                _trace_prev_msg_count = len(messages)
+                _resp_raw: dict = {}
+                try:
+                    _resp_raw = response.model_dump()  # type: ignore[attr-defined]
+                except Exception:
+                    try:
+                        _resp_raw = response.to_dict()  # type: ignore[attr-defined]
+                    except Exception:
+                        _resp_raw = {
+                            "choices": [{
+                                "finish_reason": finish,
+                                "message": {
+                                    "content": msg.content or "",
+                                    "tool_calls": [
+                                        {"id": tc.id, "function": {
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments,
+                                        }}
+                                        for tc in (msg.tool_calls or [])
+                                    ],
+                                },
+                            }],
+                            "usage": (
+                                {
+                                    "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0) or 0,
+                                    "completion_tokens": getattr(response.usage, 'completion_tokens', 0) or 0,
+                                    "total_tokens": (
+                                        (getattr(response.usage, 'prompt_tokens', 0) or 0)
+                                        + (getattr(response.usage, 'completion_tokens', 0) or 0)
+                                    ),
+                                }
+                                if hasattr(response, 'usage') and response.usage else {}
+                            ),
+                        }
+                from api.logger import log_llm_step
+                await log_llm_step(
+                    operation_id=operation_id,
+                    step_index=_trace_step_index,
+                    messages_delta=_msgs_delta,
+                    response_raw=_resp_raw,
+                    system_prompt=(system_prompt if _trace_step_index == 0 else None),
+                    tools_manifest=(tools_spec if _trace_step_index == 0 else None),
+                    agent_type=agent_type,
+                    is_subagent=_trace_is_subagent,
+                    parent_op_id=_trace_parent_op_id,
+                    temperature=0.1,
+                    model=_lm_model(),
+                )
+                _trace_step_index += 1
+            except Exception as _trace_e:
+                log.debug("log_llm_step failed: %s", _trace_e)
+
             # Opt-in full LLM exchange logging (LOG_LLM_EXCHANGES=1)
             if os.environ.get("LOG_LLM_EXCHANGES", "").lower() in ("1", "true", "yes"):
                 from api.logger import log_llm_exchange
@@ -808,36 +894,53 @@ async def _run_single_agent_step(
                     )
                     continue  # Next iteration will call plan_action
 
-                # ── v2.34.8 hallucination guard ──────────────────────────────
+                # ── v2.34.14 hallucination guard (replaces "fire once → accept") ─
                 # Reject final_answer if the agent has made too few substantive
-                # (non-META) tool calls. Forces at least one retry so the model
-                # cannot fabricate infrastructure facts without data. Fires at
-                # most once per task — a second attempt is accepted with a
-                # surfaced warning to prevent infinite loops when no data is
-                # genuinely available.
+                # (non-META) tool calls. Retries up to _halluc_guard_max times with
+                # escalating correction messages. On exhaustion, fails loudly —
+                # no `[HARNESS WARNING]` escape hatch, no silent acceptance.
                 _min_subst = MIN_SUBSTANTIVE_BY_TYPE.get(agent_type, 1)
                 if substantive_tool_calls < _min_subst:
-                    if not _hallucination_block_fired:
-                        _hallucination_block_fired = True
+                    _halluc_guard_attempts += 1
+                    _hallucination_block_fired = True
+                    if _halluc_guard_attempts < _halluc_guard_max:
+                        _esc_msg = {
+                            1: (
+                                f"You finalised after {substantive_tool_calls} "
+                                f"substantive tool call(s). Call at least {_min_subst} "
+                                "data-gathering tools BEFORE your final answer. Do NOT "
+                                "write an EVIDENCE block citing tools you have not called. "
+                                "Meta tools (audit_log, runbook_search, memory_recall, "
+                                "propose_subtask, engram_activate, plan_action) do not count."
+                            ),
+                            2: (
+                                "Second attempt: you are still finalising without tool data. "
+                                "The previous answer appears to cite tool calls that did not "
+                                "happen. If you genuinely cannot gather data, call escalate() "
+                                "with reason='insufficient_tool_access' — do NOT fabricate "
+                                "tool output."
+                            ),
+                        }.get(_halluc_guard_attempts, (
+                            "Final warning: call real data-returning tools or escalate. "
+                            "Fabricated evidence will cause this task to fail."
+                        ))
                         if msg.content:
                             messages.append({"role": "assistant", "content": msg.content})
                         messages.append({
                             "role": "system",
-                            "content": (
-                                f"[harness] You attempted to finalize after "
-                                f"{substantive_tool_calls} substantive tool call(s). "
-                                f"Your agent_type ({agent_type}) requires at least "
-                                f"{_min_subst}. Call real data-returning tools before "
-                                "answering. Meta tools (audit_log, runbook_search, "
-                                "memory_recall, propose_subtask, engram_activate, "
-                                "plan_action) do not count. Do not fabricate values — "
-                                "call a tool that returns real data."
-                            ),
+                            "content": f"[harness] {_esc_msg}",
                         })
                         try:
-                            from api.metrics import HALLUCINATION_GUARD_COUNTER
+                            from api.metrics import (
+                                HALLUCINATION_GUARD_COUNTER,
+                                HALLUC_GUARD_ATTEMPTS_COUNTER,
+                            )
                             HALLUCINATION_GUARD_COUNTER.labels(
                                 agent_type=agent_type, outcome="retried"
+                            ).inc()
+                            HALLUC_GUARD_ATTEMPTS_COUNTER.labels(
+                                attempt=str(_halluc_guard_attempts),
+                                agent_type=agent_type,
                             ).inc()
                         except Exception:
                             pass
@@ -846,37 +949,152 @@ async def _run_single_agent_step(
                             "session_id":        session_id,
                             "substantive_count": substantive_tool_calls,
                             "required":          _min_subst,
+                            "attempt":           _halluc_guard_attempts,
+                            "max_attempts":      _halluc_guard_max,
                             "agent_type":        agent_type,
                             "timestamp":         datetime.now(timezone.utc).isoformat(),
                         })
                         await manager.send_line(
                             "step",
-                            f"[halluc-guard] final_answer blocked — "
+                            f"[halluc-guard] final_answer blocked "
+                            f"(attempt {_halluc_guard_attempts}/{_halluc_guard_max}) — "
                             f"{substantive_tool_calls}/{_min_subst} substantive tool calls. "
                             "Forcing retry.",
                             status="warning", session_id=session_id,
                         )
                         continue  # loop back so the LLM can call a real tool
                     else:
-                        # Second attempt — accept but surface a warning so
-                        # the operator sees the guard fired and fallback was used.
+                        # Exhausted — fail loudly instead of accepting fabricated text.
                         try:
-                            from api.metrics import HALLUCINATION_GUARD_COUNTER
-                            HALLUCINATION_GUARD_COUNTER.labels(
-                                agent_type=agent_type, outcome="fallback_accepted"
+                            from api.metrics import HALLUC_GUARD_EXHAUSTED_COUNTER
+                            HALLUC_GUARD_EXHAUSTED_COUNTER.labels(
+                                agent_type=agent_type,
                             ).inc()
                         except Exception:
                             pass
-                        _fallback_warn = (
-                            f"[HARNESS WARNING] Final answer delivered with only "
-                            f"{substantive_tool_calls} substantive tool call(s) "
-                            f"(required {_min_subst}). Treat the findings below as "
-                            "low-confidence — no real tool data was gathered.\n\n"
+                        last_reasoning = (
+                            f"Task failed: hallucination_guard_exhausted. Agent "
+                            f"finalised {_halluc_guard_max} attempts without "
+                            f"{_min_subst} substantive tool calls. Rejecting run "
+                            "to prevent fabricated evidence reaching operator."
                         )
-                        if last_reasoning and not last_reasoning.startswith("[HARNESS WARNING]"):
-                            last_reasoning = _fallback_warn + last_reasoning
-                        elif not last_reasoning:
-                            last_reasoning = _fallback_warn.strip()
+                        await manager.send_line(
+                            "halt",
+                            f"[halluc-guard] exhausted after {_halluc_guard_max} attempts — "
+                            "failing task to block fabricated evidence.",
+                            status="failed", session_id=session_id,
+                        )
+                        if is_final_step:
+                            await manager.broadcast({
+                                "type":       "done",
+                                "session_id": session_id,
+                                "agent_type": agent_type,
+                                "content":    last_reasoning,
+                                "status":     "failed",
+                                "choices":    [],
+                                "reason":     "hallucination_guard_exhausted",
+                                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                            })
+                        final_status = "failed"
+                        break
+
+                # ── v2.34.14 fabrication detector ────────────────────────────
+                # Scans final_answer for tool-call-shaped citations that were
+                # never actually made. Fires when a confident EVIDENCE block
+                # cites invented tool calls. Shares the guard-attempts budget.
+                try:
+                    from api.agents.fabrication_detector import is_fabrication
+                    _fab_fired, _fab_detail = is_fabrication(
+                        msg.content or "",
+                        tools_used_names,
+                        min_cites=_fabrication_min_cites,
+                        score_threshold=_fabrication_score_threshold,
+                    )
+                except Exception as _fe:
+                    log.debug("fabrication_detector error: %s", _fe)
+                    _fab_fired, _fab_detail = False, {
+                        "score": 0.0, "cited": [], "actual": [], "fabricated": [],
+                    }
+                if _fab_fired and not _fabrication_detected_once:
+                    _fabrication_detected_once = True
+                    _halluc_guard_attempts += 1
+                    try:
+                        from api.metrics import FABRICATION_DETECTED_COUNTER
+                        FABRICATION_DETECTED_COUNTER.labels(
+                            agent_type=agent_type,
+                            is_subagent=str(bool(parent_session_id)).lower(),
+                        ).inc()
+                    except Exception:
+                        pass
+                    log.warning(
+                        "fabrication_detected operation=%s cited=%d fabricated=%d score=%.2f",
+                        operation_id,
+                        len(_fab_detail.get("cited", [])),
+                        len(_fab_detail.get("fabricated", [])),
+                        _fab_detail.get("score", 0.0),
+                    )
+                    if _halluc_guard_attempts < _halluc_guard_max:
+                        _fab_names = ", ".join(_fab_detail["fabricated"][:5]) or "(unknown)"
+                        if msg.content:
+                            messages.append({"role": "assistant", "content": msg.content})
+                        messages.append({
+                            "role": "system",
+                            "content": (
+                                f"[harness] Your answer cites "
+                                f"{len(_fab_detail['fabricated'])} tool calls that "
+                                f"did not happen in this run: {_fab_names}. "
+                                "You must only cite tools you have actually called. "
+                                "If you need data you don't have, call the tool now "
+                                "or call escalate()."
+                            ),
+                        })
+                        await manager.broadcast({
+                            "type":       "fabrication_detected",
+                            "session_id": session_id,
+                            "cited":      _fab_detail.get("cited", []),
+                            "fabricated": _fab_detail.get("fabricated", []),
+                            "score":      _fab_detail.get("score", 0.0),
+                            "agent_type": agent_type,
+                            "timestamp":  datetime.now(timezone.utc).isoformat(),
+                        })
+                        await manager.send_line(
+                            "step",
+                            f"[fabrication] final_answer cites "
+                            f"{len(_fab_detail['fabricated'])} uncalled tools — forcing retry.",
+                            status="warning", session_id=session_id,
+                        )
+                        continue
+                    else:
+                        try:
+                            from api.metrics import HALLUC_GUARD_EXHAUSTED_COUNTER
+                            HALLUC_GUARD_EXHAUSTED_COUNTER.labels(
+                                agent_type=agent_type,
+                            ).inc()
+                        except Exception:
+                            pass
+                        last_reasoning = (
+                            f"Task failed: hallucination_guard_exhausted "
+                            f"(fabrication detected — score {_fab_detail.get('score', 0.0):.2f}, "
+                            f"{len(_fab_detail.get('fabricated', []))} uncalled tool(s) cited)."
+                        )
+                        await manager.send_line(
+                            "halt",
+                            "[fabrication] guard exhausted — failing task.",
+                            status="failed", session_id=session_id,
+                        )
+                        if is_final_step:
+                            await manager.broadcast({
+                                "type":       "done",
+                                "session_id": session_id,
+                                "agent_type": agent_type,
+                                "content":    last_reasoning,
+                                "status":     "failed",
+                                "choices":    [],
+                                "reason":     "hallucination_guard_exhausted",
+                                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                            })
+                        final_status = "failed"
+                        break
 
                 # Synthesise degraded findings if present and summary is thin
                 if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
@@ -1348,6 +1566,7 @@ async def _run_single_agent_step(
                                 _spawn = {"ok": False, "error": f"spawn crashed: {_se}"}
 
                             if _spawn.get("ok"):
+                                _sub_guard = _spawn.get("harness_guard") or {}
                                 _pst_result = {
                                     "status":          "sub_agent_done",
                                     "sub_task_id":     _spawn.get("sub_task_id"),
@@ -1355,6 +1574,7 @@ async def _run_single_agent_step(
                                     "final_answer":    _spawn.get("final_answer", ""),
                                     "diagnosis":       _spawn.get("diagnosis", ""),
                                     "tools_used":      _spawn.get("tools_used", 0),
+                                    "harness_guard":   _sub_guard,
                                     "message": (
                                         "Sub-agent completed. Synthesize using its "
                                         "final_answer above — do NOT re-verify its "
@@ -1367,6 +1587,45 @@ async def _run_single_agent_step(
                                     f"(tools={_spawn.get('tools_used', 0)})",
                                     status="ok", session_id=session_id,
                                 )
+                                # v2.34.14: parent-side distrust signal when the
+                                # sub-agent's output was flagged by halluc-guard
+                                # or fabrication detector.
+                                _sub_halluc_fired = bool(_sub_guard.get("halluc_guard_fired"))
+                                _sub_fab_detected = bool(_sub_guard.get("fabrication_detected"))
+                                if _sub_halluc_fired or _sub_fab_detected:
+                                    _reason = (
+                                        "fabrication_detected" if _sub_fab_detected
+                                        else "halluc_guard_fired"
+                                    )
+                                    try:
+                                        from api.metrics import SUBAGENT_DISTRUST_INJECTED_COUNTER
+                                        SUBAGENT_DISTRUST_INJECTED_COUNTER.labels(
+                                            reason=_reason,
+                                        ).inc()
+                                    except Exception:
+                                        pass
+                                    _distrust_msg = (
+                                        f"[harness] Sub-agent output was flagged "
+                                        f"(halluc_guard_fired={_sub_halluc_fired}, "
+                                        f"fabrication_detected={_sub_fab_detected}, "
+                                        f"substantive_tool_calls="
+                                        f"{_sub_guard.get('substantive_tool_calls', 0)}). "
+                                        "Do NOT synthesise a conclusion from this sub-agent "
+                                        "output. Your options: (a) continue the investigation "
+                                        "yourself with your remaining tool budget, (b) call "
+                                        "escalate() with reason='subagent_unreliable'. Do not "
+                                        "reverse your own prior evidence based on this "
+                                        "sub-agent's unverified claims."
+                                    )
+                                    messages.append({
+                                        "role": "system",
+                                        "content": _distrust_msg,
+                                    })
+                                    await manager.send_line(
+                                        "step",
+                                        f"[subagent] distrust signal injected — {_reason}",
+                                        status="warning", session_id=session_id,
+                                    )
                                 try:
                                     from api.metrics import (
                                         SUBAGENT_SPAWN_COUNTER, BUDGET_NUDGE_COUNTER,
@@ -2241,6 +2500,42 @@ async def _spawn_and_wait_subagent(
         error=err_msg,
     )
 
+    # v2.34.14: compute harness guard signals for parent-side distrust check.
+    # The parent harness will inject a distrust message on the next turn if
+    # either the hallucination guard fired OR the fabrication detector fired.
+    # Fabrication check runs here (post-hoc) against the sub-agent's actual
+    # tool-call names.
+    _actual_tool_names: list[str] = []
+    try:
+        from api.db.base import get_engine as _geng
+        from api.db import queries as _q_tc
+        async with _geng().connect() as _conn_tc:
+            _tcs = await _q_tc.get_tool_calls_for_operation(_conn_tc, sub_operation_id)
+        for _tc in (_tcs or []):
+            _name = (_tc.get("tool_name") or "") if isinstance(_tc, dict) else ""
+            if _name:
+                _actual_tool_names.append(_name)
+    except Exception:
+        pass
+
+    try:
+        from api.agents.fabrication_detector import is_fabrication as _is_fab
+        _min_cites = int(os.environ.get("AGENT_FABRICATION_MIN_CITES", "3"))
+        _score_th = float(os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5"))
+        _fab_fired, _fab_detail = _is_fab(
+            sub_final_answer or "",
+            _actual_tool_names,
+            min_cites=_min_cites,
+            score_threshold=_score_th,
+        )
+    except Exception:
+        _fab_fired, _fab_detail = False, {
+            "score": 0.0, "cited": [], "actual": [], "fabricated": [],
+        }
+
+    _min_subst_req = MIN_SUBSTANTIVE_BY_TYPE.get(agent_type, 1)
+    _halluc_guard_fired = sub_substantive < _min_subst_req
+
     try:
         await manager.broadcast({
             "type":            "subagent_done",
@@ -2251,6 +2546,8 @@ async def _spawn_and_wait_subagent(
             "terminal_status": terminal_status,
             "final_answer":    sub_final_answer[:500],
             "tools_used":      sub_tools_used,
+            "halluc_guard_fired":   _halluc_guard_fired,
+            "fabrication_detected": bool(_fab_fired),
             "timestamp":       datetime.now(timezone.utc).isoformat(),
         })
     except Exception:
@@ -2264,6 +2561,14 @@ async def _spawn_and_wait_subagent(
         "diagnosis":       sub_diagnosis,
         "tools_used":      sub_tools_used,
         "error":           err_msg,
+        "harness_guard":   {
+            "halluc_guard_fired":   bool(_halluc_guard_fired),
+            "halluc_guard_attempts": 0,  # not surfaced from sub loop yet
+            "fabrication_detected": bool(_fab_fired),
+            "fabrication_detail":   _fab_detail,
+            "substantive_tool_calls": sub_substantive,
+            "min_substantive_required": _min_subst_req,
+        },
     }
 
 
@@ -2631,6 +2936,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             client=client,
             is_final_step=(step_num == total_steps and not use_coordinator),
             plan_already_approved=plan_approved_this_session,
+            parent_session_id=parent_session_id,
         )
 
         # Track plan approval across coordinator loop iterations

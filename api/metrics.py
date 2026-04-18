@@ -118,6 +118,37 @@ PROMPT_TOOL_MENTION_COUNTER = Counter(
     ["agent_type", "tool"],
 )
 
+# --- hallucination hardening (v2.34.14) ---
+HALLUC_GUARD_ATTEMPTS_COUNTER = Counter(
+    "deathstar_halluc_guard_attempts_total",
+    "Hallucination-guard attempts by attempt number",
+    ["attempt", "agent_type"],
+)
+
+HALLUC_GUARD_EXHAUSTED_COUNTER = Counter(
+    "deathstar_halluc_guard_exhausted_total",
+    "Agent runs that exhausted all hallucination-guard retries (task failed)",
+    ["agent_type"],
+)
+
+FABRICATION_DETECTED_COUNTER = Counter(
+    "deathstar_fabrication_detected_total",
+    "Final answers rejected for citing uncalled tools",
+    ["agent_type", "is_subagent"],
+)
+
+SUBAGENT_DISTRUST_INJECTED_COUNTER = Counter(
+    "deathstar_subagent_distrust_injected_total",
+    "Parent runs where sub-agent output was flagged as low-confidence",
+    ["reason"],   # "halluc_guard_fired" | "fabrication_detected"
+)
+
+LLM_TRACES_WRITTEN_COUNTER = Counter(
+    "deathstar_llm_traces_written_total",
+    "LLM trace rows written to DB",
+    ["step_type"],   # "root" | "subagent"
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

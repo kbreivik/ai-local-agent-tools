@@ -185,7 +185,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.34.10.md | v2.34.10 | feat(vm_exec): read-only network diagnostics + safe pipe passthrough | DONE (70e6bcc) |
 | CC_PROMPT_v2.34.11.md | v2.34.11 | fix(agents): classifier hard-routes investigative starters to research | DONE (b76839f) |
 | CC_PROMPT_v2.34.12.md | v2.34.12 | feat(tools): container-introspection tools (config_read, env, networks, tcp_probe, discover) | DONE (8e7adaa) |
-| CC_PROMPT_v2.34.13.md | v2.34.13 | fix(agents): retarget prompts to prefer container_introspect over raw docker exec | RUNNING |
+| CC_PROMPT_v2.34.13.md | v2.34.13 | fix(agents): retarget prompts to prefer container_introspect over raw docker exec | DONE (d3c14b8) |
+| CC_PROMPT_v2.34.14.md | v2.34.14 | fix(agents): hallucination hardening + fabrication detection + LLM trace persistence | RUNNING |
 
 ---
 
@@ -336,6 +337,9 @@ Session 2bd88acb hit token cap (123k > 120k) after 16 tool calls with 5 blocked 
 **v2.34.13** — fix(agents): retarget prompts to prefer container_introspect over raw docker exec.
 v2.34.12 shipped the five container_* tools correctly registered, allowlisted, and mentioned in RESEARCH_PROMPT, but session a69fd96d made 9 vm_exec calls and 0 container_* calls. Prometheus confirms: counter declared, zero series. Root cause: the KAFKA TRIAGE block at the top of RESEARCH_PROMPT is prescriptive with vm_exec/kafka_exec step lists, while the CONTAINER INTROSPECTION block sits 400 lines further down after STORAGE/NETWORK/COMPUTE/SECURITY branches — by the time the LLM reaches it the top-of-prompt playbook has committed it to vm_exec. Fix inserts a CONTAINER INTROSPECT FIRST block immediately before KAFKA TRIAGE ORDER with a `docker exec <x> → container_* tool` mapping table and the canonical overlay-diagnosis sequence (discover ×2 → networks ×2 → tcp_probe → config_read). Replaces the "vm_exec docker ps --filter name=" step in CONSUMER LAG PATH and BROKER MISSING PATH with container_discover_by_service. Tightens docstring first-lines for semantic-rank readiness. Adds PROMPT_TOOL_MENTION_COUNTER smoke-test Prometheus metric so prompt regressions are spottable. No new code, no new tools — pure prompt retargeting.
 
+**v2.34.14** — fix(agents): hallucination hardening + fabrication detection + LLM trace persistence.
+Session c97014a8 (parent, 10 tools, "completed" but WRONG) + bf3a71ea (sub-agent, 0 tools, emitted fabricated EVIDENCE block with invented container IDs x7k9a/y8m2b, invented IPs, invented hostname `elastic-ingress.internal`). v2.34.8 hallucination guard fired but its "fire once + accept with [HARNESS WARNING] prefix" design let the sub-agent win on re-emit. Parent then TRUSTED the fabrication and reversed its own earlier service_placement evidence (worker-03 → "actually worker-01 and worker-02"). Operation status "completed" + confidently wrong answer = worst failure mode. Fix: (1) hallucination guard rewritten to reject up to N times then status=failed/reason=hallucination_guard_exhausted, no [HARNESS WARNING] escape hatch; (2) new fabrication_detector scans final_answer for tool-call-shaped citations against actual tool_calls, rejects when ≥3 cited tools don't match; (3) parent-side distrust: sub-agent output flagged by guard/detector triggers `[harness] do NOT synthesise from this` injection to parent; (4) new agent_llm_traces + agent_llm_system_prompts tables persist full LLM messages + response for every step (system prompt stored once per operation, Postgres TOAST handles compression), 7-day retention default; (5) new `/api/logs/operations/{id}/trace?format=structured|digest` endpoint for debugging. New tests anchor on canonical bf3a71ea fabrication. Marks kafka_consumer_lag kwarg error (v2.34.9 regression) as known issue for v2.34.15.
+
 ---
 
 ## Key file paths
@@ -376,5 +380,7 @@ api/collectors/proxmox_vms.py             — write VMs to infra_inventory (v2.2
 gui/src/context/DashboardDataContext.jsx  — shared dashboard state + version gate (v2.22.0)
 api/db/metric_samples.py                  — time-series metrics (v2.21.0)
 mcp_server/tools/metric_tools.py          — metric_trend + list_metrics (v2.21.0)
-api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10)
+api/metrics.py                            — Prometheus metrics (v2.33.5, v2.34.2, v2.34.5, v2.34.8, v2.34.9, v2.34.10, v2.34.14)
+api/agents/fabrication_detector.py        — citation extraction + fabrication scoring (v2.34.14)
+api/db/llm_trace_retention.py             — nightly purge (v2.34.14)
 ```

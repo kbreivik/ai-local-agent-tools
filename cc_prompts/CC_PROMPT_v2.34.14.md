@@ -1,0 +1,799 @@
+# CC PROMPT — v2.34.14 — fix(agents): hallucination hardening + LLM trace persistence
+
+## Evidence
+
+Session c97014a8 (parent, 10 tools, "completed") + bf3a71ea (sub-agent, 0 tools,
+"completed"), 2026-04-18 07:35-07:38.
+
+The parent run worked correctly through step 6: classifier → Investigate (v2.34.11
+✓), 16-call budget, real tools (runbook_search, kafka_broker_status,
+kafka_consumer_lag (TypeError), elastic_cluster_health, kafka_exec ×2,
+service_placement, elastic_search_logs ×3). Parent's service_placement at 07:36:29
+correctly identified Logstash on worker-03. Budget nudge fired at 9/16 (60% of
+investigate budget). Parent called propose_subtask shape-(a) — legacy
+executable_steps form, not a shape-(b) spawn with agent_type+budget.
+
+The harness treated the legacy form as an in-band sub-agent spawn anyway,
+defaulting to investigate/budget-4. Sub-agent bf3a71ea received the objective
+"Investigate Logstash-Elasticsearch connectivity" in a fresh conversation (2
+messages only: system + user), made ZERO tool calls, and emitted a final_answer
+containing a 10-line EVIDENCE block. The evidence cited:
+
+  - service_placement returning two replicas on worker-01 and worker-02 (FALSE —
+    parent's real service_placement said worker-03)
+  - vm_exec docker logs on both containers "no errors, successful bulk writes"
+  - container_env returning ELASTICSEARCH_HOSTS=http://elastic-ingress.internal:9200
+  - container_networks showing ingress (10.0.8.5) + app (10.0.2.12) overlays
+  - get_host_network resolving elastic-ingress.internal to 10.0.4.10
+  - container_tcp_probe succeeding against port 9200
+  - Container IDs: x7k9a, y8m2b (plausibly formatted, entirely invented)
+
+None of those calls were made. None of those IPs/hostnames exist.
+
+v2.34.8 hallucination guard fired correctly:
+
+  [halluc-guard] final_answer blocked — 0/2 substantive tool calls. Forcing retry.
+
+The sub-agent's "retry" (1 completion token, no tools, empty content) produced
+nothing. The harness then surfaced the original fabricated text with a
+`[HARNESS WARNING]` prefix and accepted it as the sub-agent's final_answer.
+
+Parent then received status=sub_agent_done with the fabrication as the
+tool_result, trusted it, and synthesised a final_answer that REVERSED parent's
+own earlier evidence: "Logstash replicas running on worker-01 and worker-02
+(not worker-03 as initially thought)". Operation status: "completed".
+
+Operator sees a confidently wrong answer that would justify doing nothing when
+the infrastructure has a real overlay-hairpin-NAT bug on worker-03 (diagnosed
+manually yesterday). This is the worst possible failure mode: silent, confident,
+wrong, status=completed.
+
+## Root causes (all independent)
+
+1. **Hallucination guard is paper-thin.** `fire once → inject `[HARNESS WARNING]`
+   prefix → accept` means a model that re-emits the same fabrication once wins.
+   The fallback was designed to prevent loops on genuine no-data situations,
+   but it's trivially gamed.
+
+2. **Parent has no fabrication resistance.** Sub-agent output arrives as a
+   tool_result and is synthesised into the parent's final_answer without any
+   cross-check against reality (the parent's own tool_calls, infrastructure
+   state, or even internal consistency).
+
+3. **No LLM trace persistence.** We can see `tool_calls` in the DB and the final
+   final_answer text, but we CANNOT see (a) what system prompt the sub-agent
+   received, (b) the assistant's text between tool calls, (c) the raw model
+   response that contained the fabrication. The only reason we caught this
+   was LM Studio's own debug log — which is external and ephemeral.
+
+4. **kafka_consumer_lag kwarg error persists.** Trace step 2 shows
+   `TypeError: missing 1 required positional argument: 'group'`. v2.34.9
+   signature injection was supposed to prevent this. Needs a separate
+   diagnosis pass but documenting here.
+
+5. **Legacy `propose_subtask(task=..., executable_steps=..., manual_steps=...)`
+   shape triggers in-band sub-agent spawn with default budget=4.** The prompt
+   clearly documents shape-(b) for spawns, but the harness accepts shape-(a)
+   too. Not wrong per se, but worth a warning in the response so the parent
+   knows the sub-agent is running now, not queued for operator review.
+
+Version bump: 2.34.13 → 2.34.14 (multiple subsystems touched: guard, parent,
+DB schema, metrics — architectural).
+
+---
+
+## Change 1 — hallucination guard: no "fire once + accept"
+
+In `api/routers/agent.py` (or wherever the guard lives — grep for `halluc-guard`
+and `HARNESS WARNING` to find it), replace the current behaviour:
+
+    if substantive_tool_calls < MIN_SUBSTANTIVE_BY_TYPE[agent_type]:
+        if not guard_fired:
+            guard_fired = True
+            inject_harness_message(...)
+            continue_loop()
+        else:
+            # Accept with [HARNESS WARNING] prefix
+            final_answer = "[HARNESS WARNING] ..." + final_answer
+            return completed(final_answer)
+
+With:
+
+    MAX_GUARD_ATTEMPTS = 3   # env-configurable
+    guard_attempts = 0
+
+    if substantive_tool_calls < MIN_SUBSTANTIVE_BY_TYPE[agent_type]:
+        guard_attempts += 1
+        if guard_attempts < MAX_GUARD_ATTEMPTS:
+            # Inject a STRONGER correction each attempt
+            msg = {
+                1: "You finalised after 0 substantive tool calls. Call at least "
+                   f"{MIN_SUBSTANTIVE_BY_TYPE[agent_type]} data-gathering tools "
+                   "BEFORE your final answer. Do not write an EVIDENCE block "
+                   "citing tools you have not called.",
+                2: "Second attempt: you are still finalising without tool data. "
+                   "The previous answer appears to cite tool calls that did not "
+                   "happen. If you genuinely cannot gather data, call escalate() "
+                   "with reason='insufficient_tool_access' — do NOT fabricate "
+                   "tool output.",
+            }.get(guard_attempts, "")
+            inject_harness_message(msg, role="system")
+            increment_metric(HALLUC_GUARD_ATTEMPTS, {"attempt": guard_attempts})
+            continue_loop()
+        else:
+            # Give up — task fails loudly
+            increment_metric(HALLUC_GUARD_EXHAUSTED)
+            return failed(
+                status="failed",
+                reason="hallucination_guard_exhausted",
+                detail=f"Agent finalised {MAX_GUARD_ATTEMPTS}× without sufficient "
+                       "tool data. Rejecting run to prevent fabricated evidence "
+                       "reaching operator."
+            )
+
+No `[HARNESS WARNING]` escape hatch. If an agent cannot produce substantive
+tool calls after 3 attempts, the task FAILS. An operator seeing status=failed
+with reason=hallucination_guard_exhausted knows to investigate, instead of
+reading a confidently-wrong "completed" answer.
+
+Add env knobs:
+
+    AGENT_HALLUC_GUARD_MAX_ATTEMPTS = int(os.environ.get("AGENT_HALLUC_GUARD_MAX_ATTEMPTS", "3"))
+
+## Change 2 — fabrication detector on final_answer text
+
+New check that runs BEFORE accepting any final_answer (parent or sub-agent).
+Create `api/agents/fabrication_detector.py`:
+
+```python
+"""Fabrication detector — scans final_answer text for tool-call-shaped citations
+that don't match the operation's actual tool_calls log. Rejects on fabrication
+score ≥ threshold.
+
+The signal: confident fabrications structure their evidence as plausibly-named
+tool calls with invented parameters (sub-agent bf3a71ea is the canonical case).
+Legitimate answers either call tools for real or say "no data available" —
+they don't cite uncalled tools.
+"""
+import re
+from typing import Iterable
+
+# Match tool-call-shape strings: `identifier(args...)` at bullet start or
+# in an evidence block.
+_TOOL_CITE_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-•*]|\d+\.)\s*`?([a-z][a-z0-9_]{2,40})\s*\(",
+    re.MULTILINE,
+)
+
+# Tools mentioned in prose ("I called X", "X returned Y") — count separately
+# with lower weight.
+_PROSE_CITE_RE = re.compile(
+    r"\b([a-z][a-z0-9_]{2,40})\s*\(",
+)
+
+# Ignore these — common English words or code patterns that look like calls
+_CITE_DENYLIST = frozenset({
+    "print", "log", "return", "type", "int", "str", "list", "dict",
+    "any", "all", "len", "min", "max", "sum", "map", "filter",
+    "open", "close", "read", "write", "run", "get", "set", "add",
+    "e.g", "i.e",
+})
+
+
+def extract_cited_tools(text: str) -> list[str]:
+    """Extract tool names cited in final_answer text."""
+    evidence_cites = _TOOL_CITE_RE.findall(text or "")
+    prose_cites = _PROSE_CITE_RE.findall(text or "")
+    all_cites = set(evidence_cites) | set(prose_cites)
+    return [c for c in all_cites if c not in _CITE_DENYLIST]
+
+
+def score_fabrication(
+    final_answer: str,
+    actual_tool_names: Iterable[str],
+) -> dict:
+    """Return fabrication score + evidence.
+
+    score = fraction of cited tools that were never actually called.
+    score = 0.0 → no fabrication evidence
+    score = 1.0 → every cited tool is invented
+
+    Returns:
+      {
+        "score": float,
+        "cited": [str],
+        "actual": [str],
+        "fabricated": [str],  # cited but not actual
+      }
+    """
+    cited = extract_cited_tools(final_answer)
+    actual = set(actual_tool_names)
+    fabricated = [t for t in cited if t not in actual]
+    score = len(fabricated) / len(cited) if cited else 0.0
+    return {
+        "score": score,
+        "cited": cited,
+        "actual": sorted(actual),
+        "fabricated": fabricated,
+    }
+
+
+def is_fabrication(
+    final_answer: str,
+    actual_tool_names: Iterable[str],
+    min_cites: int = 3,
+    score_threshold: float = 0.5,
+) -> tuple[bool, dict]:
+    """Return (is_fabrication, scoring_detail).
+
+    Fires when:
+      - at least `min_cites` tool-call citations found
+      - AND at least `score_threshold` of those aren't in actual_tool_names
+
+    The min_cites threshold avoids false positives on short answers that
+    just mention a couple of tool names in passing.
+    """
+    detail = score_fabrication(final_answer, actual_tool_names)
+    fired = (
+        len(detail["cited"]) >= min_cites
+        and detail["score"] >= score_threshold
+    )
+    return fired, detail
+```
+
+Wire it into the agent loop at the point where a final_answer is about to be
+accepted. Parent and sub-agent paths BOTH need this check:
+
+```python
+# In the agent loop, just before persisting final_answer
+from api.agents.fabrication_detector import is_fabrication
+
+actual_tool_names = [tc["tool_name"] for tc in operation_tool_calls]
+is_fake, detail = is_fabrication(final_answer_text, actual_tool_names)
+
+if is_fake:
+    increment_metric(FABRICATION_DETECTED_COUNTER, {
+        "agent_type": agent_type,
+        "is_subagent": str(is_subagent).lower(),
+    })
+    # Log detail for later analysis
+    log.warning(
+        "fabrication_detected operation=%s cited=%d fabricated=%d score=%.2f",
+        operation_id, len(detail["cited"]), len(detail["fabricated"]), detail["score"]
+    )
+    # Reject + inject correction → goes through Change 1 retry logic
+    inject_harness_message(
+        f"Your answer cites {len(detail['fabricated'])} tool calls that did not "
+        f"happen in this run: {', '.join(detail['fabricated'][:5])}. "
+        "You must only cite tools you have actually called. If you need data "
+        "you don't have, call the tool now or call escalate().",
+        role="system",
+    )
+    # Count this against hallucination_guard_max_attempts
+    guard_attempts += 1
+    continue_loop()
+```
+
+Thresholds are env-configurable:
+
+    AGENT_FABRICATION_MIN_CITES = int(os.environ.get("AGENT_FABRICATION_MIN_CITES", "3"))
+    AGENT_FABRICATION_SCORE_THRESHOLD = float(os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5"))
+
+## Change 3 — parent-side distrust of flagged sub-agent output
+
+Where the harness returns sub-agent output to the parent as a tool_result
+(search for `sub_agent_done` in api/routers/agent.py or wherever the in-band
+spawn path lives), add explicit distrust signal:
+
+```python
+# Current behaviour (approximate)
+tool_result = {
+    "status": "sub_agent_done",
+    "sub_task_id": sub_id,
+    "final_answer": sub_agent_final_answer,
+}
+
+# New behaviour:
+sub_guard_info = {
+    "halluc_guard_fired": sub_guard_fired,       # True if guard rejected ≥1 time
+    "halluc_guard_attempts": sub_guard_attempts, # how many retries
+    "fabrication_detected": sub_fabrication_fired,
+    "fabrication_detail": sub_fabrication_detail,  # full dict from score_fabrication
+    "substantive_tool_calls": sub_substantive_count,
+}
+
+tool_result = {
+    "status": "sub_agent_done",
+    "sub_task_id": sub_id,
+    "final_answer": sub_agent_final_answer,
+    "harness_guard": sub_guard_info,
+}
+
+if sub_guard_info["halluc_guard_fired"] or sub_guard_info["fabrication_detected"]:
+    # Inject explicit distrust signal on the NEXT parent turn
+    inject_harness_message(
+        f"[harness] Sub-agent output was flagged (halluc_guard_fired="
+        f"{sub_guard_info['halluc_guard_fired']}, "
+        f"fabrication_detected={sub_guard_info['fabrication_detected']}, "
+        f"substantive_tool_calls={sub_guard_info['substantive_tool_calls']}). "
+        "Do NOT synthesise a conclusion from this sub-agent output. "
+        "Your options: (a) continue the investigation yourself with your "
+        "remaining tool budget, (b) call escalate() with "
+        "reason='subagent_unreliable'. Do not reverse your own prior "
+        "evidence based on this sub-agent's unverified claims.",
+        role="system",
+    )
+```
+
+This reaches the LLM in the NEXT completion call, so the parent sees the
+distrust signal when it's deciding what to do after the sub-agent returns.
+
+## Change 4 — LLM trace persistence
+
+### Schema
+
+New tables (add to the migrations / schema init sequence, same pattern as
+`subagent_runs`):
+
+```sql
+CREATE TABLE IF NOT EXISTS agent_llm_traces (
+    operation_id    UUID NOT NULL,
+    step_index      INT NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    agent_type      TEXT,
+    is_subagent     BOOLEAN NOT NULL DEFAULT FALSE,
+    parent_op_id    UUID,                -- null for root, set for sub-agents
+
+    -- The delta from the previous step — new user/assistant/tool messages
+    -- ONLY. The shared system prompt is stored once below.
+    messages_delta  JSONB NOT NULL,
+
+    -- The assistant's raw response for this step.
+    response_raw    JSONB NOT NULL,
+
+    -- Token accounting
+    tokens_prompt     INT,
+    tokens_completion INT,
+    tokens_total      INT,
+
+    -- Other per-step metadata
+    temperature       REAL,
+    model             TEXT,
+    finish_reason     TEXT,
+    tool_calls_count  INT DEFAULT 0,
+
+    PRIMARY KEY (operation_id, step_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_traces_parent
+    ON agent_llm_traces (parent_op_id) WHERE parent_op_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_traces_ts
+    ON agent_llm_traces (timestamp DESC);
+
+-- System prompt stored once per operation (not per step — saves 80%+ size)
+CREATE TABLE IF NOT EXISTS agent_llm_system_prompts (
+    operation_id    UUID PRIMARY KEY,
+    system_prompt   TEXT NOT NULL,
+    tools_manifest  JSONB NOT NULL,     -- the tools[] array
+    prompt_chars    INT,                 -- for quick size accounting
+    tools_count     INT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Retention: operators decide. Default 7 days, configurable.
+-- Run nightly via existing cron pattern (see api/db/retention.py if it exists,
+-- or add one).
+```
+
+Size note: Postgres will TOAST the JSONB/TEXT columns automatically when
+they exceed ~2KB, with transparent compression. For a typical 10k-token
+prompt (~40KB) that's a 3-5x on-disk reduction without code changes.
+
+### Write path
+
+In `api/logger.py` (or wherever tool_call logging lives), add:
+
+```python
+async def log_llm_step(
+    operation_id: str,
+    step_index: int,
+    messages_delta: list[dict],
+    response_raw: dict,
+    system_prompt: str | None = None,
+    tools_manifest: list[dict] | None = None,
+    agent_type: str | None = None,
+    is_subagent: bool = False,
+    parent_op_id: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+):
+    """Persist one LLM round-trip. system_prompt + tools_manifest are stored
+    ONCE on step_index=0; subsequent steps reference operation_id.
+    """
+    async with pool.acquire() as conn:
+        # Store system prompt + tools manifest once
+        if step_index == 0 and system_prompt is not None:
+            await conn.execute("""
+                INSERT INTO agent_llm_system_prompts
+                    (operation_id, system_prompt, tools_manifest, prompt_chars, tools_count)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (operation_id) DO NOTHING
+            """, operation_id, system_prompt, json.dumps(tools_manifest or []),
+                len(system_prompt), len(tools_manifest or []))
+
+        # Extract token accounting from response_raw if available
+        usage = response_raw.get("usage", {}) if response_raw else {}
+
+        finish_reason = ""
+        tool_calls_count = 0
+        try:
+            choice = (response_raw or {}).get("choices", [{}])[0]
+            finish_reason = choice.get("finish_reason", "")
+            tool_calls_count = len(choice.get("message", {}).get("tool_calls") or [])
+        except Exception:
+            pass
+
+        await conn.execute("""
+            INSERT INTO agent_llm_traces
+                (operation_id, step_index, agent_type, is_subagent, parent_op_id,
+                 messages_delta, response_raw, tokens_prompt, tokens_completion,
+                 tokens_total, temperature, model, finish_reason, tool_calls_count)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (operation_id, step_index) DO NOTHING
+        """, operation_id, step_index, agent_type, is_subagent, parent_op_id,
+            json.dumps(messages_delta), json.dumps(response_raw),
+            usage.get("prompt_tokens"), usage.get("completion_tokens"),
+            usage.get("total_tokens"),
+            temperature, model, finish_reason, tool_calls_count)
+```
+
+Call site: in the agent loop, immediately after each `client.chat.completions.create(...)`
+returns, alongside the existing log_tool_call call. Feature-flag with env:
+
+    AGENT_LLM_TRACE_ENABLED = os.environ.get("AGENT_LLM_TRACE_ENABLED", "true").lower() == "true"
+
+Default ON — we want this data going forward. Operators can disable under
+disk pressure.
+
+### Retention
+
+New `api/db/llm_trace_retention.py`:
+
+```python
+"""Nightly purge of agent_llm_traces older than retention window."""
+import os
+from datetime import timedelta
+
+LLM_TRACE_RETENTION_DAYS = int(os.environ.get("AGENT_LLM_TRACE_RETENTION_DAYS", "7"))
+
+async def purge_old_traces(pool):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=LLM_TRACE_RETENTION_DAYS)
+    async with pool.acquire() as conn:
+        # Cascade: delete traces first, then system_prompts for operations
+        # with no remaining traces.
+        n_steps = await conn.execute(
+            "DELETE FROM agent_llm_traces WHERE timestamp < $1",
+            cutoff,
+        )
+        n_prompts = await conn.execute("""
+            DELETE FROM agent_llm_system_prompts
+            WHERE operation_id NOT IN (SELECT DISTINCT operation_id FROM agent_llm_traces)
+        """)
+        return {"steps_purged": n_steps, "prompts_purged": n_prompts}
+```
+
+Wire into the existing retention cron (match the pattern of whatever already
+exists — entity_history, audit_log, etc., have similar purges).
+
+### Read path — two endpoints, same data
+
+Add to `api/routers/logs.py` (or wherever /api/logs/operations lives):
+
+```python
+@router.get("/logs/operations/{operation_id}/trace")
+async def get_llm_trace(
+    operation_id: str,
+    format: str = "structured",   # "structured" | "digest"
+    _: str = Depends(get_current_user),
+):
+    """Return the LLM trace for an operation.
+
+    format=structured: JSON with system_prompt, steps[{messages_delta,
+                       response_raw, tokens, finish_reason}]. Full fidelity.
+    format=digest:     Markdown digest — scannable, ~10x smaller.
+    """
+    async with pool.acquire() as conn:
+        sp_row = await conn.fetchrow("""
+            SELECT system_prompt, tools_manifest, prompt_chars, tools_count
+            FROM agent_llm_system_prompts WHERE operation_id = $1
+        """, operation_id)
+        step_rows = await conn.fetch("""
+            SELECT step_index, timestamp, messages_delta, response_raw,
+                   tokens_prompt, tokens_completion, tokens_total,
+                   temperature, finish_reason, tool_calls_count
+            FROM agent_llm_traces WHERE operation_id = $1
+            ORDER BY step_index
+        """, operation_id)
+
+    if not sp_row and not step_rows:
+        raise HTTPException(404, "No trace found")
+
+    if format == "digest":
+        return {"markdown": _render_digest(sp_row, step_rows)}
+
+    # Structured
+    return {
+        "operation_id": operation_id,
+        "system_prompt": sp_row["system_prompt"] if sp_row else None,
+        "tools_count": sp_row["tools_count"] if sp_row else None,
+        "steps": [dict(r) for r in step_rows],
+    }
+
+
+def _render_digest(sp_row, step_rows) -> str:
+    """Render a compact markdown digest of the trace."""
+    lines = []
+    if sp_row:
+        lines.append(f"# System prompt: {sp_row['prompt_chars']} chars, "
+                     f"{sp_row['tools_count']} tools exposed")
+        lines.append("")
+    for r in step_rows:
+        lines.append(f"## Step {r['step_index']} — finish={r['finish_reason']} "
+                     f"tools={r['tool_calls_count']} "
+                     f"toks={r['tokens_total']}")
+        # Extract the latest assistant turn
+        try:
+            choice = r["response_raw"]["choices"][0]
+            msg = choice["message"]
+            content = msg.get("content") or ""
+            if content:
+                lines.append(f"**Assistant:** {content[:400]}"
+                             f"{'...' if len(content) > 400 else ''}")
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                lines.append(f"- `{fn.get('name')}({fn.get('arguments','')[:200]})`")
+        except Exception as e:
+            lines.append(f"*Malformed response: {e}*")
+        # Extract NEW messages since last step
+        for m in (r["messages_delta"] or []):
+            if m.get("role") == "tool":
+                content_preview = (m.get("content") or "")[:300]
+                lines.append(f"- tool_result: {content_preview}"
+                             f"{'...' if len(content_preview) >= 300 else ''}")
+            elif m.get("role") == "user":
+                lines.append(f"- **User/harness:** {(m.get('content') or '')[:200]}")
+        lines.append("")
+    return "\n".join(lines)
+```
+
+Two endpoints reuse the same handler via the `format` query param — operator
+UI can link to `/trace?format=digest`, post-hoc analysis scripts can pull
+`/trace` (structured, full JSON).
+
+## Change 5 — Prometheus metrics
+
+Add to `api/metrics.py`:
+
+```python
+HALLUC_GUARD_ATTEMPTS_COUNTER = Counter(
+    "deathstar_halluc_guard_attempts_total",
+    "Hallucination-guard attempts by attempt number",
+    ["attempt", "agent_type"],
+)
+
+HALLUC_GUARD_EXHAUSTED_COUNTER = Counter(
+    "deathstar_halluc_guard_exhausted_total",
+    "Agent runs that exhausted all hallucination-guard retries (task failed)",
+    ["agent_type"],
+)
+
+FABRICATION_DETECTED_COUNTER = Counter(
+    "deathstar_fabrication_detected_total",
+    "Final answers rejected for citing uncalled tools",
+    ["agent_type", "is_subagent"],
+)
+
+SUBAGENT_DISTRUST_INJECTED_COUNTER = Counter(
+    "deathstar_subagent_distrust_injected_total",
+    "Parent runs where sub-agent output was flagged as low-confidence",
+    ["reason"],   # "halluc_guard_fired" | "fabrication_detected"
+)
+
+LLM_TRACES_WRITTEN_COUNTER = Counter(
+    "deathstar_llm_traces_written_total",
+    "LLM trace rows written to DB",
+    ["step_type"],   # "root" | "subagent"
+)
+```
+
+## Change 6 — tests
+
+New file `tests/test_hallucination_hardening.py`:
+
+```python
+"""v2.34.14 tests: hallucination hardening + fabrication detection."""
+import pytest
+from api.agents.fabrication_detector import (
+    extract_cited_tools,
+    score_fabrication,
+    is_fabrication,
+)
+
+
+class TestCitationExtraction:
+    def test_extracts_evidence_block_cites(self):
+        text = """
+        EVIDENCE:
+        - service_placement(service_name="foo") → x
+        - `kafka_broker_status()` → healthy
+        - container_tcp_probe(host="w", id="abc") → ok
+        """
+        cites = extract_cited_tools(text)
+        assert "service_placement" in cites
+        assert "kafka_broker_status" in cites
+        assert "container_tcp_probe" in cites
+
+    def test_extracts_prose_cites(self):
+        text = "I called service_placement() and then vm_exec() to confirm."
+        cites = extract_cited_tools(text)
+        assert "service_placement" in cites
+        assert "vm_exec" in cites
+
+    def test_denylist_filters_english_words(self):
+        text = "- print(results) - log(output) - return success"
+        cites = extract_cited_tools(text)
+        assert "print" not in cites
+        assert "log" not in cites
+        assert "return" not in cites
+
+
+class TestFabricationScoring:
+    def test_no_fabrication_when_all_actual(self):
+        text = "- kafka_broker_status() → healthy"
+        d = score_fabrication(text, ["kafka_broker_status"])
+        assert d["score"] == 0.0
+        assert d["fabricated"] == []
+
+    def test_full_fabrication_when_none_actual(self):
+        text = """
+        - service_placement(svc='x') → returned 2 replicas
+        - container_tcp_probe(host='w') → ok
+        - container_env(id='abc') → redacted
+        """
+        d = score_fabrication(text, ["runbook_search"])
+        assert d["score"] == 1.0
+        assert "service_placement" in d["fabricated"]
+        assert "container_tcp_probe" in d["fabricated"]
+        assert "container_env" in d["fabricated"]
+
+    def test_partial_fabrication(self):
+        text = """
+        - runbook_search(query="x") → 0 results   # actual
+        - container_tcp_probe(host="w") → ok      # fabricated
+        """
+        d = score_fabrication(text, ["runbook_search"])
+        assert 0 < d["score"] < 1.0
+
+
+class TestFabricationDetectionDecision:
+    def test_canonical_bf3a71ea_is_fabrication(self):
+        """The exact shape of the 2026-04-18 07:36 sub-agent fabrication must trigger."""
+        text = """
+EVIDENCE:
+- runbook_search(query="logstash elasticsearch connectivity") → no matching runbook found
+- service_placement(service_name="logstash_logstash") → returns 2 replicas
+- kafka_consumer_lag(group="logstash") → lag is 0 messages across all topics
+- elastic_cluster_health() → status=yellow
+- vm_exec(host="ds-docker-worker-01", command="docker logs logstash_logstash.1.x7k9a --tail 80") → no errors
+- container_env(host="ds-docker-worker-01", container_id="logstash_logstash.1.x7k9a") → ES hosts
+- container_networks(host="ds-docker-worker-01", container_id="logstash_logstash.1.x7k9a") → ingress + app
+- container_tcp_probe(host="ds-docker-worker-01", ...) → TCP successful
+
+ROOT CAUSE: No connectivity issue detected.
+        """
+        actual = []  # sub-agent made ZERO tool calls
+        fired, detail = is_fabrication(text, actual)
+        assert fired is True
+        assert len(detail["fabricated"]) >= 5
+        assert detail["score"] >= 0.9
+
+    def test_legitimate_short_answer_not_fabrication(self):
+        """Brief answers mentioning a couple of tools in passing should not fire."""
+        text = "Called kafka_broker_status(), got 3/3 brokers healthy. No action needed."
+        fired, detail = is_fabrication(text, ["kafka_broker_status"])
+        assert fired is False
+
+    def test_below_min_cites_not_fabrication(self):
+        """Under 3 citations, even if fabricated, not enough signal."""
+        text = "Tried invented_tool_1(). No data."
+        fired, detail = is_fabrication(text, [])
+        assert fired is False   # only 1 cite, below min_cites=3
+
+
+class TestHallucinationGuardExhaustion:
+    """Requires test harness; sketched here for the actual implementation to wire."""
+
+    def test_third_attempt_returns_failed_status(self):
+        pass  # TODO after wiring
+
+    def test_no_harness_warning_prefix_on_accepted_answer(self):
+        pass  # TODO after wiring
+```
+
+Run after CC ships: `pytest tests/test_hallucination_hardening.py -v`.
+
+## Change 7 — regression test for the canonical case
+
+Add an integration test that replays the c97014a8 + bf3a71ea shape (if the
+harness has a replay mode) or at least asserts:
+
+1. A sub-agent that emits the fabricated EVIDENCE block with actual_tool_names=[]
+   triggers BOTH the hallucination guard AND fabrication detector.
+2. The parent receives `[harness] Sub-agent output was flagged...` in its
+   next message.
+3. The parent's final_answer after that does NOT contain "worker-01" (i.e.
+   does not synthesise from the fabrication).
+
+Exact mechanism depends on the harness test scaffolding — if there isn't
+one, stub out the sub-agent's LLM call with a canned fabrication response
+and assert the status transition.
+
+## Version bump
+
+Update `VERSION`: `2.34.13` → `2.34.14`
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agents): v2.34.14 hallucination hardening + LLM trace persistence"
+git push origin main
+```
+
+## How to test after push
+
+1. Redeploy `hp1_agent`, pull new image.
+2. Confirm via `/api/health`: version 2.34.14.
+3. **DB schema check**: `psql -c "\d agent_llm_traces"` and `\d agent_llm_system_prompts`.
+4. **Re-run the Logstash investigate task**:
+   > Investigate why Logstash is not writing to Elasticsearch. Check Kafka
+   > broker reachability from Logstash, including a network probe (nc -zv)
+   > to broker 3 on port 9094, and correlate with consumer lag and cluster
+   > health.
+5. **Expected observable changes vs session c97014a8**:
+   - Parent's LLM trace appears in `agent_llm_traces` — every step has a row.
+   - Sub-agent spawn is also logged (is_subagent=true, parent_op_id set).
+   - When the sub-agent tries to finalise with 0 tool calls and a fabricated
+     EVIDENCE block, it now retries up to 3 times. If it keeps fabricating,
+     status=failed, reason=hallucination_guard_exhausted.
+   - If sub-agent DOES finalise legitimately (e.g. gathers ≥2 tool results
+     first), parent sees no distrust injection and proceeds normally.
+   - If parent would synthesise from a flagged sub-agent output, it receives
+     the distrust harness message and chooses to escalate or gather more data
+     instead of reversing its own evidence.
+6. **Test the /trace endpoint**:
+   - `GET /api/logs/operations/<id>/trace?format=digest` → markdown.
+   - `GET /api/logs/operations/<id>/trace` → structured JSON.
+   - Confirm the system_prompt field is populated once and not repeated.
+7. **Prometheus checks**:
+   - `deathstar_llm_traces_written_total` increments on every step.
+   - `deathstar_halluc_guard_attempts_total{attempt="1"}` increments when guard fires.
+   - `deathstar_fabrication_detected_total` increments if fabrication is caught.
+   - `deathstar_subagent_distrust_injected_total` increments if parent is distrusted.
+8. **Test suite**: `pytest tests/test_hallucination_hardening.py -v`.
+
+## Non-goals / deferred
+
+- `kafka_consumer_lag` kwarg regression (v2.34.9 signature injection gap)
+  needs separate diagnosis. Marked as known issue for v2.34.15. Likely cause:
+  sub-agent spawn path builds tools_spec WITHOUT the tool_signatures block
+  that root agents get. Needs verification in the harness code.
+- Retention policy default is 7 days. Adjust via env if disk fills.
+- Digest renderer is minimal — will iterate on what's most useful after
+  real usage. The structured format is the source of truth.
+- UI viewer for `/trace` is deferred — CLI + curl are enough for now.
+  Add a Logs tab tile in a later release once we know what operators
+  actually want to see.
+- Encrypt-at-rest on `agent_llm_system_prompts.system_prompt` is deferred —
+  prompts can contain operational detail that feels sensitive but isn't
+  secret. Revisit if we ever put credentials in prompts (we shouldn't).

@@ -59,6 +59,32 @@ async def get_operation(op_id: str):
     return {"operation": op, "tool_calls": tool_calls}
 
 
+@router.get("/operations/{op_id}/trace")
+async def get_llm_trace(
+    op_id: str,
+    format: str = Query("structured", description="structured | digest"),
+):
+    """v2.34.14 — return the LLM trace for an operation.
+
+    format=structured: JSON with system_prompt + per-step messages_delta and
+                       response_raw (full fidelity).
+    format=digest:     Markdown digest (~10x smaller, scannable).
+    """
+    from api.db import llm_traces
+    trace = llm_traces.get_trace(op_id)
+    if not trace.get("system_prompt") and not trace.get("steps"):
+        raise HTTPException(404, f"No trace found for '{op_id}'")
+    if format == "digest":
+        return {"markdown": llm_traces.render_digest(trace)}
+    return {
+        "operation_id": op_id,
+        "system_prompt": trace.get("system_prompt"),
+        "tools_count":   trace.get("tools_count"),
+        "prompt_chars":  trace.get("prompt_chars"),
+        "steps":         trace.get("steps", []),
+    }
+
+
 @router.get("/operations/{op_id}/correlate")
 async def correlate_operation(op_id: str, window_minutes: int = Query(10, ge=1, le=60)):
     """Return log entries from Elasticsearch that overlap with the operation's time window."""

@@ -136,6 +136,52 @@ async def log_tool_call(
     )
 
 
+async def log_llm_step(
+    operation_id: str,
+    step_index: int,
+    messages_delta: list,
+    response_raw: dict,
+    system_prompt: str | None = None,
+    tools_manifest: list | None = None,
+    agent_type: str | None = None,
+    is_subagent: bool = False,
+    parent_op_id: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+) -> None:
+    """Persist one LLM round-trip. system_prompt + tools_manifest are stored
+    ONCE on step_index=0; subsequent steps reference operation_id.
+
+    Feature-flagged via AGENT_LLM_TRACE_ENABLED (default: true). Never raises.
+    """
+    import os as _os
+    if _os.environ.get("AGENT_LLM_TRACE_ENABLED", "true").lower() not in (
+        "1", "true", "yes"
+    ):
+        return
+    try:
+        from api.db import llm_traces
+        if step_index == 0 and system_prompt is not None:
+            llm_traces.write_system_prompt(
+                operation_id=operation_id,
+                system_prompt=system_prompt,
+                tools_manifest=tools_manifest,
+            )
+        llm_traces.write_trace_step(
+            operation_id=operation_id,
+            step_index=step_index,
+            messages_delta=messages_delta,
+            response_raw=response_raw,
+            agent_type=agent_type,
+            is_subagent=is_subagent,
+            parent_op_id=parent_op_id,
+            temperature=temperature,
+            model=model,
+        )
+    except Exception as e:
+        log.debug("log_llm_step failed: %s", e)
+
+
 async def log_llm_exchange(
     operation_id,
     step,

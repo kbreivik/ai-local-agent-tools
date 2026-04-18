@@ -406,6 +406,26 @@ async def lifespan(app: FastAPI):
             except Exception as _ole:
                 _log.debug("operation_log cleanup failed: %s", _ole)
     _aio.create_task(_operation_log_cleanup_loop())
+    # v2.34.14 — agent_llm_traces tables + daily retention purge
+    try:
+        from api.db.llm_traces import init_llm_traces
+        init_llm_traces()
+    except Exception as _lle:
+        _log.debug("llm_traces init failed: %s", _lle)
+    async def _llm_trace_cleanup_loop():
+        while True:
+            await _aio.sleep(86400)
+            try:
+                from api.db.llm_trace_retention import purge_old_traces
+                r = purge_old_traces()
+                if r.get("steps_purged") or r.get("prompts_purged"):
+                    _log.info(
+                        "llm_traces cleanup: purged %d steps, %d prompts",
+                        r["steps_purged"], r["prompts_purged"],
+                    )
+            except Exception as _lre:
+                _log.debug("llm_traces cleanup failed: %s", _lre)
+    _aio.create_task(_llm_trace_cleanup_loop())
     # Auto-promoter: weekly scan of agent_actions for repeated tool patterns
     try:
         from api.skills.auto_promoter import schedule_weekly
