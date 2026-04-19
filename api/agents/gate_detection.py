@@ -30,6 +30,9 @@ GATE_DEFS = (
     "inrun_contradiction",
     "fact_age_rejection",
     "runbook_injected",
+    # v2.35.14 — agent exited naturally with empty final_answer; harness
+    # rescued the run by forcing a synthesis from tool history alone.
+    "empty_completion_rescued",
 )
 
 
@@ -106,6 +109,16 @@ def detect_gates_from_steps(steps: list, system_prompt: str | None = None) -> di
             ):
                 gates["forced_synthesis"]["count"] += 1
                 gates["forced_synthesis"]["details"].append(
+                    {"step": step_idx, "snippet": content[:160]}
+                )
+            # v2.35.14 — empty-completion rescue. Distinct from cap-based
+            # forced_synthesis so operators can tell which path fired.
+            if (
+                "[harness]" in content
+                and "natural completion with empty final_answer" in lowered
+            ):
+                gates["empty_completion_rescued"]["count"] += 1
+                gates["empty_completion_rescued"]["details"].append(
                     {"step": step_idx, "snippet": content[:160]}
                 )
             # v2.35.2 — in-run cross-tool contradiction advisory

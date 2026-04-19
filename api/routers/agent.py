@@ -591,6 +591,95 @@ async def _run_single_agent_step(
     final_status = "completed"
     last_reasoning = ""
 
+    # v2.35.14 — fire forced_synthesis at most once on the natural-completion
+    # path (last_reasoning empty + >=1 substantive tool call). Each terminal
+    # happy-path branch consults this guard before broadcasting "done".
+    _empty_completion_synth_done = False
+
+    async def _maybe_force_empty_synthesis() -> str:
+        """Run forced_synthesis when the loop exits naturally with no
+        final_answer but substantive tool calls were made.
+
+        Returns the synthesis text (or "" on no-op / failure). Idempotent:
+        sets ``_empty_completion_synth_done`` after the first attempt so
+        re-entries on the same operation_id do not double-fire.
+        """
+        nonlocal _empty_completion_synth_done, last_reasoning, _trace_step_index
+        if _empty_completion_synth_done:
+            return ""
+        if (last_reasoning or "").strip():
+            return ""
+        if substantive_tool_calls < 1:
+            return ""
+        _empty_completion_synth_done = True
+        log.warning(
+            "agent loop empty-completion detected op=%s tools=%d subst=%d; "
+            "invoking forced_synthesis",
+            operation_id, len(tools_used_names), substantive_tool_calls,
+        )
+        try:
+            from api.agents.forced_synthesis import run_forced_synthesis
+            _budget_for_synth = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            synth_text, harness_msg, raw_resp = run_forced_synthesis(
+                client=client,
+                model=_lm_model(),
+                messages=messages,
+                agent_type=agent_type,
+                reason="empty_completion",
+                tool_count=len(tools_used_names),
+                budget=_budget_for_synth,
+                actual_tool_names=tools_used_names,
+                operation_id=operation_id,
+                actual_tool_calls=[
+                    {
+                        "name":   tc.get("tool") or tc.get("tool_name") or tc.get("name"),
+                        "status": tc.get("status"),
+                        "result": tc.get("result") or tc.get("content"),
+                    }
+                    for tc in (tool_history or [])
+                ],
+            )
+            if synth_text:
+                last_reasoning = synth_text
+                try:
+                    await manager.send_line(
+                        "reasoning", synth_text, session_id=session_id,
+                    )
+                except Exception:
+                    pass
+                try:
+                    from api.logger import log_llm_step
+                    await log_llm_step(
+                        operation_id=operation_id,
+                        step_index=_trace_step_index,
+                        messages_delta=[
+                            {"role": "system", "content": harness_msg}
+                        ],
+                        response_raw=raw_resp or {
+                            "forced_synthesis": {
+                                "reason": "empty_completion",
+                                "text":   synth_text,
+                            }
+                        },
+                        agent_type=agent_type,
+                        is_subagent=_trace_is_subagent,
+                        parent_op_id=_trace_parent_op_id,
+                        temperature=0.3,
+                        model=_lm_model(),
+                    )
+                    _trace_step_index += 1
+                except Exception as _te:
+                    log.debug(
+                        "empty_completion trace log failed: %s", _te,
+                    )
+            return synth_text or ""
+        except Exception as e:
+            log.warning(
+                "forced_synthesis on empty_completion failed op=%s: %s",
+                operation_id, e,
+            )
+            return ""
+
     try:
         import time as _time
         _run_started = _time.monotonic()
@@ -1230,6 +1319,8 @@ async def _run_single_agent_step(
                             await manager.send_line("reasoning", _synth_text, session_id=session_id)
                     except Exception as _se:
                         log.debug("Stop-path synthesis failed: %s", _se)
+                # v2.35.14: empty-completion rescue on natural exit
+                await _maybe_force_empty_synthesis()
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
                 if is_final_step:
                     payload = {
@@ -2551,6 +2642,9 @@ async def _run_single_agent_step(
                             await manager.send_line("reasoning", _synth_text, session_id=session_id)
                     except Exception as _se:
                         log.debug("Audit-log completion synthesis failed: %s", _se)
+                # v2.35.14: empty-completion rescue when an audit_log-only step
+                # ends the run with no assistant text emitted (op 1ebb7047).
+                await _maybe_force_empty_synthesis()
                 choices = _extract_choices(last_reasoning) if last_reasoning else None
                 if is_final_step:
                     await manager.broadcast({
@@ -2633,6 +2727,10 @@ async def _run_single_agent_step(
                 except Exception as _se2:
                     log.debug("Post-loop synthesis failed: %s", _se2)
 
+            # v2.35.14: empty-completion rescue when the loop exhausted
+            # max_steps and the post-loop force_summary call also produced
+            # nothing useful (last_reasoning still empty).
+            await _maybe_force_empty_synthesis()
             if is_final_step:
                 await manager.broadcast({
                     "type": "done", "session_id": session_id, "agent_type": agent_type,

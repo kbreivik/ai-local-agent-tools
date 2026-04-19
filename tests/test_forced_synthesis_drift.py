@@ -328,6 +328,47 @@ def test_first_arg_value_priority():
     assert len(_first_arg_value({"host": long_val})) <= 40
 
 
+def test_forced_synthesis_accepts_empty_completion_reason():
+    """v2.35.14: the new reason label must round-trip through the harness
+    message and Prometheus counter."""
+    from api.agents.forced_synthesis import (
+        build_harness_message, _REASON_LABELS,
+    )
+    assert "empty_completion" in _REASON_LABELS
+    msg = build_harness_message(
+        reason="empty_completion", tool_count=5, budget=8,
+    )
+    # Reason label is used verbatim in the harness message
+    assert _REASON_LABELS["empty_completion"] in msg
+    # Harness still enforces the critical format rules
+    assert "CRITICAL FORMAT RULE" in msg
+
+
+def test_programmatic_fallback_empty_completion_reason():
+    """v2.35.14: _programmatic_fallback gracefully handles the new reason."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    out = _programmatic_fallback(
+        reason="empty_completion",
+        tool_count=5, budget=8,
+        actual_tool_calls=[
+            {"tool_name": "agent_performance_summary", "status": "ok",
+             "params": {"hours_back": 24},
+             "result": {"status": "ok",
+                        "message": "55 runs in past 24h, 30.9% success"}},
+            {"tool_name": "swarm_status", "status": "ok", "params": {},
+             "result": {"status": "ok", "message": "6/6 nodes Ready"}},
+        ],
+    )
+    assert "HARNESS FALLBACK" in out
+    # New reason label shows in the opening line
+    assert "natural completion" in out.lower()
+    # Per-tool snippets present (v2.35.13 enrichment)
+    assert "agent_performance_summary" in out
+    assert "55 runs" in out
+    assert "swarm_status" in out
+    assert "6/6 nodes" in out
+
+
 def test_run_forced_synthesis_falls_back_on_placeholder_echo(monkeypatch):
     """Integration: if attempt 1 drifts via XML and attempt 2 echoes the
     placeholder, the programmatic fallback must fire — the placeholder

@@ -13,6 +13,8 @@ export const GATE_DEFS = [
   'inrun_contradiction',
   'fact_age_rejection',
   'runbook_injected',
+  // v2.35.14 — empty_completion forced-synthesis rescue
+  'empty_completion_rescued',
 ]
 
 const RUNBOOK_MARKER = '═══ ACTIVE RUNBOOK:'
@@ -86,6 +88,14 @@ export function detectGates(steps, systemPrompt) {
       )) {
         gates.forced_synthesis.count++
         gates.forced_synthesis.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
+      }
+      // v2.35.14 — empty-completion rescue (distinct from cap path)
+      if (
+        c.includes('[harness]') &&
+        lc.includes('natural completion with empty final_answer')
+      ) {
+        gates.empty_completion_rescued.count++
+        gates.empty_completion_rescued.details.push({ step: stepIdx, snippet: c.slice(0, 160) })
       }
       // v2.35.2 — in-run cross-tool contradiction advisory
       if (c.includes('[harness] Contradiction detected within this run')) {

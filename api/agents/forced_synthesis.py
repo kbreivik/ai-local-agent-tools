@@ -36,6 +36,8 @@ _REASON_LABELS = {
     "token_cap":         "token cap",
     "destructive_cap":   "destructive-call cap",
     "tool_failures":     "consecutive-tool-failure cap",
+    # v2.35.14 — natural exit with no assistant text emitted
+    "empty_completion":  "natural completion with empty final_answer",
 }
 
 

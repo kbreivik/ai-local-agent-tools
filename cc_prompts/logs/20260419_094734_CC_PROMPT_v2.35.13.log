@@ -913,3 +913,20 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-19 09:47:34
 ========================================================================
+Push succeeded — commit `46e2836` is live on main.
+[STATUS] 7m32s
+
+PROMPT COMPLETE: v2.35.13
+
+Summary:
+- `_programmatic_fallback` rewritten with DB source (`operation_id` → `tool_calls` query), `(tool_name, first_arg_value)` dedup, and `_best_snippet` helper (message → data.summary → data keys → JSON).
+- `run_forced_synthesis` threads `operation_id` through; both call sites in `api/routers/agent.py` pass it.
+- New tools: `mcp_server/tools/pbs_health.py` (reads status_snapshots+infra_inventory) and `mcp_server/tools/agent_perf.py` (joins operations with agent_llm_traces for agent_type). Registered in `server.py`; added to observe/investigate allowlists.
+- Templates updated to invoke the new tools explicitly.
+- 22 new/existing drift tests pass; 49 pass across forced_synthesis/fabrication/fallback.
+- VERSION bumped to 2.35.13; committed and pushed as `46e2836`.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  7m32s
+========================================================================
