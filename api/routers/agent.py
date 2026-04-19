@@ -113,31 +113,41 @@ def _classify_terminal_final_answer(text: str) -> str | None:
 
 
 def compute_final_answer(steps: list[dict]) -> str:
-    """v2.35.16 — derive final_answer from agent step history.
+    """v2.35.17 — derive final_answer from agent step history.
 
-    Returns the LAST step's content (stripped), but only when that step
-    finished with finish_reason='stop'. Earlier steps' content is treated
-    as internal thinking / preamble and never persisted as the
-    operator-facing answer.
+    Rule (per OpenAI chat-completions semantics): a synthesis answer is
+    only valid when a step BOTH (a) finished with finish_reason='stop'
+    AND (b) emitted NO tool_calls. Content emitted alongside tool_calls
+    is pre-action reasoning ("I'll check the UniFi..."), not a
+    user-facing answer.
 
-    When the last step has finish_reason='tool_calls' (or anything other
-    than 'stop'), returns '' so the v2.35.14 empty_completion rescue can
-    fire run_forced_synthesis to produce a proper synthesis. This is the
-    intentional break from pre-v2.35.16 behaviour, which preserved step-0
-    preamble like "I'll check the UniFi status" as final_answer when later
-    steps emitted only tool_calls — leaking thinking text to operators.
+    Traverses steps in REVERSE so multi-synthesis flows (e.g. a natural
+    synthesis followed by a forced_synthesis rescue) pick up the most
+    recent synthesis. Returns '' if no step qualifies, so v2.35.14's
+    empty_completion rescue fires run_forced_synthesis.
 
-    Used by the agent loop's per-step content handler and as the testable
-    contract for tests/test_final_answer_assignment.py.
+    v2.35.16 only checked the last step and only gated on
+    finish_reason — that left a hole when the LLM emitted content
+    AND a tool_call in the same response (op 07d326a1, fa_len=53).
+    v2.35.17 closes that hole at the source; v2.35.15
+    too_short/preamble_only rescues become belt-and-suspenders.
+
+    Used by the agent loop's per-step content handler and as the
+    testable contract for tests/test_final_answer_assignment.py.
     """
     if not steps:
         return ""
-    last = steps[-1]
-    if not isinstance(last, dict):
-        return ""
-    if last.get("finish_reason") != "stop":
-        return ""
-    return (last.get("content") or "").strip()
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        if step.get("finish_reason") != "stop":
+            continue
+        if step.get("tool_calls"):
+            continue
+        content = (step.get("content") or "").strip()
+        if content:
+            return content
+    return ""
 
 
 def _result_count(tool_result: dict) -> int | None:
@@ -1140,20 +1150,19 @@ async def _run_single_agent_step(
                     duration_ms=int((_time.monotonic() - _step_t0) * 1000),
                 )
 
-            # v2.35.16 — last-step final_answer rule. Only persist content as
-            # last_reasoning when this step is terminal (finish_reason='stop').
-            # Pre-v2.35.16 used "if msg.content: last_reasoning = msg.content",
-            # which accumulated step-0 preamble ("I'll check the UniFi status")
-            # as final_answer when later steps emitted only tool_calls. That
-            # leaked internal thinking to operators (op 07d326a1, fa_len=53).
-            # New rule: tool-call steps' text is preamble — emit it live for UI
-            # feedback and for working-memory continuity, but DON'T store it
-            # as final_answer. If the LLM never produces a stop step,
-            # last_reasoning stays empty and the v2.35.14 empty_completion
-            # rescue fires run_forced_synthesis. v2.35.15 too_short /
-            # preamble_only rescues become belt-and-suspenders rather than the
-            # primary path.
-            if finish == "stop":
+            # v2.35.17 — final_answer rule: only assistant content from a
+            # step that both (a) finished with finish_reason='stop' AND
+            # (b) emitted NO tool_calls counts as a synthesis. Content
+            # emitted alongside tool_calls is pre-action reasoning under
+            # OpenAI chat-completions semantics ("I'll check the UniFi..."),
+            # not a user-facing synthesis. v2.35.16 only checked finish
+            # reason, which left a hole when the LLM produced both content
+            # AND a tool_call in the same response (op 07d326a1, fa_len=53).
+            # If no step qualifies, last_reasoning stays empty and the
+            # v2.35.14 empty_completion rescue fires run_forced_synthesis.
+            # v2.35.15 too_short/preamble_only rescues become
+            # belt-and-suspenders rather than the primary path.
+            if finish == "stop" and not msg.tool_calls:
                 last_reasoning = msg.content or ""
 
             if msg.content:

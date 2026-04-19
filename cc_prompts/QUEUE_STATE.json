@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-19T12:08:55",
+  "updated_at": "2026-04-19T13:15:05",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2533,10 +2533,26 @@
       "filename": "CC_PROMPT_v2.35.16.md",
       "version": "v2.35.16",
       "theme": "STRATEGY-MEMO + recommended: last-step final_answer assignment (root-cause fix for preamble bug)",
+      "runner_status": "DONE",
+      "commit_sha": "0eddcfc",
+      "error": "",
+      "started_at": "2026-04-19T12:08:55",
+      "finished_at": "2026-04-19T12:15:20",
+      "duration_s": 385.3718580999994,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260419_120855_CC_PROMPT_v2.35.16.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.35.17.md",
+      "version": "v2.35.17",
+      "theme": "fix(agents): final_answer only from finish_reason='stop' + no tool_calls (root-cause fix, supersedes v2.35.14+15 rescue dependence)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-19T12:08:55",
+      "started_at": "2026-04-19T13:15:05",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
