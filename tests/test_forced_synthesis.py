@@ -85,7 +85,9 @@ def test_forced_synthesis_does_not_pass_tools_arg():
     assert raw is not None
 
 
-def test_forced_synthesis_returns_empty_on_llm_failure():
+def test_forced_synthesis_falls_back_on_llm_failure():
+    """v2.35.10: on LLM failure, the programmatic fallback is returned
+    instead of an empty string — operators always get readable output."""
     class _FailingCompletions:
         def create(self, **kw):
             raise RuntimeError("LM Studio unreachable")
@@ -101,7 +103,8 @@ def test_forced_synthesis_returns_empty_on_llm_failure():
         budget=16,
         actual_tool_names=[],
     )
-    assert text == ""
+    assert "HARNESS FALLBACK" in text
+    assert "wall-clock cap" in text
     assert "[harness]" in harness_msg
     assert raw is None
 

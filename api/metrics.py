@@ -205,6 +205,19 @@ FORCED_SYNTHESIS_FABRICATED_COUNTER = Counter(
     ["agent_type"],
 )
 
+# --- forced synthesis XML-drift defense (v2.35.10) ---
+FORCED_SYNTHESIS_DRIFT_COUNTER = Counter(
+    "deathstar_forced_synthesis_drift_total",
+    "Times a forced_synthesis output was rejected as XML/JSON drift.",
+    ["reason", "attempt"],  # reason: tool_call_prefix/xml_density/parameter_tag_in_head/empty
+)
+
+FORCED_SYNTHESIS_FALLBACK_COUNTER = Counter(
+    "deathstar_forced_synthesis_fallback_total",
+    "Times the programmatic fallback was used (both LLM attempts drifted).",
+    ["reason"],  # reason: the loop-exit reason (budget_cap/wall_clock/...)
+)
+
 # --- skills (v2.34.2) ---
 SKILL_EXEC_COUNTER = Counter(
     "deathstar_skill_executions_total",

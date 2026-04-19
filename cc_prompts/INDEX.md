@@ -200,8 +200,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.6.md | v2.35.6 | fix(security): remove legacy [BLOCKED:...] egress sanitiser rewriting operations.final_answer | DONE (b40289b) |
 | CC_PROMPT_v2.35.7.md | v2.35.7 | fix(agents): disambiguate PREFLIGHT FACTS entity_ids from vm_exec host names | DONE (5962196) |
 | CC_PROMPT_v2.35.8.md | v2.35.8 | feat(templates): five new non-destructive templates + catalogue CI tests | DONE (3cf80a2) |
-| CC_PROMPT_v2.35.9.md | v2.35.9 | fix(vm_exec): hostname resolution hardening + safe boolean chaining + DNS template fix | RUNNING |
-| CC_PROMPT_v2.35.10.md | v2.35.10 | fix(agents): forced_synthesis XML-drift defense + programmatic fallback | PENDING |
+| CC_PROMPT_v2.35.9.md | v2.35.9 | fix(vm_exec): hostname resolution hardening + safe boolean chaining + DNS template fix | DONE (23dd5d6) |
+| CC_PROMPT_v2.35.10.md | v2.35.10 | fix(agents): forced_synthesis XML-drift defense + programmatic fallback | RUNNING |
 
 ---
 
