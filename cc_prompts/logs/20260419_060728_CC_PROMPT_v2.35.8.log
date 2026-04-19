@@ -1,0 +1,458 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.8.md (v2.35.8)
+Theme: feat(templates): five new non-destructive templates + catalogue CI tests
+
+Prompt content:
+
+# CC PROMPT — v2.35.8 — Five new high-value non-destructive task templates
+
+## What this does
+
+Adds five new read-only task templates covering operational gaps the current
+TaskTemplates catalogue doesn't address. Each template exercises tools that
+already exist in the agent allowlist — no new tool capabilities required.
+
+New templates:
+
+1. **Container restart loop diagnosis** (INFRASTRUCTURE group, non-destructive)
+   — finds containers that are flapping (exit codes, restart counts,
+   last_exit_time, recent logs around each restart).
+2. **Certificate expiry check** (SECURITY group, non-destructive) —
+   inventories SSL cert expiry across reverse proxies and flags anything
+   <30 days from expiry.
+3. **DNS resolver consistency** (NETWORK group, non-destructive) — checks
+   that all configured DNS servers resolve the same core records (split-brain
+   detection).
+4. **Docker overlay network health** (SWARM group, non-destructive) —
+   enumerates Swarm overlay networks, checks ingress reachability from every
+   worker, flags orphaned or unused networks.
+5. **Agent success rate audit** (new PLATFORM group, non-destructive) — the
+   agent reflects on itself: queries `/api/logs/operations?limit=100`, groups
+   by agent_type and status, reports completion rate + top-failing task
+   patterns in the last week.
+
+Version bump: 2.35.7 → 2.35.8.
+
+---
+
+## Change 1 — `gui/src/components/TaskTemplates.jsx`
+
+Add the five new items to existing groups (INFRASTRUCTURE, SECURITY, NETWORK,
+SWARM) and add a new `PLATFORM` group at the bottom.
+
+### INFRASTRUCTURE group — append this item to the `items` array:
+
+```javascript
+{
+  label: 'Container restart loop diagnosis',
+  task:
+    'Identify any Docker containers that are in a restart loop (>3 restarts in the last hour or >10 in the last 24h). For each flapping container: report its host, exit code of last termination, restart count, and the last 30 journal lines from around each recent restart. Call container_config_read and container_env first for the container\'s own config, then vm_exec journalctl on the host to capture crash context. Do NOT call any restart or update tools — this is read-only diagnosis.'
+},
+```
+
+### SECURITY group — append this item:
+
+```javascript
+{
+  label: 'Certificate expiry check',
+  task:
+    'Check SSL certificate expiry dates across the infrastructure. For each reverse proxy host (nginx, caddy, traefik in AVAILABLE VM HOSTS), enumerate certificate files via vm_exec (find /etc/letsencrypt/live -name fullchain.pem, find /etc/nginx/ssl, find /etc/caddy) and run openssl x509 -enddate -noout on each. Report any cert expiring within 30 days. Also check the agent-01 self-signed certs if present. Do NOT renew or modify anything — this is read-only audit.'
+},
+```
+
+### NETWORK group — append this item:
+
+```javascript
+{
+  label: 'DNS resolver consistency',
+  task:
+    'Check DNS resolver chain health. For every DNS server configured in this environment (check via list_connections platform=pihole and platform=technitium; also check /etc/resolv.conf on agent-01), use vm_exec to run dig or nslookup against each server for a standard set of records: the agent-01 host itself, one external record (google.com), and one internal record (one of the Swarm node hostnames). Compare answers across servers — flag any split-brain where servers disagree. Report all servers\' IPs, response times, and any resolution failures.'
+},
+```
+
+### SWARM group — append this item:
+
+```javascript
+{
+  label: 'Docker overlay network health',
+  task:
+    'Check Docker Swarm overlay network health. From any manager node (use swarm_node_status to identify), run vm_exec `docker network ls --filter scope=swarm` and `docker network inspect ingress`. Verify ingress network is healthy: all 3 managers + 3 workers attached, no IP pool exhaustion, no stale peers. Then from one worker, test ingress reachability by running `docker network inspect <overlay_name>` for each attached swarm service. Flag any overlay network with peer_count not equal to node count, or any orphaned networks with no services attached. Read-only — do NOT create, remove, or modify networks.'
+},
+```
+
+### Add new group `PLATFORM` after STORAGE group (just before SECURITY), OR append after SECURITY — place it so the `TEMPLATES` array ends with a new PLATFORM entry:
+
+```javascript
+{
+  group: 'PLATFORM',
+  color: 'var(--text-2)',
+  items: [
+    {
+      label: 'Agent success rate audit',
+      task:
+        'Review the agent\'s own recent performance. Fetch the last 100 operations from /api/logs/operations and aggregate by (agent_type, status). Report: (a) overall success rate (completed / total), (b) success rate per agent_type (observe, investigate, execute, build), (c) top 5 task labels that ended with status=error or escalated, (d) median wall-clock time per agent_type, (e) any patterns of hallucination_guard_exhausted or fabrication_detected firings. Output as a structured report. This is a self-monitoring task — use only read endpoints and do NOT trigger new agent runs.'
+    },
+  ],
+},
+```
+
+**Implementation note for CC:** the `TEMPLATES` const uses plain JS literals. A
+str_replace-style edit against the existing array works cleanly — grep for each
+group's `items: [` opening and insert before the closing `],`. For the new
+PLATFORM group, locate the SECURITY group's closing `},` and insert the new
+group object after it (or before, depending on desired menu order — user
+preference is PLATFORM last).
+
+---
+
+## Change 2 — `tests/test_task_templates.py` (new file — basic integrity tests)
+
+```python
+"""v2.35.8 template integrity tests.
+
+These do NOT fire agent tasks (that needs LM Studio). They verify the
+template catalogue is well-formed: unique labels within each group, every
+task string is non-empty, no unresolved placeholders outside parameterized
+templates, and each destructive template is flagged.
+"""
+from __future__ import annotations
+
+import re
+import pathlib
+
+import pytest
+
+
+TEMPLATES_PATH = (
+    pathlib.Path(__file__).parent.parent
+    / "gui" / "src" / "components" / "TaskTemplates.jsx"
+)
+
+# Labels that SHOULD contain parameter placeholders like {node_name}
+PARAMETERIZED = {"Drain Swarm node", "Reboot Proxmox VM"}
+
+# Destructive templates — safety scan makes sure these exist (so the test
+# suite reminds operators the list is up to date) and that NOTHING called
+# by a non-destructive template accidentally looks like one of these.
+DESTRUCTIVE = {
+    "Recover kafka_broker-3", "Force-update logstash",
+    "Force-update kafka_broker-3", "Drain Swarm node",
+    "Prune Docker images", "Journalctl vacuum",
+    "Reboot worker-03", "Reboot Proxmox VM",
+}
+
+
+def _parse_templates():
+    """Extract the TEMPLATES array from TaskTemplates.jsx as a flat
+    list of (group, label, task) tuples. This is a line-level regex parse
+    — good enough for the literal structure the file uses."""
+    src = TEMPLATES_PATH.read_text(encoding="utf-8")
+    # Each item block is one line per label + one task string (sometimes multiline).
+    # We parse by finding `label: '...'` and the following `task: '...'` allowing
+    # escaped quotes and multi-line template literals.
+    items = []
+    # Find all group blocks
+    group_re = re.compile(r"group:\s*['\"]([^'\"]+)['\"]")
+    label_re = re.compile(r"label:\s*['\"]([^'\"]+)['\"]")
+    # task can be single or triple quoted; match up to the next `,\n` at brace-0 depth
+    task_re  = re.compile(
+        r"task:\s*(?P<q>['\"`])(?P<body>(?:\\.|(?!(?P=q)).)*)(?P=q)",
+        re.DOTALL,
+    )
+
+    groups = list(group_re.finditer(src))
+    for gi, gm in enumerate(groups):
+        group_name = gm.group(1)
+        start = gm.end()
+        end = groups[gi + 1].start() if gi + 1 < len(groups) else len(src)
+        block = src[start:end]
+        labels = [m.group(1) for m in label_re.finditer(block)]
+        tasks = [m.group("body") for m in task_re.finditer(block)]
+        # Pair labels with tasks in order — TaskTemplates.jsx always interleaves.
+        for label, task in zip(labels, tasks):
+            items.append((group_name, label, task))
+    return items
+
+
+def test_templates_file_parses():
+    items = _parse_templates()
+    assert len(items) >= 30, f"expected >=30 templates, parsed {len(items)}"
+
+
+def test_labels_unique_within_group():
+    items = _parse_templates()
+    by_group: dict[str, list[str]] = {}
+    for grp, label, _ in items:
+        by_group.setdefault(grp, []).append(label)
+    for grp, labels in by_group.items():
+        dupes = [l for l in labels if labels.count(l) > 1]
+        assert not dupes, f"duplicate labels in {grp}: {set(dupes)}"
+
+
+def test_task_strings_are_non_empty_and_substantive():
+    items = _parse_templates()
+    for grp, label, task in items:
+        assert len(task.strip()) >= 30, \
+            f"{grp}/{label} task is suspiciously short: {len(task)} chars"
+
+
+def test_placeholders_only_in_parameterized_templates():
+    """Templates like 'Drain Swarm node' use {node_name} — that's expected.
+    Other templates should not contain unresolved placeholders."""
+    items = _parse_templates()
+    placeholder_re = re.compile(r"\{[a-z_]+\}")
+    for grp, label, task in items:
+        if label in PARAMETERIZED:
+            continue
+        matches = placeholder_re.findall(task)
+        # Allow common non-placeholder patterns: {id1, id2} in example strings
+        real_placeholders = [m for m in matches
+                             if not re.search(r"\d", m)
+                             and m not in {"{id1}", "{id2}"}]
+        assert not real_placeholders, \
+            f"{grp}/{label} has unresolved placeholders {real_placeholders!r}"
+
+
+def test_known_destructive_labels_all_present():
+    """If someone renames or removes a destructive template, a reviewer
+    must either update DESTRUCTIVE here or mark the change deliberately."""
+    items = _parse_templates()
+    labels_in_file = {l for _, l, _ in items}
+    missing = DESTRUCTIVE - labels_in_file
+    assert not missing, (
+        f"destructive templates removed without updating the test suite: "
+        f"{sorted(missing)}. If the removal is intentional, prune this set."
+    )
+
+
+def test_non_destructive_templates_do_not_mention_plan_action():
+    """Observe / investigate tasks should not pre-commit the agent to
+    plan_action — that's a gate for execute-type tasks only."""
+    items = _parse_templates()
+    for grp, label, task in items:
+        if label in DESTRUCTIVE:
+            continue
+        # Parameterized destructive-ish templates are OK
+        if label in PARAMETERIZED:
+            continue
+        assert "plan_action" not in task.lower(), \
+            (f"{grp}/{label} is not destructive but mentions plan_action; "
+             "that gates the agent toward execute mode and wastes context.")
+
+
+def test_all_hosts_templates_cite_available_vm_hosts(tmp_path=None):
+    """v2.35.7 regression — any template that says 'all hosts' /
+    'all VM hosts' / 'every host' must tell the agent to use the
+    AVAILABLE VM HOSTS list. Otherwise the agent pulls hostnames from
+    PREFLIGHT FACTS (Proxmox VM names) and burns vm_exec budget on
+    errors."""
+    items = _parse_templates()
+    trigger_re = re.compile(r"all (?:registered )?(?:VM )?hosts?|every host", re.I)
+    offenders = []
+    for grp, label, task in items:
+        if trigger_re.search(task):
+            if ("AVAILABLE VM HOSTS" not in task and
+                "list_connections" not in task and
+                "infra_lookup" not in task):
+                offenders.append(f"{grp}/{label}")
+    assert not offenders, (
+        f"templates mentioning 'all hosts' but not citing the authoritative "
+        f"host source: {offenders}. Add an instruction to use AVAILABLE VM "
+        "HOSTS / list_connections / infra_lookup — see v2.35.7 for the "
+        "exact wording used elsewhere."
+    )
+```
+
+This test suite is entirely static — no agent runs, no DB, no LM Studio
+dependency. It runs in milliseconds in CI and guards the template catalogue
+against common authoring mistakes.
+
+---
+
+## Change 3 — `VERSION`
+
+Replace with:
+
+```
+2.35.8
+```
+
+---
+
+## Verify
+
+```bash
+pytest tests/test_task_templates.py -v
+```
+
+All 7 tests must pass (6 generic integrity + the v2.35.7 regression guard).
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(templates): v2.35.8 five new non-destructive task templates + catalogue CI
+
+Adds: container restart loop diagnosis (INFRA), certificate expiry check
+(SECURITY), DNS resolver consistency (NETWORK), Docker overlay network
+health (SWARM), agent success rate audit (new PLATFORM group).
+
+All five are read-only — no destructive tools, no state changes. Each
+uses tools already in the existing allowlists; no backend changes required.
+
+Also adds tests/test_task_templates.py with 7 catalogue-integrity tests
+covering parseability, label uniqueness, placeholder discipline, the
+destructive-labels manifest, and a v2.35.7 regression guard ensuring any
+template mentioning 'all hosts' cites the AVAILABLE VM HOSTS / list_connections
+authority. These run without LM Studio and take <1s."
+git push origin main
+```
+
+---
+
+## Deploy
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Frontend bundle is rebuilt during Docker image build — the new templates
+appear in the UI dropdown after the next pull.
+
+---
+
+## Smoke test (post-deploy, LM Studio must be loaded)
+
+Click through each new template in the UI dropdown. For each, verify:
+- Task text populates the textarea (no JSX rendering errors)
+- Fire the task; expect `status: completed` for all five, no hostname
+  errors, no destructive tool calls recorded in `agent_actions` table.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-19 06:07:28
+========================================================================
+Commit pushed. Per the invocation instructions, the runner handles INDEX.md updates, not me.
+[STATUS] 3m14s
+
+PROMPT COMPLETE: v2.35.8
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m14s
+========================================================================

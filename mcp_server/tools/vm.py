@@ -94,6 +94,49 @@ def _split_pipeline(cmd: str) -> list[str]:
     return [s for s in stages if s != ""]
 
 
+# ── Safe boolean-chain support (v2.35.9) ─────────────────────────────────
+# `cmdA && cmdB` and `cmdA || cmdB` are strictly safer than separate calls
+# when both operands are read-only: no data exfiltration risk, no
+# out-of-order race. Allowed only when every segment independently validates.
+#
+# Split carefully: `&&` and `||` are the ONLY boolean chain operators — do
+# NOT split on single `&` (background) or single `|` (pipeline; that's
+# already handled by _split_pipeline).
+
+_CHAIN_OPS_RE = re.compile(r'\s*(?:&&|\|\|)\s*')
+
+
+def _split_chain(cmd: str) -> list[str]:
+    """Split cmd on && / ||, respecting quoted strings.
+
+    Returns the list of sub-commands. Single-element list when no chain ops.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if in_quote:
+            current.append(ch)
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+        elif ch in ('"', "'"):
+            in_quote = ch
+            current.append(ch)
+            i += 1
+        elif i + 1 < len(cmd) and cmd[i:i + 2] in ('&&', '||'):
+            parts.append("".join(current).strip())
+            current = []
+            i += 2
+        else:
+            current.append(ch)
+            i += 1
+    parts.append("".join(current).strip())
+    return [p for p in parts if p]
+
+
 def _validate_command(command: str, session_id: str = "") -> tuple:
     """Validate a command against the allowlist (DB-backed, 30s cache).
 
@@ -101,6 +144,11 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
       stage0           — must match the allowlist (the actual command)
       stage1..stageN   — must be in PIPE_SAFELIST (head/tail/grep/wc/...)
       trailing redir   — 2>&1, >/dev/null, 2>/dev/null all allowed
+
+    Boolean chains (v2.35.9):
+      cmdA && cmdB     — allowed when each segment independently validates
+      cmdA || cmdB     — allowed when each segment independently validates
+      max 3 segments
 
     Returns:
         (True, command)          — command is allowed (shell handles redirects)
@@ -117,6 +165,43 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
         '--format TEMPLATE',
         command,
     )
+
+    # v2.35.9: Boolean chain support — split on && / ||, validate each segment
+    # independently. No segment can itself contain another chain op (we
+    # already split on them) so recursion depth is 1.
+    chain_segments = _split_chain(sanitized)
+    if len(chain_segments) > 1:
+        if len(chain_segments) > 3:
+            return False, (
+                f"Maximum two boolean chain operators allowed "
+                f"(got {len(chain_segments) - 1} in {command!r})"
+            )
+        try:
+            from api.metrics import VM_EXEC_CHAIN_COUNTER
+        except Exception:
+            VM_EXEC_CHAIN_COUNTER = None
+        for seg in chain_segments:
+            ok, seg_result = _validate_command(seg, session_id=session_id)
+            if not ok:
+                if isinstance(seg_result, dict):
+                    seg_result = {
+                        **seg_result,
+                        "message": (
+                            f"(chain segment {seg!r} failed) "
+                            + seg_result.get("message", "")
+                        ),
+                    }
+                else:
+                    seg_result = f"Chain segment {seg!r} rejected: {seg_result}"
+                return False, seg_result
+            if VM_EXEC_CHAIN_COUNTER is not None:
+                try:
+                    VM_EXEC_CHAIN_COUNTER.labels(
+                        op="&&" if "&&" in command else "||"
+                    ).inc()
+                except Exception:
+                    pass
+        return True, command
 
     # Strip safelisted redirects BEFORE the metachar check — these legitimately
     # contain & and > that would otherwise be blocked.
@@ -197,7 +282,9 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
 
 def _resolve_connection(host, all_conns):
     """Resolve a host name/IP/alias to a vm_host connection.
-    Resolution order: infra_inventory -> label exact -> IP exact -> label partial.
+    Resolution order: infra_inventory -> label exact -> IP exact ->
+    unique suffix -> unique substring.
+    Returns None on ambiguous partial match — caller must format an error.
     """
     q = host.lower().strip()
 
@@ -213,17 +300,28 @@ def _resolve_connection(host, all_conns):
     except Exception:
         pass
 
-    # 2. Direct connection match -- label exact -> IP exact -> label partial
+    # 2. Direct connection match -- label exact -> IP exact
     for c in all_conns:
         if c.get("label", "").lower() == q:
             return c
     for c in all_conns:
         if c.get("host", "") == host:
             return c
-    for c in all_conns:
-        if q in c.get("label", "").lower():
-            return c
 
+    # 3. Unique suffix match — catches "manager-01" ≡ "ds-docker-manager-01"
+    #    but rejects ambiguous matches.
+    suffix_matches = [c for c in all_conns
+                      if c.get("label", "").lower().endswith(q)]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0]
+
+    # 4. Unique substring match — broader fallback, still requires uniqueness.
+    substring_matches = [c for c in all_conns
+                         if q in c.get("label", "").lower()]
+    if len(substring_matches) == 1:
+        return substring_matches[0]
+
+    # Ambiguous partial — return None; caller formats an informative error.
     return None
 
 
@@ -301,6 +399,21 @@ def vm_exec(host: str, command: str) -> dict:
 
     conn = _resolve_connection(host, all_conns)
     if not conn:
+        # Detect ambiguity — distinguish "unknown" from "ambiguous partial".
+        all_partials = [c for c in all_conns
+                        if host.lower() in c.get("label", "").lower()
+                        or c.get("label", "").lower().endswith(host.lower())]
+        if len(all_partials) > 1:
+            names = sorted({c.get("label") for c in all_partials})
+            return {
+                "status": "error",
+                "message": (
+                    f"Ambiguous host reference {host!r} matches {len(all_partials)} "
+                    f"connections: {names}. Use the COMPLETE label string."
+                ),
+                "data": None,
+                "timestamp": _ts(),
+            }
         labels = [f"{c.get('label', '?')} ({c.get('host', '?')})" for c in all_conns]
         return {"status": "error",
                 "message": (

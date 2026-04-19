@@ -87,7 +87,7 @@ const TEMPLATES = [
       {
         label: 'DNS resolver consistency',
         task:
-          'Check DNS resolver chain health. For every DNS server configured in this environment (check via list_connections platform=pihole and platform=technitium; also check /etc/resolv.conf on agent-01), use vm_exec to run dig or nslookup against each server for a standard set of records: the agent-01 host itself, one external record (google.com), and one internal record (one of the Swarm node hostnames). Compare answers across servers — flag any split-brain where servers disagree. Report all servers\' IPs, response times, and any resolution failures.'
+          'Check DNS resolver chain health. For every DNS server configured in this environment (check via list_connections platform=pihole and platform=technitium; also check /etc/resolv.conf on the agent host — use the hp1-ai-agent-lab vm_host connection label OR call list_connections(platform=\'vm_host\') first to confirm), use vm_exec to run dig or nslookup against each server for a standard set of records: the hp1-ai-agent-lab host itself, one external record (google.com), and one internal record (one of the Swarm node hostnames). Compare answers across servers — flag any split-brain where servers disagree. Report all servers\' IPs, response times, and any resolution failures.'
       },
     ],
   },

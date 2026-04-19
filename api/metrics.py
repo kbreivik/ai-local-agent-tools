@@ -94,6 +94,13 @@ VM_EXEC_PIPE_COUNTER = Counter(
     ["pipe_stage"],  # head | tail | grep | wc | sort | uniq | awk | sed | cut | tr
 )
 
+# --- vm_exec boolean chains (v2.35.9) ---
+VM_EXEC_CHAIN_COUNTER = Counter(
+    "deathstar_vm_exec_chain_operators_total",
+    "Count of vm_exec commands using && or || boolean chains.",
+    ["op"],
+)
+
 # --- task classifier decisions (v2.34.11) ---
 CLASSIFIER_DECISIONS_COUNTER = Counter(
     "deathstar_agent_classifier_decisions_total",
