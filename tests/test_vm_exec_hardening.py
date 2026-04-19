@@ -87,14 +87,34 @@ def test_validate_command_still_rejects_command_substitution():
 
 
 def test_validate_command_chain_depth_cap():
+    """v2.35.18: cap raised 3→5 segments (max 4 boolean operators).
+    4-segment chains are now accepted; 6-segment chains still rejected."""
     from mcp_server.tools.vm import _validate_command
-    # 4+ segments not allowed
-    ok, result = _validate_command(
+    # 4 segments (3 operators) — now allowed, every segment validates
+    ok, _ = _validate_command(
         "df -h && uptime && free -m && uname -a", session_id=""
+    )
+    assert ok, "4-segment chain should be accepted after v2.35.18"
+    # 6 segments (5 operators) — still over the cap
+    ok, result = _validate_command(
+        "df -h && uptime && free -m && uname -a && whoami && hostname",
+        session_id="",
     )
     assert not ok
     err_text = result if isinstance(result, str) else result.get("message", "")
     assert "chain" in err_text.lower() or "boolean" in err_text.lower()
+
+
+def test_validate_command_four_chain_segments_the_vm_health_pattern():
+    """Regression pin for the exact command shape that was breaking the
+    multi-host VM-health task. Agents emit this verbatim; it must now pass
+    validation so the status agent doesn't burn its 8-call budget on
+    per-host splits. See docs/AGENT_FAILURE_ANALYSIS_v2.35.md Sample 2."""
+    from mcp_server.tools.vm import _validate_command
+    ok, _ = _validate_command(
+        "df -h && free -m && uptime && whoami", session_id=""
+    )
+    assert ok
 
 
 # ── Template text regression ──────────────────────────────────────────────

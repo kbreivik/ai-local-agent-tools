@@ -1,0 +1,292 @@
+# CC PROMPT — v2.35.18 — Drill the 30.9% success rate: two-phase analysis + targeted fix
+
+## What this does
+
+v2.35.17 closed the last known structural hole in the agent loop
+(preamble leak into final_answer). The rescue machinery built
+across v2.35.10–15 fires correctly, and the structural invariant
+`status=completed ⇒ substantive final_answer` holds end-to-end.
+
+The next-highest-leverage work is NOT another rescue patch. It's
+using the v2.34.14 `/trace` endpoint + v2.35.13 `agent_performance_summary`
+tool (both now working and verified) to find out WHY roughly 70% of
+recent agent runs haven't completed cleanly, categorise the top
+failure modes, and ship one targeted fix for whichever mode
+dominates.
+
+This is a **two-phase prompt**:
+
+- **Phase 1** — analysis only. No code. Produces
+  `docs/AGENT_FAILURE_ANALYSIS_v2.35.md` with a categorised
+  breakdown of failing runs and a single recommended fix.
+- **Phase 2** — the recommended fix. Scope depends on what
+  Phase 1 finds. CC writes Phase 2 inline into THIS file after
+  Phase 1 completes, commits both the doc and the code fix
+  together, and bumps VERSION to 2.35.18.
+
+Version bump: 2.35.17 → 2.35.18.
+
+---
+
+## Baseline from v2.35.13 first-run data
+
+Running `agent_performance_summary(hours_back=24)` during v2.35.13
+verification reported **55 runs, 30.9% success rate**, with 10
+top-failing task labels captured. That's stale data (pre-v2.35.14-17
+fixes), but it's the baseline: if post-v2.35.17 success rate is
+60%+, many of the earlier failures were the empty_completion /
+preamble bugs that are now fixed and the remaining failure modes
+are a different population. If it's still ~30%, there are
+structural issues beyond synthesis.
+
+---
+
+## Phase 1 — analysis (no code)
+
+### Step 1 — pull current aggregates
+
+```python
+# Use the agent_performance_summary tool directly via /api/tools invoke:
+#   POST /api/tools/agent_performance_summary/invoke  body={"hours_back": 168}
+# Also pull a narrower 24h window for post-v2.35.17 recency:
+#   POST /api/tools/agent_performance_summary/invoke  body={"hours_back": 24}
+```
+
+Record (into the analysis doc):
+
+- total runs (168h and 24h)
+- success_rate_pct (168h and 24h)
+- per-(agent_type, status) bucket counts
+- top-10 failing task labels with count + typical status
+
+### Step 2 — sample failing traces
+
+For each of the top-5 failing task labels from the 168h window,
+pull 2-3 representative `operation_id`s via direct SQL:
+
+```sql
+-- From inside the agent-01 container:
+SELECT id, agent_type, status, status_reason, duration_ms, created_at
+FROM operations
+WHERE task ILIKE '<label pattern>'
+  AND status != 'completed'
+  AND created_at > now() - interval '7 days'
+ORDER BY created_at DESC
+LIMIT 3;
+```
+
+Alternative — via the authenticated endpoint:
+`GET /api/logs/operations?status=failed|capped|escalated|error&limit=50`
+and filter client-side by task label.
+
+For each selected operation_id, fetch:
+
+```
+GET /api/logs/operations/{full_uuid}/trace?format=digest
+GET /api/logs/operations/{full_uuid}/trace?format=structured  (if digest is too sparse)
+```
+
+Record for each:
+
+- operation_id (short prefix is fine in the doc; full UUID in a
+  footnote table)
+- task label
+- agent_type
+- status + status_reason
+- step count
+- `gates_fired` keys that fired
+- tool_calls summary (names, ok/error counts)
+- final_answer shape: empty / preamble-stub / harness_fallback / real / fabricated
+- last-step finish_reason
+- 1-sentence hypothesis of the root cause
+
+### Step 3 — categorise
+
+Group the sampled failures into these buckets (add new buckets if
+something doesn't fit):
+
+| Bucket | Signal |
+|---|---|
+| `tool_auth_ssh` | vm_exec / container_* consistently failing with SSH/auth errors (the worker-host 93-char error string from v2.35.13 era) |
+| `tool_signature` | TypeError / missing-arg errors on tool calls despite v2.34.15's render_call_example |
+| `tool_missing` | Agent cited a tool name that isn't in its allowlist (blocked → retry → exhausted budget) |
+| `hallucination_guard_exhausted` | v2.34.8/14 guard fired N times, ended with failed/hallucination_guard_exhausted |
+| `fabrication_detected_and_rejected` | v2.34.14 fabrication detector rejected synthesis |
+| `budget_cap_with_rescue` | status=capped, forced_synthesis produced output (partial success) |
+| `budget_cap_with_fallback` | status=capped, _programmatic_fallback had to fire (LLM-synthesis unusable) |
+| `subagent_spawn_failed` | propose_subtask fired but sub-agent didn't complete |
+| `infra_not_found` | Tasks referencing entities that aren't in any collector's inventory |
+| `classifier_wrong` | Task routed to agent_type that can't do what's being asked |
+| `other` | Catch-all, describe |
+
+Record bucket counts + percent of total sampled failures.
+
+### Step 4 — pick ONE direction for Phase 2
+
+Select the bucket that (a) has the highest volume AND (b) has a
+plausible narrow code-level fix. If two buckets are close in volume
+but one is clearly infra (credentials, down nodes), prefer the
+code-addressable one.
+
+In the analysis doc, under `## Recommended Phase 2` include:
+
+- Selected bucket name and justification
+- The specific file(s) + function(s) that need changing
+- The expected behaviour change
+- A rough LOC estimate
+- A concrete regression test that would fail today and pass after
+  the fix
+
+Commit Phase 1 results:
+
+```bash
+git add docs/AGENT_FAILURE_ANALYSIS_v2.35.md
+git commit -m "docs(agents): v2.35.18 Phase 1 failure analysis of 30.9% success rate"
+# do NOT push yet — Phase 2 will be squashed in
+```
+
+### Phase 1 STOP CONDITION
+
+If Phase 1's analysis says "no single bucket dominates, all fixes
+would be speculative, most failures look infra-level (SSH auth,
+worker-03 down, missing connections)" — STOP. Commit the doc with
+a `## Phase 2: DEFERRED — infra work first` note, bump VERSION to
+2.35.18, push, and report back. Operator then triages infra before
+another code prompt.
+
+---
+
+## Phase 2 — targeted fix
+
+CC writes this section inline into THIS file AFTER completing
+Phase 1, using the bucket selected in Step 4. Template below —
+fill in the specifics:
+
+```markdown
+## Phase 2 (as written by CC after Phase 1) — fix for bucket `<NAME>`
+
+### Evidence
+<2-3 sentences citing the Phase 1 findings>
+
+### Change 1 — <file>
+<patch or spec>
+
+### Change 2 — <file> (if needed)
+<patch or spec>
+
+### Tests
+<regression test spec>
+
+### Prometheus
+<if any new counters are needed>
+```
+
+### Pre-authorised fix sketches (pick whichever fits Phase 1)
+
+These are NOT exhaustive — use them as starting points only. If
+Phase 1 points to something else, write that instead.
+
+**If `tool_auth_ssh` dominates:**
+- Audit `api/connections.py` `get_connection_for_platform()` — the
+  LIMIT 1 behaviour is a known debt item (project instructions).
+  Multiple vm_host connections for workers could collide; verify
+  each SSH error op is actually routing to the right connection.
+- Check credential_profile resolution: if worker SSH uses a
+  profile with `credential_state='needs_profile'` or a rotated-but-
+  not-confirmed key, vm_exec fails with a 93-char `auth_failed`
+  message. Add `deathstar_vm_exec_auth_errors_total{host, reason}`
+  counter to surface this in /metrics, and a harness advisory
+  injected into the agent prompt on 2+ consecutive SSH auth
+  failures against distinct hosts ("SSH auth appears misconfigured
+  for <host>, do not retry — report to operator").
+
+**If `tool_signature` dominates:**
+- The v2.34.15 render_call_example covered example blocks in
+  STATUS/RESEARCH/ACTION prompts. Phase 1 should name the specific
+  tool that's still failing. Expand render_call_example to cover
+  runbook bodies (v2.35.4 introduced runbook-sourced triage) —
+  runbooks are DB rows, not scanned at prompt build time.
+
+**If `hallucination_guard_exhausted` dominates:**
+- This is usually task-scope-too-broad. Check if the failing task
+  labels are composite ("investigate X and correlate with Y
+  across all hosts"). Fix: agent_type classifier should route
+  composite tasks to `investigate` with a strong prompt advising
+  to `propose_subtask` early. Check the propose_subtask nudge
+  threshold (v2.34.5 dropped it to 60%).
+
+**If `budget_cap_with_fallback` dominates:**
+- Every capped run that ends in fallback means the LLM produced
+  unusable output despite v2.35.10-13 work. This is likely Qwen3-
+  Coder-Next behaving pathologically on specific prompt shapes.
+  Examine the prompts of 3+ fallback-ending runs for a common
+  anti-pattern (same triage block, same runbook match, etc) and
+  fix the upstream prompt.
+
+**If `infra_not_found` dominates:**
+- Entities referenced in tasks that don't exist in any collector.
+  Either update collectors to import them, or add a harness
+  advisory when preflight returns 0 candidates AND 0 fact matches
+  telling the agent to `escalate` rather than retrying.
+
+---
+
+## Change — VERSION
+
+```
+2.35.18
+```
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(ops): v2.35.18 failure analysis doc + <bucket> fix
+
+Phase 1 analysis of 30.9% success rate baseline (from v2.35.13
+agent_performance_summary first run). Sampled N failing traces
+across top-5 failing task labels.
+
+Bucket breakdown:
+- tool_auth_ssh:                X%  (<N>/<total>)
+- tool_signature:               X%
+- hallucination_guard_exhausted: X%
+- budget_cap_with_rescue:       X%
+- budget_cap_with_fallback:     X%
+- subagent_spawn_failed:        X%
+- infra_not_found:              X%
+- classifier_wrong:             X%
+- other:                        X%
+
+Phase 2 fix lands in <file>: <1-sentence summary>.
+
+Regression tests in <tests/...>."
+git push origin main
+```
+
+## Deploy + smoke test
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy, re-run `agent_performance_summary(hours_back=24)`
+after a day of normal usage. Success rate should climb by at least
+the percentage of the targeted bucket.
+
+---
+
+## Scope guard
+
+If Phase 1 analysis takes more than ~30 trace-reads to feel
+confident, STOP and commit what's been found with a clear "need
+operator decision on which bucket to target" note. Don't speculate
+across too many unrelated failures.
+
+Do NOT modify any code outside the scope of the selected bucket.
+This prompt is not a license to refactor the agent loop.
+
+Do NOT touch v2.35.14/15 rescue machinery unless Phase 1 shows a
+bug in it. The invariant established at v2.35.17 should not be
+weakened.

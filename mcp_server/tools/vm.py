@@ -145,10 +145,10 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
       stage1..stageN   — must be in PIPE_SAFELIST (head/tail/grep/wc/...)
       trailing redir   — 2>&1, >/dev/null, 2>/dev/null all allowed
 
-    Boolean chains (v2.35.9):
+    Boolean chains (v2.35.9, cap raised v2.35.18):
       cmdA && cmdB     — allowed when each segment independently validates
       cmdA || cmdB     — allowed when each segment independently validates
-      max 3 segments
+      max 5 segments (4 boolean operators)
 
     Returns:
         (True, command)          — command is allowed (shell handles redirects)
@@ -171,9 +171,15 @@ def _validate_command(command: str, session_id: str = "") -> tuple:
     # already split on them) so recursion depth is 1.
     chain_segments = _split_chain(sanitized)
     if len(chain_segments) > 1:
-        if len(chain_segments) > 3:
+        # v2.35.18: cap raised 3 → 5 segments (allows 4 boolean operators).
+        # Every segment is still independently validated below, so the
+        # safety model is unchanged — this just unblocks the legitimate
+        # multi-host health pattern `df -h && free -m && uptime && whoami`
+        # that was forcing agents into a 3-4× fan-out and burning through
+        # the status agent's tool-call budget.
+        if len(chain_segments) > 5:
             return False, (
-                f"Maximum two boolean chain operators allowed "
+                f"Maximum four boolean chain operators allowed "
                 f"(got {len(chain_segments) - 1} in {command!r})"
             )
         try:
