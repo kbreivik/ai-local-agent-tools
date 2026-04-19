@@ -101,6 +101,13 @@ VM_EXEC_CHAIN_COUNTER = Counter(
     ["op"],
 )
 
+# --- connections query retries (v2.35.19) ---
+CONNECTIONS_QUERY_RETRY_COUNTER = Counter(
+    "deathstar_connections_query_retry_total",
+    "get_connection(s)_for_platform DB retry attempts and outcomes",
+    ["platform", "outcome"],  # outcome: retry | exhausted
+)
+
 # --- task classifier decisions (v2.34.11) ---
 CLASSIFIER_DECISIONS_COUNTER = Counter(
     "deathstar_agent_classifier_decisions_total",

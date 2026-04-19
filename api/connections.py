@@ -764,10 +764,17 @@ def get_connection_for_platform(platform: str) -> dict | None:
 
     Used by plugins/skills to resolve connection details instead of env vars.
     Works with both PostgreSQL (psycopg2) and SQLite (SQLAlchemy).
+
+    v2.35.19: loud error logging + one-shot retry on transient DB failures
+    (same treatment as get_all_connections_for_platform).
     """
-    # Try PostgreSQL first
-    conn = _get_conn()
-    if conn:
+    import time as _time
+
+    # PostgreSQL path with one retry
+    for attempt in (1, 2):
+        conn = _get_conn()
+        if conn is None:
+            break
         try:
             cur = conn.cursor()
             cur.execute(
@@ -788,14 +795,36 @@ def get_connection_for_platform(platform: str) -> dict | None:
             if cfg.get("paused"):
                 return None
             return decoded
-        except Exception:
-            return None
+        except Exception as e:
+            try: conn.close()
+            except Exception: pass
+            log.warning(
+                "get_connection_for_platform(platform=%r) attempt %d failed: %s",
+                platform, attempt, e, exc_info=(attempt == 2),
+            )
+            try:
+                from api.metrics import CONNECTIONS_QUERY_RETRY_COUNTER
+                CONNECTIONS_QUERY_RETRY_COUNTER.labels(
+                    platform=platform,
+                    outcome="retry" if attempt == 1 else "exhausted",
+                ).inc()
+            except Exception:
+                pass
+            if attempt == 1:
+                _time.sleep(0.15)
+                continue
+            # attempt 2 failed — fall through to SQLite fallback
 
-    # SQLite fallback via SQLAlchemy
+    # SQLite fallback via SQLAlchemy (loud-logged)
     try:
         from sqlalchemy import text as _text
         sa = _get_sa_conn()
         if not sa:
+            log.warning(
+                "get_connection_for_platform(%r): no PG conn and no SQLite "
+                "fallback available — returning None",
+                platform,
+            )
             return None
         row = sa.execute(
             _text("SELECT * FROM connections WHERE platform=:p AND enabled=1 AND host!='' ORDER BY created_at LIMIT 1"),
@@ -812,7 +841,11 @@ def get_connection_for_platform(platform: str) -> dict | None:
         if cfg.get("paused"):
             return None
         return decoded
-    except Exception:
+    except Exception as e:
+        log.warning(
+            "get_connection_for_platform(%r) SQLite fallback failed: %s",
+            platform, e, exc_info=True,
+        )
         return None
 
 
@@ -821,10 +854,19 @@ def get_all_connections_for_platform(platform: str) -> list[dict]:
 
     Used by collectors that support multiple connections (e.g. multiple
     Proxmox clusters). Works with both PostgreSQL and SQLite.
+
+    v2.35.19: loud error logging + one-shot retry on transient DB failures.
+    Pre-v2.35.19 silently returned [] on any exception, which led agents
+    to report "No vm_host connections configured" when the real issue was
+    a transient asyncpg pool hiccup.
     """
-    # PostgreSQL
-    conn = _get_conn()
-    if conn:
+    import time as _time
+
+    # PostgreSQL path with one retry
+    for attempt in (1, 2):
+        conn = _get_conn()
+        if conn is None:
+            break  # PG unavailable entirely; try SQLite fallback
         try:
             cur = conn.cursor()
             cur.execute(
@@ -839,14 +881,36 @@ def get_all_connections_for_platform(platform: str) -> list[dict]:
             return [d for d in (_decode_creds(r) for r in rows)
                     if not ((d.get("config") or {}) if isinstance(d.get("config"), dict)
                             else {}).get("paused")]
-        except Exception:
-            return []
+        except Exception as e:
+            try: conn.close()
+            except Exception: pass
+            log.warning(
+                "get_all_connections_for_platform(platform=%r) attempt %d failed: %s",
+                platform, attempt, e, exc_info=(attempt == 2),
+            )
+            try:
+                from api.metrics import CONNECTIONS_QUERY_RETRY_COUNTER
+                CONNECTIONS_QUERY_RETRY_COUNTER.labels(
+                    platform=platform,
+                    outcome="retry" if attempt == 1 else "exhausted",
+                ).inc()
+            except Exception:
+                pass
+            if attempt == 1:
+                _time.sleep(0.15)
+                continue
+            # attempt 2 failed — fall through to SQLite fallback
 
-    # SQLite fallback
+    # SQLite fallback (also loud-logged)
     try:
         from sqlalchemy import text as _text
         sa = _get_sa_conn()
         if not sa:
+            log.warning(
+                "get_all_connections_for_platform(%r): no PG conn and no SQLite "
+                "fallback available — returning empty",
+                platform,
+            )
             return []
         rows = sa.execute(
             _text("SELECT * FROM connections WHERE platform=:p AND enabled=1 "
@@ -857,5 +921,9 @@ def get_all_connections_for_platform(platform: str) -> list[dict]:
         return [d for d in (_decode_creds(dict(r)) for r in rows)
                 if not ((d.get("config") or {}) if isinstance(d.get("config"), dict)
                         else {}).get("paused")]
-    except Exception:
+    except Exception as e:
+        log.warning(
+            "get_all_connections_for_platform(%r) SQLite fallback failed: %s",
+            platform, e, exc_info=True,
+        )
         return []

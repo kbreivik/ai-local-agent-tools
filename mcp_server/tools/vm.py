@@ -399,9 +399,19 @@ def vm_exec(host: str, command: str) -> dict:
                 "data": None, "timestamp": _ts()}
 
     if not all_conns:
-        return {"status": "error",
-                "message": "No vm_host connections configured. Add in Settings -> Connections -> vm_host.",
-                "data": None, "timestamp": _ts()}
+        return {
+            "status": "error",
+            "message": (
+                "vm_host connection lookup returned no rows. Either: (a) no "
+                "vm_host connections are configured — add in Settings -> "
+                "Connections -> vm_host; or (b) a transient DB error occurred "
+                "and the query returned empty (check container logs for "
+                "'get_all_connections_for_platform' warnings). The second is "
+                "retryable — the agent can try this tool call again in a few "
+                "seconds."
+            ),
+            "data": None, "timestamp": _ts(),
+        }
 
     conn = _resolve_connection(host, all_conns)
     if not conn:

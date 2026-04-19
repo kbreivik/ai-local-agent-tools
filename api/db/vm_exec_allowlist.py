@@ -52,7 +52,7 @@ BASE_PATTERNS: list[tuple[str, str]] = [
     (r'^df\b',                         'Disk filesystem usage'),
     (r'^du\b',                         'Disk usage by directory'),
     (r'^free\b',                       'Memory usage'),
-    (r'^uptime$',                      'System uptime'),
+    (r'^uptime\b',                     'System uptime (supports -p, -s flags)'),
     (r'^uname\b',                      'Kernel/OS info'),
     (r'^hostname$',                    'Hostname'),
     (r'^whoami$',                      'Current user'),
@@ -175,8 +175,22 @@ def init_allowlist():
                    ON CONFLICT (pattern) DO NOTHING""",
                 (str(uuid.uuid4()), pattern, description),
             )
+        # v2.35.19: idempotent migration — pre-v2.35.19 installs have the
+        # end-anchored r'^uptime$' which blocks `uptime -p` / `uptime -s`.
+        # Rewrite to r'^uptime\b' for consistency with df/free/uname/date.
+        try:
+            cur.execute(
+                "UPDATE vm_exec_allowlist "
+                "SET pattern = %s, description = %s "
+                "WHERE pattern = %s AND is_base = TRUE",
+                (r'^uptime\b', 'System uptime (supports -p, -s flags)', r'^uptime$'),
+            )
+        except Exception as _ue:
+            log.warning("v2.35.19 uptime allowlist migration failed: %s", _ue)
         cur.close()
         conn.close()
+        # Bust the in-memory cache so the new pattern is picked up immediately.
+        invalidate_cache()
         _initialized = True
         log.info("vm_exec_allowlist table ready (%d base patterns)", len(BASE_PATTERNS))
     except Exception as e:
