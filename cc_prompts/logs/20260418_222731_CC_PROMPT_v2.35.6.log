@@ -520,3 +520,17 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-18 22:27:31
 ========================================================================
+PROMPT COMPLETE: v2.35.6
+[STATUS] 5m20s
+
+Summary:
+- **Change 1 (legacy sanitiser removal)**: Confirmed by grep that no Python file under `api/` or `mcp_server/` produces the `[BLOCKED:...]` literal — the legacy module was already removed by v2.34.15/v2.34.17. No code changes needed.
+- **Change 2 (recovery migration)**: Added `_recover_blocked_final_answers()` inside `api/main.py` lifespan right after `init_llm_traces()` — restores nuked `final_answer` rows by replaying the last step's assistant content from `agent_llm_traces`. Idempotent.
+- **Change 3 (regression tests)**: Created `tests/test_response_egress.py` with 5 tests (health, agent/models, DB round-trip, canonical redacted format, structural guard). 4 passed, 1 skipped locally (DB-dependent — skips cleanly when Postgres unavailable).
+- **Change 4 (VERSION)**: Bumped to `2.35.6`.
+- Pushed as commit `b40289b`. Queue runner handles INDEX.md.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  5m21s
+========================================================================

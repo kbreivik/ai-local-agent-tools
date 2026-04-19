@@ -38,11 +38,11 @@ const TEMPLATES = [
     group: 'INFRASTRUCTURE',
     color: 'var(--green)',
     items: [
-      { label: 'Disk usage — all hosts', task: 'Check disk usage on all registered VM hosts. Flag any filesystem above 80% used. Show top directories consuming space on any full disks.' },
-      { label: 'Memory and load — all hosts', task: 'Check memory usage and load average on all registered VM hosts. Flag any hosts with free memory below 500MB or load above 4.' },
+      { label: 'Disk usage — all hosts', task: 'Check disk usage on all registered VM hosts. Flag any filesystem above 80% used. Show top directories consuming space on any full disks. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
+      { label: 'Memory and load — all hosts', task: 'Check memory usage and load average on all registered VM hosts. Flag any hosts with free memory below 500MB or load above 4. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
       { label: 'Prune Docker images', task: 'Prune unused Docker images on all VM hosts. Show before/after disk reclaimed.' },
       { label: 'Journalctl vacuum', task: 'Check journal disk usage on all VM hosts and vacuum journals older than 7 days if they exceed 500MB.' },
-      { label: 'VM host overview', task: 'Give me a health summary of all registered VM hosts: disk, memory, load, uptime. Flag anything that needs attention.' },
+      { label: 'VM host overview', task: 'Give me a health summary of all registered VM hosts: disk, memory, load, uptime. Flag anything that needs attention. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
     ],
   },
   {
@@ -83,14 +83,14 @@ const TEMPLATES = [
       { label: 'PBS datastore health', task: 'Check Proxmox Backup Server datastore health — used space, available space, GC status, recent backup task success rate. Flag any datastores above 85% full.' },
       { label: 'TrueNAS pool status', task: 'Check TrueNAS pool status — health, used/free space, SMART status, any scrub errors. Flag any pools with degraded vdevs or high usage.' },
       { label: 'Backup status check', task: 'Check recent backup job status across PBS. How many backups completed successfully in the last 24 hours? Any failures or warnings?' },
-      { label: 'Storage capacity overview', task: 'Give me a storage capacity overview: PBS datastore usage, TrueNAS pool usage, and Docker volume usage on all VM hosts. Flag anything above 80%.' },
+      { label: 'Storage capacity overview', task: 'Give me a storage capacity overview: PBS datastore usage, TrueNAS pool usage, and Docker volume usage on all VM hosts. Flag anything above 80%. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
     ],
   },
   {
     group: 'SECURITY',
     color: 'var(--red)',
     items: [
-      { label: 'SSH access audit', task: 'Check which VM hosts have verified SSH access via credential profiles. List any hosts that have not been successfully reached in the last 7 days.' },
+      { label: 'SSH access audit', task: 'Check which VM hosts have verified SSH access via credential profiles. List any hosts that have not been successfully reached in the last 7 days. Treat the AVAILABLE VM HOSTS list in your system prompt as the source of truth for which hosts should have SSH access.' },
       { label: 'Recent auth failures', task: 'Search Elasticsearch for authentication failure log entries in the last 24 hours. Summarise by host and source IP.' },
       { label: 'Firewall interface check', task: 'Check FortiGate for any interface errors, high error rates, or unusual traffic patterns in the last hour. Report any interfaces with more than 100 errors.' },
     ],

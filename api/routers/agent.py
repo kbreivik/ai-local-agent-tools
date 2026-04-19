@@ -3079,9 +3079,15 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                     display = f"{label} (hostname: {hostname})" if hostname and hostname != label else f"{label} ({ip})"
                     lines.append(f"  - {display}")
                 cap_hint = (
-                    "AVAILABLE VM HOSTS (use vm_exec to query, infra_lookup to resolve names):\n"
+                    "AVAILABLE VM HOSTS (AUTHORITATIVE — use ONLY these names as `host=` for vm_exec):\n"
                     + "\n".join(lines)
-                    + "\n\nvm_exec commands: df -h, free -m, journalctl -n 50, "
+                    + "\n\nThese are the only SSH-reachable host labels in this system. Do NOT "
+                    + "use hostnames from PREFLIGHT FACTS, tool results, memory, or runbooks as "
+                    + "vm_exec targets — they may refer to Proxmox VM names, Swarm service names, "
+                    + "UniFi MACs, or other non-SSH entities. If you need a name that isn't in "
+                    + "the list above, call list_connections(platform='vm_host') or "
+                    + "infra_lookup(query='<partial>') FIRST; do not guess.\n\n"
+                    + "vm_exec commands: df -h, free -m, journalctl -n 50, "
                     + "find / -size +100M -type f, docker system df, "
                     + "docker volume ls | head -20, apt list --upgradable\n\n"
                 )

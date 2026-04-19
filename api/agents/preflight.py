@@ -952,6 +952,31 @@ def format_preflight_facts_section(preflight: PreflightResult,
         lines.append("EVIDENCE block. Do NOT call a tool to re-verify unless you suspect")
         lines.append("the fact is stale or you need a value not listed above.")
         lines.append("")
+        lines.append(
+            "NOTE: Fact keys here encode the entity as each collector sees it (e.g."
+        )
+        lines.append(
+            "`prod.proxmox.vm.<pve_name>.*`, `prod.swarm.service.<service>.*`,"
+        )
+        lines.append(
+            "`prod.unifi.device.<mac>.*`). These entity identifiers are for"
+        )
+        lines.append(
+            "REASONING ONLY — they may NOT be valid as `host=` arguments to `vm_exec`"
+        )
+        lines.append(
+            "or `ssh_exec`. For SSH-addressable hosts, use the names in the"
+        )
+        lines.append(
+            "`AVAILABLE VM HOSTS` section of this prompt (or call `list_connections`"
+        )
+        lines.append(
+            "/ `infra_lookup`) — never use entity_ids from PREFLIGHT FACTS as"
+        )
+        lines.append(
+            "vm_exec targets unless they also appear in the AVAILABLE VM HOSTS list."
+        )
+        lines.append("")
 
     # Trace — always shown when a trace exists
     if preflight.trace:
