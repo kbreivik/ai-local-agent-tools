@@ -987,6 +987,30 @@ def pbs_last_backup(vm_id: str) -> dict:
 
 
 @mcp.tool()
+def pbs_datastore_health() -> dict:
+    """Health snapshot of every Proxmox Backup Server datastore.
+    Sourced from the most recent PBS collector snapshot — no live PBS
+    API call. Returns per-datastore usage_pct, total_gb, used_gb,
+    gc_status, last_backup_age_hours, and a HEALTHY/DEGRADED/CRITICAL
+    flag (>=85% = DEGRADED, >=95% = CRITICAL).
+    """
+    from mcp_server.tools.pbs_health import pbs_datastore_health as _pdh
+    return _pdh()
+
+
+@mcp.tool()
+def agent_performance_summary(hours_back: int = 24) -> dict:
+    """Aggregated agent performance over the past N hours (1..168).
+    Reads the operations and agent_llm_traces tables directly — no HTTP
+    fetch. Returns total run count, per-(agent_type, status) breakdown
+    with median wall-clock, success rate %, and top-10 failing task
+    labels.
+    """
+    from mcp_server.tools.agent_perf import agent_performance_summary as _aps
+    return _aps(hours_back=hours_back)
+
+
+@mcp.tool()
 def log_timeline(
     entity_id: str,
     window_minutes: int = 60,

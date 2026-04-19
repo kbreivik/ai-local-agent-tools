@@ -95,7 +95,7 @@ const TEMPLATES = [
     group: 'STORAGE',
     color: '#818cf8',
     items: [
-      { label: 'PBS datastore health', task: 'Check Proxmox Backup Server datastore health — used space, available space, GC status, recent backup task success rate. Flag any datastores above 85% full.' },
+      { label: 'PBS datastore health', task: 'Use pbs_datastore_health() to check every Proxmox Backup Server datastore. Report any at >85% usage, any with failed GC, and any where the last backup is more than 24 hours old.' },
       { label: 'TrueNAS pool status', task: 'Check TrueNAS pool status — health, used/free space, SMART status, any scrub errors. Flag any pools with degraded vdevs or high usage.' },
       { label: 'Backup status check', task: 'Check recent backup job status across PBS. How many backups completed successfully in the last 24 hours? Any failures or warnings?' },
       { label: 'Storage capacity overview', task: 'Give me a storage capacity overview: PBS datastore usage, TrueNAS pool usage, and Docker volume usage on all VM hosts. Flag anything above 80%. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
@@ -122,7 +122,7 @@ const TEMPLATES = [
       {
         label: 'Agent success rate audit',
         task:
-          'Review the agent\'s own recent performance. Fetch the last 100 operations from /api/logs/operations and aggregate by (agent_type, status). Report: (a) overall success rate (completed / total), (b) success rate per agent_type (observe, investigate, execute, build), (c) top 5 task labels that ended with status=error or escalated, (d) median wall-clock time per agent_type, (e) any patterns of hallucination_guard_exhausted or fabrication_detected firings. Output as a structured report. This is a self-monitoring task — use only read endpoints and do NOT trigger new agent runs.'
+          'Use agent_performance_summary(hours_back=24) to audit recent agent runs. Report overall success rate, per-agent_type breakdown, and top-3 failing tasks. If success rate is below 70%, flag as DEGRADED.'
       },
     ],
   },

@@ -655,7 +655,9 @@ async def _run_single_agent_step(
                     tool_count=len(tools_used_names),
                     budget=_budget_cap,
                     actual_tool_names=tools_used_names,
-                    # v2.35.12 — pass rich history for enriched fallback
+                    # v2.35.13 — DB-sourced fallback via operation_id
+                    operation_id=operation_id,
+                    # v2.35.12 — pass rich history as backup source
                     actual_tool_calls=[
                         {
                             "name": tc.get("tool") or tc.get("tool_name") or tc.get("name"),
@@ -768,7 +770,9 @@ async def _run_single_agent_step(
                     tool_count=len(tools_used_names),
                     budget=_tool_budget,
                     actual_tool_names=tools_used_names,
-                    # v2.35.12 — pass rich history for enriched fallback
+                    # v2.35.13 — DB-sourced fallback via operation_id
+                    operation_id=operation_id,
+                    # v2.35.12 — pass rich history as backup source
                     actual_tool_calls=[
                         {
                             "name": tc.get("tool") or tc.get("tool_name") or tc.get("name"),

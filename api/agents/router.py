@@ -141,6 +141,9 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "vm_exec_allowlist_list",
     "vm_exec_allowlist_request",
     "runbook_search",
+    # v2.35.13 — template-gap closures
+    "pbs_datastore_health",
+    "agent_performance_summary",
 })
 
 # Investigate agent — read-only + elastic search + correlation + ingestion
@@ -180,6 +183,8 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "vm_exec_allowlist_request",
     "propose_subtask",
     "runbook_search",
+    # v2.35.13 — template-gap closure (PBS datastore health diagnosis)
+    "pbs_datastore_health",
 })
 
 # Execute agent — destructive tools, filtered by domain

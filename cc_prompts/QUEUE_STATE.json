@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-19T09:17:31",
+  "updated_at": "2026-04-19T09:47:34",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2469,10 +2469,26 @@
       "filename": "CC_PROMPT_v2.35.12.md",
       "version": "v2.35.12",
       "theme": "fix(agents): drop drifted messages entirely + enrich programmatic fallback with per-tool result snippets",
+      "runner_status": "DONE",
+      "commit_sha": "bcb9568",
+      "error": "",
+      "started_at": "2026-04-19T09:17:31",
+      "finished_at": "2026-04-19T09:20:39",
+      "duration_s": 187.4782656999887,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260419_091731_CC_PROMPT_v2.35.12.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.35.13.md",
+      "version": "v2.35.13",
+      "theme": "fix(agents): DB-sourced fallback + per-host dedup + best_snippet + pbs_datastore_health + agent_performance_summary tools",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-19T09:17:31",
+      "started_at": "2026-04-19T09:47:34",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

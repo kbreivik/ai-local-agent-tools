@@ -12,6 +12,14 @@ v2.35.12 — drop drifted messages from history entirely (instead of
            attractor the model would echo. Sentinel constant + echo
            detection retained for edge cases. Fallback enriched with
            per-tool result snippets.
+v2.35.13 — DB-sourced fallback: _programmatic_fallback now optionally
+           takes an operation_id and queries tool_calls directly for
+           canonical rows (tool_name/status/params/result dict).
+           Removes caller-wiring fragility. Dedup keyed by
+           (tool_name, first_arg_value) so vm_exec across multiple
+           hosts each gets its own row. _best_snippet helper prefers
+           result['message'] -> data.summary -> top-level data keys
+           -> JSON dump.
 """
 from __future__ import annotations
 
@@ -117,54 +125,198 @@ def build_harness_message(reason: str, tool_count: int, budget: int) -> str:
     )
 
 
+# Priority order for identifying a call's primary argument. Used for
+# dedup keying so calls to the same tool with different primary args
+# (e.g. vm_exec across hosts) each get their own fallback row.
+_FIRST_ARG_KEYS_PRIORITY = (
+    "host", "service_name", "entity_id", "container_id",
+    "vm_name", "node", "broker_id", "pool", "datastore",
+    "topic", "group", "key", "name", "label",
+)
+
+
+def _first_arg_value(params: dict) -> str:
+    """Return a short stable representation of the call's primary arg.
+
+    Used for dedup keying: calls to the same tool with different primary
+    args should NOT be collapsed into a single fallback row. For example,
+    vm_exec(host='worker-01', command='df -h') and
+    vm_exec(host='worker-02', command='df -h') must produce two rows.
+
+    Falls back to empty string (= no distinction) when no recognised
+    primary arg key is present and no leaf value can be extracted.
+    """
+    if not isinstance(params, dict) or not params:
+        return ""
+    for k in _FIRST_ARG_KEYS_PRIORITY:
+        v = params.get(k)
+        if v is not None:
+            s = str(v).strip()
+            if s:
+                return s[:40]
+    for k, v in params.items():
+        if isinstance(v, (str, int, float)) and str(v).strip():
+            return str(v).strip()[:40]
+    return ""
+
+
+def _best_snippet(result, max_chars: int = 120) -> str:
+    """Extract a useful short snippet from a tool's result.
+
+    Tool results have a canonical shape:
+      {"status": "ok"|"error", "message": "<short>", "data": {...}}
+
+    Preference order:
+      1. `message` field (short, author-written)
+      2. First line of `data.summary`
+      3. Top-level keys of `data` (for structured tool returns)
+      4. JSON dump of `data` (truncated)
+      5. str(result) truncated
+    """
+    def _truncate(s: str) -> str:
+        s = s.strip().replace("\n", " ")
+        return s[:max_chars - 3] + "..." if len(s) > max_chars else s
+
+    if result is None:
+        return ""
+    if not isinstance(result, dict):
+        return _truncate(str(result))
+
+    msg = result.get("message")
+    if isinstance(msg, str) and msg.strip():
+        return _truncate(msg)
+
+    data = result.get("data")
+
+    if isinstance(data, dict):
+        summ = data.get("summary")
+        if isinstance(summ, str) and summ.strip():
+            first_line = summ.strip().split("\n", 1)[0].strip()
+            return _truncate(first_line)
+
+    if isinstance(data, dict) and data:
+        pairs = []
+        for k, v in list(data.items())[:6]:
+            if isinstance(v, (str, int, float, bool)):
+                pairs.append(f"{k}={v}")
+            elif isinstance(v, list):
+                pairs.append(f"{k}=[{len(v)} items]")
+            elif isinstance(v, dict):
+                pairs.append(f"{k}={{{len(v)} keys}}")
+        if pairs:
+            return _truncate(", ".join(pairs))
+    elif isinstance(data, list) and data:
+        return f"[{len(data)} items]"
+
+    try:
+        import json as _json
+        return _truncate(_json.dumps(result, default=str))
+    except Exception:
+        return _truncate(str(result))
+
+
+def _load_tool_calls_for_op(operation_id: str) -> list[dict]:
+    """Load canonical tool_calls rows from the DB for a given operation.
+
+    Returns [] on any DB error (logged at debug). Never raises — the
+    fallback must work even if the DB is flaky.
+
+    Rows have the canonical shape:
+      {tool_name, status, params (dict), result (dict),
+       duration_ms, timestamp}
+    """
+    try:
+        from sqlalchemy import text
+        from api.db.base import get_sync_engine
+        eng = get_sync_engine()
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT tool_name, status, params, result, "
+                    "duration_ms, timestamp "
+                    "FROM tool_calls WHERE operation_id = :op "
+                    "ORDER BY timestamp ASC"
+                ),
+                {"op": operation_id},
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        log.debug("fallback DB load error op=%s: %s", operation_id, e)
+        return []
+
+
 def _programmatic_fallback(
     *,
     reason: str,
     tool_count: int,
     budget: int,
+    operation_id: str | None = None,       # v2.35.13 preferred source
     actual_tool_calls: list[dict] | None = None,
     actual_tool_names: list[str] | None = None,  # backward compat
 ) -> str:
     """Build a final_answer from tool history alone.
 
-    Accepts either:
-      - `actual_tool_calls`: list of {name, params?, result?, status?}
-        dicts for rich snippets (v2.35.12 preferred)
-      - `actual_tool_names`: list of tool name strings (v2.35.10
-        fallback — retained so existing callers and tests keep working)
+    Source preference (first non-empty wins):
+      1. operation_id -> DB query for canonical tool_calls rows
+         (v2.35.13 preferred — removes caller-wiring fragility).
+      2. actual_tool_calls -> any shape with name/tool_name + status +
+         result/params keys (v2.35.12 path).
+      3. actual_tool_names -> names-only (v2.35.10 legacy path).
 
-    When `actual_tool_calls` is provided, the output includes a per-tool
-    snippet line with the first 120 chars of each unique tool's first
-    successful result. This gives operators actionable insight inline
-    without opening the Trace viewer.
+    Dedup v2.35.13: groups by (tool_name, first_arg_value) so vm_exec
+    calls across different hosts each get their own row. When a second
+    call has the same (tool, first_arg) as an existing row, the success
+    replaces an error.
     """
     label = _REASON_LABELS.get(reason, reason)
 
-    # Normalise inputs — prefer rich calls over names
-    if actual_tool_calls:
-        calls = actual_tool_calls
-    elif actual_tool_names:
-        calls = [{"name": n} for n in actual_tool_names]
-    else:
-        calls = []
+    calls: list[dict] = []
+    source = "names_only"
 
-    # Deduplicate by tool name, keep first success per tool (fall back to
-    # first error if no success). This gives each unique tool at most one
-    # snippet row.
-    seen_names: set[str] = set()
+    if operation_id:
+        try:
+            calls = _load_tool_calls_for_op(operation_id)
+            source = "db"
+        except Exception as e:
+            log.debug("fallback DB load failed op=%s: %s", operation_id, e)
+            calls = []
+
+    if not calls and actual_tool_calls:
+        calls = list(actual_tool_calls)
+        source = "caller_calls"
+
+    if not calls and actual_tool_names:
+        calls = [{"tool_name": n} for n in actual_tool_names]
+        source = "names_only"
+
+    log.info(
+        "forced_synthesis fallback source=%s calls=%d reason=%s",
+        source, len(calls), reason,
+    )
+
     unique_rows: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
     for call in calls:
-        name = call.get("name") or call.get("tool_name")
-        if not name or name in seen_names:
+        name = (call.get("tool_name") or call.get("name") or "").strip()
+        if not name:
             continue
-        # Find best call for this name across the full history
-        candidates = [c for c in calls
-                      if (c.get("name") or c.get("tool_name")) == name]
-        success = next((c for c in candidates
-                        if c.get("status") in ("ok", None, "")), None)
-        chosen = success or (candidates[0] if candidates else {"name": name})
-        seen_names.add(name)
-        unique_rows.append(chosen)
+        first_arg = _first_arg_value(call.get("params") or {})
+        key = (name, first_arg)
+        if key in seen_keys:
+            existing_idx = next(
+                (i for i, r in enumerate(unique_rows)
+                 if (r.get("tool_name") or r.get("name")) == name
+                 and _first_arg_value(r.get("params") or {}) == first_arg),
+                None,
+            )
+            if existing_idx is not None:
+                existing = unique_rows[existing_idx]
+                if (call.get("status") == "ok"
+                        and existing.get("status") != "ok"):
+                    unique_rows[existing_idx] = call
+            continue
+        seen_keys.add(key)
+        unique_rows.append(call)
 
     lines = [
         f"[HARNESS FALLBACK] Agent reached {label} "
@@ -176,22 +328,21 @@ def _programmatic_fallback(
 
     if unique_rows:
         for row in unique_rows:
-            name = row.get("name") or row.get("tool_name") or "?"
-            status = row.get("status", "?")
-            result = row.get("result") or row.get("content") or ""
-            if isinstance(result, dict):
-                try:
-                    import json as _json
-                    result = _json.dumps(result, default=str)
-                except Exception:
-                    result = str(result)
-            result = str(result).strip().replace("\n", " ")
-            if len(result) > 120:
-                result = result[:117] + "..."
-            if result:
-                lines.append(f"- {name}() status={status}: {result}")
+            name = row.get("tool_name") or row.get("name") or "?"
+            first_arg = _first_arg_value(row.get("params") or {})
+            status = row.get("status") or "?"
+            # Prefer structured result dict via _best_snippet; fall back
+            # to the legacy `content` field for callers still using v1
+            # shape.
+            raw_result = row.get("result")
+            if raw_result is None:
+                raw_result = row.get("content")
+            snippet = _best_snippet(raw_result)
+            arg_label = f"({first_arg})" if first_arg else "()"
+            if snippet:
+                lines.append(f"- {name}{arg_label} status={status}: {snippet}")
             else:
-                lines.append(f"- {name}() status={status}")
+                lines.append(f"- {name}{arg_label} status={status}")
         lines.append("- See the Trace viewer (Logs \u2192 Trace) "
                      "for full tool results.")
     else:
@@ -288,6 +439,7 @@ def run_forced_synthesis(
     tool_count: int,
     budget: int,
     actual_tool_names: Iterable[str],
+    operation_id: str | None = None,               # NEW v2.35.13
     actual_tool_calls: list[dict] | None = None,   # NEW v2.35.12
     max_tokens: int = 1500,
 ) -> tuple[str, str, dict | None]:
@@ -401,6 +553,7 @@ def run_forced_synthesis(
             reason=reason,
             tool_count=tool_count,
             budget=budget,
+            operation_id=operation_id,             # v2.35.13
             actual_tool_calls=actual_tool_calls,
             actual_tool_names=actual_list,
         )

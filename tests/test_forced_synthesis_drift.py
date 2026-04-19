@@ -239,6 +239,95 @@ def test_placeholder_substring_in_long_prose_not_drift():
     )
 
 
+def test_fallback_db_source_when_operation_id_given(monkeypatch):
+    """v2.35.13: with operation_id, fallback loads from DB and renders
+    per-host rows for vm_exec."""
+    from api.agents import forced_synthesis as fs
+
+    def _fake_load(op_id):
+        return [
+            {"tool_name": "vm_exec", "status": "ok",
+             "params": {"host": "worker-01", "command": "df -h"},
+             "result": {"status": "ok", "message": "/dev/sda1 42G/120G"}},
+            {"tool_name": "vm_exec", "status": "ok",
+             "params": {"host": "worker-02", "command": "df -h"},
+             "result": {"status": "ok", "message": "/dev/sda1 50G/120G"}},
+            {"tool_name": "vm_exec", "status": "ok",
+             "params": {"host": "worker-03", "command": "df -h"},
+             "result": {"status": "ok", "message": "/dev/sda1 90G/120G"}},
+            {"tool_name": "swarm_node_status", "status": "ok",
+             "params": {},
+             "result": {"status": "ok", "message": "6 nodes Ready"}},
+        ]
+    monkeypatch.setattr(fs, "_load_tool_calls_for_op", _fake_load)
+
+    out = fs._programmatic_fallback(
+        reason="budget_cap", tool_count=4, budget=8,
+        operation_id="op-xyz",
+    )
+    assert out.count("vm_exec(worker-01)") == 1
+    assert out.count("vm_exec(worker-02)") == 1
+    assert out.count("vm_exec(worker-03)") == 1
+    assert "swarm_node_status" in out
+    assert "status=ok" in out
+    assert ("42G/120G" in out or "50G/120G" in out or "90G/120G" in out)
+
+
+def test_fallback_dedup_same_host_calls():
+    """Two calls to same tool with same first-arg collapse to one row,
+    preferring the success over the error."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    calls = [
+        {"tool_name": "vm_exec", "status": "error",
+         "params": {"host": "worker-01"},
+         "result": {"status": "error", "message": "ssh timeout"}},
+        {"tool_name": "vm_exec", "status": "ok",
+         "params": {"host": "worker-01"},
+         "result": {"status": "ok", "message": "42G used"}},
+    ]
+    out = _programmatic_fallback(
+        reason="budget_cap", tool_count=2, budget=8,
+        actual_tool_calls=calls,
+    )
+    assert out.count("vm_exec(worker-01)") == 1
+    assert "42G used" in out
+    assert "ssh timeout" not in out
+
+
+def test_best_snippet_prefers_message_field():
+    from api.agents.forced_synthesis import _best_snippet
+    result = {"status": "ok", "message": "6 nodes Ready, 0 Down",
+              "data": {"nodes": [{"n": 1}, {"n": 2}]}}
+    assert _best_snippet(result) == "6 nodes Ready, 0 Down"
+
+
+def test_best_snippet_falls_back_to_data_summary():
+    from api.agents.forced_synthesis import _best_snippet
+    result = {"status": "ok",
+              "data": {"summary": "3 datastores healthy\nSecond line"}}
+    assert _best_snippet(result) == "3 datastores healthy"
+
+
+def test_best_snippet_falls_back_to_data_keys():
+    from api.agents.forced_synthesis import _best_snippet
+    result = {"status": "ok",
+              "data": {"broker_count": 3, "isr_ok": True,
+                       "topics": [{"t": 1}, {"t": 2}]}}
+    snip = _best_snippet(result)
+    assert "broker_count=3" in snip
+    assert "isr_ok=True" in snip
+    assert "topics=[2 items]" in snip
+
+
+def test_first_arg_value_priority():
+    from api.agents.forced_synthesis import _first_arg_value
+    assert _first_arg_value({"host": "h1", "command": "x"}) == "h1"
+    assert _first_arg_value({"service_name": "kafka_broker-1"}) == "kafka_broker-1"
+    assert _first_arg_value({}) == ""
+    long_val = "x" * 100
+    assert len(_first_arg_value({"host": long_val})) <= 40
+
+
 def test_run_forced_synthesis_falls_back_on_placeholder_echo(monkeypatch):
     """Integration: if attempt 1 drifts via XML and attempt 2 echoes the
     placeholder, the programmatic fallback must fire — the placeholder
