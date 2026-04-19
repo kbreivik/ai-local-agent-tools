@@ -112,6 +112,34 @@ def _classify_terminal_final_answer(text: str) -> str | None:
     return None
 
 
+def compute_final_answer(steps: list[dict]) -> str:
+    """v2.35.16 — derive final_answer from agent step history.
+
+    Returns the LAST step's content (stripped), but only when that step
+    finished with finish_reason='stop'. Earlier steps' content is treated
+    as internal thinking / preamble and never persisted as the
+    operator-facing answer.
+
+    When the last step has finish_reason='tool_calls' (or anything other
+    than 'stop'), returns '' so the v2.35.14 empty_completion rescue can
+    fire run_forced_synthesis to produce a proper synthesis. This is the
+    intentional break from pre-v2.35.16 behaviour, which preserved step-0
+    preamble like "I'll check the UniFi status" as final_answer when later
+    steps emitted only tool_calls — leaking thinking text to operators.
+
+    Used by the agent loop's per-step content handler and as the testable
+    contract for tests/test_final_answer_assignment.py.
+    """
+    if not steps:
+        return ""
+    last = steps[-1]
+    if not isinstance(last, dict):
+        return ""
+    if last.get("finish_reason") != "stop":
+        return ""
+    return (last.get("content") or "").strip()
+
+
 def _result_count(tool_result: dict) -> int | None:
     """Heuristic: extract a 'count of items returned' from common tool response shapes.
 
@@ -1112,8 +1140,23 @@ async def _run_single_agent_step(
                     duration_ms=int((_time.monotonic() - _step_t0) * 1000),
                 )
 
+            # v2.35.16 — last-step final_answer rule. Only persist content as
+            # last_reasoning when this step is terminal (finish_reason='stop').
+            # Pre-v2.35.16 used "if msg.content: last_reasoning = msg.content",
+            # which accumulated step-0 preamble ("I'll check the UniFi status")
+            # as final_answer when later steps emitted only tool_calls. That
+            # leaked internal thinking to operators (op 07d326a1, fa_len=53).
+            # New rule: tool-call steps' text is preamble — emit it live for UI
+            # feedback and for working-memory continuity, but DON'T store it
+            # as final_answer. If the LLM never produces a stop step,
+            # last_reasoning stays empty and the v2.35.14 empty_completion
+            # rescue fires run_forced_synthesis. v2.35.15 too_short /
+            # preamble_only rescues become belt-and-suspenders rather than the
+            # primary path.
+            if finish == "stop":
+                last_reasoning = msg.content or ""
+
             if msg.content:
-                last_reasoning = msg.content
                 await manager.send_line("reasoning", msg.content, session_id=session_id)
                 # Extract working memory from <think> content for inter-step continuity
                 _wm = _extract_working_memory(msg.content, step)

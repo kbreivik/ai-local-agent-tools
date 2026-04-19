@@ -206,7 +206,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.12.md | v2.35.12 | fix(agents): drop drifted messages entirely + enrich programmatic fallback with per-tool result snippets | DONE (bcb9568) |
 | CC_PROMPT_v2.35.13.md | v2.35.13 | fix(agents): DB-sourced fallback + per-host dedup + best_snippet + pbs_datastore_health + agent_performance_summary tools | DONE (46e2836) |
 | CC_PROMPT_v2.35.14.md | v2.35.14 | fix(agents): forced synthesis on empty-completion path (status=completed + final_answer='') | DONE (c6afc70) |
-| CC_PROMPT_v2.35.15.md | v2.35.15 | fix(agents): near-empty / preamble-only final_answer detection + PBS+perf tool event-loop safety | RUNNING |
+| CC_PROMPT_v2.35.15.md | v2.35.15 | fix(agents): near-empty / preamble-only final_answer detection + PBS+perf tool event-loop safety | DONE (3ca8409) |
+| CC_PROMPT_v2.35.16.md | v2.35.16 | STRATEGY-MEMO + recommended: last-step final_answer assignment (root-cause fix for preamble bug) | RUNNING |
 
 ---
 
