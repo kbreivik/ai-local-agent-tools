@@ -32,6 +32,11 @@ const TEMPLATES = [
       { label: 'Force-update kafka_broker-3', task: 'Force-update the kafka_broker-3 Swarm service to clear any network or scheduling issues on worker-03.' },
       { label: 'Swarm cluster health', task: 'Give me a full Swarm cluster health report: nodes, managers, workers, services, tasks. Flag anything not in desired state.' },
       { label: 'Drain Swarm node', task: 'Drain Swarm node {node_name} cleanly.\n\nSTEP 1: Call swarm_node_status to confirm the node exists and is currently Active. If it\'s already Drain or Down, report and stop.\nSTEP 2: Propose a plan_action with these commands (must run from a manager node): `docker node update --availability drain {node_name}`.\nSTEP 3: After plan is approved and executed, poll `docker node ps {node_name} --filter desired-state=running` every 10 seconds up to {timeout_s} seconds until the running task count is 0.\nSTEP 4: Return a structured summary:\n  NODE: <name>\n  AVAILABILITY: drain\n  TASKS_SHED: <count>\n  ELAPSED_S: <seconds>\n  STATUS: DRAINED | TIMEOUT' },
+      {
+        label: 'Docker overlay network health',
+        task:
+          'Check Docker Swarm overlay network health. From any manager node (use swarm_node_status to identify), run vm_exec `docker network ls --filter scope=swarm` and `docker network inspect ingress`. Verify ingress network is healthy: all 3 managers + 3 workers attached, no IP pool exhaustion, no stale peers. Then from one worker, test ingress reachability by running `docker network inspect <overlay_name>` for each attached swarm service. Flag any overlay network with peer_count not equal to node count, or any orphaned networks with no services attached. Read-only — do NOT create, remove, or modify networks.'
+      },
     ],
   },
   {
@@ -40,9 +45,14 @@ const TEMPLATES = [
     items: [
       { label: 'Disk usage — all hosts', task: 'Check disk usage on all registered VM hosts. Flag any filesystem above 80% used. Show top directories consuming space on any full disks. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
       { label: 'Memory and load — all hosts', task: 'Check memory usage and load average on all registered VM hosts. Flag any hosts with free memory below 500MB or load above 4. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
-      { label: 'Prune Docker images', task: 'Prune unused Docker images on all VM hosts. Show before/after disk reclaimed.' },
-      { label: 'Journalctl vacuum', task: 'Check journal disk usage on all VM hosts and vacuum journals older than 7 days if they exceed 500MB.' },
+      { label: 'Prune Docker images', task: 'Prune unused Docker images on all VM hosts. Show before/after disk reclaimed. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
+      { label: 'Journalctl vacuum', task: 'Check journal disk usage on all VM hosts and vacuum journals older than 7 days if they exceed 500MB. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
       { label: 'VM host overview', task: 'Give me a health summary of all registered VM hosts: disk, memory, load, uptime. Flag anything that needs attention. Use only the host names from the AVAILABLE VM HOSTS list in your system prompt as vm_exec targets; if unsure, call list_connections(platform=\'vm_host\') first.' },
+      {
+        label: 'Container restart loop diagnosis',
+        task:
+          'Identify any Docker containers that are in a restart loop (>3 restarts in the last hour or >10 in the last 24h). For each flapping container: report its host, exit code of last termination, restart count, and the last 30 journal lines from around each recent restart. Call container_config_read and container_env first for the container\'s own config, then vm_exec journalctl on the host to capture crash context. Do NOT call any restart or update tools — this is read-only diagnosis.'
+      },
     ],
   },
   {
@@ -74,6 +84,11 @@ const TEMPLATES = [
       { label: 'FortiGate interface status', task: 'Check FortiGate interface status — list all interfaces, show which are up/down, report any errors or unusual traffic on key interfaces.' },
       { label: 'Network connectivity check', task: 'Check overall network health: FortiGate interface status, UniFi device connectivity, and whether all registered services are reachable.' },
       { label: 'UniFi client count', task: 'How many wireless clients are currently connected to UniFi? Break down by AP if possible. Flag any APs that are offline.' },
+      {
+        label: 'DNS resolver consistency',
+        task:
+          'Check DNS resolver chain health. For every DNS server configured in this environment (check via list_connections platform=pihole and platform=technitium; also check /etc/resolv.conf on agent-01), use vm_exec to run dig or nslookup against each server for a standard set of records: the agent-01 host itself, one external record (google.com), and one internal record (one of the Swarm node hostnames). Compare answers across servers — flag any split-brain where servers disagree. Report all servers\' IPs, response times, and any resolution failures.'
+      },
     ],
   },
   {
@@ -93,6 +108,22 @@ const TEMPLATES = [
       { label: 'SSH access audit', task: 'Check which VM hosts have verified SSH access via credential profiles. List any hosts that have not been successfully reached in the last 7 days. Treat the AVAILABLE VM HOSTS list in your system prompt as the source of truth for which hosts should have SSH access.' },
       { label: 'Recent auth failures', task: 'Search Elasticsearch for authentication failure log entries in the last 24 hours. Summarise by host and source IP.' },
       { label: 'Firewall interface check', task: 'Check FortiGate for any interface errors, high error rates, or unusual traffic patterns in the last hour. Report any interfaces with more than 100 errors.' },
+      {
+        label: 'Certificate expiry check',
+        task:
+          'Check SSL certificate expiry dates across the infrastructure. For each reverse proxy host (nginx, caddy, traefik in AVAILABLE VM HOSTS), enumerate certificate files via vm_exec (find /etc/letsencrypt/live -name fullchain.pem, find /etc/nginx/ssl, find /etc/caddy) and run openssl x509 -enddate -noout on each. Report any cert expiring within 30 days. Also check the agent-01 self-signed certs if present. Do NOT renew or modify anything — this is read-only audit.'
+      },
+    ],
+  },
+  {
+    group: 'PLATFORM',
+    color: 'var(--text-2)',
+    items: [
+      {
+        label: 'Agent success rate audit',
+        task:
+          'Review the agent\'s own recent performance. Fetch the last 100 operations from /api/logs/operations and aggregate by (agent_type, status). Report: (a) overall success rate (completed / total), (b) success rate per agent_type (observe, investigate, execute, build), (c) top 5 task labels that ended with status=error or escalated, (d) median wall-clock time per agent_type, (e) any patterns of hallucination_guard_exhausted or fabrication_detected firings. Output as a structured report. This is a self-monitoring task — use only read endpoints and do NOT trigger new agent runs.'
+      },
     ],
   },
 ]

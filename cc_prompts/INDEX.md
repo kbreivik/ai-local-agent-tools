@@ -198,8 +198,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.4.md | v2.35.4 | feat(agents): runbook-based TRIAGE injection + UI editor (augment default) | DONE (057d594) |
 | CC_PROMPT_v2.35.5.md | v2.35.5 | fix(agents): preflight fact injection on zero-inventory-match (v2.35.1 fix) | DONE (1366611) |
 | CC_PROMPT_v2.35.6.md | v2.35.6 | fix(security): remove legacy [BLOCKED:...] egress sanitiser rewriting operations.final_answer | DONE (b40289b) |
-| CC_PROMPT_v2.35.7.md | v2.35.7 | fix(agents): disambiguate PREFLIGHT FACTS entity_ids from vm_exec host names | RUNNING |
-| CC_PROMPT_v2.35.8.md | v2.35.8 | feat(templates): five new non-destructive templates + catalogue CI tests | PENDING |
+| CC_PROMPT_v2.35.7.md | v2.35.7 | fix(agents): disambiguate PREFLIGHT FACTS entity_ids from vm_exec host names | DONE (5962196) |
+| CC_PROMPT_v2.35.8.md | v2.35.8 | feat(templates): five new non-destructive templates + catalogue CI tests | RUNNING |
 
 ---
 
