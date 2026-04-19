@@ -48,6 +48,12 @@ _DRIFT_PREFIX_RE = _re.compile(
 )
 
 
+# Module-level constant — used by both _strip_xml_drift_from_messages
+# and _is_drift so the placeholder can never be echoed back as valid
+# synthesis output.
+_DRIFT_STRIPPED_PLACEHOLDER = "[__FORCED_SYNTHESIS_STRIPPED_DRIFT_PLACEHOLDER__]"
+
+
 def _xml_density(text: str) -> float:
     """Fraction of characters inside balanced ``<...>`` tag pairs.
 
@@ -78,6 +84,18 @@ def _is_drift(text: str, *, density_threshold: float = 0.30) -> tuple[bool, str]
     """Return (is_drift, reason) for a synthesis candidate."""
     if not text:
         return True, "empty"
+
+    # v2.35.11: defend against the model echoing the stripped-drift
+    # placeholder from cleaned retry context. If the output IS the
+    # placeholder or substantially contains it (>50% of output), treat
+    # as drift so the programmatic fallback fires.
+    stripped = text.strip()
+    if stripped == _DRIFT_STRIPPED_PLACEHOLDER:
+        return True, "placeholder_echo"
+    if (_DRIFT_STRIPPED_PLACEHOLDER in text
+            and len(_DRIFT_STRIPPED_PLACEHOLDER) / max(len(text), 1) > 0.5):
+        return True, "placeholder_echo"
+
     if _DRIFT_PREFIX_RE.match(text):
         return True, "tool_call_prefix"
     if _xml_density(text) > density_threshold:
@@ -200,7 +218,7 @@ def _strip_xml_drift_from_messages(messages: list) -> list:
             if drift:
                 cleaned.append({
                     "role": "assistant",
-                    "content": "[prior step: tool call attempt, see tool_calls]",
+                    "content": _DRIFT_STRIPPED_PLACEHOLDER,
                 })
                 continue
         cleaned.append(m)
@@ -241,7 +259,6 @@ def run_forced_synthesis(
         FORCED_SYNTHESIS_FALLBACK_COUNTER = None
 
     harness_msg = build_harness_message(reason, tool_count, budget)
-    synthesis_msgs = messages + [{"role": "system", "content": harness_msg}]
     actual_list = list(actual_tool_names or [])
 
     try:
@@ -249,10 +266,43 @@ def run_forced_synthesis(
     except Exception:
         pass
 
-    # Attempt 1
-    synthesis_text, raw = _call_synthesis(client, model, synthesis_msgs, max_tokens)
+    # v2.35.11: both attempts use cleaned history + strong anti-drift prompt.
+    # Historical context showed attempt 1 drifts 4/4 times on Qwen3-Coder-Next
+    # when left to use raw message history — the cleaned/strong path is
+    # strictly better, so we promote it to attempt 1 and retain attempt 2
+    # as one last-chance retry with even stronger prompt.
+    cleaned_msgs = _strip_xml_drift_from_messages(messages)
 
-    # Attempt 2 — drift retry
+    def _synthesis_messages(attempt: int) -> list:
+        if attempt == 1:
+            synth_harness = (
+                harness_msg
+                + "\n\nIMPORTANT: No tools are available in this final "
+                "synthesis step. Write PLAIN PROSE only — no <tool_call>, "
+                "<function=...>, <parameter=...>, or ```json``` syntax. "
+                "Start with 'EVIDENCE:' and synthesise only from real tool "
+                "results already in this conversation."
+            )
+        else:  # attempt 2 — even stronger
+            synth_harness = (
+                harness_msg
+                + "\n\nSYSTEM: Your previous response was rejected because "
+                "it contained <tool_call> / <function=...> XML syntax OR "
+                "echoed a context placeholder. You CANNOT make tool calls "
+                "\u2014 no tools are available. Write plain natural-language "
+                "prose ONLY. Do NOT copy any prior message from this "
+                "conversation \u2014 write a FRESH synthesis in your own "
+                "words. Start with the literal word 'EVIDENCE:' (not '<') "
+                "and do not include ANY angle-bracket tags."
+            )
+        return cleaned_msgs + [{"role": "system", "content": synth_harness}]
+
+    # Attempt 1 — cleaned history + strong anti-XML prompt from the start
+    synthesis_text, raw = _call_synthesis(
+        client, model, _synthesis_messages(1), max_tokens
+    )
+
+    # Attempt 2 — only if attempt 1 drifted
     if synthesis_text:
         drift, drift_reason = _is_drift(synthesis_text)
         if drift:
@@ -264,22 +314,11 @@ def run_forced_synthesis(
                 except Exception:
                     pass
             log.warning(
-                "forced_synthesis: drift detected (%s) on attempt 1, retrying",
-                drift_reason,
+                "forced_synthesis: drift on attempt 1 despite cleaned history "
+                "(%s), retrying with stronger prompt", drift_reason,
             )
-            cleaned_msgs = _strip_xml_drift_from_messages(messages)
-            retry_harness = (
-                harness_msg
-                + "\n\nSYSTEM: Your previous response was rejected because "
-                "it contained <tool_call> / <function=...> XML syntax. "
-                "You CANNOT make tool calls \u2014 no tools are available. "
-                "Write plain natural-language prose ONLY. If your first "
-                "response would have started with '<', start with 'EVIDENCE:' "
-                "instead. Do not include ANY angle-bracket tags."
-            )
-            retry_msgs = cleaned_msgs + [{"role": "system", "content": retry_harness}]
             synthesis_text, raw = _call_synthesis(
-                client, model, retry_msgs, max_tokens
+                client, model, _synthesis_messages(2), max_tokens
             )
             if synthesis_text:
                 drift2, drift_reason2 = _is_drift(synthesis_text)

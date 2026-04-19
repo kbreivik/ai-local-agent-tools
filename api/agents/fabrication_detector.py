@@ -15,14 +15,17 @@ from typing import Iterable
 # Match tool-call-shape strings: `identifier(args...)` at bullet start or
 # in an evidence block.
 _TOOL_CITE_RE = re.compile(
-    r"(?:^|\n)\s*(?:[-\u2022*]|\d+\.)\s*`?([a-z][a-z0-9_]{2,40})\s*\(",
+    r"(?:^|\n)\s*(?:[-\u2022*]|\d+\.)\s*`?([a-z][a-z0-9_]{2,40})\(",
     re.MULTILINE,
 )
 
 # Tools mentioned in prose ("I called X", "X returned Y") — count separately
 # with lower weight.
+# v2.35.11: require IMMEDIATE `(` after identifier — no whitespace.
+# Tool calls are always `name(args)`. A space before `(` means
+# parenthetical prose, not a citation.
 _PROSE_CITE_RE = re.compile(
-    r"\b([a-z][a-z0-9_]{2,40})\s*\(",
+    r"\b([a-z][a-z0-9_]{2,40})\(",
 )
 
 # Ignore these — common English words or code patterns that look like calls.
@@ -31,6 +34,12 @@ _CITE_DENYLIST = frozenset({
     "any", "all", "len", "min", "max", "sum", "map", "filter",
     "open", "close", "read", "write", "run", "get", "set", "add",
     "e.g", "i.e",
+    # v2.35.11: common English words observed in synthesis prose
+    "see", "via", "with", "using", "for", "from", "and", "or", "but",
+    "unavailable", "available", "reachable", "failed", "running",
+    "blocked", "registered", "scheduled", "confirmed", "lab", "tool",
+    "call", "time", "step", "note", "tip", "hint",
+    "docker", "swarm",  # tools start with `docker_` or `swarm_` not bare
 })
 
 
