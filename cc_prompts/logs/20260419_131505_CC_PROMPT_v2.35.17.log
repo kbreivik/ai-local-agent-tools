@@ -1,0 +1,479 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.35.17.md (v2.35.17)
+Theme: fix(agents): final_answer only from finish_reason='stop' + no tool_calls (root-cause fix, supersedes v2.35.14+15 rescue dependence)
+
+Prompt content:
+
+# CC PROMPT — v2.35.17 — Fix final_answer at source: only `finish_reason="stop"` + no tool_calls content counts
+
+## What this does
+
+Root-cause fix for the preamble-only `final_answer` bug that
+v2.35.14 (`empty_completion`) and v2.35.15 (`too_short_completion`,
+`preamble_only_completion`) rescues have been catching. The
+orchestrator captures assistant content from steps that ALSO emitted
+tool_calls — that content is OpenAI-spec "reasoning before tool_calls"
+(pre-action thinking), NOT a synthesis answer, and must never land in
+`final_answer`. This fix changes the selection rule upstream so
+rescues become safety nets, not the primary path.
+
+Version bump: 2.35.16 → 2.35.17.
+
+(The v2.35.16 file remains as a strategy-memo artifact; this prompt
+is the executable follow-on with trace findings baked in.)
+
+---
+
+## Evidence gathered before this prompt was written
+
+Trace pulled for op `07d326a1-1fcd-4c01-880f-5a287fedd6cc` (UniFi
+regression, v2.35.14 era, `fa_len=53`):
+
+```
+Step | content_len | finish_reason | tool_calls
+-----+-------------+---------------+-------------------------
+ 0   |    53       | tool_calls    | [unifi_network_status]     ← content = "I'll check the UniFi..."
+ 1   |     0       | tool_calls    | [result_fetch]
+ 2   |     0       | tool_calls    | [result_query]
+ 3   |     0       | tool_calls    | [result_query]
+ 4   |     0       | tool_calls    | [result_query]
+ 5   |     0       | tool_calls    | [audit_log]
+```
+
+Every step finished with `finish_reason="tool_calls"`. Step 0 emitted
+BOTH assistant content AND a tool_call in the same response. That
+content (`"I'll check the UniFi..."`) is pre-action reasoning under
+OpenAI chat-completions semantics, not a user-facing synthesis.
+
+The orchestrator is capturing step 0's pre-action content and using
+it as `final_answer`. That's the 53-char stub operators saw.
+
+Correct rule per OpenAI chat-completions semantics:
+- `finish_reason="stop"` + no `tool_calls` → **synthesis** (use this as final_answer)
+- `finish_reason="tool_calls"` (with or without content) → **pre-action**, content is internal thinking
+- `finish_reason="length"` → hit token cap mid-sentence, operational error
+- `finish_reason="content_filter"` → blocked, operational error
+
+Only the first case yields a valid `final_answer`.
+
+---
+
+## Change 1 — `api/routers/agent.py` — gate final_answer selection on finish_reason + no-tool_calls
+
+CC: locate where `final_answer` is computed from the accumulated step
+history. Likely patterns:
+
+- Inside the step loop: `final_answer = step.content` or similar
+  assignment that runs every step
+- After the loop: `final_answer = "\n".join(s.content for s in steps)`
+  or `final_answer = steps[0].content` or similar
+- In the terminal write path: directly before the DB update to
+  `operations.final_answer`
+
+Replace that logic with a strict last-synthesis-wins traversal:
+
+```python
+# v2.35.17: ONLY assistant content from a step that both (a)
+# finished with finish_reason='stop' AND (b) emitted NO tool_calls
+# counts as a synthesis candidate. Content emitted alongside
+# tool_calls is OpenAI-spec "reasoning before action" — it's the
+# model thinking before invoking a tool, NOT a user-facing answer.
+# Capturing it caused the v2.35.14-era "I'll check the ..." 53-char
+# stub bug (op 07d326a1).
+#
+# Traverse in reverse so multi-synthesis flows (e.g. a natural
+# synthesis followed by forced_synthesis) pick up the most-recent
+# one. If no step qualifies, final_answer stays empty and v2.35.14's
+# empty_completion rescue invokes run_forced_synthesis.
+
+final_answer = ""
+for step in reversed(steps or []):
+    # Adapt attribute access to whatever shape `step` is in scope.
+    # Could be dict, dataclass, or object — CC picks the right pattern.
+    resp = (
+        getattr(step, "response_raw", None)
+        or getattr(step, "response", None)
+        or step.get("response_raw")
+        or step.get("response")
+        or {}
+    )
+    choice = (resp.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    fin = choice.get("finish_reason")
+    has_tool_calls = bool(msg.get("tool_calls"))
+    content = (msg.get("content") or "").strip()
+    if fin == "stop" and not has_tool_calls and content:
+        final_answer = content
+        break
+```
+
+Two notes for CC:
+
+1. **Don't delete the v2.35.14+15 rescues.** They're the safety
+   net — without them, empty `final_answer` (the common case after
+   this fix) would produce empty output again. The rescue condition
+   is already `if not final_answer: ...`, which will continue to
+   fire correctly.
+
+2. **Don't change the step-storage logic.** `agent_llm_traces`
+   should still store every step's full response, including
+   pre-action reasoning content. This fix only changes which step's
+   content is promoted to `operations.final_answer`.
+
+## Change 2 — `api/agents/orchestrator.py` — `verdict_from_text` unchanged
+
+`verdict_from_text` in the orchestrator may also consume assistant
+content from step history for its `prior_verdict.summary` output. CC:
+grep `verdict_from_text` and verify it does NOT need the same
+gating. The function typically runs on whatever text is available
+(not just stop-steps), so leave it alone unless you see the same
+preamble-leak pattern there.
+
+## Change 3 — `tests/test_final_answer_assignment.py` (new file)
+
+```python
+"""v2.35.17 — regression test for final_answer assignment from step history.
+
+Before v2.35.17: final_answer accepted content from any step,
+including steps that emitted tool_calls. That made pre-action
+reasoning ("I'll check the UniFi...") leak into final_answer.
+
+After v2.35.17: final_answer is the content of the last step that
+finished with 'stop' and no tool_calls. Any other exit yields empty
+final_answer so the empty_completion rescue can produce a proper
+synthesis.
+"""
+from __future__ import annotations
+
+
+def _compute_final_answer(steps):
+    """Reference implementation of the v2.35.17 rule for isolated testing.
+    CC: if the real implementation lives in a helper function, import
+    and test that instead. Otherwise keep this local copy in sync
+    with the production logic."""
+    final_answer = ""
+    for step in reversed(steps or []):
+        resp = step.get("response_raw") or step.get("response") or {}
+        choice = (resp.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        fin = choice.get("finish_reason")
+        has_tool_calls = bool(msg.get("tool_calls"))
+        content = (msg.get("content") or "").strip()
+        if fin == "stop" and not has_tool_calls and content:
+            final_answer = content
+            break
+    return final_answer
+
+
+def _mk_step(content: str, finish_reason: str, tool_calls=None) -> dict:
+    return {
+        "response_raw": {
+            "choices": [{
+                "finish_reason": finish_reason,
+                "message": {
+                    "content": content,
+                    "tool_calls": tool_calls or [],
+                },
+            }],
+        },
+    }
+
+
+def test_preamble_with_tool_call_rejected():
+    """Regression for op 07d326a1 — step 0 content with tool_calls
+    must NOT become final_answer."""
+    steps = [
+        _mk_step("I'll check the UniFi status",
+                 finish_reason="tool_calls",
+                 tool_calls=[{"id": "1", "function": {"name": "unifi_network_status"}}]),
+        _mk_step("", finish_reason="tool_calls",
+                 tool_calls=[{"id": "2"}]),
+        _mk_step("", finish_reason="tool_calls",
+                 tool_calls=[{"id": "3"}]),
+    ]
+    assert _compute_final_answer(steps) == ""
+
+
+def test_stop_no_tool_calls_content_wins():
+    """Natural synthesis on the last step is the final_answer."""
+    steps = [
+        _mk_step("I'll check",
+                 finish_reason="tool_calls",
+                 tool_calls=[{"id": "1"}]),
+        _mk_step("STATUS: HEALTHY. 39 clients connected.",
+                 finish_reason="stop",
+                 tool_calls=[]),
+    ]
+    assert _compute_final_answer(steps) == "STATUS: HEALTHY. 39 clients connected."
+
+
+def test_reverse_traversal_picks_most_recent_synthesis():
+    """If somehow two synthesis steps exist, the last one wins."""
+    steps = [
+        _mk_step("First synthesis.",
+                 finish_reason="stop", tool_calls=[]),
+        _mk_step("",
+                 finish_reason="tool_calls",
+                 tool_calls=[{"id": "1"}]),
+        _mk_step("Second synthesis.",
+                 finish_reason="stop", tool_calls=[]),
+    ]
+    assert _compute_final_answer(steps) == "Second synthesis."
+
+
+def test_length_finish_reason_rejected():
+    """finish_reason='length' is a truncation error, not a synthesis."""
+    steps = [
+        _mk_step("Answer cut off mid-sent",
+                 finish_reason="length", tool_calls=[]),
+    ]
+    assert _compute_final_answer(steps) == ""
+
+
+def test_content_filter_finish_reason_rejected():
+    """finish_reason='content_filter' means blocked, not a synthesis."""
+    steps = [
+        _mk_step("",
+                 finish_reason="content_filter", tool_calls=[]),
+    ]
+    assert _compute_final_answer(steps) == ""
+
+
+def test_stop_with_tool_calls_rejected():
+    """Edge case: 'stop' finish with tool_calls present (rare but
+    possible) — still pre-action per semantics."""
+    steps = [
+        _mk_step("Let me verify this finding.",
+                 finish_reason="stop",
+                 tool_calls=[{"id": "1"}]),
+    ]
+    assert _compute_final_answer(steps) == ""
+
+
+def test_no_steps_yields_empty():
+    assert _compute_final_answer([]) == ""
+    assert _compute_final_answer(None) == ""
+
+
+def test_whitespace_only_content_rejected():
+    """Must strip and check truthiness."""
+    steps = [
+        _mk_step("   \n  \t ",
+                 finish_reason="stop", tool_calls=[]),
+    ]
+    assert _compute_final_answer(steps) == ""
+```
+
+## Change 4 — `VERSION`
+
+```
+2.35.17
+```
+
+## Verify
+
+```bash
+pytest tests/test_final_answer_assignment.py -v
+pytest tests/test_forced_synthesis_drift.py -v
+pytest tests/test_preamble_detection.py -v
+pytest tests/ -v -k "final_answer or synthesis or rescue or preamble"
+```
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agents): v2.35.17 final_answer only from finish_reason=stop + no tool_calls
+
+Root-cause fix for the preamble-leak bug that v2.35.14+15 rescues
+have been patching downstream. Orchestrator was capturing
+assistant content from steps that ALSO emitted tool_calls — that
+content is OpenAI-spec 'reasoning before action', NOT a synthesis
+answer.
+
+Trace op 07d326a1 (UniFi, v2.35.14 era, fa_len=53):
+  Step 0: content_len=53 (\"I'll check the UniFi...\")  finish_reason=tool_calls
+  Step 1-5: content_len=0                              finish_reason=tool_calls
+
+Step 0's 53 chars leaked into final_answer despite being pre-action
+thinking.
+
+New rule: final_answer = content of the last step with
+finish_reason='stop' AND no tool_calls. Reverse traversal so
+multi-synthesis flows pick up the most recent one. Empty result
+falls through to v2.35.14's empty_completion rescue.
+
+v2.35.15's too_short_completion and preamble_only_completion
+rescue counters should drop to near-zero after this deploys — they
+were compensating for a bug that's now fixed upstream. Keep as
+belt-and-suspenders; primary path no longer relies on them.
+
+8 unit tests in tests/test_final_answer_assignment.py cover:
+- preamble-with-tool_call rejection (regression for op 07d326a1)
+- stop-no-tool_calls wins
+- reverse traversal for multi-synthesis
+- length / content_filter rejection
+- edge cases: stop+tool_calls (rare), empty steps, whitespace"
+git push origin main
+```
+
+## Deploy
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+## Post-deploy smoke
+
+Re-run the three v2.35.15 acceptance tests:
+
+1. **UniFi device status** — expect one of: (a) status=completed
+   with real synthesis (LLM naturally emitted a stop-step); (b)
+   status=completed with `empty_completion` rescue fired. MUST
+   NOT produce a `"I'll check..."` preamble stub.
+
+2. **PBS datastore health** — unchanged behaviour expected.
+
+3. **Agent success rate audit** — unchanged, continues to work via
+   `empty_completion` rescue.
+
+Metric goal: over 10+ capped/completion runs post-deploy,
+`deathstar_forced_synthesis_total{reason="too_short_completion"}`
+and `{reason="preamble_only_completion"}` should stop incrementing
+or increment only very rarely. If either keeps growing, the root
+cause was more subtle than aggregation and we need to revisit.
+
+`deathstar_forced_synthesis_total{reason="empty_completion"}` may
+grow faster than before — that's expected and correct. It's the
+right gate, now doing most of the work.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-19 13:15:05
+========================================================================
+PROMPT COMPLETE: v2.35.17
+[STATUS] 2m58s
+
+Changes:
+- `api/routers/agent.py` — `compute_final_answer` now reverse-traverses and gates on both `finish_reason='stop'` AND `not tool_calls`; agent-loop `last_reasoning` assignment also gated on `not msg.tool_calls`.
+- `tests/test_final_answer_assignment.py` — 13 tests (8 reference + 5 production-helper) all pass; full synthesis/rescue/preamble suite (58 tests) passes.
+- `VERSION` → 2.35.17.
+- Commit `9ea1b1a` pushed to main.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m58s
+========================================================================

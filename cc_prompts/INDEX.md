@@ -208,7 +208,10 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.14.md | v2.35.14 | fix(agents): forced synthesis on empty-completion path (status=completed + final_answer='') | DONE (c6afc70) |
 | CC_PROMPT_v2.35.15.md | v2.35.15 | fix(agents): near-empty / preamble-only final_answer detection + PBS+perf tool event-loop safety | DONE (3ca8409) |
 | CC_PROMPT_v2.35.16.md | v2.35.16 | STRATEGY-MEMO + recommended: last-step final_answer assignment (root-cause fix for preamble bug) | DONE (0eddcfc) |
-| CC_PROMPT_v2.35.17.md | v2.35.17 | fix(agents): final_answer only from finish_reason='stop' + no tool_calls (root-cause fix, supersedes v2.35.14+15 rescue dependence) | RUNNING |
+| CC_PROMPT_v2.35.17.md | v2.35.17 | fix(agents): final_answer only from finish_reason='stop' + no tool_calls (root-cause fix, supersedes v2.35.14+15 rescue dependence) | DONE (9ea1b1a) |
+| CC_PROMPT_v2.35.18.md | v2.35.18 | feat(ops): two-phase drill on 30.9% success rate — Phase 1 analysis doc + Phase 2 targeted fix (bucket chosen by CC after analysis) | DONE (dcee6c1) |
+| CC_PROMPT_v2.35.19.md | v2.35.19 | fix(tools): uptime allowlist \b fix + loud DB errors + one-shot retry in get_(all_)connections_for_platform | DONE (2620552) |
+| CC_PROMPT_v2.35.20.md | v2.35.20 | fix(tools): infra_lookup not-found returns status=ok with data.found=false (semantic tool-contract fix) | RUNNING |
 
 ---
 

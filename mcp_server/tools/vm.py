@@ -490,11 +490,24 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
         platform: optional filter -- vm_host, proxmox, docker_host, etc.
     """
     try:
+        from api.metrics import INFRA_LOOKUP_RESULT_COUNTER
+    except Exception:
+        INFRA_LOOKUP_RESULT_COUNTER = None
+
+    def _tick(outcome: str) -> None:
+        if INFRA_LOOKUP_RESULT_COUNTER is not None:
+            try:
+                INFRA_LOOKUP_RESULT_COUNTER.labels(outcome=outcome).inc()
+            except Exception:
+                pass
+
+    try:
         from api.db.infra_inventory import resolve_host, list_inventory
 
         if query:
             entry = resolve_host(query)
             if entry:
+                _tick("found")
                 return {
                     "status": "ok",
                     "message": f"Found: {entry['label']} ({entry.get('hostname') or '?'})",
@@ -510,9 +523,19 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
                     },
                     "timestamp": _ts(),
                 }
-            return {"status": "error",
-                    "message": f"No infrastructure entity found for {query!r}",
-                    "data": None, "timestamp": _ts()}
+            # v2.35.20: not-found is a successful query with a negative result,
+            # not a tool-execution failure. status=ok, data.found=False.
+            _tick("not_found")
+            return {
+                "status": "ok",
+                "message": f"No match for {query!r}",
+                "data": {
+                    "found": False,
+                    "query": query,
+                    "platform_filter": platform or None,
+                },
+                "timestamp": _ts(),
+            }
         else:
             entries = list_inventory(platform=platform)
             summary = [
@@ -526,6 +549,7 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
                 }
                 for e in entries
             ]
+            _tick("list")
             return {
                 "status": "ok",
                 "message": f"{len(summary)} infrastructure entities known",
@@ -533,6 +557,7 @@ def infra_lookup(query: str = "", platform: str = "") -> dict:
                 "timestamp": _ts(),
             }
     except Exception as e:
+        _tick("error")
         return {"status": "error", "message": f"infra_lookup error: {e}",
                 "data": None, "timestamp": _ts()}
 

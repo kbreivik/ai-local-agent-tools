@@ -108,6 +108,13 @@ CONNECTIONS_QUERY_RETRY_COUNTER = Counter(
     ["platform", "outcome"],  # outcome: retry | exhausted
 )
 
+# --- infra_lookup tool outcomes (v2.35.20) ---
+INFRA_LOOKUP_RESULT_COUNTER = Counter(
+    "deathstar_infra_lookup_result_total",
+    "infra_lookup outcomes",
+    ["outcome"],  # found | not_found | list | error
+)
+
 # --- task classifier decisions (v2.34.11) ---
 CLASSIFIER_DECISIONS_COUNTER = Counter(
     "deathstar_agent_classifier_decisions_total",

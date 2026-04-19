@@ -413,3 +413,20 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-19 18:19:34
 ========================================================================
+PROMPT COMPLETE: v2.35.18
+[STATUS] 4m53s
+
+Phase 1 analysis + Phase 2 fix landed in commit `dcee6c1`:
+
+- **Baseline**: 58.7% success (168h) / 40.6% (24h) — already up ~28pts from 30.9% baseline thanks to v2.35.14-17.
+- **Dominant bucket**: `budget_cap_with_fallback` (58% of sampled) — every capped op ends in `[HARNESS FALLBACK]`.
+- **Root cause**: `_validate_command` chain cap at 2 operators forced `df -h && free -m && uptime && whoami` into 3+ calls per host, exhausting the status agent's 8-call budget on 5-host health tasks.
+- **Fix**: raised `chain_segments > 3` → `> 5` in `mcp_server/tools/vm.py`. Per-segment validation unchanged, safety model intact.
+- **Tests**: updated `test_validate_command_chain_depth_cap` (4-seg now OK, 6-seg still blocked) + added verbatim-pattern regression. 11/11 pass.
+
+Per runner instructions, did not touch INDEX.md or queue status files.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  4m53s
+========================================================================
