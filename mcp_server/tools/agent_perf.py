@@ -6,10 +6,35 @@ median wall-clock per agent_type, and top-10 task labels that ended in
 a failure-like status. The `agent_type` field lives on the
 `agent_llm_traces` table (one row per LLM step), not on `operations`,
 so this query joins the two. Sync-only, no HTTP fetch.
+
+v2.35.15 — DB access uses a self-contained per-call engine with
+pool_pre_ping=True (see pbs_health.py for full rationale). This
+ensures the tool is invocable under agent invocation (i.e. inside an
+already-running event loop) without asyncio-loop entanglement.
 """
 import logging
+import os
 
 log = logging.getLogger(__name__)
+
+
+def _build_sync_db_url() -> str:
+    url = os.environ.get("DATABASE_URL", "") or ""
+    if url:
+        return (
+            url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+               .replace("postgresql+asyncpg", "postgresql+psycopg2")
+               .replace("sqlite+aiosqlite", "sqlite")
+        )
+    try:
+        from api.db.base import _build_url
+        return _build_url().replace("sqlite+aiosqlite", "sqlite")
+    except Exception:
+        return ""
+
+
+def _detect_backend(db_url: str) -> str:
+    return "postgres" if db_url.startswith(("postgres", "postgresql")) else "sqlite"
 
 
 def agent_performance_summary(hours_back: int = 24) -> dict:
@@ -31,16 +56,23 @@ def agent_performance_summary(hours_back: int = 24) -> dict:
         hours_back = 24
     hours_back = max(1, min(168, hours_back))
 
+    db_url = _build_sync_db_url()
+    if not db_url:
+        return {
+            "status": "error",
+            "message": "DATABASE_URL not configured",
+            "data": {},
+        }
     try:
-        from sqlalchemy import text
-        from api.db.base import get_sync_engine, DB_BACKEND
-        eng = get_sync_engine()
+        from sqlalchemy import create_engine, text
+        eng = create_engine(db_url, pool_pre_ping=True, pool_size=1)
     except Exception as e:
         return {
             "status": "error",
             "message": f"agent_performance_summary init failed: {e}",
             "data": {},
         }
+    DB_BACKEND = _detect_backend(db_url)
 
     # Backend-specific time-window predicate (NOW() is Postgres;
     # SQLite uses datetime('now', ...)).
@@ -68,79 +100,92 @@ def agent_performance_summary(hours_back: int = 24) -> dict:
         # (median is not critical for this meta-tool).
         median_expr = "AVG(" + wall_seconds_expr + ")"
 
+    total = 0
+    buckets: list[dict] = []
+    top_failing: list[dict] = []
+    early_no_runs = False
     try:
-        with eng.connect() as conn:
-            # Total run count in window
-            total_row = conn.execute(
-                text(
-                    f"SELECT COUNT(*) AS n FROM operations o "
-                    f"WHERE {cutoff_predicate}"
-                )
-            ).mappings().first()
-            total = int((total_row or {}).get("n") or 0)
-
-            if total == 0:
-                return {
-                    "status": "ok",
-                    "message": f"No runs in past {hours_back}h",
-                    "data": {"total": 0, "hours_back": hours_back,
-                             "summary": "no runs"},
-                }
-
-            # Per-(agent_type, status) buckets.  agent_type lives on
-            # agent_llm_traces; an operation may have many trace rows,
-            # so we pick one representative agent_type per operation via
-            # the earliest step_index (the primary agent type for the
-            # run).
-            buckets_rows = conn.execute(
-                text(
-                    f"""
-                    WITH op_agent AS (
-                        SELECT operation_id, agent_type,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY operation_id
-                                   ORDER BY step_index ASC
-                               ) AS rn
-                        FROM agent_llm_traces
+        try:
+            with eng.connect() as conn:
+                # Total run count in window
+                total_row = conn.execute(
+                    text(
+                        f"SELECT COUNT(*) AS n FROM operations o "
+                        f"WHERE {cutoff_predicate}"
                     )
-                    SELECT COALESCE(oa.agent_type, 'unknown') AS agent_type,
-                           o.status AS status,
-                           COUNT(*) AS n,
-                           {median_expr} AS median_wall_s
-                    FROM operations o
-                    LEFT JOIN op_agent oa
-                      ON CAST(oa.operation_id AS TEXT) = CAST(o.id AS TEXT)
-                     AND oa.rn = 1
-                    WHERE {cutoff_predicate}
-                    GROUP BY COALESCE(oa.agent_type, 'unknown'), o.status
-                    """
-                )
-            ).mappings().all()
-            buckets = [dict(r) for r in buckets_rows]
+                ).mappings().first()
+                total = int((total_row or {}).get("n") or 0)
 
-            # Top-failing task labels
-            failing_rows = conn.execute(
-                text(
-                    f"""
-                    SELECT o.label AS task_label,
-                           o.status AS status,
-                           COUNT(*) AS n
-                    FROM operations o
-                    WHERE {cutoff_predicate}
-                      AND o.status IN ('error', 'capped', 'escalated',
-                                       'failed', 'cancelled')
-                    GROUP BY o.label, o.status
-                    ORDER BY COUNT(*) DESC
-                    LIMIT 10
-                    """
-                )
-            ).mappings().all()
-            top_failing = [dict(r) for r in failing_rows]
-    except Exception as e:
+                if total == 0:
+                    early_no_runs = True
+                else:
+                    # Per-(agent_type, status) buckets.  agent_type lives on
+                    # agent_llm_traces; an operation may have many trace rows,
+                    # so we pick one representative agent_type per operation via
+                    # the earliest step_index (the primary agent type for the
+                    # run).
+                    buckets_rows = conn.execute(
+                        text(
+                            f"""
+                            WITH op_agent AS (
+                                SELECT operation_id, agent_type,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY operation_id
+                                           ORDER BY step_index ASC
+                                       ) AS rn
+                                FROM agent_llm_traces
+                            )
+                            SELECT COALESCE(oa.agent_type, 'unknown') AS agent_type,
+                                   o.status AS status,
+                                   COUNT(*) AS n,
+                                   {median_expr} AS median_wall_s
+                            FROM operations o
+                            LEFT JOIN op_agent oa
+                              ON CAST(oa.operation_id AS TEXT) = CAST(o.id AS TEXT)
+                             AND oa.rn = 1
+                            WHERE {cutoff_predicate}
+                            GROUP BY COALESCE(oa.agent_type, 'unknown'), o.status
+                            """
+                        )
+                    ).mappings().all()
+                    buckets = [dict(r) for r in buckets_rows]
+
+                    # Top-failing task labels
+                    failing_rows = conn.execute(
+                        text(
+                            f"""
+                            SELECT o.label AS task_label,
+                                   o.status AS status,
+                                   COUNT(*) AS n
+                            FROM operations o
+                            WHERE {cutoff_predicate}
+                              AND o.status IN ('error', 'capped', 'escalated',
+                                               'failed', 'cancelled')
+                            GROUP BY o.label, o.status
+                            ORDER BY COUNT(*) DESC
+                            LIMIT 10
+                            """
+                        )
+                    ).mappings().all()
+                    top_failing = [dict(r) for r in failing_rows]
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"operations query failed: {e}",
+                "data": {},
+            }
+    finally:
+        try:
+            eng.dispose()
+        except Exception:
+            pass
+
+    if early_no_runs:
         return {
-            "status": "error",
-            "message": f"operations query failed: {e}",
-            "data": {},
+            "status": "ok",
+            "message": f"No runs in past {hours_back}h",
+            "data": {"total": 0, "hours_back": hours_back,
+                     "summary": "no runs"},
         }
 
     completed = sum(int(b.get("n") or 0) for b in buckets

@@ -8,12 +8,40 @@ rows with platform='pbs_backup' to surface the freshest backup
 timestamp per datastore when available.
 
 Sync-only, no live PBS API call is made.
+
+v2.35.15 — DB access uses a self-contained per-call engine with
+pool_pre_ping=True instead of the shared singleton. This guarantees
+the tool does not reuse a stale pooled connection (the singleton can
+outlive a DB reconnect across the agent loop's event loop) and that
+the tool is invocable from any sync context — including inside an
+already-running event loop — without asyncio.run_until_complete
+entanglement.
 """
 import json
 import logging
+import os
 import time
 
 log = logging.getLogger(__name__)
+
+
+def _build_sync_db_url() -> str:
+    """Return a synchronous-driver DB URL, mirroring api/db/base._build_url
+    but substituting sync drivers for any async ones. Empty string if no
+    DATABASE_URL is set and no SQLite default resolvable."""
+    url = os.environ.get("DATABASE_URL", "") or ""
+    if url:
+        return (
+            url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+               .replace("postgresql+asyncpg", "postgresql+psycopg2")
+               .replace("sqlite+aiosqlite", "sqlite")
+        )
+    # Fallback to the project's default sqlite path via api/db/base
+    try:
+        from api.db.base import _build_url
+        return _build_url().replace("sqlite+aiosqlite", "sqlite")
+    except Exception:
+        return ""
 
 
 def _parse_state(state) -> dict:
@@ -38,18 +66,27 @@ def pbs_datastore_health() -> dict:
     CRITICAL (>=95%). Also includes the freshest backup age per
     datastore when infra_inventory has pbs_backup rows for it.
     """
+    db_url = _build_sync_db_url()
+    if not db_url:
+        return {
+            "status": "error",
+            "message": "DATABASE_URL not configured",
+            "data": {},
+        }
     try:
-        from sqlalchemy import text
-        from api.db.base import get_sync_engine
-        eng = get_sync_engine()
-        with eng.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT state, timestamp FROM status_snapshots "
-                    "WHERE component = 'pbs' "
-                    "ORDER BY timestamp DESC LIMIT 1"
-                )
-            ).mappings().first()
+        from sqlalchemy import create_engine, text
+        eng = create_engine(db_url, pool_pre_ping=True, pool_size=1)
+        try:
+            with eng.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT state, timestamp FROM status_snapshots "
+                        "WHERE component = 'pbs' "
+                        "ORDER BY timestamp DESC LIMIT 1"
+                    )
+                ).mappings().first()
+        finally:
+            eng.dispose()
     except Exception as e:
         return {
             "status": "error",

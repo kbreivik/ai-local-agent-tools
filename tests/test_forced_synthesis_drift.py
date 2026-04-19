@@ -417,3 +417,43 @@ def test_run_forced_synthesis_falls_back_on_placeholder_echo(monkeypatch):
     # Must be programmatic fallback
     assert "HARNESS FALLBACK" in text
     assert "EVIDENCE" in text
+
+
+def test_near_empty_reason_labels_registered():
+    """v2.35.15: the two new reason labels must be in _REASON_LABELS."""
+    from api.agents.forced_synthesis import _REASON_LABELS
+    assert "too_short_completion" in _REASON_LABELS
+    assert "preamble_only_completion" in _REASON_LABELS
+    for k in ("too_short_completion", "preamble_only_completion"):
+        assert "natural completion" in _REASON_LABELS[k]
+
+
+def test_programmatic_fallback_accepts_near_empty_reasons():
+    """v2.35.15: both new reasons must round-trip through the fallback."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    for reason in ("too_short_completion", "preamble_only_completion"):
+        out = _programmatic_fallback(
+            reason=reason, tool_count=3, budget=8,
+            actual_tool_names=["unifi_network_status", "result_fetch"],
+        )
+        assert "HARNESS FALLBACK" in out
+        assert "natural completion" in out.lower()
+        assert "unifi_network_status" in out
+
+
+def test_near_empty_harness_messages_distinct():
+    """v2.35.15: build_harness_message must emit distinct labels per reason
+    so the gate detector can tell the three rescue paths apart."""
+    from api.agents.forced_synthesis import build_harness_message
+    msgs = {
+        r: build_harness_message(reason=r, tool_count=3, budget=8)
+        for r in ("empty_completion", "too_short_completion",
+                  "preamble_only_completion")
+    }
+    # Each label appears in its own message only
+    assert "empty final_answer" in msgs["empty_completion"]
+    assert "unusably short final_answer" in msgs["too_short_completion"]
+    assert "thinking-preamble-only final_answer" in msgs["preamble_only_completion"]
+    # No cross-contamination
+    assert "unusably short" not in msgs["empty_completion"]
+    assert "thinking-preamble-only" not in msgs["too_short_completion"]

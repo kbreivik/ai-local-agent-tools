@@ -44,6 +44,74 @@ def _step_temperature(agent_type: str, has_tool_calls: bool, is_force_summary: b
     return 0.1
 
 
+_PREAMBLE_STARTERS = (
+    "i'll ", "i will ", "let me ", "let's ", "sure, ",
+    "sure! ", "okay, ", "okay! ", "ok, ", "first, ",
+    "first i'll ", "first let me ", "i'm going to ",
+    "i am going to ", "going to ", "going to check ",
+    "to answer ", "to check ",
+)
+
+_VERDICT_MARKERS = (
+    "STATUS:", "FINDINGS:", "ROOT CAUSE:", "EVIDENCE:",
+    "CONCLUSION:", "SUMMARY:", "UNRESOLVED:", "NEXT STEPS:",
+)
+
+
+def _is_preamble_only(text: str) -> bool:
+    """v2.35.15 — return True for text that is a thinking preamble, not a
+    synthesis.
+
+    The LLM often emits 'I'll check ...' or 'Let me look into ...' on step 1
+    before making tool calls, then never gets back to summarising. That
+    stub is what ends up in final_answer.
+
+    A text is flagged as preamble iff ALL of:
+      * starts with a known preamble opener (case-insensitive)
+      * does NOT contain any verdict marker (STATUS:, FINDINGS:, ...)
+      * AND (is short (<200 chars) OR ends without terminal punctuation
+        like '.', '!', '?' — i.e. looks cut off / ends with '...')
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    low = stripped.lower()
+    if not any(low.startswith(p) for p in _PREAMBLE_STARTERS):
+        return False
+    upper = stripped.upper()
+    has_verdict = any(marker in upper for marker in _VERDICT_MARKERS)
+    if has_verdict:
+        return False
+    ends_unfinished = (
+        stripped.endswith("...")
+        or stripped.endswith("\u2026")
+        or not stripped.endswith((".", "!", "?", ":", ">"))
+    )
+    return len(stripped) < 200 or ends_unfinished
+
+
+def _classify_terminal_final_answer(text: str) -> str | None:
+    """v2.35.15 — return the rescue reason for a terminal final_answer,
+    or None if the text is substantive enough to stand as-is.
+
+    Three-way dispatch:
+      - empty_completion         → text is missing / whitespace-only
+      - too_short_completion     → <60 chars (can't plausibly be a synthesis)
+      - preamble_only_completion → thinking stub (see _is_preamble_only)
+      - None                     → real answer; no rescue needed
+    """
+    if not (text or "").strip():
+        return "empty_completion"
+    stripped = text.strip()
+    if len(stripped) < 60:
+        return "too_short_completion"
+    if _is_preamble_only(stripped):
+        return "preamble_only_completion"
+    return None
+
+
 def _result_count(tool_result: dict) -> int | None:
     """Heuristic: extract a 'count of items returned' from common tool response shapes.
 
@@ -594,11 +662,15 @@ async def _run_single_agent_step(
     # v2.35.14 — fire forced_synthesis at most once on the natural-completion
     # path (last_reasoning empty + >=1 substantive tool call). Each terminal
     # happy-path branch consults this guard before broadcasting "done".
+    # v2.35.15 — extended from single empty-check to three-way dispatch
+    # (empty / too_short / preamble_only). Each reason rides the same
+    # once-per-run guard and gets a distinct metric label.
     _empty_completion_synth_done = False
 
     async def _maybe_force_empty_synthesis() -> str:
-        """Run forced_synthesis when the loop exits naturally with no
-        final_answer but substantive tool calls were made.
+        """Run forced_synthesis when the loop exits naturally with a
+        missing / near-empty / preamble-only final_answer but substantive
+        tool calls were made.
 
         Returns the synthesis text (or "" on no-op / failure). Idempotent:
         sets ``_empty_completion_synth_done`` after the first attempt so
@@ -607,15 +679,17 @@ async def _run_single_agent_step(
         nonlocal _empty_completion_synth_done, last_reasoning, _trace_step_index
         if _empty_completion_synth_done:
             return ""
-        if (last_reasoning or "").strip():
+        rescue_reason = _classify_terminal_final_answer(last_reasoning or "")
+        if rescue_reason is None:
             return ""
         if substantive_tool_calls < 1:
             return ""
         _empty_completion_synth_done = True
         log.warning(
-            "agent loop empty-completion detected op=%s tools=%d subst=%d; "
+            "agent loop %s detected op=%s fa_len=%d tools=%d subst=%d; "
             "invoking forced_synthesis",
-            operation_id, len(tools_used_names), substantive_tool_calls,
+            rescue_reason, operation_id, len(last_reasoning or ""),
+            len(tools_used_names), substantive_tool_calls,
         )
         try:
             from api.agents.forced_synthesis import run_forced_synthesis
@@ -625,7 +699,7 @@ async def _run_single_agent_step(
                 model=_lm_model(),
                 messages=messages,
                 agent_type=agent_type,
-                reason="empty_completion",
+                reason=rescue_reason,
                 tool_count=len(tools_used_names),
                 budget=_budget_for_synth,
                 actual_tool_names=tools_used_names,
@@ -639,7 +713,10 @@ async def _run_single_agent_step(
                     for tc in (tool_history or [])
                 ],
             )
-            if synth_text:
+            # Only replace last_reasoning when the synthesis is substantive;
+            # a too-short or drifted synthesis must not overwrite a possibly
+            # useful existing preamble.
+            if synth_text and len(synth_text.strip()) >= 60:
                 last_reasoning = synth_text
                 try:
                     await manager.send_line(
@@ -657,7 +734,7 @@ async def _run_single_agent_step(
                         ],
                         response_raw=raw_resp or {
                             "forced_synthesis": {
-                                "reason": "empty_completion",
+                                "reason": rescue_reason,
                                 "text":   synth_text,
                             }
                         },
@@ -670,13 +747,13 @@ async def _run_single_agent_step(
                     _trace_step_index += 1
                 except Exception as _te:
                     log.debug(
-                        "empty_completion trace log failed: %s", _te,
+                        "%s trace log failed: %s", rescue_reason, _te,
                     )
             return synth_text or ""
         except Exception as e:
             log.warning(
-                "forced_synthesis on empty_completion failed op=%s: %s",
-                operation_id, e,
+                "forced_synthesis on %s failed op=%s: %s",
+                rescue_reason, operation_id, e,
             )
             return ""
 

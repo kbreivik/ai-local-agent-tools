@@ -1,0 +1,462 @@
+# CC PROMPT — v2.35.15 — Near-empty final_answer detection + PBS tool DB connection robustness
+
+## What this does
+
+v2.35.14 verification surfaced two separate product-level issues that
+leak through the now-complete forced-synthesis coverage:
+
+1. **Near-empty `final_answer`**: UniFi regression test (op
+   `07d326a1`) completed with `fa_len: 53` — the text decodes to
+   `"I'll check the UniFi network device stat..."`, a thinking
+   preamble from step 1 that got aggregated into `final_answer`
+   because later steps only emitted tool calls. v2.35.14's
+   empty-check (`final_answer == ""`) correctly did NOT fire
+   because 53 > 0, but operators still got a useless stub instead
+   of a proper synthesis.
+
+2. **PBS tool DB connection error under agent invocation**: op
+   `2c0cb236` had `pbs_datastore_health:error` despite the direct
+   invoke immediately prior returning `status=ok` with a real
+   datastore. The tool's per-call engine construction
+   (`create_engine(...)` inside the tool) was v2.35.13's pragmatic
+   choice to avoid event-loop entanglement. Under agent invocation
+   (event loop already running), `asyncio.get_event_loop()` returns
+   the caller's loop which may reject `run_until_complete` → tool
+   reports the DB failure. This is a tool-plumbing issue, not a
+   fallback issue.
+
+Version bump: 2.35.14 → 2.35.15.
+
+Two surgical fixes. Both preserve the v2.35.14 structural invariant
+(`status=completed` ⇒ non-empty `final_answer`) and strengthen it to
+`status=completed` ⇒ **substantive** `final_answer`.
+
+---
+
+## Evidence gathered before this prompt was written
+
+### Near-empty case — op `07d326a1` (UniFi, commit `c6afc70`, 2026-04-19)
+
+```
+status: completed                 final_answer_len: 53
+tool_count: 6                     is_fallback: false
+tools: unifi_network_status:ok, result_fetch:ok,
+       result_query:error, result_query:ok,
+       result_query:error, audit_log:ok
+empty_completion counter: 1 (unchanged by this run — did NOT fire)
+first_40_codes → "I'll check the UniFi network device stat"
+```
+
+Earlier UniFi run pre-v2.35.14 (op `73464ff1`): `fa_len: 454` with
+`"STATUS: HEALTHY\nFINDINGS: Total clients: 39 (19 wireless, 20 wired)..."`
+
+The v2.35.14 run went backwards on the SAME template because the
+LLM emitted `"I'll check..."` on step 1 (a thinking preamble) and
+then never emitted a synthesis — later steps were all tool_calls.
+The loop aggregated step 1's text as `final_answer` and exited
+happily. v2.35.14's `len > 0` check let it through.
+
+### PBS tool case — op `2c0cb236` (PBS datastore health, commit `46e2836`)
+
+```
+status: completed                 final_answer_len: 527
+tool_count: 1                     used_pbs_tool: true
+tools: pbs_datastore_health:error
+fa decoded: "The PBS datastore health check failed due to a
+             database connection issue..."
+```
+
+Direct invoke of the same tool via `/api/tools/pbs_datastore_health/invoke`
+moments earlier returned `{status: ok, datastores_count: 1, ...}`. The
+difference is the invocation context: direct invoke runs
+synchronously in a fresh async context; the MCP tool-registry path
+runs inside the agent loop's already-active event loop, where
+`asyncio.get_event_loop().run_until_complete(_q())` can raise
+`RuntimeError: This event loop is already running`.
+
+---
+
+## Change 1 — `api/routers/agent.py` — extend empty-check to "near-empty or preamble-only"
+
+Locate the v2.35.14 wiring that detects `final_answer is empty` and
+calls `run_forced_synthesis` with `reason="empty_completion"`. Extend
+the condition with two additional quality checks. Reason labels
+differ so operators can distinguish the three paths in metrics.
+
+```python
+# v2.35.15: three distinct quality gates on terminal final_answer.
+# Reason labels are distinct so operators see in metrics which kind
+# of rescue fired.
+
+def _is_preamble_only(text: str) -> bool:
+    """Return True for text that is a thinking preamble, not a
+    synthesis. The LLM often emits 'I'll check ...' or 'Let me look
+    into ...' on step 1 before making tool calls, then never gets
+    back to summarising. That stub is what ends up in final_answer."""
+    if not text:
+        return False
+    stripped = text.strip()
+    # Obvious preamble starters
+    _preamble_starters = (
+        "i'll ", "i will ", "let me ", "let's ", "sure, ",
+        "sure! ", "okay, ", "okay! ", "ok, ", "first, ",
+        "first i'll ", "first let me ", "i'm going to ",
+        "i am going to ", "going to ", "going to check ",
+        "to answer ", "to check ",
+    )
+    low = stripped.lower()
+    for p in _preamble_starters:
+        if low.startswith(p):
+            # And ends WITHOUT a conclusion/verdict marker
+            has_verdict = any(marker in stripped.upper() for marker in
+                              ("STATUS:", "FINDINGS:", "ROOT CAUSE:",
+                               "EVIDENCE:", "CONCLUSION:", "SUMMARY:",
+                               "UNRESOLVED:", "NEXT STEPS:"))
+            # Ends with ellipsis or unfinished punctuation → preamble
+            ends_unfinished = (
+                stripped.endswith("...")
+                or stripped.endswith("\u2026")
+                or (not stripped.endswith((".", "!", "?", ":", ">"))
+                    and not has_verdict)
+            )
+            # Short AND unfinished AND no verdict → preamble
+            if not has_verdict and (len(stripped) < 200 or ends_unfinished):
+                return True
+    return False
+
+
+# --- In the terminal-write branch of the agent loop -------------
+if not final_answer:
+    rescue_reason = "empty_completion"
+elif len(final_answer.strip()) < 60:
+    # v2.35.15: very short text that can't plausibly be a synthesis
+    rescue_reason = "too_short_completion"
+elif _is_preamble_only(final_answer):
+    # v2.35.15: preamble like "I'll check ..." with no findings
+    rescue_reason = "preamble_only_completion"
+else:
+    rescue_reason = None
+
+if rescue_reason:
+    substantive = sum(
+        1 for tc in tool_history_local
+        if tc.get("tool_name") not in META_TOOLS
+    )
+    if substantive >= 1:
+        log.warning(
+            "agent loop %s detected op=%s fa_len=%d tools=%d subst=%d; "
+            "invoking forced_synthesis",
+            rescue_reason, operation_id, len(final_answer or ""),
+            len(tool_history_local), substantive,
+        )
+        try:
+            from api.agents.forced_synthesis import run_forced_synthesis
+            synthesis_text, harness_msg, raw = run_forced_synthesis(
+                client=client, model=_lm_model(),
+                messages=messages_for_llm,
+                agent_type=agent_type,
+                reason=rescue_reason,
+                tool_count=len(tool_history_local),
+                budget=_tool_budget,
+                actual_tool_names=[
+                    tc.get("tool_name") for tc in tool_history_local
+                ],
+                operation_id=operation_id,
+            )
+            if synthesis_text and len(synthesis_text.strip()) >= 60:
+                final_answer = synthesis_text
+        except Exception as e:
+            log.warning(
+                "forced_synthesis on %s failed op=%s: %s",
+                rescue_reason, operation_id, e,
+            )
+```
+
+Thresholds picked conservatively:
+- `< 60 chars` is "too short" — below this, no template or tool
+  result could be a meaningful synthesis. (`STATUS: HEALTHY` alone
+  is 15 chars; a real answer includes findings.)
+- `< 200 chars` combined with preamble starter AND no verdict marker
+  catches the "I'll check ..." stub cases without misclassifying
+  short-but-complete answers like `"STATUS: HEALTHY. 39 clients
+  connected, all APs online."` (67 chars, passes `STATUS:` check).
+
+## Change 2 — `api/agents/forced_synthesis.py` — register new reason labels
+
+Add to `_REASON_LABELS`:
+
+```python
+_REASON_LABELS = {
+    "budget_cap":        "tool-call budget-cap",
+    "wall_clock":        "wall-clock cap",
+    "token_cap":         "token cap",
+    "destructive_cap":   "destructive-call cap",
+    "tool_failures":     "consecutive-tool-failure cap",
+    "empty_completion":  "natural completion with empty final_answer",
+    # v2.35.15 ↓
+    "too_short_completion":     "natural completion with unusably short final_answer",
+    "preamble_only_completion": "natural completion with thinking-preamble-only final_answer",
+}
+```
+
+## Change 3 — `mcp_server/tools/pbs_health.py` — event-loop-safe DB query
+
+Replace the brittle `asyncio.get_event_loop().run_until_complete(...)`
+pattern with `asyncio.run_coroutine_threadsafe` dispatched via the
+standard thread-executor helper used elsewhere in the MCP tool layer.
+
+CC: grep `run_until_complete` across `mcp_server/tools/` — if other
+tools use the pattern, ALL of them need the same fix. Pick whichever
+pattern the project already uses for sync-calling an async DB helper
+from an MCP tool (most likely a utility in `mcp_server/tools/` or
+`api/db/` that wraps the engine appropriately). Apply it to
+`pbs_datastore_health` and to the newly-added `agent_performance_summary`.
+
+Fallback pattern if no existing utility exists — use a synchronous
+engine directly (same approach as v2.35.13's `_load_tool_calls_for_op`):
+
+```python
+def pbs_datastore_health() -> dict:
+    """Return {status, message, data: {datastores: [...], summary: str}}."""
+    from sqlalchemy import create_engine, text
+    import os, json as _json
+
+    db_url = os.environ.get("DATABASE_URL", "").replace(
+        "postgresql+asyncpg://", "postgresql://"
+    ).replace("postgresql+psycopg://", "postgresql://")
+    if not db_url:
+        return {"status": "error",
+                "message": "DATABASE_URL not configured",
+                "data": {}}
+
+    try:
+        eng = create_engine(db_url, pool_pre_ping=True, pool_size=1)
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT entity_id, label, metadata, status_text, "
+                    "updated_at FROM infra_inventory "
+                    "WHERE platform = 'pbs' "
+                    "AND entity_type = 'datastore' "
+                    "ORDER BY label"
+                )
+            ).mappings().all()
+            datastores = [dict(r) for r in rows]
+        eng.dispose()
+    except Exception as e:
+        return {"status": "error",
+                "message": f"PBS datastore query failed: {e}",
+                "data": {}}
+
+    if not datastores:
+        return {"status": "ok",
+                "message": "No PBS datastores found in inventory.",
+                "data": {"datastores": [], "summary": "no datastores"}}
+
+    # ... rest unchanged: enrich with used/total/pct/flag, build summary
+```
+
+Same pattern applies to `agent_performance_summary()`. The sync-engine
+approach is slightly less efficient than async but tool calls are
+already synchronous from the agent's perspective (`invoke_tool` is
+sync), so there's no latency loss — only avoidance of the
+event-loop-already-running failure.
+
+## Change 4 — tests
+
+Extend `tests/test_forced_synthesis_drift.py`:
+
+```python
+def test_near_empty_reason_labels_registered():
+    """v2.35.15: the two new reason labels must be in _REASON_LABELS."""
+    from api.agents.forced_synthesis import _REASON_LABELS
+    assert "too_short_completion" in _REASON_LABELS
+    assert "preamble_only_completion" in _REASON_LABELS
+    for k in ("too_short_completion", "preamble_only_completion"):
+        assert "natural completion" in _REASON_LABELS[k]
+
+
+def test_programmatic_fallback_accepts_near_empty_reasons():
+    """Both new reasons must round-trip through the fallback."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    for reason in ("too_short_completion", "preamble_only_completion"):
+        out = _programmatic_fallback(
+            reason=reason, tool_count=3, budget=8,
+            actual_tool_names=["unifi_network_status", "result_fetch"],
+        )
+        assert "HARNESS FALLBACK" in out
+        assert "natural completion" in out.lower()
+        assert "unifi_network_status" in out
+```
+
+New `tests/test_preamble_detection.py`:
+
+```python
+"""v2.35.15 — preamble-only detection regression tests."""
+
+import pytest
+
+
+def test_detect_short_preamble_as_preamble():
+    # CC: the detector is likely in api/routers/agent.py as
+    # _is_preamble_only. Adjust import path to wherever it lives.
+    from api.routers.agent import _is_preamble_only
+
+    # All of these are preamble stubs — must be detected
+    preambles = [
+        "I'll check the UniFi network device stat...",
+        "Let me look into the swarm status.",
+        "Sure, I'll start by calling the tool.",
+        "First, let me gather some information",
+        "I'm going to call list_connections first",
+        "To answer this, I'll need to run several checks",
+    ]
+    for p in preambles:
+        assert _is_preamble_only(p), f"Failed to detect: {p!r}"
+
+
+def test_real_synthesis_not_flagged_as_preamble():
+    from api.routers.agent import _is_preamble_only
+
+    # These are real (short) syntheses — must NOT be flagged
+    real = [
+        "STATUS: HEALTHY. 6/6 nodes Ready, no issues detected.",
+        "FINDINGS: 39 clients connected, all APs online.",
+        "ROOT CAUSE: disk pressure on worker-03.",
+        "No issues found. All services are running.",
+        # Starts with "I'll" but also includes a verdict
+        "I'll note that STATUS: HEALTHY based on the tool results.",
+    ]
+    for r in real:
+        assert not _is_preamble_only(r), \
+            f"False-positive preamble on real answer: {r!r}"
+
+
+def test_preamble_with_long_but_unfinished_text_still_flagged():
+    from api.routers.agent import _is_preamble_only
+    # Long-ish text that starts with preamble and ends with "..."
+    # (no verdict marker) → still preamble
+    t = (
+        "I'll start by checking the UniFi controller status "
+        "and then look at the individual AP connectivity. "
+        "Let me gather the information now..."
+    )
+    assert _is_preamble_only(t)
+
+
+def test_empty_text_is_not_preamble():
+    from api.routers.agent import _is_preamble_only
+    assert not _is_preamble_only("")
+    assert not _is_preamble_only("   \n  ")
+```
+
+Extend `tests/test_empty_completion_path.py` if it exists, OR make a
+small addition confirming the three-way reason dispatch:
+
+```python
+def test_rescue_reason_dispatch():
+    """v2.35.15 — the three rescue reasons dispatch to correct labels."""
+    # Simulate the branch logic
+    test_cases = [
+        ("", "empty_completion"),
+        ("abc", "too_short_completion"),          # 3 chars < 60
+        ("I'll check the UniFi status...", "preamble_only_completion"),
+        ("STATUS: HEALTHY. All nodes Ready. 39 clients connected.",
+         None),  # real answer — no rescue
+    ]
+    # CC: if _classify_terminal_answer() helper exists, use it;
+    # otherwise assert on the branch outcomes directly.
+```
+
+## Change 5 — `api/agents/gate_detection.py` — surface new reasons in Gates Fired
+
+Extend gate-detection to include two new signals:
+
+```python
+"too_short_completion_rescued": lambda trace: any(
+    s.get("reason") == "too_short_completion"
+    for s in (trace.get("forced_synthesis_invocations") or [])
+),
+"preamble_only_completion_rescued": lambda trace: any(
+    s.get("reason") == "preamble_only_completion"
+    for s in (trace.get("forced_synthesis_invocations") or [])
+),
+```
+
+## Change 6 — `VERSION`
+
+```
+2.35.15
+```
+
+## Verify
+
+```bash
+pytest tests/test_forced_synthesis_drift.py -v
+pytest tests/test_preamble_detection.py -v
+pytest tests/ -v -k "forced_synthesis or empty_completion or preamble"
+```
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agents): v2.35.15 near-empty final_answer detection + PBS tool event-loop safety
+
+v2.35.14 verification op 07d326a1 (UniFi regression) ended
+status=completed with fa_len=53: the LLM emitted 'I'll check the
+UniFi network device stat...' on step 1 as a thinking preamble,
+then made only tool calls on later steps. Loop aggregated step 1
+text as final_answer and exited. v2.35.14's empty-check (len==0)
+correctly did NOT fire because 53 > 0, but operators still got
+a useless stub instead of a real synthesis.
+
+Extends v2.35.14's single rescue trigger (empty_completion) to a
+three-way dispatch:
+- empty_completion         — final_answer is empty
+- too_short_completion     — final_answer < 60 chars (v2.35.15)
+- preamble_only_completion — starts with 'I'll/Let me/etc' AND
+                             has no verdict marker AND
+                             is short or ends unfinished (v2.35.15)
+
+Each reason gets its own label, its own Prometheus series, and its
+own Gates Fired entry in the Trace viewer. Strengthens the v2.35.14
+invariant from 'status=completed ⇒ non-empty' to 'status=completed ⇒
+substantive'.
+
+Separately, pbs_datastore_health and agent_performance_summary use
+asyncio.get_event_loop().run_until_complete() which raises when the
+agent-loop's event loop is already running — both tools returned
+error under agent invocation despite working under direct invoke.
+Replaced with synchronous engine pattern (same approach as v2.35.13's
+_load_tool_calls_for_op). No latency regression because invoke_tool
+is already sync-from-caller."
+git push origin main
+```
+
+## Deploy + smoke test
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+1. **UniFi device status** — expect `fa_len > 200` with real
+   findings (STATUS/FINDINGS format). `/metrics` should show
+   `deathstar_forced_synthesis_total{reason="preamble_only_completion"}`
+   incrementing if the LLM still emits a preamble on step 1.
+
+2. **PBS datastore health** — agent-invocation should NOW return
+   `status=ok` from `pbs_datastore_health()`, matching what direct
+   invoke returned. final_answer should describe the 1 known
+   datastore.
+
+3. **Agent success rate audit** — re-run to confirm no regression
+   on the v2.35.14 empty_completion fix. Expect
+   `empty_completion` or one of the new reasons to fire; operator
+   sees real synthesis or rich HARNESS FALLBACK.
+
+4. `/metrics` audit:
+   `deathstar_forced_synthesis_total{reason=...}` should have
+   one or more of: empty_completion, too_short_completion,
+   preamble_only_completion, depending on what the LLM emits.

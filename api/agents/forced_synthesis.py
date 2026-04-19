@@ -38,6 +38,11 @@ _REASON_LABELS = {
     "tool_failures":     "consecutive-tool-failure cap",
     # v2.35.14 — natural exit with no assistant text emitted
     "empty_completion":  "natural completion with empty final_answer",
+    # v2.35.15 — natural exit with substance-less final_answer
+    "too_short_completion":
+        "natural completion with unusably short final_answer",
+    "preamble_only_completion":
+        "natural completion with thinking-preamble-only final_answer",
 }
 
 

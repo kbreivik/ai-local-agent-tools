@@ -33,6 +33,11 @@ GATE_DEFS = (
     # v2.35.14 — agent exited naturally with empty final_answer; harness
     # rescued the run by forcing a synthesis from tool history alone.
     "empty_completion_rescued",
+    # v2.35.15 — agent exited naturally but final_answer was unusably
+    # short / preamble-only; same rescue path, distinct reason so
+    # operators can tell the three gates apart in metrics and Trace.
+    "too_short_completion_rescued",
+    "preamble_only_completion_rescued",
 )
 
 
@@ -119,6 +124,23 @@ def detect_gates_from_steps(steps: list, system_prompt: str | None = None) -> di
             ):
                 gates["empty_completion_rescued"]["count"] += 1
                 gates["empty_completion_rescued"]["details"].append(
+                    {"step": step_idx, "snippet": content[:160]}
+                )
+            # v2.35.15 — near-empty rescues.
+            if (
+                "[harness]" in content
+                and "natural completion with unusably short final_answer" in lowered
+            ):
+                gates["too_short_completion_rescued"]["count"] += 1
+                gates["too_short_completion_rescued"]["details"].append(
+                    {"step": step_idx, "snippet": content[:160]}
+                )
+            if (
+                "[harness]" in content
+                and "natural completion with thinking-preamble-only final_answer" in lowered
+            ):
+                gates["preamble_only_completion_rescued"]["count"] += 1
+                gates["preamble_only_completion_rescued"]["details"].append(
                     {"step": step_idx, "snippet": content[:160]}
                 )
             # v2.35.2 — in-run cross-tool contradiction advisory
