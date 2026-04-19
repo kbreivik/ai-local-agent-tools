@@ -1,25 +1,17 @@
-"""Forced-synthesis step for agent runs that hit a hard cap (v2.34.17).
+"""Forced-synthesis step for agent runs that hit a hard cap.
 
-When the loop exits because of budget / wall-clock / token-cap / consecutive
-failures, the model never gets a chance to produce a ``final_answer`` from
-the evidence it has already collected. Without this step, the operator sees
-``status=capped, final_answer=null`` and the run is effectively lost even
-though the smoking gun may have been found on tool-call 7 of 16.
-
-This module builds a synthesis-only message, calls the LLM with ``tools=None``
-(so the model physically cannot make another tool call), runs the fabrication
-detector on the output, and returns the text so the caller can persist it as
-``final_answer``. Counters are incremented in ``api.metrics``.
-
-The harness message starts with ``[harness]`` and contains the literal
-string ``budget-cap`` (or ``wall-clock`` / ``token-cap`` etc.) so the
-gate-fired detector can count it alongside the other harness gates.
-
-v2.35.10 adds an XML-drift defense layer: Qwen3-Coder-Next occasionally
-emits tool calls as XML text (<tool_call><function=...>...) even when no
-tools are available. Outputs are screened; a retry is made with cleaned
-history, and if that also drifts, a programmatic fallback built from the
-tool-call history is returned.
+v2.34.17 — original version: single-shot LLM call after budget cap.
+v2.35.10 — added XML-drift defence (regex check on output) + one-shot
+           retry with a sentinel-replaced history + programmatic
+           fallback.
+v2.35.11 — unique sentinel constant + placeholder_echo drift detection
+           + attempt-1 uses cleaned history + strong anti-XML prompt
+           from the start.
+v2.35.12 — drop drifted messages from history entirely (instead of
+           sentinel replacement) because the sentinel became an
+           attractor the model would echo. Sentinel constant + echo
+           detection retained for edge cases. Fallback enriched with
+           per-tool result snippets.
 """
 from __future__ import annotations
 
@@ -130,37 +122,78 @@ def _programmatic_fallback(
     reason: str,
     tool_count: int,
     budget: int,
-    actual_tool_names: list[str],
+    actual_tool_calls: list[dict] | None = None,
+    actual_tool_names: list[str] | None = None,  # backward compat
 ) -> str:
-    """Build a final_answer from tool history alone when the LLM fails
-    to produce a clean synthesis. This is the last line of defence —
-    the operator will ALWAYS get readable output, even if the model
-    emits pure XML drift multiple times.
-    """
-    seen = set()
-    unique_tools: list[str] = []
-    for t in actual_tool_names:
-        if t not in seen:
-            seen.add(t)
-            unique_tools.append(t)
+    """Build a final_answer from tool history alone.
 
+    Accepts either:
+      - `actual_tool_calls`: list of {name, params?, result?, status?}
+        dicts for rich snippets (v2.35.12 preferred)
+      - `actual_tool_names`: list of tool name strings (v2.35.10
+        fallback — retained so existing callers and tests keep working)
+
+    When `actual_tool_calls` is provided, the output includes a per-tool
+    snippet line with the first 120 chars of each unique tool's first
+    successful result. This gives operators actionable insight inline
+    without opening the Trace viewer.
+    """
     label = _REASON_LABELS.get(reason, reason)
 
+    # Normalise inputs — prefer rich calls over names
+    if actual_tool_calls:
+        calls = actual_tool_calls
+    elif actual_tool_names:
+        calls = [{"name": n} for n in actual_tool_names]
+    else:
+        calls = []
+
+    # Deduplicate by tool name, keep first success per tool (fall back to
+    # first error if no success). This gives each unique tool at most one
+    # snippet row.
+    seen_names: set[str] = set()
+    unique_rows: list[dict] = []
+    for call in calls:
+        name = call.get("name") or call.get("tool_name")
+        if not name or name in seen_names:
+            continue
+        # Find best call for this name across the full history
+        candidates = [c for c in calls
+                      if (c.get("name") or c.get("tool_name")) == name]
+        success = next((c for c in candidates
+                        if c.get("status") in ("ok", None, "")), None)
+        chosen = success or (candidates[0] if candidates else {"name": name})
+        seen_names.add(name)
+        unique_rows.append(chosen)
+
     lines = [
-        f"[HARNESS FALLBACK] Agent reached {label} ({tool_count}/{budget} "
-        "tool calls). The model failed to produce a clean synthesis; this "
-        "summary was built from tool history alone.",
+        f"[HARNESS FALLBACK] Agent reached {label} "
+        f"({tool_count}/{budget} tool calls). The model failed to produce "
+        "a clean synthesis; this summary was built from tool history alone.",
         "",
         "EVIDENCE:",
     ]
-    if unique_tools:
-        lines.append(
-            f"- {tool_count} tool calls made across "
-            f"{len(unique_tools)} distinct tools: {', '.join(unique_tools)}"
-        )
-        lines.append(
-            "- See the Trace viewer (Logs \u2192 Trace) for full tool results."
-        )
+
+    if unique_rows:
+        for row in unique_rows:
+            name = row.get("name") or row.get("tool_name") or "?"
+            status = row.get("status", "?")
+            result = row.get("result") or row.get("content") or ""
+            if isinstance(result, dict):
+                try:
+                    import json as _json
+                    result = _json.dumps(result, default=str)
+                except Exception:
+                    result = str(result)
+            result = str(result).strip().replace("\n", " ")
+            if len(result) > 120:
+                result = result[:117] + "..."
+            if result:
+                lines.append(f"- {name}() status={status}: {result}")
+            else:
+                lines.append(f"- {name}() status={status}")
+        lines.append("- See the Trace viewer (Logs \u2192 Trace) "
+                     "for full tool results.")
     else:
         lines.append("- No tool calls were recorded for this run.")
 
@@ -173,8 +206,9 @@ def _programmatic_fallback(
         "1. Open the Trace viewer for this operation to inspect the "
         "full tool results.",
         "2. Consider re-running with a narrower task (scope to a single "
-        "entity or a single question), or ask a follow-up that references "
-        "a specific tool result to continue from that evidence.",
+        "entity or a single question), or ask a follow-up that "
+        "references a specific tool result to continue from that "
+        "evidence.",
     ]
     return "\n".join(lines)
 
@@ -204,23 +238,42 @@ def _call_synthesis(client, model, msgs, max_tokens):
 
 
 def _strip_xml_drift_from_messages(messages: list) -> list:
-    """Return a copy of messages with XML-drift removed from assistant text.
+    """Return a copy of messages with XML-drift assistant turns REMOVED.
 
-    Keeps message order and roles; replaces text-only assistant messages
-    whose content is XML-drift with a short placeholder. Real tool_calls
-    messages are unchanged. Prevents the drift pattern from being 'primed'
-    in the retry call.
+    v2.35.12 change: messages whose content matches `_is_drift()` are
+    dropped from the history entirely (not replaced with a sentinel).
+    The previous sentinel-replacement approach created an attractor
+    pattern — the model in the synthesis call would sometimes echo the
+    sentinel verbatim as 'prose', treating it as a safe plain-text
+    fallback. Dropping entirely avoids this.
+
+    Related tool-response messages for the dropped assistant turns are
+    also dropped, because the pairing is broken once the parent
+    assistant message is gone. This is safe: drifted assistant messages
+    never had real `tool_calls` (they had text-embedded XML), so the
+    tool responses below them were produced by different flow branches
+    and aren't referenced by `tool_call_id` anywhere upstream.
     """
     cleaned = []
+    skip_next_tool_block = False
     for m in messages:
-        if m.get("role") == "assistant" and isinstance(m.get("content"), str):
+        role = m.get("role")
+
+        # A tool response immediately following a dropped assistant turn
+        # is orphaned — drop it too.
+        if role == "tool" and skip_next_tool_block:
+            continue
+        # First non-tool message clears the skip flag
+        if role != "tool":
+            skip_next_tool_block = False
+
+        # Check for drift on text-only assistant content
+        if role == "assistant" and isinstance(m.get("content"), str):
             drift, _ = _is_drift(m["content"])
             if drift:
-                cleaned.append({
-                    "role": "assistant",
-                    "content": _DRIFT_STRIPPED_PLACEHOLDER,
-                })
+                skip_next_tool_block = True
                 continue
+
         cleaned.append(m)
     return cleaned
 
@@ -235,6 +288,7 @@ def run_forced_synthesis(
     tool_count: int,
     budget: int,
     actual_tool_names: Iterable[str],
+    actual_tool_calls: list[dict] | None = None,   # NEW v2.35.12
     max_tokens: int = 1500,
 ) -> tuple[str, str, dict | None]:
     """Run one tools-free completion to synthesise a final_answer.
@@ -344,7 +398,10 @@ def run_forced_synthesis(
             except Exception:
                 pass
         synthesis_text = _programmatic_fallback(
-            reason=reason, tool_count=tool_count, budget=budget,
+            reason=reason,
+            tool_count=tool_count,
+            budget=budget,
+            actual_tool_calls=actual_tool_calls,
             actual_tool_names=actual_list,
         )
 

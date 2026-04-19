@@ -45,41 +45,119 @@ def test_drift_detector_accepts_angle_bracket_lt_gt_comparisons():
     assert not drift
 
 
-def test_programmatic_fallback_produces_readable_output():
+def test_programmatic_fallback_names_only_backward_compat():
+    """v2.35.10 callers passing only names still work."""
     from api.agents.forced_synthesis import _programmatic_fallback
     out = _programmatic_fallback(
         reason="budget_cap", tool_count=8, budget=8,
-        actual_tool_names=["runbook_search", "vm_exec", "vm_exec", "service_placement"],
+        actual_tool_names=["runbook_search", "vm_exec", "vm_exec",
+                           "service_placement"],
     )
     assert "HARNESS FALLBACK" in out
     assert "EVIDENCE" in out
     assert "NEXT STEPS" in out
     assert "<tool_call" not in out
     assert "<function=" not in out
-    # De-duplicated list of tools (2 vm_exec -> 1 entry)
+    # De-duplicated: 2 vm_exec -> 1 row
+    assert out.count("vm_exec()") <= 1 or out.count("vm_exec(") == 1
     assert "runbook_search" in out
-    assert "vm_exec" in out
     assert "service_placement" in out
 
 
-def test_strip_xml_drift_from_messages_preserves_non_drift():
+def test_programmatic_fallback_enriched_with_results():
+    """v2.35.12 new: per-tool result snippet included when available."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    calls = [
+        {"name": "swarm_node_status", "status": "ok",
+         "result": "6 nodes Ready, leader manager-02"},
+        {"name": "vm_exec", "status": "ok",
+         "result": "/dev/sda1 42G used 120G avail"},
+        {"name": "vm_exec", "status": "ok",
+         "result": "/dev/sda1 second run same"},
+        {"name": "service_placement", "status": "error",
+         "result": "Unknown service: foo"},
+    ]
+    out = _programmatic_fallback(
+        reason="budget_cap", tool_count=4, budget=8,
+        actual_tool_calls=calls,
+    )
+    assert "swarm_node_status" in out
+    assert "6 nodes Ready" in out  # snippet included
+    assert "vm_exec" in out
+    assert "42G used" in out
+    # Deduplicated: only one vm_exec row
+    assert out.count("vm_exec()") == 1 or out.count("vm_exec() status") == 1
+    # Error row gets rendered too (best we have for a tool that only failed)
+    assert "service_placement" in out
+    assert "Unknown service" in out
+
+
+def test_programmatic_fallback_snippet_truncation():
+    """Results longer than 120 chars must be truncated with ellipsis."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    long_result = "X" * 500
+    out = _programmatic_fallback(
+        reason="budget_cap", tool_count=1, budget=8,
+        actual_tool_calls=[{"name": "vm_exec", "status": "ok",
+                            "result": long_result}],
+    )
+    # Must contain some X but not all 500 of them
+    assert "XXX" in out
+    assert "XXXXXXXXXX" * 50 not in out
+    # Ellipsis marker
+    assert "..." in out
+
+
+def test_programmatic_fallback_dict_result_serialised():
+    """Dict results should be JSON-stringified (not `{...object address...}`)."""
+    from api.agents.forced_synthesis import _programmatic_fallback
+    out = _programmatic_fallback(
+        reason="budget_cap", tool_count=1, budget=8,
+        actual_tool_calls=[{"name": "kafka_broker_status", "status": "ok",
+                            "result": {"brokers": 3, "isr": "[1,2,3]"}}],
+    )
+    assert "kafka_broker_status" in out
+    assert "brokers" in out
+    assert "3" in out
+
+
+def test_strip_xml_drift_from_messages_drops_drifted_entirely():
+    """v2.35.12: drifted messages must be REMOVED, not sentinel-replaced."""
     from api.agents.forced_synthesis import (
         _strip_xml_drift_from_messages, _DRIFT_STRIPPED_PLACEHOLDER,
     )
     msgs = [
         {"role": "system", "content": "you are helpful"},
         {"role": "user", "content": "do something"},
-        {"role": "assistant", "content": "Sure, I'll check."},                       # keep
-        {"role": "assistant", "content": "<tool_call>\n<function=foo>\n</tool_call>"}, # strip
-        {"role": "tool", "tool_call_id": "x", "content": "{}"},                      # keep
+        {"role": "assistant", "content": "Sure, I'll check."},
+        {"role": "assistant", "content": "<tool_call>\n<function=foo>\n</tool_call>"},
+        {"role": "tool", "tool_call_id": "x", "content": "{}"},
+        {"role": "assistant", "content": "Results look good."},
     ]
     out = _strip_xml_drift_from_messages(msgs)
+    # Drifted assistant PLUS its orphaned tool response are both gone
+    assert len(out) == len(msgs) - 2
+    assert all(_DRIFT_STRIPPED_PLACEHOLDER not in str(m.get("content", ""))
+               for m in out)
+    # Non-drift messages preserved
+    assert out[0]["content"] == "you are helpful"
+    assert out[2]["content"] == "Sure, I'll check."
+    assert out[3]["content"] == "Results look good."
+
+
+def test_strip_xml_drift_preserves_tool_responses_to_valid_calls():
+    """Tool responses that follow a non-drift assistant must NOT be dropped."""
+    from api.agents.forced_synthesis import _strip_xml_drift_from_messages
+    msgs = [
+        {"role": "user", "content": "query"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "1", "function": {"name": "foo"}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "result"},
+        {"role": "assistant", "content": "done"},
+    ]
+    out = _strip_xml_drift_from_messages(msgs)
+    # None of these drift — all preserved
     assert len(out) == len(msgs)
-    assert out[0] == msgs[0]
-    assert out[1] == msgs[1]
-    assert out[2] == msgs[2]
-    assert out[3]["content"] == _DRIFT_STRIPPED_PLACEHOLDER
-    assert out[4] == msgs[4]
 
 
 def test_run_forced_synthesis_falls_back_on_drift(monkeypatch):

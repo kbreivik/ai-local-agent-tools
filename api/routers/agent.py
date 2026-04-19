@@ -655,6 +655,15 @@ async def _run_single_agent_step(
                     tool_count=len(tools_used_names),
                     budget=_budget_cap,
                     actual_tool_names=tools_used_names,
+                    # v2.35.12 — pass rich history for enriched fallback
+                    actual_tool_calls=[
+                        {
+                            "name": tc.get("tool") or tc.get("tool_name") or tc.get("name"),
+                            "status": tc.get("status"),
+                            "result": tc.get("result") or tc.get("content"),
+                        }
+                        for tc in (tool_history or [])
+                    ],
                 )
                 if synthesis_text:
                     last_reasoning = synthesis_text
@@ -759,6 +768,15 @@ async def _run_single_agent_step(
                     tool_count=len(tools_used_names),
                     budget=_tool_budget,
                     actual_tool_names=tools_used_names,
+                    # v2.35.12 — pass rich history for enriched fallback
+                    actual_tool_calls=[
+                        {
+                            "name": tc.get("tool") or tc.get("tool_name") or tc.get("name"),
+                            "status": tc.get("status"),
+                            "result": tc.get("result") or tc.get("content"),
+                        }
+                        for tc in (tool_history or [])
+                    ],
                 )
                 if synthesis_text:
                     last_reasoning = synthesis_text
