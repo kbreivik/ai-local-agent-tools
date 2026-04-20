@@ -7,6 +7,7 @@ const DEFAULTS = {
   // General
   theme:                    'dark',
   dashboardRefreshInterval: 15000,
+  autoUpdate:               false,
 
   // Infrastructure
   dockerHost:             '',
@@ -57,6 +58,40 @@ const DEFAULTS = {
   externalConfirmTimeoutSeconds:     300,
   externalContextLastNToolResults:   5,
 
+  // Facts & Knowledge (v2.35.0 – v2.35.4 — v2.36.6 allowlisted)
+  factInjectionThreshold:            0.7,
+  factInjectionMaxRows:              40,
+  factSourceWeight_manual:                 1.0,
+  factSourceWeight_proxmox_collector:      0.9,
+  factSourceWeight_swarm_collector:        0.9,
+  factSourceWeight_docker_agent_collector: 0.85,
+  factSourceWeight_pbs_collector:          0.85,
+  factSourceWeight_kafka_collector:        0.8,
+  factSourceWeight_fortiswitch_collector:  0.85,
+  factSourceWeight_agent_observation:      0.5,
+  factSourceWeight_rag_extraction:         0.4,
+  factHalfLifeHours_collector:       168,
+  factHalfLifeHours_agent:           24,
+  factHalfLifeHours_manual_phase1:   720,
+  factHalfLifeHours_manual_phase2:   1440,
+  factHalfLifeHours_agent_volatile:  2,
+  factVerifyCountCap:                10,
+  factAgeRejectionMode:              'medium',
+  factAgeRejectionMaxAgeMin:         5,
+  factAgeRejectionMinConfidence:     0.85,
+  runbookInjectionMode:              'augment',
+  runbookClassifierMode:             'keyword',
+  preflightPanelMode:                'always_visible',
+  preflightDisambiguationTimeout:    300,
+  preflightLLMFallbackEnabled:       true,
+  preflightLLMFallbackMaxTokens:     200,
+
+  // Agent Budgets (v2.36.5 — v2.36.6 allowlisted)
+  agentToolBudget_observe:     8,
+  agentToolBudget_investigate: 16,
+  agentToolBudget_execute:     14,
+  agentToolBudget_build:       12,
+
   // Coordinator
   coordinatorPriorAttemptsEnabled: true,
 
@@ -95,6 +130,25 @@ const SERVER_KEYS = new Set([
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',
   'autoUpdate', 'dashboardRefreshInterval',
+  // Facts & Knowledge (v2.35.0 – v2.35.4 — v2.36.6 allowlisted)
+  'factInjectionThreshold', 'factInjectionMaxRows',
+  'factSourceWeight_manual', 'factSourceWeight_proxmox_collector',
+  'factSourceWeight_swarm_collector', 'factSourceWeight_docker_agent_collector',
+  'factSourceWeight_pbs_collector', 'factSourceWeight_kafka_collector',
+  'factSourceWeight_fortiswitch_collector', 'factSourceWeight_agent_observation',
+  'factSourceWeight_rag_extraction',
+  'factHalfLifeHours_collector', 'factHalfLifeHours_agent',
+  'factHalfLifeHours_manual_phase1', 'factHalfLifeHours_manual_phase2',
+  'factHalfLifeHours_agent_volatile',
+  'factVerifyCountCap',
+  'factAgeRejectionMode', 'factAgeRejectionMaxAgeMin', 'factAgeRejectionMinConfidence',
+  'runbookInjectionMode', 'runbookClassifierMode',
+  'preflightPanelMode', 'preflightDisambiguationTimeout',
+  'preflightLLMFallbackEnabled', 'preflightLLMFallbackMaxTokens',
+
+  // Agent Budgets (v2.36.5 — v2.36.6 allowlisted)
+  'agentToolBudget_observe', 'agentToolBudget_investigate',
+  'agentToolBudget_execute', 'agentToolBudget_build',
 ])
 
 function isMasked(v) {

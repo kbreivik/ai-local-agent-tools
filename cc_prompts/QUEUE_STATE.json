@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-20T20:44:26",
+  "updated_at": "2026-04-20T21:33:17",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2709,10 +2709,26 @@
       "filename": "CC_PROMPT_v2.36.5.md",
       "version": "v2.36.5",
       "theme": "feat(agents): per-agent-type tool call budgets in Settings (tune without redeploy)",
+      "runner_status": "DONE",
+      "commit_sha": "6edc531",
+      "error": "",
+      "started_at": "2026-04-20T20:44:26",
+      "finished_at": "2026-04-20T20:48:27",
+      "duration_s": 241.35618599998998,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260420_204426_CC_PROMPT_v2.36.5.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.36.6.md",
+      "version": "v2.36.6",
+      "theme": "fix(ui): add 30 missing Settings keys (Facts × 26 + Agent Budgets × 4) to SERVER_KEYS allowlist",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-20T20:44:26",
+      "started_at": "2026-04-20T21:33:17",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
