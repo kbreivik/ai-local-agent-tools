@@ -235,3 +235,109 @@ def reseed_settings(_: str = Depends(get_current_user)):
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── External AI: test connection ────────────────────────────────────────────
+@router.post("/test-external-ai")
+async def test_external_ai(
+    body: dict[str, Any] = Body(...),
+    _: str = Depends(get_current_user),
+):
+    """Round-trip a minimal request to the selected external AI provider.
+
+    Body: {provider, api_key?, model}
+    - api_key: optional. If empty/missing or contains '***' (masked from GET),
+      falls back to the DB-saved externalApiKey.
+    - provider: 'claude' | 'openai' | 'grok'
+    - model:    provider-specific model id
+
+    Returns:
+      {ok: bool, stage: 'auth'|'request'|'parse'|'success',
+       latency_ms: int, model: str, error?: str, input_tokens?: int,
+       output_tokens?: int}
+    """
+    import time
+    import httpx
+    from api.settings_manager import get_setting
+
+    provider = str(body.get("provider") or "").strip().lower()
+    model    = str(body.get("model") or "").strip()
+    api_key  = str(body.get("api_key") or "").strip()
+
+    # Fallback to saved key when the submitted value is blank or masked
+    if not api_key or "***" in api_key:
+        api_key = str(get_setting("externalApiKey", SETTINGS_KEYS)["value"] or "").strip()
+
+    if provider not in {"claude", "openai", "grok"}:
+        return {"ok": False, "stage": "auth",
+                "error": f"Unknown provider: {provider!r}"}
+    if not api_key:
+        return {"ok": False, "stage": "auth", "error": "No API key set"}
+    if not model:
+        return {"ok": False, "stage": "auth", "error": "No model set"}
+
+    # Provider-specific request shape
+    if provider == "claude":
+        url     = "https://api.anthropic.com/v1/messages"
+        headers = {"x-api-key": api_key,
+                   "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+    elif provider == "openai":
+        url     = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+    else:  # grok (xAI, OpenAI-compatible)
+        url     = "https://api.x.ai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(url, json=payload, headers=headers)
+    except httpx.TimeoutException:
+        return {"ok": False, "stage": "request", "error": "Timed out after 10s"}
+    except httpx.HTTPError as e:
+        return {"ok": False, "stage": "request", "error": f"Network error: {e!s}"}
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    # Non-2xx → extract provider error message
+    if r.status_code >= 400:
+        msg = f"HTTP {r.status_code}"
+        try:
+            err = r.json().get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or msg
+            elif isinstance(err, str):
+                msg = err
+        except Exception:
+            pass
+        stage = "auth" if r.status_code in (401, 403) else "request"
+        return {"ok": False, "stage": stage, "status": r.status_code,
+                "latency_ms": latency_ms, "model": model, "error": msg}
+
+    # 2xx — parse usage block if present (best-effort)
+    try:
+        data = r.json()
+    except Exception:
+        return {"ok": False, "stage": "parse", "latency_ms": latency_ms,
+                "model": model, "error": "Non-JSON response"}
+
+    usage = data.get("usage") or {}
+    # Claude: {input_tokens, output_tokens}. OpenAI/Grok: {prompt_tokens, completion_tokens}
+    in_tok  = usage.get("input_tokens",  usage.get("prompt_tokens"))
+    out_tok = usage.get("output_tokens", usage.get("completion_tokens"))
+
+    return {
+        "ok": True, "stage": "success",
+        "latency_ms": latency_ms,
+        "model": data.get("model") or model,
+        "input_tokens":  in_tok,
+        "output_tokens": out_tok,
+    }

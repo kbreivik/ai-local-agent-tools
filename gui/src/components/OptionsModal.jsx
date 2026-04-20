@@ -551,13 +551,29 @@ function AIServicesTab({ draft, update }) {
     setTesting('ext')
     setExtTest(null)
     try {
-      // Basic connectivity check — just verify key is non-empty
-      if (!draft.externalApiKey?.trim()) {
-        setExtTest({ ok: false, msg: 'No API key set' })
-        setTesting(false)
-        return
+      const r = await fetch(`${BASE}/api/settings/test-external-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          provider: draft.externalProvider,
+          // Send the typed key only if user typed a new one; backend falls back
+          // to the saved DB value when this is empty or masked (contains '***').
+          api_key:  draft.externalApiKey || '',
+          model:    draft.externalModel  || '',
+        }),
+      })
+      const d = await r.json()
+      if (d.ok) {
+        const toks = (d.input_tokens != null && d.output_tokens != null)
+          ? ` · ${d.input_tokens}/${d.output_tokens} tok`
+          : ''
+        setExtTest({ ok: true, msg: `OK (${d.latency_ms}ms) — ${d.model}${toks}` })
+      } else {
+        const stage = d.stage ? `[${d.stage}] ` : ''
+        setExtTest({ ok: false, msg: `${stage}${d.error || 'Failed'}` })
       }
-      setExtTest({ ok: true, msg: 'API key present — connectivity not verified in browser' })
+    } catch (e) {
+      setExtTest({ ok: false, msg: e.message })
     } finally {
       setTesting(false)
     }

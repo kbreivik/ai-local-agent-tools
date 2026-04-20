@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-19T21:38:11",
+  "updated_at": "2026-04-20T14:42:53",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2597,10 +2597,26 @@
       "filename": "CC_PROMPT_v2.35.20.md",
       "version": "v2.35.20",
       "theme": "fix(tools): infra_lookup not-found returns status=ok with data.found=false (semantic tool-contract fix)",
+      "runner_status": "DONE",
+      "commit_sha": "02f233c",
+      "error": "",
+      "started_at": "2026-04-19T21:38:11",
+      "finished_at": "2026-04-19T21:41:08",
+      "duration_s": 176.13367670000298,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260419_213811_CC_PROMPT_v2.35.20.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.35.21.md",
+      "version": "v2.35.21",
+      "theme": "feat(settings): real Test Connection for external AI providers (Claude/OpenAI/Grok) — POST /api/settings/test-external-ai",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-19T21:38:11",
+      "started_at": "2026-04-20T14:42:53",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

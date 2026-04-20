@@ -1,0 +1,429 @@
+# CC PROMPT — v2.35.21 — Wire External AI "Test Connection" button to real round-trip
+
+## What this does
+
+Replaces the stub `testExternal()` in `AIServicesTab` with a real
+round-trip against the selected provider. Adds backend endpoint
+`POST /api/settings/test-external-ai` that proxies a minimal
+(`max_tokens=1`) call to Claude, OpenAI, or Grok and returns
+`{ok, latency_ms, model, stage, error, ...}`.
+
+Version bump: 2.35.20 → 2.35.21.
+
+Single endpoint + 1 frontend function + 1 test file. No schema
+changes, no new settings keys, no new deps.
+
+---
+
+## Why
+
+Today `testExternal()` only checks `draft.externalApiKey?.trim()`
+is non-empty and reports "API key present — connectivity not verified
+in browser." Useless for catching:
+- Invalid / expired key
+- Wrong provider selected
+- Model name typo (e.g. `claude-sonnet-5-0`)
+- Network egress blocked from agent-01
+- Hung egress (firewall drop vs refuse)
+
+The notification webhook tab has the right pattern
+(`POST /api/alerts/test-webhook` → `{ok, message}`) — mirror it.
+
+---
+
+## Change 1 — `api/routers/settings.py` — add test endpoint
+
+Add at the bottom of the file (after `reseed_settings`):
+
+```python
+# ── External AI: test connection ────────────────────────────────────────────
+@router.post("/test-external-ai")
+async def test_external_ai(
+    body: dict[str, Any] = Body(...),
+    _: str = Depends(get_current_user),
+):
+    """Round-trip a minimal request to the selected external AI provider.
+
+    Body: {provider, api_key?, model}
+    - api_key: optional. If empty/missing or contains '***' (masked from GET),
+      falls back to the DB-saved externalApiKey.
+    - provider: 'claude' | 'openai' | 'grok'
+    - model:    provider-specific model id
+
+    Returns:
+      {ok: bool, stage: 'auth'|'request'|'parse'|'success',
+       latency_ms: int, model: str, error?: str, input_tokens?: int,
+       output_tokens?: int}
+    """
+    import time
+    import httpx
+    from api.settings_manager import get_setting
+
+    provider = str(body.get("provider") or "").strip().lower()
+    model    = str(body.get("model") or "").strip()
+    api_key  = str(body.get("api_key") or "").strip()
+
+    # Fallback to saved key when the submitted value is blank or masked
+    if not api_key or "***" in api_key:
+        api_key = str(get_setting("externalApiKey", SETTINGS_KEYS)["value"] or "").strip()
+
+    if provider not in {"claude", "openai", "grok"}:
+        return {"ok": False, "stage": "auth",
+                "error": f"Unknown provider: {provider!r}"}
+    if not api_key:
+        return {"ok": False, "stage": "auth", "error": "No API key set"}
+    if not model:
+        return {"ok": False, "stage": "auth", "error": "No model set"}
+
+    # Provider-specific request shape
+    if provider == "claude":
+        url     = "https://api.anthropic.com/v1/messages"
+        headers = {"x-api-key": api_key,
+                   "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+    elif provider == "openai":
+        url     = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+    else:  # grok (xAI, OpenAI-compatible)
+        url     = "https://api.x.ai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": 1,
+                   "messages": [{"role": "user", "content": "ping"}]}
+
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(url, json=payload, headers=headers)
+    except httpx.TimeoutException:
+        return {"ok": False, "stage": "request", "error": "Timed out after 10s"}
+    except httpx.HTTPError as e:
+        return {"ok": False, "stage": "request", "error": f"Network error: {e!s}"}
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    # Non-2xx → extract provider error message
+    if r.status_code >= 400:
+        msg = f"HTTP {r.status_code}"
+        try:
+            err = r.json().get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or msg
+            elif isinstance(err, str):
+                msg = err
+        except Exception:
+            pass
+        stage = "auth" if r.status_code in (401, 403) else "request"
+        return {"ok": False, "stage": stage, "status": r.status_code,
+                "latency_ms": latency_ms, "model": model, "error": msg}
+
+    # 2xx — parse usage block if present (best-effort)
+    try:
+        data = r.json()
+    except Exception:
+        return {"ok": False, "stage": "parse", "latency_ms": latency_ms,
+                "model": model, "error": "Non-JSON response"}
+
+    usage = data.get("usage") or {}
+    # Claude: {input_tokens, output_tokens}. OpenAI/Grok: {prompt_tokens, completion_tokens}
+    in_tok  = usage.get("input_tokens",  usage.get("prompt_tokens"))
+    out_tok = usage.get("output_tokens", usage.get("completion_tokens"))
+
+    return {
+        "ok": True, "stage": "success",
+        "latency_ms": latency_ms,
+        "model": data.get("model") or model,
+        "input_tokens":  in_tok,
+        "output_tokens": out_tok,
+    }
+```
+
+**Security note:** never log `api_key`. Do not echo it in the response.
+
+---
+
+## Change 2 — `gui/src/components/OptionsModal.jsx` — replace stub testExternal
+
+Inside `function AIServicesTab({ draft, update })`, locate the existing
+`testExternal` function (currently ~10 lines, contains the comment
+`// Basic connectivity check — just verify key is non-empty`).
+
+**Replace the entire function** with:
+
+```jsx
+  const testExternal = async () => {
+    setTesting('ext')
+    setExtTest(null)
+    try {
+      const r = await fetch(`${BASE}/api/settings/test-external-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          provider: draft.externalProvider,
+          // Send the typed key only if user typed a new one; backend falls back
+          // to the saved DB value when this is empty or masked (contains '***').
+          api_key:  draft.externalApiKey || '',
+          model:    draft.externalModel  || '',
+        }),
+      })
+      const d = await r.json()
+      if (d.ok) {
+        const toks = (d.input_tokens != null && d.output_tokens != null)
+          ? ` · ${d.input_tokens}/${d.output_tokens} tok`
+          : ''
+        setExtTest({ ok: true, msg: `OK (${d.latency_ms}ms) — ${d.model}${toks}` })
+      } else {
+        const stage = d.stage ? `[${d.stage}] ` : ''
+        setExtTest({ ok: false, msg: `${stage}${d.error || 'Failed'}` })
+      }
+    } catch (e) {
+      setExtTest({ ok: false, msg: e.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+```
+
+Do NOT touch anything else in `AIServicesTab` — the Local AI `testLocal`,
+the Provider/Model fields, Escalation Policy, and Coordinator sections
+are all correct.
+
+---
+
+## Change 3 — tests — `tests/test_external_ai_test_endpoint.py`
+
+```python
+"""v2.35.21 — POST /api/settings/test-external-ai round-trip + error paths."""
+import pytest
+from unittest.mock import patch, AsyncMock, MagicMock
+
+
+def _mk_response(status_code: int, json_body: dict):
+    r = MagicMock()
+    r.status_code = status_code
+    r.json = MagicMock(return_value=json_body)
+    return r
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_returns_error():
+    from api.routers.settings import test_external_ai
+    out = await test_external_ai(
+        body={"provider": "bogus", "api_key": "x", "model": "y"},
+        _="test_user",
+    )
+    assert out["ok"] is False
+    assert out["stage"] == "auth"
+    assert "bogus" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_missing_key_and_no_db_key_returns_error():
+    from api.routers.settings import test_external_ai
+    with patch("api.settings_manager.get_setting",
+               return_value={"value": "", "source": "default", "encrypted": False}):
+        out = await test_external_ai(
+            body={"provider": "claude", "api_key": "", "model": "claude-sonnet-4-6"},
+            _="test_user",
+        )
+    assert out["ok"] is False
+    assert out["stage"] == "auth"
+    assert "No API key" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_masked_key_falls_back_to_db():
+    """Key with *** should trigger DB lookup."""
+    from api.routers.settings import test_external_ai
+
+    with patch("api.settings_manager.get_setting",
+               return_value={"value": "sk-real", "source": "db", "encrypted": True}), \
+         patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(return_value=_mk_response(200, {
+            "model": "claude-sonnet-4-6",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "claude", "api_key": "sk-r***",
+                  "model": "claude-sonnet-4-6"},
+            _="test_user",
+        )
+        # Verify the DB key was used, not the masked value
+        call_headers = mock_ctx.post.call_args.kwargs["headers"]
+        assert call_headers["x-api-key"] == "sk-real"
+
+    assert out["ok"] is True
+    assert out["input_tokens"]  == 3
+    assert out["output_tokens"] == 1
+
+
+@pytest.mark.asyncio
+async def test_401_marked_as_auth_stage():
+    from api.routers.settings import test_external_ai
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(return_value=_mk_response(401, {
+            "error": {"message": "invalid x-api-key"},
+        }))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "claude", "api_key": "sk-bad",
+                  "model": "claude-sonnet-4-6"},
+            _="test_user",
+        )
+    assert out["ok"] is False
+    assert out["stage"] == "auth"
+    assert out["status"] == 401
+    assert "invalid" in out["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_404_model_marked_as_request_stage():
+    """Model-not-found is a request-stage problem, not auth."""
+    from api.routers.settings import test_external_ai
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(return_value=_mk_response(404, {
+            "error": {"message": "model not found: claude-sonnet-99"},
+        }))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "claude", "api_key": "sk-ok",
+                  "model": "claude-sonnet-99"},
+            _="test_user",
+        )
+    assert out["ok"] is False
+    assert out["stage"] == "request"
+    assert "model" in out["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_openai_uses_bearer_header():
+    from api.routers.settings import test_external_ai
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(return_value=_mk_response(200, {
+            "model": "gpt-4o",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+        }))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "openai", "api_key": "sk-openai",
+                  "model": "gpt-4o"},
+            _="test_user",
+        )
+        call = mock_ctx.post.call_args
+        assert call.args[0] == "https://api.openai.com/v1/chat/completions"
+        assert call.kwargs["headers"]["Authorization"] == "Bearer sk-openai"
+    assert out["ok"] is True
+    # OpenAI schema → translated to input_tokens/output_tokens in response
+    assert out["input_tokens"]  == 2
+    assert out["output_tokens"] == 1
+
+
+@pytest.mark.asyncio
+async def test_grok_hits_xai_base():
+    from api.routers.settings import test_external_ai
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(return_value=_mk_response(200, {"model": "grok-2-latest"}))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "grok", "api_key": "xai-key", "model": "grok-2-latest"},
+            _="test_user",
+        )
+        assert mock_ctx.post.call_args.args[0] == "https://api.x.ai/v1/chat/completions"
+    assert out["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_timeout_marked_as_request_stage():
+    import httpx
+    from api.routers.settings import test_external_ai
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_ctx = AsyncMock()
+        mock_ctx.post = AsyncMock(side_effect=httpx.TimeoutException("slow"))
+        MockClient.return_value.__aenter__.return_value = mock_ctx
+
+        out = await test_external_ai(
+            body={"provider": "claude", "api_key": "sk-x", "model": "claude-sonnet-4-6"},
+            _="test_user",
+        )
+    assert out["ok"] is False
+    assert out["stage"] == "request"
+    assert "Timed out" in out["error"]
+```
+
+---
+
+## Change 4 — `VERSION`
+
+```
+2.35.21
+```
+
+---
+
+## Verify
+
+```bash
+pytest tests/test_external_ai_test_endpoint.py -v
+```
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(settings): v2.35.21 real Test Connection for external AI providers
+
+Backend: POST /api/settings/test-external-ai performs a max_tokens=1
+round-trip against Claude, OpenAI, or Grok (xAI). Returns
+{ok, stage, latency_ms, model, input_tokens, output_tokens, error}.
+Falls back to DB-saved externalApiKey when the submitted key is blank
+or still masked (contains '***') so users don't have to re-type saved
+keys. 10s timeout. Never logs the key.
+
+Frontend: AIServicesTab.testExternal() replaced from a string-length
+stub to a real fetch to the new endpoint. Success shows latency + model
++ token counts. Failure shows the stage ([auth]/[request]/[parse]) and
+the provider's error message — so 'wrong key' vs 'wrong model' vs
+'network blocked' are all distinguishable at a glance.
+
+8 regression tests: unknown-provider, no-key, masked-key-falls-back-to-DB,
+401->auth stage, 404->request stage, OpenAI bearer header, Grok xAI base
+URL, timeout->request stage."
+git push origin main
+```
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+1. Settings → AI Services → with saved Claude key and `claude-sonnet-4-6`
+   → click **Test Connection** → green `OK (Nms) — claude-sonnet-4-6 · 3/1 tok`
+2. Change model to `claude-sonnet-99` → red `[request] model not found: …`
+3. Switch provider to Openai with no key saved → red `[auth] No API key set`
+4. Switch provider to Grok, paste a valid xAI key, model `grok-2-latest`
+   → green OK + latency.
+
+## Scope guard — do NOT touch
+
+- LM Studio `testLocal` — already working, different code path.
+- `SETTINGS_KEYS` registry — no new keys needed.
+- Escalation Policy / Coordinator sections in AIServicesTab.
+- `api/settings_manager.py` — `get_setting` already returns plaintext.
+- Any agent-loop / escalation-trigger code — this is settings-page-only.
