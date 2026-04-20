@@ -33,6 +33,8 @@ import ServiceCards from './components/ServiceCards'
 import Sidebar from './components/Sidebar'
 import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
+import ExternalAIConfirmModal from './components/ExternalAIConfirmModal'
+import ExternalAICallsView from './components/ExternalAICallsView'
 import WindowsSection from './components/WindowsSection'
 import RunbooksPanel from './components/RunbooksPanel'
 import DiscoveredView from './components/DiscoveredView'
@@ -1396,6 +1398,30 @@ function AppShell() {
       .catch(() => {})
   }, [])
 
+  // v2.36.4 — External AI Router confirmation modal.
+  // Opens on external_ai_confirm_pending WS event, closes on
+  // external_ai_confirm_resolved, external_ai_call_start, or manual dismiss.
+  const [externalAIConfirmEvent, setExternalAIConfirmEvent] = useState(null)
+  useEffect(() => {
+    const handler = (e) => {
+      let msg
+      try {
+        msg = typeof e.detail === 'string' ? JSON.parse(e.detail) : e.detail
+      } catch { return }
+      if (!msg || !msg.type) return
+      if (msg.type === 'external_ai_confirm_pending') {
+        setExternalAIConfirmEvent(msg)
+      } else if (
+        msg.type === 'external_ai_confirm_resolved' ||
+        msg.type === 'external_ai_call_start'
+      ) {
+        setExternalAIConfirmEvent(null)
+      }
+    }
+    window.addEventListener('ws:message', handler)
+    return () => window.removeEventListener('ws:message', handler)
+  }, [])
+
   // Navigate to Logs tab on event
   useEffect(() => {
     const handler = () => setActiveTab('Logs')
@@ -1669,6 +1695,14 @@ function AppShell() {
               </div>
             </div>
           )}
+
+          {activeTab === 'ExternalAICalls' && (
+            <div className="flex flex-1 overflow-auto min-h-0">
+              <div className="flex-1 overflow-auto" style={{ background: 'var(--bg-0)' }}>
+                <ExternalAICallsView />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Compare panel — right side */}
@@ -1687,6 +1721,12 @@ function AppShell() {
 
       <AlertToast />
       <PlanConfirmModal />
+      {externalAIConfirmEvent && (
+        <ExternalAIConfirmModal
+          event={externalAIConfirmEvent}
+          onClose={() => setExternalAIConfirmEvent(null)}
+        />
+      )}
       {drawerEntityId && (
         <EntityDrawer entityId={drawerEntityId} onClose={() => setDrawerEntityId(null)} />
       )}

@@ -17,6 +17,7 @@ const NAV = [
     { key: 'Gates',       icon: '⛨' },
     { key: 'Memory',      icon: '◎' },
     { key: 'Discovered',  icon: '⊕' },
+    { key: 'ExternalAICalls', icon: '🤖', label: 'External AI Calls' },
   ]},
   { section: 'OPERATE', items: [
     { key: 'Commands',  icon: '▶' },
@@ -68,6 +69,30 @@ export default function Sidebar({
   const [collapsed, setCollapsed] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef(null)
+
+  // v2.36.4 — per-group collapse state persisted to localStorage.
+  // Device-local UX only; never synced to the prefs DB.
+  const [groupOpen, setGroupOpen] = useState(() => {
+    const init = {}
+    for (const g of NAV) {
+      const key = `collapse:sidebar.${g.section.toLowerCase()}`
+      try {
+        const raw = localStorage.getItem(key)
+        init[g.section] = raw === null ? true : raw === 'true'
+      } catch { init[g.section] = true }
+    }
+    return init
+  })
+  const toggleGroup = (section) => {
+    setGroupOpen(prev => {
+      const next = { ...prev, [section]: !prev[section] }
+      try {
+        localStorage.setItem(`collapse:sidebar.${section.toLowerCase()}`,
+                             String(next[section]))
+      } catch {}
+      return next
+    })
+  }
 
   useEffect(() => {
     fetchHealth().then(setHealth).catch(() => {})
@@ -129,21 +154,35 @@ export default function Sidebar({
 
       {/* Navigation */}
       <nav style={{ flex: 1, paddingTop: 8, overflowY: 'auto' }}>
-        {NAV.map(group => (
+        {NAV.map(group => {
+          const open = collapsed ? true : groupOpen[group.section] !== false
+          return (
           <div key={group.section}>
             {/* Section label row */}
             <div style={{
               display: 'flex', alignItems: 'center',
               padding: collapsed ? '10px 4px 4px' : '10px 12px 4px',
-            }}>
+              cursor: collapsed ? 'default' : 'pointer',
+            }}
+              onClick={() => { if (!collapsed) toggleGroup(group.section) }}
+              title={collapsed ? undefined : (open ? 'Collapse' : 'Expand')}>
               <div style={{
                 fontFamily: 'var(--font-mono)', fontSize: 7, letterSpacing: 2, color: 'var(--text-3)',
                 textTransform: 'uppercase', flex: 1,
                 opacity: collapsed ? 0 : 1, transition: 'opacity 0.1s ease',
                 whiteSpace: 'nowrap', overflow: 'hidden',
               }}>{group.section}</div>
+              {!collapsed && (
+                <span style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)',
+                  marginRight: group.section === 'OPERATE' ? 6 : 0,
+                  transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.15s', display: 'inline-block',
+                }}>›</span>
+              )}
               {group.section === 'OPERATE' && !collapsed && onToggleCommandPanel && (
-                <button onClick={onToggleCommandPanel} title="Toggle command panel (Ctrl+Shift+C)"
+                <button onClick={(e) => { e.stopPropagation(); onToggleCommandPanel() }}
+                  title="Toggle command panel (Ctrl+Shift+C)"
                   style={{
                     background: commandPanelOpen ? 'var(--accent-dim)' : 'none',
                     border: `1px solid ${commandPanelOpen ? 'var(--accent)' : 'transparent'}`,
@@ -155,7 +194,7 @@ export default function Sidebar({
               )}
             </div>
 
-            {group.items.map((item) => {
+            {open && group.items.map((item) => {
               const isActive = item.key === activeTab && (!item.settingsTab || item.settingsTab === activeSettingsTab)
               const navKey = item.settingsTab ? `${item.key}-${item.settingsTab}` : item.key
               return (
@@ -187,7 +226,8 @@ export default function Sidebar({
               )
             })}
           </div>
-        ))}
+          )
+        })}
       </nav>
 
       {/* Footer — user menu */}

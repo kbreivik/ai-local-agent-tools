@@ -38,6 +38,9 @@ GATE_DEFS = (
     # operators can tell the three gates apart in metrics and Trace.
     "too_short_completion_rescued",
     "preamble_only_completion_rescued",
+    # v2.36.4 — agent step_index=99999 with response_raw.external_ai marks a
+    # run where the External AI Router synthesised the final answer.
+    "external_ai_routed",
 )
 
 
@@ -68,6 +71,17 @@ def detect_gates_from_steps(steps: list, system_prompt: str | None = None) -> di
     gates = _empty_gates()
     for s in steps or []:
         step_idx = s.get("step_index", 0)
+        # v2.36.4 — external AI synthesis emitted as step_index=99999
+        if step_idx == 99999 and (s.get("response_raw") or {}).get("external_ai"):
+            rr = s.get("response_raw") or {}
+            gates["external_ai_routed"]["count"] += 1
+            gates["external_ai_routed"]["details"].append({
+                "step": 99999,
+                "provider": rr.get("provider"),
+                "model": rr.get("model"),
+                "rule": rr.get("rule_fired"),
+                "cost": (rr.get("usage") or {}).get("est_cost_usd"),
+            })
         for m in _iter_delta_messages(s):
             content = m.get("content")
             if not isinstance(content, str):

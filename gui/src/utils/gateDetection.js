@@ -15,6 +15,8 @@ export const GATE_DEFS = [
   'runbook_injected',
   // v2.35.14 — empty_completion forced-synthesis rescue
   'empty_completion_rescued',
+  // v2.36.4 — external AI synthesis emitted as step_index=99999
+  'external_ai_routed',
 ]
 
 const RUNBOOK_MARKER = '═══ ACTIVE RUNBOOK:'
@@ -53,6 +55,17 @@ export function detectGates(steps, systemPrompt) {
   const gates = emptyGates()
   for (const s of steps || []) {
     const stepIdx = s?.step_index ?? 0
+    // v2.36.4 — external AI synthesis emitted as step_index=99999
+    if (stepIdx === 99999 && s?.response_raw?.external_ai) {
+      gates.external_ai_routed.count += 1
+      gates.external_ai_routed.details.push({
+        step: 99999,
+        provider: s.response_raw.provider,
+        model: s.response_raw.model,
+        rule: s.response_raw.rule_fired,
+        cost: s.response_raw.usage?.est_cost_usd,
+      })
+    }
     for (const m of s?.messages_delta || []) {
       const c = asString(m?.content)
       if (!c) continue

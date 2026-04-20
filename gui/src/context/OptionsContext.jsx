@@ -44,6 +44,19 @@ const DEFAULTS = {
   autoEscalate:        'both',
   requireConfirmation: true,
 
+  // v2.36.x — External AI Router
+  externalRoutingMode:               'off',      // 'off'|'manual'|'auto'
+  externalRoutingOutputMode:         'replace',
+  routeOnGateFailure:                true,
+  routeOnBudgetExhaustion:           true,
+  routeOnConsecutiveFailures:        3,
+  routeOnPriorAttemptsGte:           0,
+  routeOnComplexityKeywords:         '',
+  routeOnComplexityMinPriorAttempts: 2,
+  routeMaxExternalCallsPerOp:        3,
+  externalConfirmTimeoutSeconds:     300,
+  externalContextLastNToolResults:   5,
+
   // Coordinator
   coordinatorPriorAttemptsEnabled: true,
 
@@ -72,6 +85,12 @@ const SERVER_KEYS = new Set([
   'lmStudioUrl', 'lmStudioApiKey', 'modelName',
   'externalProvider', 'externalApiKey', 'externalModel',
   'autoEscalate', 'requireConfirmation',
+  'externalRoutingMode', 'externalRoutingOutputMode',
+  'routeOnGateFailure', 'routeOnBudgetExhaustion', 'routeOnConsecutiveFailures',
+  'routeOnPriorAttemptsGte', 'routeOnComplexityKeywords',
+  'routeOnComplexityMinPriorAttempts',
+  'routeMaxExternalCallsPerOp', 'externalConfirmTimeoutSeconds',
+  'externalContextLastNToolResults',
   'coordinatorPriorAttemptsEnabled',
   'kafkaBootstrapServers', 'elasticsearchUrl', 'kibanaUrl',
   'muninndbUrl', 'dockerHost', 'swarmManagerIPs', 'swarmWorkerIPs', 'ghcrToken', 'agentDockerHost',

@@ -9,6 +9,7 @@ import { authHeaders } from '../api'
 import RotationTestModal from './RotationTestModal'
 import CardTemplateEditor from './CardTemplateEditor'
 import { CONTAINER_SCHEMA, SWARM_SERVICE_SCHEMA, DEFAULT_TEMPLATES } from '../schemas/cardSchemas'
+import CollapsibleSection from './CollapsibleSection'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -588,11 +589,7 @@ function AIServicesTab({ draft, update }) {
 
   return (
     <div>
-      {/* Local AI */}
-      <div className="mb-5">
-        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
-          Local AI
-        </h3>
+      <CollapsibleSection title="Local AI (LM Studio)" storageKey="ai.local">
         <Field label="LM Studio URL">
           <TextInput value={draft.lmStudioUrl} onChange={v => update('lmStudioUrl', v)} placeholder="http://localhost:1234/v1" />
         </Field>
@@ -614,13 +611,9 @@ function AIServicesTab({ draft, update }) {
             {localTest.ok ? `OK (${localTest.ms}ms) — ${localTest.info}` : localTest.msg}
           </p>
         )}
-      </div>
+      </CollapsibleSection>
 
-      {/* External AI */}
-      <div className="mb-5">
-        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
-          External AI (Escalation)
-        </h3>
+      <CollapsibleSection title="External AI — Provider" storageKey="ai.external.provider">
         <Field label="Provider">
           <div className="flex gap-4">
             {['claude', 'openai', 'grok'].map(p => (
@@ -645,16 +638,148 @@ function AIServicesTab({ draft, update }) {
         </button>
         {extTest && (
           <p className={`text-xs mt-1 ${extTest.ok ? 'text-green-400' : 'text-red-400'}`}>
-            {extTest.ok ? extTest.msg : extTest.msg}
+            {extTest.msg}
           </p>
         )}
-      </div>
+      </CollapsibleSection>
 
-      {/* Escalation Policy */}
-      <div className="mb-5">
-        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
-          Escalation Policy
-        </h3>
+      <CollapsibleSection title="External AI — Routing Mode" storageKey="ai.external.routing">
+        <label className="block text-xs uppercase text-gray-400 mb-1">Mode</label>
+        <div className="flex gap-4 mb-3">
+          {['off', 'manual', 'auto'].map(m => (
+            <label key={m} className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="externalRoutingMode"
+                checked={draft.externalRoutingMode === m}
+                onChange={() => update('externalRoutingMode', m)}
+              />
+              {m}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 mb-3">
+          <b>off</b>: no routing, no external calls.{' '}
+          <b>manual</b>: operator-only via UI button (not implemented in v2.36.x).{' '}
+          <b>auto</b>: router fires on rules below.
+        </p>
+
+        <label className="block text-xs uppercase text-gray-400 mt-3 mb-1">Output Mode</label>
+        <div className="flex gap-4">
+          {['replace'].map(m => (
+            <label key={m} className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="externalRoutingOutputMode"
+                checked={draft.externalRoutingOutputMode === m}
+                onChange={() => update('externalRoutingOutputMode', m)}
+                disabled={m !== 'replace'}
+              />
+              {m}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 mt-1">
+          REPLACE: external AI synthesises final_answer from local evidence, local
+          agent does not continue. Other modes (ADVISE / TAKEOVER) deferred to
+          v2.36.5+.
+        </p>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="External AI — Routing Triggers"
+                          storageKey="ai.external.triggers"
+                          defaultOpen={false}>
+        <p className="text-xs text-gray-500 mb-3">
+          Rules OR'd; first match wins in priority order. Set a numeric threshold
+          to 0 to disable that rule.
+        </p>
+
+        <label className="flex items-center gap-2 text-sm mb-2">
+          <input type="checkbox"
+                 checked={!!draft.routeOnGateFailure}
+                 onChange={e => update('routeOnGateFailure', e.target.checked)} />
+          <span><b>gate_failure</b> — escalate on hallucination guard exhausted or
+            fabrication detected ≥ 2x</span>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm mb-2">
+          <input type="checkbox"
+                 checked={!!draft.routeOnBudgetExhaustion}
+                 onChange={e => update('routeOnBudgetExhaustion', e.target.checked)} />
+          <span><b>budget_exhaustion</b> — escalate if tool budget hit with no
+            DIAGNOSIS: emitted</span>
+        </label>
+
+        <div className="flex items-center gap-2 text-sm mb-2">
+          <span className="min-w-[200px]"><b>consecutive_failures</b> threshold:</span>
+          <input type="number" min="0" max="20" value={draft.routeOnConsecutiveFailures ?? 0}
+                 onChange={e => update('routeOnConsecutiveFailures', parseInt(e.target.value)||0)}
+                 className="w-16 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+          <span className="text-xs text-gray-500">(0 = disabled)</span>
+        </div>
+
+        <div className="flex items-center gap-2 text-sm mb-2">
+          <span className="min-w-[200px]"><b>prior_attempts</b> threshold (7d):</span>
+          <input type="number" min="0" max="20" value={draft.routeOnPriorAttemptsGte ?? 0}
+                 onChange={e => update('routeOnPriorAttemptsGte', parseInt(e.target.value)||0)}
+                 className="w-16 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+          <span className="text-xs text-gray-500">(0 = disabled)</span>
+        </div>
+
+        <div className="mt-3">
+          <label className="block text-xs uppercase text-gray-400 mb-1">
+            complexity_prefilter keywords (comma-separated)
+          </label>
+          <input type="text"
+                 value={draft.routeOnComplexityKeywords || ''}
+                 onChange={e => update('routeOnComplexityKeywords', e.target.value)}
+                 placeholder="correlate, root cause, why"
+                 className="w-full bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+          <div className="flex items-center gap-2 text-sm mt-2">
+            <span className="min-w-[200px]">min prior attempts:</span>
+            <input type="number" min="0" max="20"
+                   value={draft.routeOnComplexityMinPriorAttempts ?? 2}
+                   onChange={e => update('routeOnComplexityMinPriorAttempts', parseInt(e.target.value)||0)}
+                   className="w-16 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="External AI — Limits"
+                          storageKey="ai.external.limits"
+                          defaultOpen={false}>
+        <label className="flex items-center gap-2 text-sm mb-3">
+          <input type="checkbox"
+                 checked={!!draft.requireConfirmation}
+                 onChange={e => update('requireConfirmation', e.target.checked)} />
+          <span>Require operator confirmation before each external AI call</span>
+        </label>
+
+        <div className="flex items-center gap-2 text-sm mb-2">
+          <span className="min-w-[220px]">Max external calls per operation:</span>
+          <input type="number" min="1" max="20" value={draft.routeMaxExternalCallsPerOp ?? 3}
+                 onChange={e => update('routeMaxExternalCallsPerOp', parseInt(e.target.value)||3)}
+                 className="w-16 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+        </div>
+
+        <div className="flex items-center gap-2 text-sm mb-2">
+          <span className="min-w-[220px]">Confirmation timeout (seconds):</span>
+          <input type="number" min="30" max="3600"
+                 value={draft.externalConfirmTimeoutSeconds ?? 300}
+                 onChange={e => update('externalConfirmTimeoutSeconds', parseInt(e.target.value)||300)}
+                 className="w-20 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+        </div>
+
+        <div className="flex items-center gap-2 text-sm">
+          <span className="min-w-[220px]">Context handoff: last N tool results:</span>
+          <input type="number" min="0" max="20"
+                 value={draft.externalContextLastNToolResults ?? 5}
+                 onChange={e => update('externalContextLastNToolResults', parseInt(e.target.value)||5)}
+                 className="w-16 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm" />
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Escalation Policy" storageKey="ai.escalation" defaultOpen={false}>
         <Field label="Auto-escalate on">
           <div className="flex gap-4">
             {[['failure', 'Failure'], ['degraded', 'Degraded'], ['both', 'Both']].map(([v, l]) => (
@@ -662,17 +787,9 @@ function AIServicesTab({ draft, update }) {
             ))}
           </div>
         </Field>
-        <Field label="">
-          <Toggle value={draft.requireConfirmation} onChange={v => update('requireConfirmation', v)}
-            label="Require confirmation before external AI call" />
-        </Field>
-      </div>
+      </CollapsibleSection>
 
-      {/* Coordinator */}
-      <div className="mb-5">
-        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
-          Coordinator
-        </h3>
+      <CollapsibleSection title="Coordinator" storageKey="ai.coordinator" defaultOpen={false}>
         <Field label="Inject prior attempts context"
           hint="When a task scopes an entity, show the agent up to 3 prior attempts on that entity from the last 7 days. Helps avoid repeating failed tool chains.">
           <Toggle
@@ -681,13 +798,9 @@ function AIServicesTab({ draft, update }) {
             label="Enabled"
           />
         </Field>
-      </div>
+      </CollapsibleSection>
 
-      {/* Elasticsearch */}
-      <div>
-        <h3 className="text-xs font-bold text-[color:var(--text-2)] uppercase tracking-wider mb-3 border-b border-[color:var(--border)] pb-1">
-          Elasticsearch
-        </h3>
+      <CollapsibleSection title="Elasticsearch" storageKey="ai.elastic" defaultOpen={false}>
         <Field label="Schema discovery on filter miss"
           hint="When elastic_search_logs returns 0 hits but the time window has data, sample 2-3 real docs and attach available fields + suggested filters to the response. Helps the agent discover correct field names (service.name vs container.name, etc.) instead of narrowing further.">
           <Toggle
@@ -696,7 +809,7 @@ function AIServicesTab({ draft, update }) {
             label="Enabled"
           />
         </Field>
-      </div>
+      </CollapsibleSection>
     </div>
   )
 }
