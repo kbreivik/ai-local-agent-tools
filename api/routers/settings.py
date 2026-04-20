@@ -131,6 +131,17 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Limits
     "routeMaxExternalCallsPerOp":         {"env": None, "sens": False, "default": 3,         "type": "int",   "group": "External AI Router"},
     "externalConfirmTimeoutSeconds":      {"env": None, "sens": False, "default": 300,       "type": "int",   "group": "External AI Router"},
+
+    # --- Agent Budgets (v2.36.5) ---
+    # Per-agent-type tool call budget. When the agent makes N tool calls without
+    # emitting a final synthesis, the loop forces synthesis via run_forced_synthesis
+    # and the operation status becomes 'capped'. Defaults match the pre-v2.36.5
+    # hardcoded values. Safe range 4..100. Set to 0 to restore the hardcoded default.
+    # Type aliases: status→observe, research→investigate, action→execute.
+    "agentToolBudget_observe":      {"env": None, "sens": False, "default": 8,  "type": "int", "group": "Agent Budgets"},
+    "agentToolBudget_investigate":  {"env": None, "sens": False, "default": 16, "type": "int", "group": "Agent Budgets"},
+    "agentToolBudget_execute":      {"env": None, "sens": False, "default": 14, "type": "int", "group": "Agent Budgets"},
+    "agentToolBudget_build":        {"env": None, "sens": False, "default": 12, "type": "int", "group": "Agent Budgets"},
 }
 
 

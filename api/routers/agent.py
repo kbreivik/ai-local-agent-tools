@@ -50,6 +50,81 @@ def _extract_response_model(response, fallback: str = "") -> str:
     return fallback or ""
 
 
+# ─── Per-agent-type tool call budgets (v2.36.5) ───────────────────────────────
+# Runtime-Settings driven so operators can tune without redeploy. Falls back
+# to the pre-v2.36.5 hardcoded values when Settings are unavailable or a
+# key returns a malformed value.
+
+_TOOL_BUDGET_DEFAULTS: dict[str, int] = {
+    "observe":     8,
+    "investigate": 16,
+    "execute":     14,
+    "build":       12,
+}
+
+# Agent-type aliases → canonical type. status / research / action are
+# historical names that still appear in task classifications; they share
+# the canonical type's budget.
+_TOOL_BUDGET_ALIASES: dict[str, str] = {
+    "status":      "observe",
+    "research":    "investigate",
+    "action":      "execute",
+    "ambiguous":   "observe",   # ambiguous classifier routes to observe
+}
+
+# Accept anything from 4 (below which the agent has no room to work) to 100
+# (above which wall-clock / token caps will trip first anyway). Misconfigured
+# values get clamped and a warning is logged.
+_TOOL_BUDGET_MIN = 4
+_TOOL_BUDGET_MAX = 100
+
+
+def _tool_budget_for(agent_type: str) -> int:
+    """Return the tool call budget for `agent_type`, read fresh from Settings.
+
+    Aliases resolved first (status→observe, research→investigate, action→execute).
+    Unknown types fall back to the investigate budget (the most permissive of the
+    four canonical types). Misconfigured values (None, non-int, <=0, >100) log
+    a warning and fall back to the hardcoded default.
+    """
+    canonical = _TOOL_BUDGET_ALIASES.get(agent_type, agent_type)
+    default = _TOOL_BUDGET_DEFAULTS.get(canonical, _TOOL_BUDGET_DEFAULTS["investigate"])
+    key = f"agentToolBudget_{canonical}"
+
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        raw = get_backend().get_setting(key)
+    except Exception as e:
+        log.debug("tool budget settings read failed for %s: %s", key, e)
+        return default
+
+    if raw is None or raw == "":
+        return default
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "tool budget setting %s has non-int value %r; using default %d",
+            key, raw, default,
+        )
+        return default
+
+    if value <= 0:
+        # Operator explicitly set 0 → fall back to default (documented behaviour).
+        return default
+
+    if value < _TOOL_BUDGET_MIN or value > _TOOL_BUDGET_MAX:
+        log.warning(
+            "tool budget setting %s=%d outside safe range [%d..%d]; "
+            "clamping to default %d",
+            key, value, _TOOL_BUDGET_MIN, _TOOL_BUDGET_MAX, default,
+        )
+        return default
+
+    return value
+
+
 def _step_temperature(agent_type: str, has_tool_calls: bool, is_force_summary: bool = False) -> float:
     """Return appropriate temperature for this step type.
 
@@ -1100,15 +1175,10 @@ async def _run_single_agent_step(
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
     max_steps = _MAX_STEPS_BY_TYPE.get(agent_type, 20)
-    # ─── Tool call budgets per agent type (v2.32.5) ──────────────────────────────
+    # ─── Tool call budgets per agent type (v2.32.5 → v2.36.5) ────────────────────
     # Unlike max_steps (LLM inference rounds), this counts actual tool invocations.
     # When exhausted, the harness forces a summary — no more tool calls allowed.
-    _MAX_TOOL_CALLS_BY_TYPE = {
-        "status": 8, "observe": 8,
-        "research": 16, "investigate": 16,
-        "action": 14, "execute": 14,
-        "build": 12,
-    }
+    # v2.36.5: budget now sourced from Settings via _tool_budget_for(agent_type).
     final_status = "completed"
     last_reasoning = ""
 
@@ -1146,7 +1216,7 @@ async def _run_single_agent_step(
         )
         try:
             from api.agents.forced_synthesis import run_forced_synthesis
-            _budget_for_synth = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            _budget_for_synth = _tool_budget_for(agent_type)
             synth_text, harness_msg, raw_resp = run_forced_synthesis(
                 client=client,
                 model=_lm_model(),
@@ -1264,7 +1334,7 @@ async def _run_single_agent_step(
                     "destructive_cap":  "destructive_cap",
                     "tool_failures":    "tool_failures",
                 }.get(reason, reason or "wall_clock")
-                _budget_cap = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                _budget_cap = _tool_budget_for(agent_type)
                 from api.agents.forced_synthesis import run_forced_synthesis
                 synthesis_text, harness_msg, raw_resp = run_forced_synthesis(
                     client=client,
@@ -1325,7 +1395,7 @@ async def _run_single_agent_step(
                 break
 
             # v2.32.5: Tool call budget enforcement
-            _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            _tool_budget = _tool_budget_for(agent_type)
 
             # v2.33.3: Budget handoff nudge — fires when investigate agent has
             # not emitted DIAGNOSIS: and has not yet proposed a subtask.
@@ -2074,7 +2144,7 @@ async def _run_single_agent_step(
             # tool_result placeholders for the dropped ones so the OpenAI
             # tool_call_id contract is preserved on the next turn.
             _proposed_tcs = list(msg.tool_calls or [])
-            _tool_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+            _tool_budget = _tool_budget_for(agent_type)
             _remaining = _tool_budget - len(tools_used_names)
             _dropped_tcs: list = []
             if _remaining <= 0:
@@ -2482,7 +2552,7 @@ async def _run_single_agent_step(
 
                         if _inband_ok:
                             # Compute parent's remaining tool budget at this moment
-                            _parent_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                            _parent_budget = _tool_budget_for(agent_type)
                             _parent_remaining = max(
                                 0, _parent_budget - len(tools_used_names)
                             )
@@ -3104,7 +3174,7 @@ async def _run_single_agent_step(
                 # can surface budget/DIAGNOSIS/zero-streak state before the run
                 # exhausts budget and draws a shallow conclusion.
                 try:
-                    _diag_budget = _MAX_TOOL_CALLS_BY_TYPE.get(agent_type, 16)
+                    _diag_budget = _tool_budget_for(agent_type)
                     _diag_used = len(tools_used_names)
                     _diag_has_diagnosis = (
                         "DIAGNOSIS:" in (last_reasoning or "")

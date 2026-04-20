@@ -810,6 +810,42 @@ function AIServicesTab({ draft, update }) {
           />
         </Field>
       </CollapsibleSection>
+
+      {/* Agent Budgets (v2.36.5) */}
+      <div className="mt-6 pt-4 border-t border-white/10">
+        <h3 className="text-sm font-mono uppercase tracking-wider text-[var(--accent)] mb-1">
+          Agent Budgets
+        </h3>
+        <p className="text-xs text-gray-500 mb-3">
+          Tool call budget per agent type. When reached, the loop forces
+          synthesis and status becomes 'capped'. Raising a value lets the
+          agent gather more evidence before synthesising. Safe range 4..100.
+          Changes take effect on the next task — no restart needed.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            ['agentToolBudget_observe',     'Observe',     'status checks, read-only'],
+            ['agentToolBudget_investigate', 'Investigate', 'why/diagnose/logs'],
+            ['agentToolBudget_execute',     'Execute',     'fix/restart/deploy'],
+            ['agentToolBudget_build',       'Build',       'skill management'],
+          ].map(([key, label, hint]) => (
+            <div key={key}>
+              <label className="block text-xs uppercase text-gray-400 mb-1">
+                {label}
+                <span className="ml-2 normal-case text-gray-500">— {hint}</span>
+              </label>
+              <input
+                type="number"
+                min="4"
+                max="100"
+                value={draft[key] ?? ''}
+                onChange={e => update(key, parseInt(e.target.value) || 0)}
+                className="w-24 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
