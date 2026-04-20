@@ -341,6 +341,39 @@ RUNBOOK_SELECTION_DECISIONS_COUNTER = Counter(
     ["classifier_mode", "outcome"],   # outcome: matched | no_match | disabled
 )
 
+# --- External AI Router (v2.36.0) ---
+EXTERNAL_ROUTING_DECISIONS = Counter(
+    "deathstar_external_routing_decisions_total",
+    "Router decisions: escalated or skipped, by rule fired",
+    ["decision", "rule"],  # decision: escalated | skipped_mode_off | skipped_rule_quiet | skipped_cap_exhausted
+                           # rule: <rule_name> | none
+)
+
+EXTERNAL_AI_CALLS = Counter(
+    "deathstar_external_ai_calls_total",
+    "External AI calls, by provider and outcome",
+    ["provider", "outcome"],  # outcome: success | rejected_by_gate | auth_error | network_error | timeout | cancelled_by_user
+)
+
+EXTERNAL_AI_LATENCY = Histogram(
+    "deathstar_external_ai_latency_seconds",
+    "External AI call wall-clock latency",
+    ["provider"],
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60),
+)
+
+EXTERNAL_AI_TOKENS = Counter(
+    "deathstar_external_ai_tokens_total",
+    "Tokens consumed by external AI, by provider and direction",
+    ["provider", "direction"],  # direction: input | output
+)
+
+EXTERNAL_AI_CONFIRM_OUTCOME = Counter(
+    "deathstar_external_ai_confirm_outcome_total",
+    "Outcome of the requireConfirmation gate",
+    ["outcome"],  # approved | rejected | timeout
+)
+
 # --- build info ---
 BUILD = Info("deathstar_build", "Build metadata")
 

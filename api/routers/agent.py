@@ -28,6 +28,28 @@ def _lm_model(): return os.environ.get("LM_STUDIO_MODEL",    DEFAULT_LM_STUDIO_M
 def _lm_key():   return os.environ.get("LM_STUDIO_API_KEY",  DEFAULT_LM_STUDIO_KEY)
 
 
+def _extract_response_model(response, fallback: str = "") -> str:
+    """Return the model string actually served by the API for this response.
+
+    OpenAI SDK exposes this as `response.model`. Fall back to the provided
+    default (typically `_lm_model()`) when unavailable — never crashes.
+    """
+    try:
+        m = getattr(response, "model", None)
+        if m:
+            return str(m)
+    except Exception:
+        pass
+    try:
+        if isinstance(response, dict):
+            m = response.get("model")
+            if m:
+                return str(m)
+    except Exception:
+        pass
+    return fallback or ""
+
+
 def _step_temperature(agent_type: str, has_tool_calls: bool, is_force_summary: bool = False) -> float:
     """Return appropriate temperature for this step type.
 
@@ -780,7 +802,8 @@ async def _run_single_agent_step(
                         is_subagent=_trace_is_subagent,
                         parent_op_id=_trace_parent_op_id,
                         temperature=0.3,
-                        model=_lm_model(),
+                        model=_extract_response_model(raw_resp, fallback=_lm_model()),
+                        provider="lm_studio",
                     )
                     _trace_step_index += 1
                 except Exception as _te:
@@ -892,7 +915,8 @@ async def _run_single_agent_step(
                         is_subagent=_trace_is_subagent,
                         parent_op_id=_trace_parent_op_id,
                         temperature=0.3,
-                        model=_lm_model(),
+                        model=_extract_response_model(raw_resp, fallback=_lm_model()),
+                        provider="lm_studio",
                     )
                     _trace_step_index += 1
                 except Exception as _te:
@@ -1003,7 +1027,8 @@ async def _run_single_agent_step(
                         is_subagent=_trace_is_subagent,
                         parent_op_id=_trace_parent_op_id,
                         temperature=0.3,
-                        model=_lm_model(),
+                        model=_extract_response_model(raw_resp, fallback=_lm_model()),
+                        provider="lm_studio",
                     )
                     _trace_step_index += 1
                 except Exception as _te:
@@ -1131,7 +1156,8 @@ async def _run_single_agent_step(
                     is_subagent=_trace_is_subagent,
                     parent_op_id=_trace_parent_op_id,
                     temperature=0.1,
-                    model=_lm_model(),
+                    model=_extract_response_model(response, fallback=_lm_model()),
+                    provider="lm_studio",
                 )
                 _trace_step_index += 1
             except Exception as _trace_e:

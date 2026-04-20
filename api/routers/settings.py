@@ -112,6 +112,25 @@ SETTINGS_KEYS: dict[str, dict] = {
     "preflightDisambiguationTimeout":    {"env": None, "sens": False, "default": 300,              "type": "int",  "group": "Facts & Knowledge"},
     "preflightLLMFallbackEnabled":       {"env": None, "sens": False, "default": True,             "type": "bool", "group": "Facts & Knowledge"},
     "preflightLLMFallbackMaxTokens":     {"env": None, "sens": False, "default": 200,              "type": "int",  "group": "Facts & Knowledge"},
+
+    # --- External AI Router (v2.36.0) ---
+    # Master switch. off = no behaviour change from pre-v2.36 (default).
+    #                manual = UI-only escalation button, no auto-rules.
+    #                auto   = rules in Routing Triggers subsection fire automatically.
+    "externalRoutingMode":                {"env": None, "sens": False, "default": "off",     "type": "str",   "group": "External AI Router"},
+    "externalRoutingOutputMode":          {"env": None, "sens": False, "default": "replace", "type": "str",   "group": "External AI Router"},
+    # Routing Triggers (rules) — all opt-in; master switch must be 'auto' or 'manual'.
+    "routeOnConsecutiveFailures":         {"env": None, "sens": False, "default": 3,         "type": "int",   "group": "External AI Router"},
+    "routeOnBudgetExhaustion":            {"env": None, "sens": False, "default": True,      "type": "bool",  "group": "External AI Router"},
+    "routeOnGateFailure":                 {"env": None, "sens": False, "default": True,      "type": "bool",  "group": "External AI Router"},
+    "routeOnPriorAttemptsGte":            {"env": None, "sens": False, "default": 0,         "type": "int",   "group": "External AI Router"},
+    "routeOnComplexityKeywords":          {"env": None, "sens": False, "default": "",        "type": "str",   "group": "External AI Router"},
+    "routeOnComplexityMinPriorAttempts":  {"env": None, "sens": False, "default": 2,         "type": "int",   "group": "External AI Router"},
+    # Context handoff
+    "externalContextLastNToolResults":    {"env": None, "sens": False, "default": 5,         "type": "int",   "group": "External AI Router"},
+    # Limits
+    "routeMaxExternalCallsPerOp":         {"env": None, "sens": False, "default": 3,         "type": "int",   "group": "External AI Router"},
+    "externalConfirmTimeoutSeconds":      {"env": None, "sens": False, "default": 300,       "type": "int",   "group": "External AI Router"},
 }
 
 

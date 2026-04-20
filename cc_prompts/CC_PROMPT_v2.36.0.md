@@ -1,0 +1,671 @@
+# CC PROMPT — v2.36.0 — External AI Router: schema + registry + provenance fix
+
+## What this does
+
+Foundation for the v2.36.x external-AI-routing subsystem. Four things, no behaviour
+change to agent loop beyond a bug fix:
+
+1. **Provenance fix** — `agent_llm_traces.model` currently stores
+   `_lm_model()` (env var label) instead of the actual model the API
+   returned. Capture real `response.model` at every trace-write site so a
+   future Claude call logs as `claude-sonnet-4-6`, not `qwen3-coder-next`.
+   Also add a new `provider` column (default `lm_studio`) so the trace
+   viewer + billing queries can distinguish providers.
+2. **Schema** — new `external_ai_calls` table for per-call billing /
+   outcome rows.
+3. **Settings registry** — new keys for the router (all defaults OFF so
+   no behaviour change ships).
+4. **Prometheus** — counters for router decisions, external calls, gate
+   rejections.
+
+Version bump: 2.35.21 → 2.36.0 (`.1.x` — new subsystem, architectural).
+
+---
+
+## Why
+
+Kent verified in v2.35.21 session spar: the trace writer passes `model=_lm_model()`
+(env var) to `log_llm_step`, never the actual served model. When external AI is
+added in v2.36.3, a Claude call would silently log as `qwen3-coder-next`. Fix
+needs to land in the foundation prompt so every subsequent prompt can rely on
+correct provenance.
+
+Everything in this prompt is additive or bugfix — flag `externalRoutingMode=off`
+means no new behaviour.
+
+---
+
+## Change 1 — `api/db/llm_traces.py` — add `provider` column + signature
+
+In `_DDL_TRACES`, add `provider TEXT NOT NULL DEFAULT 'lm_studio'` after the
+existing `model` column. Migration handles existing rows.
+
+Replace the `_DDL_TRACES` block with:
+
+```python
+_DDL_TRACES = """
+CREATE TABLE IF NOT EXISTS agent_llm_traces (
+    operation_id    TEXT NOT NULL,
+    step_index      INTEGER NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    agent_type      TEXT,
+    is_subagent     BOOLEAN NOT NULL DEFAULT FALSE,
+    parent_op_id    TEXT,
+    messages_delta  JSONB NOT NULL,
+    response_raw    JSONB NOT NULL,
+    tokens_prompt     INTEGER,
+    tokens_completion INTEGER,
+    tokens_total      INTEGER,
+    temperature       REAL,
+    model             TEXT,
+    provider          TEXT NOT NULL DEFAULT 'lm_studio',
+    finish_reason     TEXT,
+    tool_calls_count  INTEGER DEFAULT 0,
+    PRIMARY KEY (operation_id, step_index)
+);
+ALTER TABLE agent_llm_traces
+    ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'lm_studio';
+CREATE INDEX IF NOT EXISTS idx_llm_traces_parent
+    ON agent_llm_traces (parent_op_id) WHERE parent_op_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_traces_ts
+    ON agent_llm_traces (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_traces_provider
+    ON agent_llm_traces (provider) WHERE provider <> 'lm_studio';
+"""
+```
+
+Update `write_trace_step(...)` to accept a `provider` kwarg (default
+`"lm_studio"`) and persist it. Insert between `model` and `finish_reason`
+in the column list AND the values tuple:
+
+```python
+def write_trace_step(
+    operation_id: str,
+    step_index: int,
+    messages_delta: list,
+    response_raw: dict,
+    agent_type: str | None = None,
+    is_subagent: bool = False,
+    parent_op_id: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+    provider: str = "lm_studio",
+) -> None:
+```
+
+And inside, change the INSERT:
+
+```python
+        cur.execute(
+            """INSERT INTO agent_llm_traces
+                   (operation_id, step_index, agent_type, is_subagent,
+                    parent_op_id, messages_delta, response_raw,
+                    tokens_prompt, tokens_completion, tokens_total,
+                    temperature, model, provider, finish_reason, tool_calls_count)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (operation_id, step_index) DO NOTHING""",
+            (
+                str(operation_id),
+                int(step_index),
+                agent_type,
+                bool(is_subagent),
+                str(parent_op_id) if parent_op_id else None,
+                json.dumps(messages_delta or []),
+                json.dumps(response_raw or {}),
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+                temperature,
+                model,
+                provider,
+                finish_reason,
+                tool_calls_count,
+            ),
+        )
+```
+
+And update `get_trace(...)`'s SELECT to pull `provider` (column after `model`)
+— extend the column list and append `"provider": r[14]` to the per-step dict.
+Renumber trailing indexes if necessary (model was r[13] before, stays r[13];
+add provider as r[14], push `agent_type/is_subagent/parent_op_id` to r[10..12]
+— DO NOT change those, they stay; `model` is r[13], new `provider` becomes
+r[14]).
+
+Explicit SELECT order should be:
+```sql
+SELECT step_index, timestamp, messages_delta, response_raw,
+       tokens_prompt, tokens_completion, tokens_total,
+       temperature, finish_reason, tool_calls_count,
+       agent_type, is_subagent, parent_op_id, model, provider
+FROM agent_llm_traces WHERE operation_id = %s
+ORDER BY step_index
+```
+
+And per-step dict becomes:
+```python
+result["steps"].append({
+    "step_index": r[0],
+    "timestamp": r[1].isoformat() if r[1] else None,
+    "messages_delta": msgs,
+    "response_raw": resp,
+    "tokens_prompt": r[4],
+    "tokens_completion": r[5],
+    "tokens_total": r[6],
+    "temperature": r[7],
+    "finish_reason": r[8],
+    "tool_calls_count": r[9],
+    "agent_type": r[10],
+    "is_subagent": r[11],
+    "parent_op_id": r[12],
+    "model": r[13],
+    "provider": r[14],
+})
+```
+
+---
+
+## Change 2 — `api/logger.py` — thread `provider` through `log_llm_step`
+
+Find the `log_llm_step` helper that wraps `write_trace_step`. Add `provider:
+str = "lm_studio"` to its signature and pass it through. Exact current
+signature may vary; the minimal addition is:
+
+```python
+async def log_llm_step(
+    operation_id: str,
+    step_index: int,
+    messages_delta: list,
+    response_raw: dict,
+    *,
+    system_prompt: str | None = None,
+    tools_manifest: list | None = None,
+    agent_type: str | None = None,
+    is_subagent: bool = False,
+    parent_op_id: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+    provider: str = "lm_studio",   # NEW
+) -> None:
+    # ... existing body ...
+    # When it calls write_trace_step(...), add provider=provider
+```
+
+If `api/logger.py` does not have a wrapper and the agent router imports
+`write_trace_step` directly, skip this step — the signature is already
+threaded in Change 1.
+
+---
+
+## Change 3 — `api/routers/agent.py` — use real response model at ALL trace-write sites
+
+Root bug: every call to `log_llm_step(..., model=_lm_model())` hard-codes the
+env-var label. After v2.36.3 lands, a Claude call would be logged as
+`qwen3-coder-next`. Fix is mechanical: extract the real model from the API
+response object wherever possible.
+
+**Helper function (add near the top of the file, after `_lm_key`):**
+
+```python
+def _extract_response_model(response, fallback: str = "") -> str:
+    """Return the model string actually served by the API for this response.
+
+    OpenAI SDK exposes this as `response.model`. Fall back to the provided
+    default (typically `_lm_model()`) when unavailable — never crashes.
+    """
+    try:
+        m = getattr(response, "model", None)
+        if m:
+            return str(m)
+    except Exception:
+        pass
+    try:
+        # dict shape (our fallback raw_resp)
+        if isinstance(response, dict):
+            m = response.get("model")
+            if m:
+                return str(m)
+    except Exception:
+        pass
+    return fallback or ""
+```
+
+**Now fix every `log_llm_step(..., model=_lm_model(), ...)` call site in
+this file.** There are four current call sites:
+
+1. Main per-step trace writer (inside the `while step < max_steps:` loop,
+   immediately after `response = client.chat.completions.create(...)`):
+   replace `model=_lm_model()` with
+   `model=_extract_response_model(response, fallback=_lm_model())`.
+   Add `provider="lm_studio"` on the same call.
+
+2. Budget-cap forced-synthesis trace write (inside the `_cap_exceeded`
+   branch): replace `model=_lm_model()` with
+   `model=_extract_response_model(raw_resp, fallback=_lm_model())`.
+   Add `provider="lm_studio"`.
+
+3. Another budget-cap branch (the `if len(tools_used_names) >= _tool_budget`
+   block): same treatment — `model=_extract_response_model(raw_resp,
+   fallback=_lm_model())`, `provider="lm_studio"`.
+
+4. `_maybe_force_empty_synthesis()` inner `log_llm_step` call: same
+   treatment — `model=_extract_response_model(raw_resp,
+   fallback=_lm_model())`, `provider="lm_studio"`.
+
+**Additional fix — `log_tool_call`:** the auto-verify helper
+`_auto_verify` and other tool-call logging sites pass
+`_lm_model()` as the model tag for tool calls. That's harmless today
+(tool calls aren't an LLM call), but for consistency wrap those in the
+same helper or pass an explicit `lm_studio` label. Leave `log_tool_call`
+call sites ALONE for v2.36.0 — they don't represent LLM provider choice.
+
+---
+
+## Change 4 — `api/db/external_ai_calls.py` — new table
+
+Create a new file `api/db/external_ai_calls.py`:
+
+```python
+"""external_ai_calls — per-call billing + outcome log for external AI.
+
+Writes one row per external AI round-trip (v2.36.3+). Distinct from
+agent_llm_traces (which is the OpenAI-shape per-step dump) — this table is
+billing-focused: which rule fired, which provider, how much it cost, and
+whether the output survived the harness gates.
+"""
+import json
+import logging
+import os
+
+log = logging.getLogger(__name__)
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS external_ai_calls (
+    id              SERIAL PRIMARY KEY,
+    operation_id    TEXT NOT NULL,
+    step_index      INTEGER,
+    provider        TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    rule_fired      TEXT NOT NULL,
+    output_mode     TEXT NOT NULL,
+    latency_ms      INTEGER,
+    input_tokens    INTEGER,
+    output_tokens   INTEGER,
+    est_cost_usd    REAL,
+    outcome         TEXT NOT NULL,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_external_ai_calls_op
+    ON external_ai_calls (operation_id);
+CREATE INDEX IF NOT EXISTS idx_external_ai_calls_created
+    ON external_ai_calls (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_ai_calls_rule
+    ON external_ai_calls (rule_fired, created_at DESC);
+"""
+
+_initialized = False
+
+
+def _is_pg() -> bool:
+    return "postgres" in os.environ.get("DATABASE_URL", "")
+
+
+def init_external_ai_calls() -> None:
+    global _initialized
+    if _initialized or not _is_pg():
+        _initialized = True
+        return
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in _DDL.strip().split(";"):
+            s = stmt.strip()
+            if s:
+                cur.execute(s)
+        cur.close()
+        conn.close()
+        _initialized = True
+        log.info("external_ai_calls table ready")
+    except Exception as e:
+        log.warning("external_ai_calls init failed: %s", e)
+
+
+def write_external_ai_call(
+    *,
+    operation_id: str,
+    step_index: int | None,
+    provider: str,
+    model: str,
+    rule_fired: str,
+    output_mode: str,
+    latency_ms: int | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    est_cost_usd: float | None,
+    outcome: str,
+    error_message: str | None = None,
+) -> None:
+    """Persist one external AI call. Never raises.
+
+    outcome ∈ {'success', 'rejected_by_gate', 'auth_error',
+               'network_error', 'timeout', 'cancelled_by_user'}
+    """
+    if not _is_pg() or not operation_id:
+        return
+    try:
+        init_external_ai_calls()
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO external_ai_calls
+                   (operation_id, step_index, provider, model, rule_fired,
+                    output_mode, latency_ms, input_tokens, output_tokens,
+                    est_cost_usd, outcome, error_message)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                str(operation_id),
+                int(step_index) if step_index is not None else None,
+                provider,
+                model,
+                rule_fired,
+                output_mode,
+                int(latency_ms) if latency_ms is not None else None,
+                int(input_tokens) if input_tokens is not None else None,
+                int(output_tokens) if output_tokens is not None else None,
+                float(est_cost_usd) if est_cost_usd is not None else None,
+                outcome,
+                (error_message or "")[:500] or None,
+            ),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        log.warning("write_external_ai_call failed: %s", e)
+
+
+def list_recent_external_calls(limit: int = 20) -> list[dict]:
+    """Return the last N external AI calls for the UI dashboard."""
+    if not _is_pg():
+        return []
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id, operation_id, step_index, provider, model,
+                      rule_fired, output_mode, latency_ms, input_tokens,
+                      output_tokens, est_cost_usd, outcome, error_message,
+                      created_at
+               FROM external_ai_calls
+               ORDER BY created_at DESC
+               LIMIT %s""",
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "id": r[0], "operation_id": r[1], "step_index": r[2],
+                "provider": r[3], "model": r[4], "rule_fired": r[5],
+                "output_mode": r[6], "latency_ms": r[7],
+                "input_tokens": r[8], "output_tokens": r[9],
+                "est_cost_usd": r[10], "outcome": r[11],
+                "error_message": r[12],
+                "created_at": r[13].isoformat() if r[13] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        log.warning("list_recent_external_calls failed: %s", e)
+        return []
+```
+
+Add `from api.db.external_ai_calls import init_external_ai_calls` +
+`init_external_ai_calls()` call in `api/main.py` `lifespan()` near the
+other `init_*` calls (find `init_llm_traces()` — add right after it).
+
+---
+
+## Change 5 — `api/routers/settings.py` — add External AI Router registry keys
+
+Append to `SETTINGS_KEYS` (after the existing "Facts & Knowledge" block,
+under a new comment header):
+
+```python
+    # --- External AI Router (v2.36.0) ---
+    # Master switch. off = no behaviour change from pre-v2.36 (default).
+    #                manual = UI-only escalation button, no auto-rules.
+    #                auto   = rules in Routing Triggers subsection fire automatically.
+    "externalRoutingMode":                {"env": None, "sens": False, "default": "off",     "type": "str",   "group": "External AI Router"},
+    "externalRoutingOutputMode":          {"env": None, "sens": False, "default": "replace", "type": "str",   "group": "External AI Router"},
+    # Routing Triggers (rules) — all opt-in; master switch must be 'auto' or 'manual'.
+    "routeOnConsecutiveFailures":         {"env": None, "sens": False, "default": 3,         "type": "int",   "group": "External AI Router"},
+    "routeOnBudgetExhaustion":            {"env": None, "sens": False, "default": True,      "type": "bool",  "group": "External AI Router"},
+    "routeOnGateFailure":                 {"env": None, "sens": False, "default": True,      "type": "bool",  "group": "External AI Router"},
+    "routeOnPriorAttemptsGte":            {"env": None, "sens": False, "default": 0,         "type": "int",   "group": "External AI Router"},
+    "routeOnComplexityKeywords":          {"env": None, "sens": False, "default": "",        "type": "str",   "group": "External AI Router"},
+    "routeOnComplexityMinPriorAttempts":  {"env": None, "sens": False, "default": 2,         "type": "int",   "group": "External AI Router"},
+    # Context handoff
+    "externalContextLastNToolResults":    {"env": None, "sens": False, "default": 5,         "type": "int",   "group": "External AI Router"},
+    # Limits
+    "routeMaxExternalCallsPerOp":         {"env": None, "sens": False, "default": 3,         "type": "int",   "group": "External AI Router"},
+    "externalConfirmTimeoutSeconds":      {"env": None, "sens": False, "default": 300,       "type": "int",   "group": "External AI Router"},
+```
+
+**Default of 0 on `routeOnConsecutiveFailures` and
+`routeOnPriorAttemptsGte` means the rule is disabled.** Only
+`routeOnBudgetExhaustion` and `routeOnGateFailure` default-on, per the
+earlier spar.
+
+---
+
+## Change 6 — `api/metrics.py` — add External AI Router counters
+
+Append to `api/metrics.py` (at the bottom, below existing definitions):
+
+```python
+# --- External AI Router (v2.36.0) ---
+EXTERNAL_ROUTING_DECISIONS = Counter(
+    "deathstar_external_routing_decisions_total",
+    "Router decisions: escalated or skipped, by rule fired",
+    ["decision", "rule"],  # decision: escalated | skipped_mode_off | skipped_rule_quiet | skipped_cap_exhausted
+                           # rule: <rule_name> | none
+)
+
+EXTERNAL_AI_CALLS = Counter(
+    "deathstar_external_ai_calls_total",
+    "External AI calls, by provider and outcome",
+    ["provider", "outcome"],  # outcome: success | rejected_by_gate | auth_error | network_error | timeout | cancelled_by_user
+)
+
+EXTERNAL_AI_LATENCY = Histogram(
+    "deathstar_external_ai_latency_seconds",
+    "External AI call wall-clock latency",
+    ["provider"],
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60),
+)
+
+EXTERNAL_AI_TOKENS = Counter(
+    "deathstar_external_ai_tokens_total",
+    "Tokens consumed by external AI, by provider and direction",
+    ["provider", "direction"],  # direction: input | output
+)
+
+EXTERNAL_AI_CONFIRM_OUTCOME = Counter(
+    "deathstar_external_ai_confirm_outcome_total",
+    "Outcome of the requireConfirmation gate",
+    ["outcome"],  # approved | rejected | timeout
+)
+```
+
+---
+
+## Change 7 — `tests/test_llm_traces_provider.py`
+
+Lock the provenance fix with a regression test. New file:
+
+```python
+"""v2.36.0 — regression test for agent_llm_traces.model capture.
+
+The bug: pre-v2.36.0 passed the env-var _lm_model() to log_llm_step instead
+of the actual model the API returned. When external AI lands in v2.36.3, a
+Claude call would silently log as 'qwen3-coder-next'.
+
+This test asserts _extract_response_model correctly prefers the response's
+model attribute over the fallback.
+"""
+from types import SimpleNamespace
+
+
+def test_extract_response_model_prefers_response_attr():
+    from api.routers.agent import _extract_response_model
+
+    # OpenAI SDK response shape — model is an attribute
+    resp = SimpleNamespace(model="claude-sonnet-4-6")
+    assert _extract_response_model(resp, fallback="qwen3-coder-next") == \
+        "claude-sonnet-4-6"
+
+
+def test_extract_response_model_falls_back_when_missing():
+    from api.routers.agent import _extract_response_model
+
+    resp = SimpleNamespace()  # no model attr
+    assert _extract_response_model(resp, fallback="qwen3-coder-next") == \
+        "qwen3-coder-next"
+
+
+def test_extract_response_model_falls_back_on_none_value():
+    from api.routers.agent import _extract_response_model
+
+    resp = SimpleNamespace(model=None)
+    assert _extract_response_model(resp, fallback="qwen3-coder-next") == \
+        "qwen3-coder-next"
+
+
+def test_extract_response_model_handles_dict_shape():
+    """Raw fallback responses (our forced_synthesis shim) are dicts."""
+    from api.routers.agent import _extract_response_model
+
+    resp = {"model": "grok-2-latest", "choices": []}
+    assert _extract_response_model(resp, fallback="qwen3-coder-next") == \
+        "grok-2-latest"
+
+
+def test_extract_response_model_returns_empty_when_no_fallback():
+    from api.routers.agent import _extract_response_model
+
+    resp = SimpleNamespace()
+    assert _extract_response_model(resp, fallback="") == ""
+
+
+def test_write_trace_step_accepts_provider_kwarg():
+    """Smoke test — function signature accepts provider kwarg (v2.36.0).
+
+    Runs against sqlite / no-op path (no postgres in CI). Never actually
+    touches the DB. Validates the signature hasn't regressed.
+    """
+    import os
+    os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")  # no-op path
+    from api.db.llm_traces import write_trace_step
+    # Should not raise on the provider kwarg
+    write_trace_step(
+        operation_id="test-op",
+        step_index=0,
+        messages_delta=[],
+        response_raw={},
+        provider="claude",
+    )
+```
+
+---
+
+## Change 8 — `VERSION`
+
+```
+2.36.0
+```
+
+---
+
+## Verify
+
+```bash
+pytest tests/test_llm_traces_provider.py -v
+# Also confirm existing trace tests still pass
+pytest tests/test_prompt_snapshots.py tests/test_forced_synthesis_drift.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(agents): v2.36.0 External AI Router foundation — schema + provenance fix
+
+Foundation for v2.36.x external AI routing. No behaviour change to agent loop.
+
+Provenance fix: agent_llm_traces.model previously always stored the env-var
+label _lm_model() at every write site, not the model the API actually served.
+When v2.36.3 adds Claude/OpenAI/Grok, a Claude call would have silently logged
+as 'qwen3-coder-next'. New _extract_response_model() helper pulls model from
+the OpenAI SDK response.model attribute (or dict key for synthetic responses),
+applied at all four log_llm_step call sites in api/routers/agent.py.
+
+Schema additions:
+- agent_llm_traces.provider TEXT NOT NULL DEFAULT 'lm_studio' — new column
+  with ALTER guard for existing deployments. Partial index on non-default
+  values for cheap 'show me non-local calls' queries.
+- external_ai_calls table — per-call billing/outcome log, distinct from
+  agent_llm_traces. Fields: provider, model, rule_fired, output_mode,
+  latency_ms, input_tokens, output_tokens, est_cost_usd, outcome,
+  error_message. Indexed on (op, created_at, rule).
+
+Settings registry: 11 new keys under 'External AI Router' group, all defaulting
+to off or safe values. Master switch externalRoutingMode='off' means no
+production behaviour change ships with v2.36.0. routeOnBudgetExhaustion and
+routeOnGateFailure default on; routeOnConsecutiveFailures=0 and
+routeOnPriorAttemptsGte=0 mean disabled.
+
+Prometheus: 5 new counter families (decisions, calls, latency, tokens,
+confirm-outcome) ready for v2.36.1-4 to populate. Standard deathstar_*
+naming.
+
+6 regression tests in tests/test_llm_traces_provider.py lock the fix."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+1. GET `/api/health` → returns 200, no regressions.
+2. Start any agent task (e.g. an observe template) → trace writes succeed.
+3. Query: `psql -c "SELECT DISTINCT provider FROM agent_llm_traces ORDER BY 1;"`
+   should return only `lm_studio` (no behaviour change, no external calls yet).
+4. Query: `psql -c "SELECT DISTINCT model FROM agent_llm_traces WHERE timestamp > NOW() - INTERVAL '5 minutes' ORDER BY 1;"`
+   should return the ACTUAL model string LM Studio served (e.g. `qwen3-coder-next`)
+   — NOT whatever `LM_STUDIO_MODEL` env var is set to. This is the provenance
+   fix working.
+5. GET `/api/metrics | grep external_routing_decisions_total` → should return
+   zero series (no decisions yet; counters just declared).
+
+---
+
+## Scope guard — do NOT touch
+
+- Agent loop behaviour — no routing, no confirmation gate, no external calls in v2.36.0.
+- `api/routers/settings.py` test-external-ai endpoint (v2.35.21) — untouched.
+- UI — no UI changes in v2.36.0. That's v2.36.4.
+- Existing trace rows — the `ALTER TABLE ADD COLUMN IF NOT EXISTS` handles
+  backfill automatically (default 'lm_studio').

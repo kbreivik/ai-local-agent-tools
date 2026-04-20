@@ -29,14 +29,19 @@ CREATE TABLE IF NOT EXISTS agent_llm_traces (
     tokens_total      INTEGER,
     temperature       REAL,
     model             TEXT,
+    provider          TEXT NOT NULL DEFAULT 'lm_studio',
     finish_reason     TEXT,
     tool_calls_count  INTEGER DEFAULT 0,
     PRIMARY KEY (operation_id, step_index)
 );
+ALTER TABLE agent_llm_traces
+    ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'lm_studio';
 CREATE INDEX IF NOT EXISTS idx_llm_traces_parent
     ON agent_llm_traces (parent_op_id) WHERE parent_op_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_llm_traces_ts
     ON agent_llm_traces (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_traces_provider
+    ON agent_llm_traces (provider) WHERE provider <> 'lm_studio';
 """
 
 _DDL_PROMPTS = """
@@ -134,6 +139,7 @@ def write_trace_step(
     parent_op_id: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    provider: str = "lm_studio",
 ) -> None:
     """Persist one LLM round-trip step. Never raises."""
     if not _is_enabled() or not _is_pg() or not operation_id:
@@ -160,8 +166,8 @@ def write_trace_step(
                    (operation_id, step_index, agent_type, is_subagent,
                     parent_op_id, messages_delta, response_raw,
                     tokens_prompt, tokens_completion, tokens_total,
-                    temperature, model, finish_reason, tool_calls_count)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    temperature, model, provider, finish_reason, tool_calls_count)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (operation_id, step_index) DO NOTHING""",
             (
                 str(operation_id),
@@ -176,6 +182,7 @@ def write_trace_step(
                 usage.get("total_tokens"),
                 temperature,
                 model,
+                provider,
                 finish_reason,
                 tool_calls_count,
             ),
@@ -223,7 +230,7 @@ def get_trace(operation_id: str) -> dict:
             """SELECT step_index, timestamp, messages_delta, response_raw,
                       tokens_prompt, tokens_completion, tokens_total,
                       temperature, finish_reason, tool_calls_count,
-                      agent_type, is_subagent, parent_op_id, model
+                      agent_type, is_subagent, parent_op_id, model, provider
                FROM agent_llm_traces WHERE operation_id = %s
                ORDER BY step_index""",
             (str(operation_id),),
@@ -258,6 +265,7 @@ def get_trace(operation_id: str) -> dict:
                 "is_subagent": r[11],
                 "parent_op_id": r[12],
                 "model": r[13],
+                "provider": r[14],
             })
         cur.close()
         conn.close()

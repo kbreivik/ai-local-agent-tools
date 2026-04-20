@@ -418,6 +418,12 @@ async def lifespan(app: FastAPI):
         init_llm_traces()
     except Exception as _lle:
         _log.debug("llm_traces init failed: %s", _lle)
+    # v2.36.0 — external_ai_calls billing/outcome log
+    try:
+        from api.db.external_ai_calls import init_external_ai_calls
+        init_external_ai_calls()
+    except Exception as _exe:
+        _log.debug("external_ai_calls init failed: %s", _exe)
     # v2.35.6 — one-shot recovery: restore operations.final_answer rows
     # nuked by the legacy [BLOCKED:...] egress sanitiser. Replays the last
     # step's assistant content from agent_llm_traces (v2.34.14 persistence).

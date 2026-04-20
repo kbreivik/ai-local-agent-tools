@@ -148,6 +148,7 @@ async def log_llm_step(
     parent_op_id: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    provider: str = "lm_studio",
 ) -> None:
     """Persist one LLM round-trip. system_prompt + tools_manifest are stored
     ONCE on step_index=0; subsequent steps reference operation_id.
@@ -177,6 +178,7 @@ async def log_llm_step(
             parent_op_id=parent_op_id,
             temperature=temperature,
             model=model,
+            provider=provider,
         )
     except Exception as e:
         log.debug("log_llm_step failed: %s", e)

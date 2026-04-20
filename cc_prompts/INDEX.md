@@ -212,7 +212,12 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.18.md | v2.35.18 | feat(ops): two-phase drill on 30.9% success rate — Phase 1 analysis doc + Phase 2 targeted fix (bucket chosen by CC after analysis) | DONE (dcee6c1) |
 | CC_PROMPT_v2.35.19.md | v2.35.19 | fix(tools): uptime allowlist \b fix + loud DB errors + one-shot retry in get_(all_)connections_for_platform | DONE (2620552) |
 | CC_PROMPT_v2.35.20.md | v2.35.20 | fix(tools): infra_lookup not-found returns status=ok with data.found=false (semantic tool-contract fix) | DONE (02f233c) |
-| CC_PROMPT_v2.35.21.md | v2.35.21 | feat(settings): real Test Connection for external AI providers (Claude/OpenAI/Grok) — POST /api/settings/test-external-ai | RUNNING |
+| CC_PROMPT_v2.35.21.md | v2.35.21 | feat(settings): real Test Connection for external AI providers (Claude/OpenAI/Grok) — POST /api/settings/test-external-ai | DONE (4a7abd6) |
+| CC_PROMPT_v2.36.0.md | v2.36.0 | feat(agents): External AI Router foundation — schema + provenance fix + Settings registry + Prometheus | RUNNING |
+| CC_PROMPT_v2.36.1.md | v2.36.1 | feat(agents): External AI Router rule engine — should_escalate_to_external_ai + 5 rules | PENDING |
+| CC_PROMPT_v2.36.2.md | v2.36.2 | feat(agents): External AI confirmation gate — wait primitive + /confirm-external endpoint + timeout | PENDING |
+| CC_PROMPT_v2.36.3.md | v2.36.3 | feat(agents): External AI client + REPLACE mode wiring — Claude/OpenAI/Grok synthesis | PENDING |
+| CC_PROMPT_v2.36.4.md | v2.36.4 | feat(ui): External AI Router UI + collapsible major sections (Settings/Monitor/Logs) | PENDING |
 
 ---
 
