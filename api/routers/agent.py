@@ -616,6 +616,108 @@ _AGENT_BADGE_COLOR = {
 }
 
 
+async def wait_for_external_ai_confirmation(
+    *,
+    session_id: str,
+    operation_id: str,
+    provider: str,
+    model: str,
+    rule_fired: str,
+    reason: str,
+    output_mode: str,
+) -> str:
+    """Gate the agent loop on operator approval before calling external AI.
+
+    v2.36.2. Broadcasts `external_ai_confirm_pending` to the GUI with the
+    router rationale + provider/model, flips operations.status, waits up
+    to `externalConfirmTimeoutSeconds` for a /confirm-external call,
+    returns one of 'approved'|'rejected'|'timeout'.
+
+    If requireConfirmation is false, returns 'approved' without waiting.
+    """
+    from mcp_server.tools.skills.storage import get_backend
+    try:
+        require = get_backend().get_setting("requireConfirmation")
+    except Exception:
+        require = True
+    if require is None:
+        require = True
+    # Normalise truthy forms from storage backend
+    if isinstance(require, str):
+        require = require.strip().lower() in ("1", "true", "yes", "on")
+
+    if not require:
+        return "approved"
+
+    # Read timeout (operator-tunable)
+    try:
+        timeout_s = int(get_backend().get_setting("externalConfirmTimeoutSeconds") or 300)
+    except Exception:
+        timeout_s = 300
+
+    # Flip DB status
+    try:
+        from api.db.base import get_engine as _ge
+        from sqlalchemy import text as _t
+        async with _ge().begin() as conn:
+            await conn.execute(
+                _t("UPDATE operations SET status='awaiting_external_ai_confirm' "
+                   "WHERE session_id=:sid"),
+                {"sid": session_id},
+            )
+    except Exception as e:
+        log.debug("wait_for_external_ai_confirmation DB flip failed: %s", e)
+
+    await manager.broadcast({
+        "type": "external_ai_confirm_pending",
+        "session_id": session_id,
+        "operation_id": operation_id,
+        "provider": provider,
+        "model": model,
+        "rule_fired": rule_fired,
+        "reason": reason,
+        "output_mode": output_mode,
+        "timeout_s": timeout_s,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await manager.send_line(
+        "step",
+        f"[external-ai] Awaiting operator approval — {provider}/{model}, "
+        f"rule={rule_fired}, mode={output_mode} (timeout {timeout_s}s)",
+        status="warning", session_id=session_id,
+    )
+
+    from api.agents.external_ai_confirmation import wait_for_confirmation
+    decision = await wait_for_confirmation(session_id, timeout_s=timeout_s)
+
+    if decision == "timeout":
+        try:
+            from api.metrics import EXTERNAL_AI_CONFIRM_OUTCOME
+            EXTERNAL_AI_CONFIRM_OUTCOME.labels(outcome="timeout").inc()
+        except Exception:
+            pass
+        try:
+            from api.db.base import get_engine as _ge
+            from sqlalchemy import text as _t
+            async with _ge().begin() as conn:
+                await conn.execute(
+                    _t("UPDATE operations SET status='cancelled', "
+                       "final_answer='External AI escalation timed out waiting for approval.' "
+                       "WHERE session_id=:sid "
+                       "AND status='awaiting_external_ai_confirm'"),
+                    {"sid": session_id},
+                )
+        except Exception:
+            pass
+        await manager.send_line(
+            "halt",
+            f"[external-ai] Approval timed out after {timeout_s}s — cancelling",
+            status="failed", session_id=session_id,
+        )
+
+    return decision
+
+
 async def _run_single_agent_step(
     task: str,
     session_id: str,
@@ -4197,6 +4299,72 @@ async def preflight_cancel(req: PreflightCancelRequest, user: str = Depends(get_
     except Exception:
         pass
     return {"status": "ok", "message": "Preflight cancelled"}
+
+
+class ExternalConfirmRequest(BaseModel):
+    session_id: str
+    approved: bool
+
+
+class ExternalConfirmCancelRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/operations/{operation_id}/confirm-external")
+async def confirm_external_ai(
+    operation_id: str,
+    req: ExternalConfirmRequest,
+    user: str = Depends(get_current_user),
+):
+    """Resolve a pending external-AI confirmation prompt.
+
+    v2.36.2 — operator approves or rejects the escalation. Router-decision
+    rationale (rule_fired, reason) was broadcast to the GUI when the gate
+    opened; this endpoint just closes it.
+    """
+    from api.agents.external_ai_confirmation import resolve_confirmation
+    ok = resolve_confirmation(req.session_id, req.approved)
+    if not ok:
+        return {
+            "status": "error",
+            "message": f"No pending external-AI confirmation for session '{req.session_id}'",
+        }
+
+    # Flip DB status back to running / cancelled so the UI reflects reality
+    # even before the agent loop writes its terminal row.
+    try:
+        from api.db.base import get_engine as _ge
+        from sqlalchemy import text as _t
+        new_status = "running" if req.approved else "cancelled"
+        async with _ge().begin() as conn:
+            await conn.execute(
+                _t("UPDATE operations SET status=:st "
+                   "WHERE session_id=:sid AND status='awaiting_external_ai_confirm'"),
+                {"st": new_status, "sid": req.session_id},
+            )
+    except Exception as e:
+        log.debug("confirm_external_ai DB update failed: %s", e)
+
+    try:
+        await manager.broadcast({
+            "type": "external_ai_confirm_resolved",
+            "session_id": req.session_id,
+            "approved": req.approved,
+            "actor": user,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    try:
+        from api.metrics import EXTERNAL_AI_CONFIRM_OUTCOME
+        EXTERNAL_AI_CONFIRM_OUTCOME.labels(
+            outcome="approved" if req.approved else "rejected",
+        ).inc()
+    except Exception:
+        pass
+
+    return {"status": "ok", "message": "approved" if req.approved else "rejected"}
 
 
 class StopRequest(BaseModel):

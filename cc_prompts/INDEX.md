@@ -214,8 +214,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.20.md | v2.35.20 | fix(tools): infra_lookup not-found returns status=ok with data.found=false (semantic tool-contract fix) | DONE (02f233c) |
 | CC_PROMPT_v2.35.21.md | v2.35.21 | feat(settings): real Test Connection for external AI providers (Claude/OpenAI/Grok) — POST /api/settings/test-external-ai | DONE (4a7abd6) |
 | CC_PROMPT_v2.36.0.md | v2.36.0 | feat(agents): External AI Router foundation — schema + provenance fix + Settings registry + Prometheus | DONE (73a7dd3) |
-| CC_PROMPT_v2.36.1.md | v2.36.1 | feat(agents): External AI Router rule engine — should_escalate_to_external_ai + 5 rules | RUNNING |
-| CC_PROMPT_v2.36.2.md | v2.36.2 | feat(agents): External AI confirmation gate — wait primitive + /confirm-external endpoint + timeout | PENDING |
+| CC_PROMPT_v2.36.1.md | v2.36.1 | feat(agents): External AI Router rule engine — should_escalate_to_external_ai + 5 rules | DONE (334c743) |
+| CC_PROMPT_v2.36.2.md | v2.36.2 | feat(agents): External AI confirmation gate — wait primitive + /confirm-external endpoint + timeout | RUNNING |
 | CC_PROMPT_v2.36.3.md | v2.36.3 | feat(agents): External AI client + REPLACE mode wiring — Claude/OpenAI/Grok synthesis | PENDING |
 | CC_PROMPT_v2.36.4.md | v2.36.4 | feat(ui): External AI Router UI + collapsible major sections (Settings/Monitor/Logs) | PENDING |
 
@@ -552,4 +552,18 @@ gui/src/components/FactLockModal.jsx      — lock creation (permission-gated) (
 gui/src/components/ConflictResolveModal.jsx — three-button conflict resolution (v2.35.0.1)
 gui/src/components/PreflightPanel.jsx     — always-visible preflight with disambiguation UI (v2.35.1)
 tests/test_external_ai_test_endpoint.py   — POST /api/settings/test-external-ai regression tests (v2.35.21)
+api/db/llm_traces.py                      — provider column + write_trace_step provider kwarg (v2.36.0)
+api/db/external_ai_calls.py               — per-call billing/outcome log (v2.36.0)
+api/agents/external_router.py             — should_escalate_to_external_ai + 5 rules (v2.36.1)
+api/agents/external_ai_confirmation.py    — wait_for_confirmation primitive (v2.36.2)
+api/agents/external_ai_client.py          — Claude/OpenAI/Grok dispatcher + REPLACE mode (v2.36.3)
+api/routers/external_ai.py                — admin-gated /api/external-ai/calls (v2.36.4)
+gui/src/components/CollapsibleSection.jsx — localStorage-persisted collapsible wrapper (v2.36.4)
+gui/src/components/ExternalAIConfirmModal.jsx — operator confirmation modal (v2.36.4)
+gui/src/components/ExternalAICallsView.jsx — MONITOR sidebar external-AI call log (v2.36.4)
+tests/test_llm_traces_provider.py         — provenance fix regression tests (v2.36.0)
+tests/test_external_router.py             — 21 rule-engine tests (v2.36.1)
+tests/test_external_ai_confirmation.py    — 5 asyncio confirmation-gate tests (v2.36.2)
+tests/test_external_ai_client.py          — 9 provider-dispatch tests with mocked httpx (v2.36.3)
+tests/test_external_ai_calls_endpoint.py  — billing table round-trip tests (v2.36.4)
 ```
