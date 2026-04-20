@@ -80,9 +80,19 @@ async def log_operation_start(
         )
 
 
-# Legacy alias used by existing callers
-async def log_operation(session_id: str, label: str, owner_user: str = "admin") -> str:
-    return await log_operation_start(session_id, label, owner_user=owner_user)
+# Legacy alias used by existing callers. Accepts model_used kwarg so the
+# Operations view gets a reasonable default from insert onwards — v2.36.7
+# previously dropped it silently, leaving operations.model_used='' for
+# every agent-started run.
+async def log_operation(
+    session_id: str,
+    label: str,
+    owner_user: str = "admin",
+    model_used: str = "",
+) -> str:
+    return await log_operation_start(
+        session_id, label, owner_user=owner_user, model_used=model_used,
+    )
 
 
 async def log_operation_complete(
@@ -90,7 +100,16 @@ async def log_operation_complete(
     status: str,
     duration_ms: int = 0,
 ) -> None:
-    """Write directly to DB — bypasses queue to guarantee the write completes."""
+    """Write directly to DB — bypasses queue to guarantee the write completes.
+
+    v2.36.7: also backfills `operations.model_used` from the highest-
+    step_index row in `agent_llm_traces` for this op. Covers external-AI
+    escalations (v2.36.3 writes a step_index=99999 trace row with the
+    external provider's model string) and LM-Studio runs where the
+    API-reported model differs from the env-var label. Only overwrites
+    when the trace row has a non-empty model string; otherwise the
+    insert-time seed value (from run_agent / run_subtask) is preserved.
+    """
     if not operation_id:
         return
     try:
@@ -101,6 +120,30 @@ async def log_operation_complete(
                 status=status,
                 total_duration_ms=duration_ms,
             )
+            # v2.36.7 backfill — best-effort, never blocks the caller.
+            try:
+                from sqlalchemy import text as _t
+                await conn.execute(
+                    _t(
+                        "UPDATE operations "
+                        "SET model_used = COALESCE( "
+                        "    (SELECT model FROM agent_llm_traces "
+                        "     WHERE operation_id = :op "
+                        "       AND model IS NOT NULL "
+                        "       AND model <> '' "
+                        "     ORDER BY step_index DESC "
+                        "     LIMIT 1), "
+                        "    model_used "
+                        ") "
+                        "WHERE id = :op"
+                    ),
+                    {"op": operation_id},
+                )
+            except Exception as _be:
+                log.debug(
+                    "model_used backfill for %s skipped: %s",
+                    operation_id, _be,
+                )
     except Exception as e:
         log.error("log_operation_complete failed for %s: %s", operation_id, e)
 

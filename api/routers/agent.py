@@ -4693,7 +4693,9 @@ async def run_agent(req: RunRequest, background_tasks: BackgroundTasks,
                     user: str = Depends(get_current_user)):
     """Start an agent task. Streams output to ws://host:8000/ws/output."""
     session_id = req.session_id or str(uuid.uuid4())
-    operation_id = await logger_mod.log_operation(session_id, req.task, owner_user=user)
+    operation_id = await logger_mod.log_operation(
+        session_id, req.task, owner_user=user, model_used=_lm_model(),
+    )
     background_tasks.add_task(_stream_agent, req.task, session_id, operation_id, user)
     return RunResponse(
         session_id=session_id,
@@ -4922,7 +4924,9 @@ async def run_subtask(req: SubtaskRequest, background_tasks: BackgroundTasks,
                       user: str = Depends(get_current_user)):
     """Start an execute sub-agent from a proposal, injecting parent investigation context."""
     session_id   = str(uuid.uuid4())
-    operation_id = await logger_mod.log_operation(session_id, req.task, owner_user=user)
+    operation_id = await logger_mod.log_operation(
+        session_id, req.task, owner_user=user, model_used=_lm_model(),
+    )
 
     # Fetch parent final_answer for context injection
     parent_context = ""

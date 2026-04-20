@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-20T21:33:17",
+  "updated_at": "2026-04-20T22:42:12",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2725,10 +2725,26 @@
       "filename": "CC_PROMPT_v2.36.6.md",
       "version": "v2.36.6",
       "theme": "fix(ui): add 30 missing Settings keys (Facts × 26 + Agent Budgets × 4) to SERVER_KEYS allowlist",
+      "runner_status": "DONE",
+      "commit_sha": "bff9648",
+      "error": "",
+      "started_at": "2026-04-20T21:33:17",
+      "finished_at": "2026-04-20T21:36:29",
+      "duration_s": 192.80850670000655,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260420_213317_CC_PROMPT_v2.36.6.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.36.7.md",
+      "version": "v2.36.7",
+      "theme": "fix(logs): populate operations.model_used — insert seed + trace backfill",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-20T21:33:17",
+      "started_at": "2026-04-20T22:42:12",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
