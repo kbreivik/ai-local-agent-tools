@@ -266,6 +266,31 @@ def get_recent_attempts(entity_id: str, limit: int = 3) -> list[dict]:
         return []
 
 
+def count_recent_failures_for_entity(entity_id: str, days: int = 7) -> int:
+    """Count agent_attempts rows for this entity with outcome != 'completed'
+    in the last `days` days. Used by v2.36.3 complexity_prefilter router rule.
+    Returns 0 on any error (never raises)."""
+    if not entity_id:
+        return 0
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT COUNT(*) FROM agent_attempts
+               WHERE entity_id = %s
+               AND outcome <> 'completed'
+               AND created_at > NOW() - INTERVAL '%s days'""",
+            (entity_id, int(days)),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
 def _prune_old(days: int = 30) -> int:
     """Delete attempts older than N days. Returns rows deleted."""
     conn = _get_pg_conn()

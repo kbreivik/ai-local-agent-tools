@@ -215,8 +215,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.35.21.md | v2.35.21 | feat(settings): real Test Connection for external AI providers (Claude/OpenAI/Grok) — POST /api/settings/test-external-ai | DONE (4a7abd6) |
 | CC_PROMPT_v2.36.0.md | v2.36.0 | feat(agents): External AI Router foundation — schema + provenance fix + Settings registry + Prometheus | DONE (73a7dd3) |
 | CC_PROMPT_v2.36.1.md | v2.36.1 | feat(agents): External AI Router rule engine — should_escalate_to_external_ai + 5 rules | DONE (334c743) |
-| CC_PROMPT_v2.36.2.md | v2.36.2 | feat(agents): External AI confirmation gate — wait primitive + /confirm-external endpoint + timeout | RUNNING |
-| CC_PROMPT_v2.36.3.md | v2.36.3 | feat(agents): External AI client + REPLACE mode wiring — Claude/OpenAI/Grok synthesis | PENDING |
+| CC_PROMPT_v2.36.2.md | v2.36.2 | feat(agents): External AI confirmation gate — wait primitive + /confirm-external endpoint + timeout | DONE (f5128da) |
+| CC_PROMPT_v2.36.3.md | v2.36.3 | feat(agents): External AI client + REPLACE mode wiring — Claude/OpenAI/Grok synthesis | RUNNING |
 | CC_PROMPT_v2.36.4.md | v2.36.4 | feat(ui): External AI Router UI + collapsible major sections (Settings/Monitor/Logs) | PENDING |
 
 ---

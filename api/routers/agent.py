@@ -718,6 +718,297 @@ async def wait_for_external_ai_confirmation(
     return decision
 
 
+class _PrerunShortCircuit(Exception):
+    """v2.36.3 — sentinel raised when complexity_prefilter replaces the local run."""
+    pass
+
+
+async def _maybe_route_to_external_ai(
+    *,
+    session_id: str,
+    operation_id: str,
+    task: str,
+    agent_type: str,
+    messages: list[dict],
+    tool_calls_made: int,
+    tool_budget: int,
+    diagnosis_emitted: bool,
+    consecutive_tool_failures: int,
+    halluc_guard_exhausted: bool,
+    fabrication_detected_count: int,
+    external_calls_this_op: int,
+    scope_entity: str,
+    is_prerun: bool,
+    prior_failed_attempts_7d: int = 0,
+) -> str | None:
+    """Run the v2.36.1 router. If it fires, gate on v2.36.2 confirmation and
+    call the v2.36.3 external AI. Return the synthesis text on success,
+    None on no-op, or raise a sentinel-failure string via ExternalAIError.
+
+    Caller treats a non-None return as the final_answer (REPLACE mode).
+    """
+    from api.agents.external_router import (
+        should_escalate_to_external_ai, record_decision, RouterState,
+    )
+    from mcp_server.tools.skills.storage import get_backend
+
+    try:
+        _cap = int(get_backend().get_setting("routeMaxExternalCallsPerOp") or 3)
+    except Exception:
+        _cap = 3
+
+    state = RouterState(
+        agent_type=agent_type,
+        task_text=task,
+        scope_entity=scope_entity,
+        tool_calls_made=tool_calls_made,
+        tool_budget=tool_budget,
+        diagnosis_emitted=diagnosis_emitted,
+        consecutive_tool_failures=consecutive_tool_failures,
+        halluc_guard_exhausted=halluc_guard_exhausted,
+        fabrication_detected_count=fabrication_detected_count,
+        external_calls_this_op=external_calls_this_op,
+        external_calls_cap=_cap,
+        prior_failed_attempts_7d=prior_failed_attempts_7d,
+    )
+    decision = should_escalate_to_external_ai(state, is_prerun=is_prerun)
+    record_decision(decision)
+    if not decision.escalate:
+        return None
+
+    # Read provider/model/output_mode
+    try:
+        provider = (get_backend().get_setting("externalProvider") or "claude").strip().lower()
+        model = (get_backend().get_setting("externalModel") or "").strip()
+        output_mode = (get_backend().get_setting("externalRoutingOutputMode") or "replace").strip().lower()
+    except Exception:
+        provider, model, output_mode = "claude", "", "replace"
+
+    # v2.36.3 only implements REPLACE. Other modes deferred to v2.36.5+.
+    if output_mode != "replace":
+        await manager.send_line(
+            "step",
+            f"[external-ai] output mode {output_mode!r} not implemented — "
+            f"falling back to 'replace'",
+            status="warning", session_id=session_id,
+        )
+        output_mode = "replace"
+
+    # Confirmation gate
+    confirm_decision = await wait_for_external_ai_confirmation(
+        session_id=session_id,
+        operation_id=operation_id,
+        provider=provider,
+        model=model,
+        rule_fired=decision.rule_fired,
+        reason=decision.reason,
+        output_mode=output_mode,
+    )
+    if confirm_decision != "approved":
+        await manager.send_line(
+            "step",
+            f"[external-ai] Escalation {confirm_decision} — no external call made",
+            status="ok", session_id=session_id,
+        )
+        try:
+            from api.db.external_ai_calls import write_external_ai_call
+            write_external_ai_call(
+                operation_id=operation_id, step_index=None,
+                provider=provider, model=model or "?",
+                rule_fired=decision.rule_fired, output_mode=output_mode,
+                latency_ms=None, input_tokens=None, output_tokens=None,
+                est_cost_usd=None,
+                outcome="cancelled_by_user" if confirm_decision == "rejected" else "cancelled_by_user",
+                error_message=f"Confirmation {confirm_decision}",
+            )
+        except Exception:
+            pass
+        return None
+
+    # Compute the trace digest for context handoff
+    digest_text = None
+    try:
+        try:
+            last_n = int(get_backend().get_setting("externalContextLastNToolResults") or 5)
+        except Exception:
+            last_n = 5
+        from api.db.llm_traces import get_trace, render_digest
+        trace = get_trace(operation_id)
+        digest_text = render_digest(trace, operation_id=operation_id)
+        # Truncate middle tool-result bodies to just the last N, keep digest intact
+        # (render_digest already emits a compact form; last_n is advisory for now)
+        if len(digest_text) > 6000:
+            digest_text = digest_text[:2500] + "\n[...digest truncated...]\n" + digest_text[-2500:]
+    except Exception as _de:
+        log.debug("digest render failed: %s", _de)
+
+    # Actually call the external AI
+    from api.agents.external_ai_client import (
+        synthesize_replace,
+        ExternalAIError, ExternalAIAuthError,
+        ExternalAINetworkError, ExternalAITimeoutError,
+    )
+    from api.db.external_ai_calls import write_external_ai_call
+
+    await manager.broadcast({
+        "type": "external_ai_call_start",
+        "session_id": session_id, "operation_id": operation_id,
+        "provider": provider, "model": model,
+        "rule_fired": decision.rule_fired, "output_mode": output_mode,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await manager.send_line(
+        "step",
+        f"[external-ai] calling {provider}/{model} (rule={decision.rule_fired})",
+        status="ok", session_id=session_id,
+    )
+
+    try:
+        result = await synthesize_replace(
+            task=task, agent_type=agent_type,
+            messages=messages, digest=digest_text,
+            context_max_chars=12000, timeout_s=45.0,
+        )
+    except ExternalAIError as e:
+        outcome = e.outcome
+        await manager.send_line(
+            "halt",
+            f"[external-ai] {outcome}: {e!s}",
+            status="failed", session_id=session_id,
+        )
+        try:
+            from api.metrics import EXTERNAL_AI_CALLS
+            EXTERNAL_AI_CALLS.labels(provider=provider, outcome=outcome).inc()
+        except Exception:
+            pass
+        write_external_ai_call(
+            operation_id=operation_id, step_index=None,
+            provider=provider, model=model or "?",
+            rule_fired=decision.rule_fired, output_mode=output_mode,
+            latency_ms=None, input_tokens=None, output_tokens=None,
+            est_cost_usd=None, outcome=outcome, error_message=str(e)[:500],
+        )
+        # Halt — raise so the caller can set status=escalation_failed
+        try:
+            from api.routers.escalations import record_escalation
+            record_escalation(
+                session_id=session_id,
+                reason=f"External AI ({provider}) failed: {e!s}",
+                operation_id=operation_id, severity="critical",
+            )
+        except Exception:
+            pass
+        raise
+
+    # Success path — apply existing harness gates to the external synthesis
+    synth_text = result.text or ""
+
+    # Fabrication detector on external output (D in spec)
+    fabrication_rejected = False
+    try:
+        from api.agents.fabrication_detector import is_fabrication
+        # Extract local tool names from messages history for the detector
+        local_tools = []
+        for m in messages:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                for tc in m.get("tool_calls") or []:
+                    fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                    if fn.get("name"):
+                        local_tools.append(fn["name"])
+        fab_fired, _fab_detail = is_fabrication(
+            synth_text, local_tools, min_cites=3, score_threshold=0.5,
+        )
+        if fab_fired:
+            fabrication_rejected = True
+    except Exception as _fe:
+        log.debug("fabrication check on external output failed: %s", _fe)
+
+    # Too-short / preamble-only rescue check
+    if not fabrication_rejected:
+        rescue_reason = _classify_terminal_final_answer(synth_text)
+        if rescue_reason is not None:
+            log.warning(
+                "external AI output rejected by %s rescue — synth_text too short/preamble",
+                rescue_reason,
+            )
+            fabrication_rejected = True
+
+    # Log per-call outcome
+    outcome = "rejected_by_gate" if fabrication_rejected else "success"
+    try:
+        from api.metrics import EXTERNAL_AI_CALLS
+        EXTERNAL_AI_CALLS.labels(provider=result.provider, outcome=outcome).inc()
+    except Exception:
+        pass
+    write_external_ai_call(
+        operation_id=operation_id, step_index=None,
+        provider=result.provider, model=result.model,
+        rule_fired=decision.rule_fired, output_mode=output_mode,
+        latency_ms=result.latency_ms,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        est_cost_usd=result.est_cost_usd,
+        outcome=outcome,
+        error_message=None,
+    )
+
+    if fabrication_rejected:
+        await manager.send_line(
+            "step",
+            f"[external-ai] output rejected by harness gate — discarding, "
+            "falling back to local forced_synthesis",
+            status="warning", session_id=session_id,
+        )
+        return None  # Caller runs forced_synthesis instead
+
+    # Persist the external-synthesis as an llm_trace row so the Trace
+    # viewer shows it with provider='claude' etc.
+    try:
+        from api.logger import log_llm_step
+        await log_llm_step(
+            operation_id=operation_id,
+            step_index=99999,  # distinguish from local steps
+            messages_delta=[
+                {"role": "system", "content": "[external-ai synthesis (REPLACE mode)]"},
+                {"role": "assistant", "content": synth_text},
+            ],
+            response_raw={
+                "external_ai": True,
+                "provider": result.provider,
+                "model": result.model,
+                "latency_ms": result.latency_ms,
+                "usage": {
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "est_cost_usd": result.est_cost_usd,
+                },
+                "rule_fired": decision.rule_fired,
+            },
+            agent_type=agent_type,
+            temperature=0.3,
+            model=result.model,
+            provider=result.provider,
+        )
+    except Exception as _te:
+        log.debug("external_ai trace log failed: %s", _te)
+
+    await manager.broadcast({
+        "type": "external_ai_call_done",
+        "session_id": session_id, "operation_id": operation_id,
+        "provider": result.provider, "model": result.model,
+        "latency_ms": result.latency_ms,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "est_cost_usd": result.est_cost_usd,
+        "outcome": outcome,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    # Prepend provider tag for operator visibility
+    tagged = f"[EXTERNAL: {result.provider}/{result.model}]\n\n{synth_text}"
+    return tagged
+
+
 async def _run_single_agent_step(
     task: str,
     session_id: str,
@@ -1136,6 +1427,32 @@ async def _run_single_agent_step(
                 except Exception as _te:
                     log.debug("forced synthesis trace log failed: %s", _te)
 
+                # v2.36.3 — budget_exhaustion rule check
+                try:
+                    _router_synth = await _maybe_route_to_external_ai(
+                        session_id=session_id,
+                        operation_id=operation_id,
+                        task=task,
+                        agent_type=agent_type,
+                        messages=messages,
+                        tool_calls_made=len(tools_used_names),
+                        tool_budget=_tool_budget,
+                        diagnosis_emitted="DIAGNOSIS:" in (last_reasoning or ""),
+                        consecutive_tool_failures=_tool_failures,
+                        halluc_guard_exhausted=(_halluc_guard_attempts >= _halluc_guard_max),
+                        fabrication_detected_count=(1 if _fabrication_detected_once else 0),
+                        external_calls_this_op=0,
+                        scope_entity=parent_session_id or "",
+                        is_prerun=False,
+                        prior_failed_attempts_7d=0,
+                    )
+                    if _router_synth:
+                        last_reasoning = _router_synth
+                except Exception as _re:
+                    # Halt-on-failure: mark status and fall through
+                    log.warning("external AI routing failed: %s", _re)
+                    final_status = "escalation_failed"
+
                 if is_final_step:
                     choices = _extract_choices(last_reasoning) if last_reasoning else None
                     await manager.broadcast({
@@ -1422,6 +1739,42 @@ async def _run_single_agent_step(
                             "failing task to block fabricated evidence.",
                             status="failed", session_id=session_id,
                         )
+                        # v2.36.3 — gate_failure router rule
+                        try:
+                            _router_synth = await _maybe_route_to_external_ai(
+                                session_id=session_id,
+                                operation_id=operation_id,
+                                task=task,
+                                agent_type=agent_type,
+                                messages=messages,
+                                tool_calls_made=len(tools_used_names),
+                                tool_budget=_tool_budget,
+                                diagnosis_emitted=False,
+                                consecutive_tool_failures=_tool_failures,
+                                halluc_guard_exhausted=True,
+                                fabrication_detected_count=(2 if _fabrication_detected_once else 0),
+                                external_calls_this_op=0,
+                                scope_entity=parent_session_id or "",
+                                is_prerun=False,
+                            )
+                            if _router_synth:
+                                last_reasoning = _router_synth
+                                final_status = "completed"
+                                if is_final_step:
+                                    await manager.broadcast({
+                                        "type":       "done",
+                                        "session_id": session_id,
+                                        "agent_type": agent_type,
+                                        "content":    last_reasoning,
+                                        "status":     "ok",
+                                        "choices":    [],
+                                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                                    })
+                                break
+                        except Exception as _re:
+                            log.warning("external AI routing on gate failure: %s", _re)
+                            final_status = "escalation_failed"
+
                         if is_final_step:
                             await manager.broadcast({
                                 "type":       "done",
@@ -1433,7 +1786,8 @@ async def _run_single_agent_step(
                                 "reason":     "hallucination_guard_exhausted",
                                 "timestamp":  datetime.now(timezone.utc).isoformat(),
                             })
-                        final_status = "failed"
+                        if final_status != "escalation_failed":
+                            final_status = "failed"
                         break
 
                 # ── v2.34.14 fabrication detector ────────────────────────────
@@ -1520,6 +1874,42 @@ async def _run_single_agent_step(
                             "[fabrication] guard exhausted — failing task.",
                             status="failed", session_id=session_id,
                         )
+                        # v2.36.3 — gate_failure router rule
+                        try:
+                            _router_synth = await _maybe_route_to_external_ai(
+                                session_id=session_id,
+                                operation_id=operation_id,
+                                task=task,
+                                agent_type=agent_type,
+                                messages=messages,
+                                tool_calls_made=len(tools_used_names),
+                                tool_budget=_tool_budget,
+                                diagnosis_emitted=False,
+                                consecutive_tool_failures=_tool_failures,
+                                halluc_guard_exhausted=True,
+                                fabrication_detected_count=(2 if _fabrication_detected_once else 0),
+                                external_calls_this_op=0,
+                                scope_entity=parent_session_id or "",
+                                is_prerun=False,
+                            )
+                            if _router_synth:
+                                last_reasoning = _router_synth
+                                final_status = "completed"
+                                if is_final_step:
+                                    await manager.broadcast({
+                                        "type":       "done",
+                                        "session_id": session_id,
+                                        "agent_type": agent_type,
+                                        "content":    last_reasoning,
+                                        "status":     "ok",
+                                        "choices":    [],
+                                        "timestamp":  datetime.now(timezone.utc).isoformat(),
+                                    })
+                                break
+                        except Exception as _re:
+                            log.warning("external AI routing on gate failure: %s", _re)
+                            final_status = "escalation_failed"
+
                         if is_final_step:
                             await manager.broadcast({
                                 "type":       "done",
@@ -1531,7 +1921,8 @@ async def _run_single_agent_step(
                                 "reason":     "hallucination_guard_exhausted",
                                 "timestamp":  datetime.now(timezone.utc).isoformat(),
                             })
-                        final_status = "failed"
+                        if final_status != "escalation_failed":
+                            final_status = "failed"
                         break
 
                 # Synthesise degraded findings if present and summary is thin
@@ -3665,6 +4056,58 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         pass
 
     client = OpenAI(base_url=base_url, api_key=api_key)
+
+    # v2.36.3 — complexity_prefilter: step 0, before any tool calls
+    try:
+        # Count prior failed attempts for this entity (v2.32.3 table)
+        _prior_failed = 0
+        _scope_entity = ""
+        try:
+            from api.db.agent_attempts import count_recent_failures_for_entity
+            from api.db.infra_inventory import resolve_host
+            for word in task.split():
+                if len(word) < 4:
+                    continue
+                _entry = resolve_host(word)
+                if _entry:
+                    _scope_entity = _entry.get("label", word)
+                    break
+            if _scope_entity:
+                _prior_failed = count_recent_failures_for_entity(_scope_entity, days=7)
+        except Exception:
+            pass
+
+        _prerun_synth = await _maybe_route_to_external_ai(
+            session_id=session_id, operation_id=operation_id,
+            task=task, agent_type=first_intent,
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": task}],
+            tool_calls_made=0, tool_budget=16, diagnosis_emitted=False,
+            consecutive_tool_failures=0,
+            halluc_guard_exhausted=False, fabrication_detected_count=0,
+            external_calls_this_op=0,
+            scope_entity=_scope_entity,
+            is_prerun=True,
+            prior_failed_attempts_7d=_prior_failed,
+        )
+        if _prerun_synth:
+            # REPLACE mode pre-run: skip the local agent entirely
+            try:
+                await logger_mod.set_operation_final_answer(session_id, _prerun_synth)
+            except Exception:
+                pass
+            await manager.broadcast({
+                "type": "done", "session_id": session_id,
+                "agent_type": first_intent,
+                "content": _prerun_synth, "status": "ok", "choices": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            # Jump straight to the finally-cleanup
+            raise _PrerunShortCircuit()
+    except _PrerunShortCircuit:
+        return
+    except Exception as _pre:
+        log.debug("prerun external route check failed: %s", _pre)
 
     # Build orchestrator step plan
     steps = build_step_plan(task)
