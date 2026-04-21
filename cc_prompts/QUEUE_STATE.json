@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T16:55:11",
+  "updated_at": "2026-04-21T18:26:51",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2853,10 +2853,26 @@
       "filename": "CC_PROMPT_v2.38.1.md",
       "version": "v2.38.1",
       "theme": "fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix",
+      "runner_status": "DONE",
+      "commit_sha": "c0c3d4b",
+      "error": "",
+      "started_at": "2026-04-21T16:55:11",
+      "finished_at": "2026-04-21T17:00:15",
+      "duration_s": 303.28494969999883,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_165511_CC_PROMPT_v2.38.1.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.38.2.md",
+      "version": "v2.38.2",
+      "theme": "fix(ui): CommandPanel unified scroll region — single outer scroll with min-h-0, task input pinned at top",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-21T16:55:11",
+      "started_at": "2026-04-21T18:26:51",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

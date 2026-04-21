@@ -1,0 +1,923 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.38.1.md (v2.38.1)
+Theme: fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix
+
+Prompt content:
+
+# CC PROMPT — v2.38.1 — Operation ID column + Analysis deep-link + Raw-output scroll fix
+
+## What this does
+
+Three tight post-ship fixes from v2.38.0 verification.
+
+### 1. UUID column in Logs → Operations
+
+Problem: v2.38.0 Analysis view references `operation_id` as "found in
+Logs → Operations or URL" but the Operations table shows only
+`Started / Label / Status / Duration / Model / Calls / Feedback` —
+no UUID anywhere. Operators have to open a row, then right-click →
+inspect → find the hidden `data-session-id` attribute to get ANY
+UUID, and that's the session_id not operation.id. Dead end.
+
+Fix: add an "ID" column between Started and Label showing
+`op.id.slice(0, 8)` in monospace. Click copies the full UUID to
+clipboard with a 1.5s "✓ copied" flash. Tooltip shows the full UUID.
+Narrow column (~80px) — keeps the table compact.
+
+### 2. Expanded detail: both IDs + "Deep-dive in Analysis" button
+
+The expanded row (clicking an operation) gets a new `Identifiers`
+block between Task and Final Answer listing:
+- `Operation ID`: full UUID in copyable monospace pill
+- `Session ID`: full UUID in copyable monospace pill
+- `[Deep-dive in Analysis →]` button that:
+  - Writes `{template_id: 'operation_full_context', params: {operation_id}}`
+    to `sessionStorage['deathstar_analysis_deeplink']`
+  - Dispatches `window.dispatchEvent(new CustomEvent('navigate-to-tab',
+    {detail: {tab: 'Analysis'}}))`
+
+App.jsx listens for `navigate-to-tab` and calls `setActiveTab`.
+AnalysisView on mount reads+consumes the sessionStorage entry and
+pre-populates `selected` + `paramValues`. Same event-bus pattern the
+codebase already uses for `open-session-output` in LogTable.jsx — no
+new infrastructure.
+
+### 3. Raw-output log scroll jump
+
+Problem: clicking "+ Raw output log" or changing a filter chip /
+keyword in SessionOutputView makes the whole outer Operations table
+scroll — Kent's expanded row jumps up or down out of view. Reported
+exactly as: *"when pressing raw output log you get bumped down, or
+logs get's bumped up, same with any filters chosen in raw log"*.
+
+Root cause at `gui/src/components/LogTable.jsx` line ~488:
+```jsx
+useEffect(() => {
+  if (!loading && lines.length > 0) {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+}, [loading])
+```
+`Element.scrollIntoView()` ascends through every scrollable ancestor
+and adjusts each one to bring the element into view. `bottomRef` sits
+inside a 380px RawOutputToggle container which sits inside the
+expanded detail `<tr>` which sits inside the Operations `<div
+className="flex-1 overflow-auto">`. Result: browser scrolls the
+Operations container to bring the Raw output's bottom into view,
+shoving Kent's row off-screen.
+
+Fix: stop using `scrollIntoView`. Scope the autoscroll to the lines
+container only via direct `scrollTop = scrollHeight` assignment on a
+new ref attached to the scrollable lines div. Direct `scrollTop`
+writes do NOT propagate to ancestors. Same UX (autoscroll to newest
+line on load/filter change) but the outer page stays put.
+
+Version bump: 2.38.0 → 2.38.1 (`.x.1` — three fixes, multi-file,
+backwards-compatible, no schema / no new Settings / no new deps).
+
+---
+
+## Change 1 — `gui/src/components/LogTable.jsx`
+
+### 1a — SessionOutputView scroll scope fix
+
+Find (around line ~475-490):
+
+```jsx
+export function SessionOutputView({ sessionId, onClose }) {
+  const [lines, setLines] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKw, setDebouncedKw] = useState('')
+  const [count, setCount] = useState(0)
+  const bottomRef = useRef(null)
+```
+
+Replace `bottomRef` with a container ref:
+
+```jsx
+export function SessionOutputView({ sessionId, onClose }) {
+  const [lines, setLines] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKw, setDebouncedKw] = useState('')
+  const [count, setCount] = useState(0)
+  // v2.38.1: scope autoscroll to the lines container only — no more
+  // scrollIntoView bubbling up to the Operations table and jumping
+  // the whole page when filters change or the panel first opens.
+  const linesContainerRef = useRef(null)
+```
+
+Find (around line ~498):
+
+```jsx
+  useEffect(() => {
+    if (!loading && lines.length > 0) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [loading])
+```
+
+Replace with:
+
+```jsx
+  useEffect(() => {
+    // v2.38.1: direct scrollTop does NOT propagate to scrollable
+    // ancestors. scrollIntoView() did, which is why the outer
+    // Operations table jumped whenever this effect fired.
+    if (!loading && lines.length > 0) {
+      const el = linesContainerRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }
+  }, [loading, lines.length])
+```
+
+Find the lines container (around line ~548):
+
+```jsx
+      {/* Lines */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+```
+
+Add the ref:
+
+```jsx
+      {/* Lines — ref used by v2.38.1 scoped autoscroll */}
+      <div ref={linesContainerRef}
+           style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+```
+
+Find and REMOVE the trailing bottomRef div (around line ~583):
+
+```jsx
+        <div ref={bottomRef} />
+```
+
+Delete that entire line. No longer needed — the container ref is the
+scroll target directly.
+
+### 1b — OpsView gets an ID column + Identifiers block
+
+Find (around line ~665, inside `OpsView`):
+
+```jsx
+  const [flashSessionId, setFlashSessionId] = useState('')
+```
+
+Add a new state for the copy-flash indicator directly after:
+
+```jsx
+  const [flashSessionId, setFlashSessionId] = useState('')
+  // v2.38.1: flash "✓ copied" for 1.5s after click-to-copy on an ID pill.
+  const [copiedId, setCopiedId] = useState('')
+```
+
+Add a helper near the top of the component body (right after the
+state declarations, before `useEffect(load...)`):
+
+```jsx
+  // v2.38.1: click handler for the ID column and detail-row ID pills.
+  // Copies the full UUID, flashes a confirmation, falls back to
+  // document.execCommand on older browsers without clipboard API.
+  const copyId = useCallback(async (id, e) => {
+    if (e) { e.stopPropagation() }
+    if (!id) return
+    try {
+      await navigator.clipboard.writeText(id)
+    } catch {
+      // Fallback for non-HTTPS or old browsers
+      const ta = document.createElement('textarea')
+      ta.value = id
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch {}
+      document.body.removeChild(ta)
+    }
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(c => (c === id ? '' : c)), 1500)
+  }, [])
+
+  // v2.38.1: deep-link into Analysis → operation_full_context for this row.
+  const openInAnalysis = useCallback((op, e) => {
+    if (e) { e.stopPropagation() }
+    if (!op?.id) return
+    try {
+      sessionStorage.setItem('deathstar_analysis_deeplink', JSON.stringify({
+        template_id: 'operation_full_context',
+        params: { operation_id: op.id },
+      }))
+    } catch {}
+    window.dispatchEvent(new CustomEvent('navigate-to-tab', {
+      detail: { tab: 'Analysis' },
+    }))
+  }, [])
+```
+
+Find the table header (around line ~714):
+
+```jsx
+              <tr>{['Started','Label','Status','Duration','Model','Calls','Feedback'].map(h => (
+                <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
+              ))}</tr>
+```
+
+Replace with:
+
+```jsx
+              <tr>{['Started','ID','Label','Status','Duration','Model','Calls','Feedback'].map(h => (
+                <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
+              ))}</tr>
+```
+
+Find the row body `<tr>` + cells (around line ~720):
+
+```jsx
+                  <tr key={op.id} data-session-id={op.session_id}
+                      className={`border-b border-slate-800 hover:bg-slate-800 cursor-pointer${flashSessionId === op.session_id ? ' ds-flash-amber' : ''}`}
+                      onClick={() => openDetail(op)}>
+                    <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
+                      {depth > 0 && (
+                        <span style={{ paddingLeft: depth * 12, color: '#334155', marginRight: 4 }}>└</span>
+                      )}
+                      {fmtTs(op.started_at)}
+                    </td>
+                    <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>
+                      <span className="line-clamp-2 leading-snug">{op.label ?? '—'}</span>
+                    </td>
+```
+
+Insert a new ID cell between Started and Label (so the cells match
+the 8-header order now):
+
+```jsx
+                  <tr key={op.id} data-session-id={op.session_id}
+                      className={`border-b border-slate-800 hover:bg-slate-800 cursor-pointer${flashSessionId === op.session_id ? ' ds-flash-amber' : ''}`}
+                      onClick={() => openDetail(op)}>
+                    <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
+                      {depth > 0 && (
+                        <span style={{ paddingLeft: depth * 12, color: '#334155', marginRight: 4 }}>└</span>
+                      )}
+                      {fmtTs(op.started_at)}
+                    </td>
+                    {/* v2.38.1: operation.id short-prefix, click-to-copy full UUID */}
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      <button
+                        onClick={(e) => copyId(op.id, e)}
+                        title={copiedId === op.id ? 'Copied!' : `Click to copy: ${op.id || '(none)'}`}
+                        className="font-mono text-xs text-blue-300 hover:text-blue-200"
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                      >
+                        {(op.id || '').slice(0, 8)}
+                        {copiedId === op.id && (
+                          <span className="ml-1 text-green-400">✓</span>
+                        )}
+                      </button>
+                    </td>
+                    <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>
+                      <span className="line-clamp-2 leading-snug">{op.label ?? '—'}</span>
+                    </td>
+```
+
+Update the colspan on the detail row (around line ~745) — it was
+`colSpan={7}`, now needs to be `colSpan={8}` for the extra ID column:
+
+```jsx
+                  {detail?.operation?.id === op.id && (
+                    <tr key={`${op.id}-detail`} className="bg-slate-900">
+                      <td colSpan={7} className="px-3 py-3 space-y-3">
+```
+
+Replace with:
+
+```jsx
+                  {detail?.operation?.id === op.id && (
+                    <tr key={`${op.id}-detail`} className="bg-slate-900">
+                      <td colSpan={8} className="px-3 py-3 space-y-3">
+```
+
+Inside the detail body, find (around line ~750):
+
+```jsx
+                        {/* Full task text */}
+                        <div>
+                          <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Task</p>
+                          <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-800 rounded px-2 py-1.5">
+                            {detail.operation.label ?? '—'}
+                          </p>
+                        </div>
+```
+
+Insert a new Identifiers block AFTER that Task div (before Final
+Answer):
+
+```jsx
+                        {/* v2.38.1: copyable Operation ID + Session ID + deep-link to Analysis */}
+                        <div>
+                          <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Identifiers</p>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-slate-800 rounded px-2 py-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-500">Operation ID:</span>
+                              <button
+                                onClick={(e) => copyId(detail.operation.id, e)}
+                                title={copiedId === detail.operation.id ? 'Copied!' : 'Click to copy'}
+                                className="font-mono text-blue-300 hover:text-blue-200"
+                                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                              >
+                                {detail.operation.id || '—'}
+                                {copiedId === detail.operation.id && (
+                                  <span className="ml-2 text-green-400">✓ copied</span>
+                                )}
+                              </button>
+                            </div>
+                            {detail.operation.session_id && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500">Session ID:</span>
+                                <button
+                                  onClick={(e) => copyId(detail.operation.session_id, e)}
+                                  title={copiedId === detail.operation.session_id ? 'Copied!' : 'Click to copy'}
+                                  className="font-mono text-blue-300 hover:text-blue-200"
+                                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                                >
+                                  {detail.operation.session_id}
+                                  {copiedId === detail.operation.session_id && (
+                                    <span className="ml-2 text-green-400">✓ copied</span>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+                            <button
+                              onClick={(e) => openInAnalysis(detail.operation, e)}
+                              className="ml-auto px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-mono text-xs rounded"
+                              style={{ borderRadius: 2 }}
+                              title="Pre-fill this operation_id in Analysis → operation_full_context"
+                            >
+                              Deep-dive in Analysis →
+                            </button>
+                          </div>
+                        </div>
+```
+
+**Scope guard for LogTable.jsx — do NOT change:**
+- `ToolCallsView`, `CorrelationView`, `RawOutputToggle`, `EscView`,
+  `StatsView`, or default-export `LogTable` — only `SessionOutputView`
+  and `OpsView` get touched.
+- The `OUTPUT_TYPES` / `OUTPUT_ICON` const blocks.
+- The `buildOpTree` tree-builder.
+- Event listener for `open-session-output` — still wired the same way.
+
+---
+
+## Change 2 — `gui/src/App.jsx` deep-link event listener
+
+Find where `activeTab` / `setActiveTab` is declared (grep for
+`activeTab` in App.jsx — likely a `useState('Dashboard')` or similar
+early in the main App component body). Add a `useEffect` right after
+that state declaration that listens for the `navigate-to-tab` event:
+
+```jsx
+  // v2.38.1: cross-view deep-link — consumed by "Deep-dive in Analysis"
+  // in Logs → Operations, and any future button that wants to jump to
+  // a specific sidebar tab. Event pattern matches existing
+  // 'open-session-output' in LogTable.jsx. Tab name must match a key
+  // in the Sidebar NAV array (e.g. 'Analysis', 'Logs', 'Facts').
+  useEffect(() => {
+    const handler = (e) => {
+      const tab = e.detail?.tab
+      if (tab) setActiveTab(tab)
+    }
+    window.addEventListener('navigate-to-tab', handler)
+    return () => window.removeEventListener('navigate-to-tab', handler)
+  }, [])
+```
+
+**If the variable name isn't `activeTab` / `setActiveTab`, use
+whatever App.jsx actually calls them (e.g. `view` / `setView`, or
+`tab` / `setTab`). The point is: the handler calls the same setter
+that `onTab` passes to the Sidebar.** CC should grep App.jsx for the
+Sidebar usage (`<Sidebar ... onTab={...}`) to find the setter name.
+
+**Scope guard — do NOT touch:**
+- Any existing event listeners (root error boundary, plan-confirm,
+  etc).
+- The Sidebar itself — the key `'Analysis'` is already correct in the
+  ADMIN group of `NAV`.
+- Any other App.jsx state / effects.
+
+---
+
+## Change 3 — `gui/src/components/AnalysisView.jsx` reads deep-link
+
+Find the top of the default-export AnalysisView component (around
+line ~99):
+
+```jsx
+export default function AnalysisView() {
+  const [templates, setTemplates]     = useState([])
+  const [loadErr, setLoadErr]         = useState(null)
+  const [selected, setSelected]       = useState('')
+  const [paramValues, setParamValues] = useState({})
+  const [result, setResult]           = useState(null)
+  const [running, setRunning]         = useState(false)
+  const [runErr, setRunErr]           = useState(null)
+
+  useEffect(() => {
+    fetch(`${BASE}/api/admin/analysis/templates`, { credentials: 'include', headers: authHeaders() })
+      .then(async (r) => {
+        if (r.status === 403) throw new Error('Access denied — sith_lord role required.')
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((d) => setTemplates(d.templates || []))
+      .catch((e) => setLoadErr(e.message))
+  }, [])
+```
+
+Add a second useEffect after the templates fetch that consumes the
+deep-link on mount AND if it arrives later (via the navigate event
+firing while AnalysisView is already rendered):
+
+```jsx
+  // v2.38.1: consume deep-link from Logs → Operations → Deep-dive button.
+  // Runs once on mount; a listener also consumes late-arriving events
+  // in case the operator is already on Analysis and fires from another
+  // tab. sessionStorage is read+cleared so switching away and back
+  // doesn't re-apply the deep-link.
+  const applyDeepLink = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem('deathstar_analysis_deeplink')
+      if (!raw) return
+      const dl = JSON.parse(raw)
+      sessionStorage.removeItem('deathstar_analysis_deeplink')
+      if (dl?.template_id) setSelected(dl.template_id)
+      if (dl?.params && typeof dl.params === 'object') setParamValues(dl.params)
+      // Clear any stale prior result since the selected template changed
+      setResult(null)
+      setRunErr(null)
+    } catch {
+      // Malformed sessionStorage — clear and ignore
+      try { sessionStorage.removeItem('deathstar_analysis_deeplink') } catch {}
+    }
+  }, [])
+
+  useEffect(() => {
+    applyDeepLink()
+    const handler = () => applyDeepLink()
+    window.addEventListener('navigate-to-tab', handler)
+    return () => window.removeEventListener('navigate-to-tab', handler)
+  }, [applyDeepLink])
+```
+
+Also add `useCallback` to the existing imports at the top:
+
+Find:
+
+```jsx
+import { useEffect, useState } from 'react'
+```
+
+Replace with:
+
+```jsx
+import { useCallback, useEffect, useState } from 'react'
+```
+
+**Scope guard for AnalysisView — do NOT change:**
+- `JsonTree`, `ParamForm` helper components — unchanged.
+- `runQuery`, `download`, `onSelect` — unchanged.
+- The templates fetch effect — unchanged.
+- The render JSX — unchanged (deep-link consumption is purely
+  state-layer; the existing render picks it up automatically).
+
+---
+
+## Change 4 — `VERSION`
+
+```
+2.38.1
+```
+
+---
+
+## Change 5 — Tests
+
+### 5a — NEW `tests/test_analysis_deeplink_wiring.py`
+
+Structural guards that the three pieces of the deep-link chain are
+present in the right files. All are pure-file parsing, <100ms.
+
+```python
+"""v2.38.1 — structural guards for Operation ID column + Analysis deep-link wiring."""
+import pathlib
+
+REPO_ROOT = pathlib.Path(__file__).parent.parent
+
+
+def _read(path: str) -> str:
+    return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+# ─── OpsView ID column + Identifiers block ────────────────────────────────────
+
+def test_ops_view_has_id_column_header():
+    src = _read("gui/src/components/LogTable.jsx")
+    # Header array now includes ID between Started and Label
+    assert "['Started','ID','Label','Status','Duration','Model','Calls','Feedback']" in src, (
+        "OpsView header must include 'ID' column between 'Started' and 'Label' (v2.38.1)"
+    )
+
+
+def test_ops_view_has_copy_id_helper():
+    src = _read("gui/src/components/LogTable.jsx")
+    assert "const copyId = useCallback" in src, (
+        "OpsView must define copyId useCallback for click-to-copy (v2.38.1)"
+    )
+    assert "navigator.clipboard.writeText" in src, (
+        "copyId must use navigator.clipboard (v2.38.1)"
+    )
+
+
+def test_ops_view_has_open_in_analysis_helper():
+    src = _read("gui/src/components/LogTable.jsx")
+    assert "openInAnalysis" in src, (
+        "OpsView must define openInAnalysis useCallback (v2.38.1)"
+    )
+    assert "deathstar_analysis_deeplink" in src, (
+        "openInAnalysis must write to sessionStorage under deathstar_analysis_deeplink (v2.38.1)"
+    )
+    assert "operation_full_context" in src, (
+        "openInAnalysis must use the operation_full_context template (v2.38.1)"
+    )
+    assert "navigate-to-tab" in src, (
+        "openInAnalysis must dispatch 'navigate-to-tab' event (v2.38.1)"
+    )
+
+
+def test_ops_view_detail_has_identifiers_block():
+    src = _read("gui/src/components/LogTable.jsx")
+    assert "Identifiers" in src, (
+        "OpsView expanded detail must include 'Identifiers' block (v2.38.1)"
+    )
+    assert "Deep-dive in Analysis" in src, (
+        "OpsView expanded detail must include 'Deep-dive in Analysis' button (v2.38.1)"
+    )
+
+
+def test_ops_view_detail_colspan_matches_new_column_count():
+    src = _read("gui/src/components/LogTable.jsx")
+    # 8 columns now, so detail row colSpan must be 8
+    assert "colSpan={8}" in src, (
+        "OpsView detail <td> must use colSpan={8} after ID column was added (v2.38.1)"
+    )
+    # And must NOT still use the old colSpan={7}
+    assert "colSpan={7}" not in src, (
+        "OpsView detail still contains legacy colSpan={7} — update to colSpan={8} (v2.38.1)"
+    )
+
+
+# ─── Scoped autoscroll in SessionOutputView ───────────────────────────────────
+
+def test_session_output_uses_scoped_scroll():
+    src = _read("gui/src/components/LogTable.jsx")
+    assert "linesContainerRef" in src, (
+        "SessionOutputView must use linesContainerRef for scoped autoscroll (v2.38.1)"
+    )
+    # The new scoped write
+    assert "el.scrollTop = el.scrollHeight" in src, (
+        "SessionOutputView must set scrollTop=scrollHeight directly — no scrollIntoView (v2.38.1)"
+    )
+
+
+def test_session_output_removes_scroll_into_view():
+    src = _read("gui/src/components/LogTable.jsx")
+    # scrollIntoView was the root cause — must be gone from this file
+    assert "scrollIntoView" not in src.split("export function OpsView")[0], (
+        "scrollIntoView must not appear in SessionOutputView or earlier sections of LogTable.jsx (v2.38.1)"
+    )
+
+
+# ─── App.jsx consumer ──────────────────────────────────────────────────────────
+
+def test_app_listens_for_navigate_to_tab():
+    src = _read("gui/src/App.jsx")
+    assert "navigate-to-tab" in src, (
+        "App.jsx must register a listener for 'navigate-to-tab' (v2.38.1)"
+    )
+
+
+# ─── AnalysisView consumer ─────────────────────────────────────────────────────
+
+def test_analysis_view_imports_usecallback():
+    src = _read("gui/src/components/AnalysisView.jsx")
+    assert "useCallback" in src, (
+        "AnalysisView must import useCallback (needed by v2.38.1 applyDeepLink)"
+    )
+
+
+def test_analysis_view_consumes_deeplink():
+    src = _read("gui/src/components/AnalysisView.jsx")
+    assert "deathstar_analysis_deeplink" in src, (
+        "AnalysisView must read sessionStorage['deathstar_analysis_deeplink'] (v2.38.1)"
+    )
+    assert "sessionStorage.removeItem" in src, (
+        "AnalysisView must clear the deep-link after consuming it (v2.38.1)"
+    )
+    assert "applyDeepLink" in src, (
+        "AnalysisView must define applyDeepLink callback (v2.38.1)"
+    )
+    # Also listens for late-arriving events
+    assert "navigate-to-tab" in src, (
+        "AnalysisView must listen for 'navigate-to-tab' to handle late deep-links (v2.38.1)"
+    )
+```
+
+### 5b — Extend `tests/test_options_context_server_keys.py` (verify only)
+
+No new Settings keys in v2.38.1, so the v2.36.6 CI guard remains
+happy. No changes needed to this file. This item is just a reminder
+to CC not to accidentally add to SETTINGS_KEYS without the
+corresponding SERVER_KEYS entry.
+
+---
+
+## Verify
+
+```bash
+# Code state
+grep -n "'Started','ID','Label'" gui/src/components/LogTable.jsx        # exactly 1
+grep -n "colSpan={8}" gui/src/components/LogTable.jsx                    # exactly 1
+grep -c "scrollIntoView" gui/src/components/LogTable.jsx                 # 0
+grep -n "linesContainerRef" gui/src/components/LogTable.jsx              # >=2 (declare + use)
+grep -n "deathstar_analysis_deeplink" gui/src/components/LogTable.jsx    # 1 (openInAnalysis)
+grep -n "deathstar_analysis_deeplink" gui/src/components/AnalysisView.jsx # >=2 (get + remove)
+grep -n "navigate-to-tab" gui/src/App.jsx                                # 1 (listener)
+grep -n "navigate-to-tab" gui/src/components/LogTable.jsx                # 1 (dispatch)
+grep -n "navigate-to-tab" gui/src/components/AnalysisView.jsx            # 1 (late-link listener)
+grep -n "useCallback" gui/src/components/AnalysisView.jsx                # >=1
+
+# Tests pass
+pytest tests/test_analysis_deeplink_wiring.py -v
+
+# v2.38.0 tests still pass (no regression)
+pytest tests/test_analysis_templates_catalog.py -v
+pytest tests/test_analysis_router_auth.py -v
+
+# Earlier structural guards still pass
+pytest tests/test_options_context_server_keys.py -v
+pytest tests/test_trace_picker_display.py -v
+pytest tests/test_logs_escalations_endpoint.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(ui): v2.38.1 Operation ID column + Analysis deep-link + raw-output scroll fix
+
+Three post-ship v2.38.0 verification fixes — Kent reported all three
+from the same session.
+
+OPERATION ID VISIBILITY: v2.38.0 Analysis view references 'operation_id
+found in Logs → Operations or URL' but the Operations table showed only
+Started/Label/Status/Duration/Model/Calls/Feedback — no UUID anywhere,
+not even in the expanded detail. Fix adds an 'ID' column between
+Started and Label showing operation.id first 8 chars with click-to-copy
+full UUID and a 1.5s check-mark flash. Expanded detail row gains an
+Identifiers block listing full Operation ID + Session ID as copyable
+monospace pills plus a 'Deep-dive in Analysis →' button. Colspan on
+the detail row bumped 7 → 8 to match the new column count.
+
+ANALYSIS DEEP-LINK: the Deep-dive button writes {template_id:
+'operation_full_context', params: {operation_id}} to sessionStorage
+['deathstar_analysis_deeplink'] and dispatches CustomEvent
+'navigate-to-tab' with {tab: 'Analysis'}. App.jsx listens for the
+event and calls setActiveTab('Analysis'). AnalysisView on mount reads
+and clears sessionStorage, pre-populating selected + paramValues.
+Matches the existing event-bus pattern used by 'open-session-output'
+in LogTable.jsx — no new infrastructure. Operator clicks Deep-dive on
+any op row and lands in Analysis with the template picked and the
+operation_id pre-filled, one keystroke from Run.
+
+RAW-OUTPUT SCROLL FIX: clicking '+ Raw output log' or changing a
+filter chip/keyword in SessionOutputView caused the outer Operations
+table to scroll, shoving the expanded row up or down out of view.
+Reported exactly as 'when pressing raw output log you get bumped
+down, or logs get's bumped up, same with any filters chosen in raw
+log'. Root cause: Element.scrollIntoView() ascends through every
+scrollable ancestor, so bringing the raw-output bottom into view also
+scrolled the Operations container. Fix replaces the bottomRef +
+scrollIntoView pair with a linesContainerRef + direct scrollTop =
+scrollHeight write on the lines div. scrollTop does NOT propagate to
+ancestors — same UX (autoscroll to newest line on load/filter
+change) but the outer page stays put.
+
+Tests: 10 structural guards in tests/test_analysis_deeplink_wiring.py
+lock in the ID column header, copyId/openInAnalysis helpers,
+Identifiers block + Deep-dive button presence, colspan=8, scoped
+autoscroll (linesContainerRef + scrollTop), scrollIntoView removal,
+App.jsx listener, AnalysisView useCallback import, and deep-link
+sessionStorage round-trip (read + removeItem + late-arrival listener).
+
+No schema changes. No new Settings keys. No new dependencies. Three
+files touched: LogTable.jsx, App.jsx, AnalysisView.jsx."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Smoke plan:
+
+1. Hard-refresh. Go to Logs → Operations. A new "ID" column should
+   appear between Started and Label showing `e1b0fd59` style 8-char
+   prefixes in blue monospace.
+
+2. Click an ID in the column — nothing expands (click handler calls
+   stopPropagation), and a green ✓ appears briefly next to the ID.
+   Paste clipboard into a scratchpad → should be the full UUID.
+
+3. Click a row to expand. The expanded detail gains an "Identifiers"
+   block above "Final Answer" with Operation ID + Session ID as
+   clickable pills. Click each → confirm full UUID copies and a
+   "✓ copied" label flashes.
+
+4. Click "Deep-dive in Analysis →" in the Identifiers block. Sidebar
+   selection flips to ADMIN → Analysis. Template dropdown auto-selects
+   "Operation — full context". operation_id field auto-fills with
+   the UUID from the row. Hit Run → single row returns with nested
+   tool_calls / trace_steps / escalations / external_ai_calls.
+
+5. Back to Logs → Operations, click a row to expand, click "+ Raw
+   output log". The 380px panel appears. The Operations table
+   should NOT scroll — the expanded row stays exactly where it was.
+
+6. With Raw output log open, click different type-filter chips
+   (step / tool / reasoning / …). The lines container refreshes and
+   auto-scrolls to the bottom of its own container, but the outer
+   Operations table does not move — the row stays in place.
+
+7. Type in the keyword filter. Same outcome: inner container
+   autoscrolls, outer page is still.
+
+---
+
+## Scope guard — DO NOT TOUCH
+
+- `ToolCallsView`, `EscView`, `StatsView`, default-export `LogTable`
+  in LogTable.jsx — only `SessionOutputView` and `OpsView` get
+  touched.
+- The `OUTPUT_TYPES` / `OUTPUT_ICON` constants.
+- `buildOpTree` helper.
+- Sidebar NAV array — the 'Analysis' entry is already correct in the
+  ADMIN group.
+- AnalysisView rendering JSX — deep-link only touches state.
+- Backend — no API changes.
+- Schema — no migrations.
+
+---
+
+## Followups (not v2.38.1)
+
+- v2.38.2 could wire a similar deep-link from the EscalationBanner
+  (click → Analysis with `escalations_detail` + operation_id
+  pre-filled) and from TraceView (click → Analysis with
+  `operation_full_context` pre-filled). Same event-bus pattern.
+- Eventually: persist deep-links in URL hash for shareable links
+  between operators. Out of scope for v2.38.1.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-21 16:55:11
+========================================================================
+Committed and pushed as `c0c3d4b`. Per queue runner instructions, INDEX.md is handled by the runner — not touching it.
+[STATUS] 5m02s
+
+PROMPT COMPLETE: v2.38.1
+
+========================================================================
+EXIT CODE: 0
+DURATION:  5m03s
+========================================================================

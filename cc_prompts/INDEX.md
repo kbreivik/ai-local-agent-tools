@@ -227,7 +227,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.37.1.md | v2.37.1 | fix(logs): escalations split-brain (Logs view rewired to agent_escalations table) + RECENT filters out direct: tool fires | DONE (7c63d9a) |
 | CC_PROMPT_v2.37.2.md | v2.37.2 | fix(ui): Trace picker shows session_id + agent_type populated in operations list | DONE (6b01917) |
 | CC_PROMPT_v2.38.0.md | v2.38.0 | feat(admin): Analysis view — sith_lord-only templated SQL diagnostics (7 templates + JSON/CSV/MD dump) | DONE (0250a7d) |
-| CC_PROMPT_v2.38.1.md | v2.38.1 | fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix | RUNNING |
+| CC_PROMPT_v2.38.1.md | v2.38.1 | fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix | DONE (c0c3d4b) |
+| CC_PROMPT_v2.38.2.md | v2.38.2 | fix(ui): CommandPanel unified scroll region — single outer scroll with min-h-0, task input pinned at top | RUNNING |
 
 ---
 

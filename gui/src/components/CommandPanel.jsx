@@ -324,8 +324,8 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
   }
 
   const inner = (
-    <div className="flex flex-col h-full" data-component="CommandPanel">
-      {/* Agent task input */}
+    <div className="flex flex-col h-full min-h-0" data-component="CommandPanel">
+      {/* Agent task input — pinned at top, never scrolls */}
       <div className={`border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
         {isTab && (
           <p className="text-sm font-semibold text-slate-300 mb-2">Agent Task</p>
@@ -348,98 +348,110 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
         />
         {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
       </div>
-      {/* Inline agent feed — below Run button, above tool list */}
-      <AgentFeed />
-      {/* Full output shortcut — shown when not running and output exists */}
-      {!isRunning && outputLines.length > 0 && (
-        <div style={{ padding: '4px 12px 0', flexShrink: 0 }}>
-          <button onClick={() => onResult && onResult('Output')}
-            style={{ width: '100%', fontSize: 9, color: 'var(--text-3)', background: 'none',
-                     border: '1px solid var(--border)', borderRadius: 2, padding: '3px 8px',
-                     cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', textAlign: 'left' }}>
-            ◫ View full output trace →
-          </button>
-        </div>
-      )}
-      {/* Live trace — shown while running */}
-      {isRunning && (
-        <div style={{ margin: '4px 12px 0', padding: '6px 8px', background: 'var(--bg-2)',
-                      border: '1px solid var(--border)', borderRadius: 2, fontFamily: 'var(--font-mono)',
-                      fontSize: 9, color: 'var(--text-3)', maxHeight: 100, overflowY: 'auto', flexShrink: 0 }}>
-          {outputLines.slice(-5).map((line, i) => (
-            <div key={i} style={{
-              color: line.type === 'tool' ? (line.status === 'error' ? 'var(--red)' : line.status === 'ok' ? 'var(--green)' : 'var(--text-2)')
-                   : line.type === 'halt' ? 'var(--red)' : 'var(--text-3)',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 1,
-            }}>
-              {line.type === 'tool' ? `⚙ ${line.content}` : line.type === 'step' ? `── ${line.content}`
-               : line.type === 'reasoning' ? `💭 ${line.content?.slice(0, 80)}`
-               : line.type === 'halt' ? `⚠ ${line.content}` : line.content}
-            </div>
-          ))}
-          <div style={{ color: 'var(--accent)' }}>▋</div>
-        </div>
-      )}
-      <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
-      <ClarificationWidget dark />
-      <TaskTemplates />
-      <RecentTasks />
 
-      {/* Tag filter bar */}
-      <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center shrink-0 ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
-        {allTags.map(tag => (
-          <button
-            key={tag}
-            onClick={() => setSelectedTags(prev => {
-              const next = new Set(prev)
-              next.has(tag) ? next.delete(tag) : next.add(tag)
-              return next
-            })}
-            className={`text-xs px-2 py-0.5 rounded transition-colors ${
-              selectedTags.has(tag)
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-            }`}
-          >
-            {humanizeCategory(tag)}
-          </button>
-        ))}
-        {selectedTags.size > 0 && (
-          <button
-            onClick={() => setSelectedTags(new Set())}
-            className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 hover:text-slate-300 ml-1"
-          >
-            ✕ clear
-          </button>
-        )}
-        {allTags.length > 0 && (
-          <div className="ml-auto flex items-center gap-0 border border-slate-600 rounded overflow-hidden text-xs shrink-0">
-            <button
-              onClick={() => setAndMode(false)}
-              className={`px-2 py-0.5 transition-colors ${!andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-            >
-              OR
-            </button>
-            <button
-              onClick={() => setAndMode(true)}
-              className={`px-2 py-0.5 transition-colors ${andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-            >
-              AND
+      {/* v2.38.2: SINGLE outer scroll region — everything below the task
+          input scrolls as one. Previously only the tool list had its own
+          overflow container which starved the other sections of height
+          when templates/recent were expanded or the browser was zoomed. */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Inline agent feed — below Run button, above tool list */}
+        <AgentFeed />
+        {/* Full output shortcut — shown when not running and output exists */}
+        {!isRunning && outputLines.length > 0 && (
+          <div style={{ padding: '4px 12px 0' }}>
+            <button onClick={() => onResult && onResult('Output')}
+              style={{ width: '100%', fontSize: 9, color: 'var(--text-3)', background: 'none',
+                       border: '1px solid var(--border)', borderRadius: 2, padding: '3px 8px',
+                       cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', textAlign: 'left' }}>
+              ◫ View full output trace →
             </button>
           </div>
         )}
-      </div>
-
-      {/* Tool list — 2-column grid in tab mode, single column in panel mode */}
-      <div className={`flex-1 overflow-y-auto ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
-        {loading && <p className="text-xs text-slate-500 animate-pulse">Loading…</p>}
-        {!loading && visible.length === 0 && (
-          <p className="text-xs text-slate-600">No items match the selected tags.</p>
+        {/* Live trace — shown while running. Keeps its own maxHeight=100
+            nested scroll because it's a bounded snapshot of the last 5
+            lines and we don't want it to grow with many outputLines. */}
+        {isRunning && (
+          <div style={{ margin: '4px 12px 0', padding: '6px 8px', background: 'var(--bg-2)',
+                        border: '1px solid var(--border)', borderRadius: 2, fontFamily: 'var(--font-mono)',
+                        fontSize: 9, color: 'var(--text-3)', maxHeight: 100, overflowY: 'auto' }}>
+            {outputLines.slice(-5).map((line, i) => (
+              <div key={i} style={{
+                color: line.type === 'tool' ? (line.status === 'error' ? 'var(--red)' : line.status === 'ok' ? 'var(--green)' : 'var(--text-2)')
+                     : line.type === 'halt' ? 'var(--red)' : 'var(--text-3)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 1,
+              }}>
+                {line.type === 'tool' ? `⚙ ${line.content}` : line.type === 'step' ? `── ${line.content}`
+                 : line.type === 'reasoning' ? `💭 ${line.content?.slice(0, 80)}`
+                 : line.type === 'halt' ? `⚠ ${line.content}` : line.content}
+              </div>
+            ))}
+            <div style={{ color: 'var(--accent)' }}>▋</div>
+          </div>
         )}
-        <div className={isTab ? 'grid grid-cols-2 gap-x-4' : ''}>
-          {visible.map(item => (
-            <ToolCard key={item.name} tool={item} onResult={onResult} />
+        <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
+        <ClarificationWidget dark />
+        <TaskTemplates />
+        <RecentTasks />
+
+        {/* Tag filter bar — scrolls with content in v2.38.2 (was shrink-0
+            sticky before, which contributed to height starvation). */}
+        <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
+          {allTags.map(tag => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTags(prev => {
+                const next = new Set(prev)
+                next.has(tag) ? next.delete(tag) : next.add(tag)
+                return next
+              })}
+              className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                selectedTags.has(tag)
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+              }`}
+            >
+              {humanizeCategory(tag)}
+            </button>
           ))}
+          {selectedTags.size > 0 && (
+            <button
+              onClick={() => setSelectedTags(new Set())}
+              className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 hover:text-slate-300 ml-1"
+            >
+              ✕ clear
+            </button>
+          )}
+          {allTags.length > 0 && (
+            <div className="ml-auto flex items-center gap-0 border border-slate-600 rounded overflow-hidden text-xs shrink-0">
+              <button
+                onClick={() => setAndMode(false)}
+                className={`px-2 py-0.5 transition-colors ${!andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                OR
+              </button>
+              <button
+                onClick={() => setAndMode(true)}
+                className={`px-2 py-0.5 transition-colors ${andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                AND
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tool list — v2.38.2: plain flow inside the outer scroll, no
+            own overflow container. 2-column grid in tab mode, single
+            column in panel mode. */}
+        <div className={isTab ? 'px-4 py-3' : 'px-3 py-2'}>
+          {loading && <p className="text-xs text-slate-500 animate-pulse">Loading…</p>}
+          {!loading && visible.length === 0 && (
+            <p className="text-xs text-slate-600">No items match the selected tags.</p>
+          )}
+          <div className={isTab ? 'grid grid-cols-2 gap-x-4' : ''}>
+            {visible.map(item => (
+              <ToolCard key={item.name} tool={item} onResult={onResult} />
+            ))}
+          </div>
         </div>
       </div>
     </div>
