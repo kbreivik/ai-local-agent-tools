@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { fmtDateTime as fmtTs } from '../utils/fmtTs'
 
 const REFRESH_MS = 30_000
 
@@ -8,18 +9,6 @@ const RADIUS_COLOR = {
   cluster: 'var(--red)',
   fleet:   'var(--red)',
   unknown: 'var(--text-3)',
-}
-
-function fmtTs(iso) {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    return d.toLocaleString(undefined, {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false,
-    })
-  } catch { return iso }
 }
 
 function StatusPill({ status }) {

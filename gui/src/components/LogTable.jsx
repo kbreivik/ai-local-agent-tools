@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchLogs, fetchOperations, fetchOperationDetail, fetchEscalations, resolveEscalation, fetchStats, authHeaders } from '../api'
+import { fmtDateTime, fmtTime } from '../utils/fmtTs'
+import CopyableId from './CopyableId'
 
 const FEEDBACK_ICON = { thumbs_up: '👍', thumbs_down: '👎' }
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-const fmtTs = (ts) => {
-  if (!ts) return 'N/A'
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? 'N/A' : d.toLocaleTimeString()
-}
+// Keep the `fmtTs` name for minimal diff across the file — but now
+// returns the v2.38.5 full "YYYY-MM-DD HH:MM:SS" format.
+const fmtTs = fmtDateTime
 
 async function fetchCorrelation(opId) {
   const r = await fetch(`${BASE}/api/elastic/correlate/${opId}`, { headers: authHeaders() })
@@ -54,6 +54,12 @@ function TcRow({ log, expanded, onClick }) {
     <>
       <tr className="border-b border-slate-800 hover:bg-slate-800 cursor-pointer text-xs" onClick={onClick}>
         <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">{ts}</td>
+        <td className="px-2 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+          <CopyableId value={log.id} />
+        </td>
+        <td className="px-2 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+          <CopyableId value={log.session_id} dim />
+        </td>
         <td className="px-2 py-1.5 text-blue-300 font-mono whitespace-nowrap">{log.tool_name}</td>
         <td className="px-2 py-1.5 text-slate-400 truncate max-w-[120px]">
           {Object.keys(params).length
@@ -70,7 +76,7 @@ function TcRow({ log, expanded, onClick }) {
       </tr>
       {expanded && (
         <tr className="bg-slate-900">
-          <td colSpan={6} className="px-3 py-2">
+          <td colSpan={8} className="px-3 py-2">
             <pre className="text-xs text-slate-300 whitespace-pre-wrap max-h-40 overflow-y-auto">
               {JSON.stringify(result, null, 2)}
             </pre>
@@ -222,7 +228,7 @@ export function ToolCallsView({ refreshTick }) {
         {logs.length > 0 && (
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 bg-slate-900 border-b border-slate-700">
-              <tr>{['Time','Tool','Params','Status','Duration','Model'].map(h => (
+              <tr>{['Time','ID','Session','Tool','Params','Status','Duration','Model'].map(h => (
                 <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
               ))}</tr>
             </thead>
@@ -309,8 +315,8 @@ export function SessionOutputView({ sessionId, onClose }) {
         <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
           RAW OUTPUT
         </span>
-        <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)' }}>
-          {sessionId?.substring(0, 8)}\u2026
+        <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }}>
+          <CopyableId value={sessionId} />
         </span>
         <span style={{ fontSize: 9, color: '#475569', marginLeft: 4 }}>{count} lines</span>
         {/* Type filter chips */}
@@ -357,14 +363,17 @@ export function SessionOutputView({ sessionId, onClose }) {
         )}
         {lines.map((line, i) => {
           const style = OUTPUT_ICON[line.type] ?? { icon: '\u00B7', color: '#475569' }
-          const ts = line.timestamp ? new Date(line.timestamp).toLocaleTimeString() : ''
+          // v2.38.5: full "YYYY-MM-DD HH:MM:SS" — the row already has space in
+          // the left column because previous width was only for HH:MM:SS. Widen
+          // the left-column width so the date fits without wrapping.
+          const ts = line.timestamp ? fmtTs(line.timestamp) : ''
           return (
             <div key={line.id || i} style={{
               display: 'flex', gap: 6, alignItems: 'flex-start',
               padding: '1px 10px', borderBottom: '1px solid #0f172a',
               fontSize: 11, lineHeight: 1.5,
             }}>
-              <span style={{ color: '#334155', flexShrink: 0, width: 58, fontSize: 9 }}>{ts}</span>
+              <span style={{ color: '#334155', flexShrink: 0, width: 140, fontSize: 9 }}>{ts}</span>
               <span style={{ color: style.color, flexShrink: 0, width: 16 }}>{style.icon}</span>
               <span style={{ color: line.type === 'tool' ? style.color : '#94a3b8',
                              whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
@@ -436,31 +445,6 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
   const [ratedOnly, setRatedOnly] = useState(false)
   const [treeMode, setTreeMode]   = useState(true)
   const [flashSessionId, setFlashSessionId] = useState('')
-  // v2.38.1: flash "✓ copied" for 1.5s after click-to-copy on an ID pill.
-  const [copiedId, setCopiedId] = useState('')
-
-  // v2.38.1: click handler for the ID column and detail-row ID pills.
-  // Copies the full UUID, flashes a confirmation, falls back to
-  // document.execCommand on older browsers without clipboard API.
-  const copyId = useCallback(async (id, e) => {
-    if (e) { e.stopPropagation() }
-    if (!id) return
-    try {
-      await navigator.clipboard.writeText(id)
-    } catch {
-      // Fallback for non-HTTPS or old browsers
-      const ta = document.createElement('textarea')
-      ta.value = id
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      try { document.execCommand('copy') } catch {}
-      document.body.removeChild(ta)
-    }
-    setCopiedId(id)
-    setTimeout(() => setCopiedId(c => (c === id ? '' : c)), 1500)
-  }, [])
 
   // v2.38.1: deep-link into Analysis → operation_full_context for this row.
   const openInAnalysis = useCallback((op, e) => {
@@ -552,19 +536,11 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
                       )}
                       {fmtTs(op.started_at)}
                     </td>
-                    {/* v2.38.1: operation.id short-prefix, click-to-copy full UUID */}
+                    {/* v2.38.5: use shared CopyableId pill */}
                     <td className="px-2 py-1.5 whitespace-nowrap">
-                      <button
-                        onClick={(e) => copyId(op.id, e)}
-                        title={copiedId === op.id ? 'Copied!' : `Click to copy: ${op.id || '(none)'}`}
-                        className="font-mono text-xs text-blue-300 hover:text-blue-200"
-                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
-                      >
-                        {(op.id || '').slice(0, 8)}
-                        {copiedId === op.id && (
-                          <span className="ml-1 text-green-400">✓</span>
-                        )}
-                      </button>
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <CopyableId value={op.id} />
+                      </span>
                     </td>
                     <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>
                       <span className="line-clamp-2 leading-snug">{op.label ?? '—'}</span>
@@ -598,32 +574,12 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-slate-800 rounded px-2 py-1.5">
                             <div className="flex items-center gap-2">
                               <span className="text-slate-500">Operation ID:</span>
-                              <button
-                                onClick={(e) => copyId(detail.operation.id, e)}
-                                title={copiedId === detail.operation.id ? 'Copied!' : 'Click to copy'}
-                                className="font-mono text-blue-300 hover:text-blue-200"
-                                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
-                              >
-                                {detail.operation.id || '—'}
-                                {copiedId === detail.operation.id && (
-                                  <span className="ml-2 text-green-400">✓ copied</span>
-                                )}
-                              </button>
+                              <CopyableId value={detail.operation.id} prefixLen={36} />
                             </div>
                             {detail.operation.session_id && (
                               <div className="flex items-center gap-2">
                                 <span className="text-slate-500">Session ID:</span>
-                                <button
-                                  onClick={(e) => copyId(detail.operation.session_id, e)}
-                                  title={copiedId === detail.operation.session_id ? 'Copied!' : 'Click to copy'}
-                                  className="font-mono text-blue-300 hover:text-blue-200"
-                                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
-                                >
-                                  {detail.operation.session_id}
-                                  {copiedId === detail.operation.session_id && (
-                                    <span className="ml-2 text-green-400">✓ copied</span>
-                                  )}
-                                </button>
+                                <CopyableId value={detail.operation.session_id} prefixLen={36} />
                               </div>
                             )}
                             <button
@@ -713,17 +669,33 @@ export function EscView({ refreshTick }) {
         {escs.length > 0 && (
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 bg-slate-900 border-b border-slate-700">
-              <tr>{['Time','Reason','Status',''].map(h => (
-                <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs">{h}</th>
+              <tr>{['Time','Severity','Reason','Session','Operation','Escalation ID','Status',''].map(h => (
+                <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
               ))}</tr>
             </thead>
             <tbody>
               {escs.map(e => (
                 <tr key={e.id} className="border-b border-slate-800 hover:bg-slate-800">
-                  <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">
+                  <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap font-mono">
                     {fmtTs(e.timestamp)}
                   </td>
-                  <td className="px-2 py-1.5 text-slate-300 truncate max-w-[200px]">{e.reason}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <Badge status={
+                      e.severity === 'critical' ? 'failed'
+                      : e.severity === 'warning' ? 'degraded'
+                      : 'ok'
+                    } />
+                  </td>
+                  <td className="px-2 py-1.5 text-slate-300 truncate max-w-[260px]" title={e.reason}>{e.reason}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <CopyableId value={e.session_id} dim />
+                  </td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <CopyableId value={e.operation_id} dim />
+                  </td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <CopyableId value={e.id} />
+                  </td>
                   <td className="px-2 py-1.5">
                     <Badge status={e.resolved ? 'ok' : 'escalated'} />
                   </td>

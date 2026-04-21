@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react'
+import { fmtDateTime } from '../utils/fmtTs'
+import CopyableId from './CopyableId'
 
 /**
  * v2.36.4 — Recent external AI calls table.
+ * v2.38.5 — gains ID + Operation columns; uses shared fmtDateTime so
+ * timestamps show full YYYY-MM-DD HH:MM:SS like the other Logs tabs.
  *
  * Pulls from GET /api/external-ai/calls?limit=50. Operator-facing
  * billing/outcome log for external AI escalations.
@@ -50,7 +54,9 @@ export default function ExternalAICallsView() {
         <thead className="text-xs uppercase text-gray-400 border-b border-white/10">
           <tr>
             <th className="text-left py-2">When</th>
+            <th className="text-left">ID</th>
             <th className="text-left">Provider / Model</th>
+            <th className="text-left">Operation</th>
             <th className="text-left">Rule</th>
             <th className="text-left">Outcome</th>
             <th className="text-right">Latency</th>
@@ -61,11 +67,17 @@ export default function ExternalAICallsView() {
         <tbody>
           {rows.map(r => (
             <tr key={r.id} className="border-b border-white/5 hover:bg-white/5">
-              <td className="py-2 text-xs text-gray-400">
-                {new Date(r.created_at).toLocaleString()}
+              <td className="py-2 text-xs text-gray-400 font-mono whitespace-nowrap">
+                {fmtDateTime(r.created_at)}
+              </td>
+              <td className="text-xs">
+                <CopyableId value={r.id} prefixLen={8} />
               </td>
               <td className="text-xs">
                 <b className="text-[var(--cyan)]">{r.provider}</b> / {r.model}
+              </td>
+              <td className="text-xs">
+                <CopyableId value={r.operation_id} dim />
               </td>
               <td className="text-xs"><code>{r.rule_fired}</code></td>
               <td className="text-xs">
