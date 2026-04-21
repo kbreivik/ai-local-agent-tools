@@ -1530,6 +1530,7 @@ async def _run_single_agent_step(
                     log.debug("forced synthesis trace log failed: %s", _te)
 
                 # v2.36.3 — budget_exhaustion rule check
+                _external_ai_route_error = ""  # v2.38.4 — surface escalation failures to UI
                 try:
                     _router_synth = await _maybe_route_to_external_ai(
                         session_id=session_id,
@@ -1551,18 +1552,50 @@ async def _run_single_agent_step(
                     if _router_synth:
                         last_reasoning = _router_synth
                 except Exception as _re:
-                    # Halt-on-failure: mark status and fall through
-                    log.warning("external AI routing failed: %s", _re)
+                    # v2.38.4 — louder logging + UI surface. Previous code
+                    # logged a single-line warning and fell through silently
+                    # to a done/ok broadcast, which masked real failures
+                    # (esp. auth 401s from the pre-v2.38.3 ciphertext bug).
+                    log.warning(
+                        "EXTERNAL_AI_ROUTE_FAIL rule=budget_exhaustion "
+                        "session=%s operation=%s err_class=%s err=%s",
+                        session_id, operation_id, type(_re).__name__, _re,
+                    )
+                    _external_ai_route_error = (
+                        f"{type(_re).__name__}: {str(_re)[:240]}"
+                    )
                     final_status = "escalation_failed"
+                    try:
+                        await manager.send_line(
+                            "halt",
+                            f"[external-ai] route failed — {_external_ai_route_error}",
+                            status="failed", session_id=session_id,
+                        )
+                    except Exception:
+                        pass
 
                 if is_final_step:
                     choices = _extract_choices(last_reasoning) if last_reasoning else None
-                    await manager.broadcast({
+                    if _external_ai_route_error:
+                        _done_status = "failed"
+                        _done_content = (
+                            f"[EXTERNAL AI ESCALATION FAILED: {_external_ai_route_error}]\n\n"
+                            f"{last_reasoning or f'Agent reached tool budget ({_tool_budget}).'}"
+                        )
+                        _done_reason = "escalation_failed"
+                    else:
+                        _done_status = "ok"
+                        _done_content = last_reasoning or f"Agent reached tool budget ({_tool_budget})."
+                        _done_reason = None
+                    _payload = {
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
-                        "content": last_reasoning or f"Agent reached tool budget ({_tool_budget}).",
-                        "status": "ok", "choices": choices or [],
+                        "content": _done_content,
+                        "status": _done_status, "choices": choices or [],
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    }
+                    if _done_reason:
+                        _payload["reason"] = _done_reason
+                    await manager.broadcast(_payload)
                 break
 
             # Inject working memory into context for step > 1
@@ -1874,7 +1907,22 @@ async def _run_single_agent_step(
                                     })
                                 break
                         except Exception as _re:
-                            log.warning("external AI routing on gate failure: %s", _re)
+                            # v2.38.4 — louder logging + UI surface
+                            log.warning(
+                                "EXTERNAL_AI_ROUTE_FAIL rule=gate_failure "
+                                "agent=%s session=%s operation=%s err_class=%s err=%s",
+                                "halluc_guard", session_id, operation_id,
+                                type(_re).__name__, _re,
+                            )
+                            try:
+                                await manager.send_line(
+                                    "halt",
+                                    f"[external-ai] rescue route failed — "
+                                    f"{type(_re).__name__}: {str(_re)[:200]}",
+                                    status="failed", session_id=session_id,
+                                )
+                            except Exception:
+                                pass
                             final_status = "escalation_failed"
 
                         if is_final_step:
@@ -2009,7 +2057,22 @@ async def _run_single_agent_step(
                                     })
                                 break
                         except Exception as _re:
-                            log.warning("external AI routing on gate failure: %s", _re)
+                            # v2.38.4 — louder logging + UI surface
+                            log.warning(
+                                "EXTERNAL_AI_ROUTE_FAIL rule=gate_failure "
+                                "agent=%s session=%s operation=%s err_class=%s err=%s",
+                                "fabrication_guard", session_id, operation_id,
+                                type(_re).__name__, _re,
+                            )
+                            try:
+                                await manager.send_line(
+                                    "halt",
+                                    f"[external-ai] rescue route failed — "
+                                    f"{type(_re).__name__}: {str(_re)[:200]}",
+                                    status="failed", session_id=session_id,
+                                )
+                            except Exception:
+                                pass
                             final_status = "escalation_failed"
 
                         if is_final_step:

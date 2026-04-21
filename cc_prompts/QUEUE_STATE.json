@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T19:23:10",
+  "updated_at": "2026-04-21T20:16:30",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2885,10 +2885,26 @@
       "filename": "CC_PROMPT_v2.38.3.md",
       "version": "v2.38.3",
       "theme": "fix(agents): external AI auth 401 — synthesize_replace reads via settings_manager.get_setting (decrypts) instead of raw backend (ciphertext)",
+      "runner_status": "DONE",
+      "commit_sha": "5924490",
+      "error": "",
+      "started_at": "2026-04-21T19:23:10",
+      "finished_at": "2026-04-21T19:25:42",
+      "duration_s": 152.17595139998593,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_192310_CC_PROMPT_v2.38.3.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.38.4.md",
+      "version": "v2.38.4",
+      "theme": "fix(ui): external AI failure visibility — done/ok masking replaced with done/failed + reason + halt line at three routing call sites",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-21T19:23:10",
+      "started_at": "2026-04-21T20:16:30",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
