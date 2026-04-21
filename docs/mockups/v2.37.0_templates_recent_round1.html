@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DEATHSTAR — Templates + Recent refactor (v2.37.0 round 1)</title>
+<style>
+  :root {
+    --font-sans: 'Rajdhani', 'Segoe UI', sans-serif;
+    --font-mono: 'Share Tech Mono', 'Consolas', monospace;
+    --bg-0: #05060a;
+    --bg-1: #09090f;
+    --bg-2: #0d0f1a;
+    --bg-3: #131724;
+    --accent: #a01828;
+    --accent-dim: rgba(160,24,40,0.12);
+    --cyan: #00c8ee;
+    --green: #00aa44;
+    --amber: #cc8800;
+    --fg-0: #c8cdd6;
+    --fg-dim: #6e7280;
+    --fg-dimmer: #4a4d55;
+    --border: #1d1f2a;
+    --border-light: #2a2d3a;
+    --radius: 2px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.4;
+  }
+  body {
+    padding: 24px;
+    max-width: 1900px;
+    margin: 0 auto;
+  }
+  header h1 {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    letter-spacing: 2px;
+    color: var(--accent);
+    margin: 0 0 4px 0;
+    text-transform: uppercase;
+  }
+  header p {
+    color: var(--fg-dim);
+    font-size: 13px;
+    margin: 0 0 24px 0;
+    max-width: 900px;
+  }
+  header p code {
+    font-family: var(--font-mono);
+    color: var(--cyan);
+    background: var(--bg-2);
+    padding: 1px 4px;
+    border-radius: var(--radius);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 1280px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .option {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .option-title {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .option-subtitle {
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin-bottom: 10px;
+    min-height: 34px;
+  }
+  .option-tradeoff {
+    font-size: 12px;
+    color: var(--fg-dim);
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-light);
+    line-height: 1.5;
+  }
+  .option-tradeoff b {
+    color: var(--fg-0);
+    font-weight: 600;
+  }
+  .option-tradeoff .plus { color: var(--green); }
+  .option-tradeoff .minus { color: var(--amber); }
+
+  .state-switch {
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border-radius: var(--radius);
+    padding: 1px;
+    margin-bottom: 12px;
+    align-self: flex-start;
+  }
+  .state-switch button {
+    background: transparent;
+    color: var(--fg-dim);
+    border: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 5px 10px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: var(--radius);
+  }
+  .state-switch button.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+
+  /* DEATHSTAR mockup elements */
+  .mock {
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    flex: 1;
+  }
+  .mock-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--fg-dimmer);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .task-input {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-dim);
+    min-height: 44px;
+    margin-bottom: 8px;
+  }
+  .btn-run {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 7px;
+    width: 100%;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+  }
+
+  .output {
+    border-left: 2px solid var(--cyan);
+    padding: 6px 10px;
+    background: var(--bg-2);
+    margin-bottom: 10px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .output ul {
+    margin: 4px 0;
+    padding-left: 18px;
+  }
+  .output li { margin: 2px 0; }
+  .output code {
+    font-family: var(--font-mono);
+    background: var(--bg-3);
+    padding: 0 3px;
+    color: var(--fg-0);
+    font-size: 11px;
+  }
+  .output .label {
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+  }
+  .output-meta {
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-top: 6px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* Templates / Recent common */
+  .section {
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    padding-top: 0;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 2px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .section-header:hover .section-title { color: var(--fg-0); }
+  .section-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-title .chev {
+    color: var(--fg-dimmer);
+    font-size: 10px;
+    width: 10px;
+    display: inline-block;
+  }
+  .section-title.active { color: var(--accent); }
+  .section-title.active .chev { color: var(--accent); }
+  .section-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-dimmer);
+    background: var(--bg-2);
+    padding: 2px 6px;
+    border-radius: var(--radius);
+  }
+  .section-body {
+    padding: 4px 0 8px 0;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin: 6px 0;
+  }
+  .chip {
+    background: var(--bg-2);
+    color: var(--fg-0);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-light);
+  }
+  .chip.dim {
+    color: var(--fg-dim);
+    border-color: var(--border);
+  }
+  .chip.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .or-and {
+    display: inline-flex;
+    background: var(--bg-2);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .or-and span {
+    padding: 2px 7px;
+    color: var(--fg-dim);
+  }
+  .or-and span.active {
+    background: var(--cyan);
+    color: var(--bg-0);
+  }
+
+  .tpl-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    padding: 7px 9px;
+    font-size: 12px;
+    margin-bottom: 3px;
+  }
+  .tpl-card .tag {
+    background: var(--bg-3);
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 2px 5px;
+    border-radius: var(--radius);
+    margin-right: 8px;
+    letter-spacing: 0.5px;
+  }
+  .tpl-card .tag.orch { background: rgba(204,136,0,0.15); color: var(--amber); }
+  .tpl-card .chev-r {
+    color: var(--fg-dimmer);
+    font-size: 11px;
+  }
+
+  /* Recent list */
+  .recent-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    font-size: 12px;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+  }
+  .recent-row:hover {
+    background: var(--bg-2);
+    border-left-color: var(--cyan);
+  }
+  .recent-row .text {
+    color: var(--fg-0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    margin-right: 8px;
+  }
+  .recent-row .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-dim);
+    flex-shrink: 0;
+  }
+  .recent-row .meta .at { color: var(--fg-dimmer); margin-right: 8px; }
+
+  .agent-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: var(--radius);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .agent-badge.observe    { background: rgba(0,200,238,0.14); color: var(--cyan); }
+  .agent-badge.investigate{ background: rgba(160,24,40,0.18); color: #d65a6d; }
+  .agent-badge.execute    { background: rgba(204,136,0,0.18); color: var(--amber); }
+  .agent-badge.build      { background: rgba(0,170,68,0.15); color: var(--green); }
+
+  /* Option B tab pair */
+  .tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: 8px;
+  }
+  .tab {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: var(--fg-dim);
+    padding: 6px 12px;
+    cursor: pointer;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab .count {
+    color: var(--fg-dimmer);
+    font-size: 9px;
+  }
+
+  /* Option C recent pills (compact, always-visible) */
+  .recent-pill-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 0 8px 0;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .recent-pill-row::-webkit-scrollbar { height: 3px; }
+  .recent-pill-row::-webkit-scrollbar-thumb { background: var(--border-light); }
+  .recent-pill-row .rp-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-dimmer);
+    letter-spacing: 1.5px;
+    margin-right: 4px;
+    flex-shrink: 0;
+  }
+  .recent-pill {
+    background: var(--bg-2);
+    border: 1px solid var(--border-light);
+    color: var(--fg-0);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recent-pill:hover {
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }
+  .recent-pill .more {
+    color: var(--fg-dim);
+  }
+
+  /* visual markers */
+  .measure {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--green);
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .measure .bad { color: var(--amber); }
+
+  /* Layout hint overlay */
+  .ratio-bar {
+    display: flex;
+    height: 6px;
+    margin: 4px 0 8px 0;
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .ratio-bar .out { background: var(--cyan); }
+  .ratio-bar .tpl { background: var(--accent); }
+  .ratio-bar .rec { background: var(--amber); }
+  .ratio-legend {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg-dim);
+    display: flex;
+    gap: 10px;
+  }
+  .ratio-legend span::before {
+    content: '';
+    display: inline-block;
+    width: 8px; height: 8px;
+    margin-right: 3px;
+    vertical-align: -1px;
+  }
+  .ratio-legend .out::before  { background: var(--cyan); }
+  .ratio-legend .tpl::before  { background: var(--accent); }
+  .ratio-legend .rec::before  { background: var(--amber); }
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>&gt; GUI spar — round 1</h1>
+  <p>
+    v2.37.0 — Templates + Recent refactor. Goal: when a task is running, maximize
+    visible task output. Both TEMPLATES and the new RECENT section collapse by
+    default; <code>CollapsibleSection</code> (v2.36.4) wrapper with
+    localStorage-persisted state. Three options below. Toggle each between
+    <b>Task Running</b> (sections collapsed) and <b>Idle</b> (expanded) to compare
+    reclaimed vertical space for the output pane.
+  </p>
+</header>
+
+<div class="grid">
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- OPTION A — Twin Collapsibles                                           -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="option" data-opt="A">
+    <div class="option-title">Option A — Twin collapsibles</div>
+    <div class="option-subtitle">
+      Two symmetric sections. Both collapsed by default. Independent expand.
+      Matches existing CollapsibleSection pattern exactly.
+    </div>
+
+    <div class="state-switch" data-target="A">
+      <button class="active" data-state="running">Task Running</button>
+      <button data-state="idle">Idle</button>
+    </div>
+
+    <div class="mock">
+      <div class="mock-label">Run Agent pane ↓</div>
+
+      <div class="task-input">
+        List all Swarm services, show replicas running vs desired, flag any
+        that are not converged…
+      </div>
+      <button class="btn-run">⚡ Run Agent</button>
+
+      <div class="output" data-role="output-full">
+        <span class="label">SESSION 9dbcca8c</span>
+        <ul>
+          <li>Services (all converged, 0 failures):</li>
+          <li>kafka_broker-1: 1/1 replicas running</li>
+          <li>kafka_broker-2: 1/1 replicas running</li>
+          <li>kafka_broker-3: 1/1 replicas running</li>
+          <li>logstash_logstash: 2/2 replicas running</li>
+          <li>Overlay Networks: listing was blocked by CLI filter…</li>
+        </ul>
+        <b>ACTION NEEDED:</b>
+        <ul>
+          <li>Run <code>docker network ls --filter driver=overlay</code></li>
+        </ul>
+        <div class="output-meta"><span>7 steps · 194.9s</span><span>👍 👎 Full log →</span></div>
+      </div>
+
+      <!-- State: running → both collapsed -->
+      <div class="running-state">
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title"><span class="chev">▸</span>TEMPLATES</span>
+            <span class="section-badge">87</span>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title"><span class="chev">▸</span>RECENT</span>
+            <span class="section-badge">10</span>
+          </div>
+        </div>
+        <div class="measure">Below-output footprint: <b>~80&thinsp;px / 2 rows</b></div>
+      </div>
+
+      <!-- State: idle → templates expanded, recent collapsed -->
+      <div class="idle-state" hidden>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title active"><span class="chev">▼</span>TEMPLATES</span>
+            <span class="section-badge">3/87</span>
+          </div>
+          <div class="section-body">
+            <div class="chips">
+              <span class="chip active">Swarm</span>
+              <span class="chip dim">Agent_perf</span>
+              <span class="chip dim">Container_introspect</span>
+              <span class="chip dim">Docker</span>
+              <span class="chip dim">Kafka</span>
+              <span class="chip dim">Pbs</span>
+              <span class="chip dim">+18</span>
+              <span class="or-and"><span class="active">OR</span><span>AND</span></span>
+            </div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>List all Swarm services</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Drain Swarm node</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Docker overlay network health</span><span class="chev-r">▼</span></div>
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title"><span class="chev">▸</span>RECENT</span>
+            <span class="section-badge">10</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="option-tradeoff">
+      <span class="plus">+</span> Simplest to ship. Reuses v2.36.4 CollapsibleSection as-is.<br>
+      <span class="plus">+</span> Independent state — you can pin RECENT open while templates stay out of the way.<br>
+      <span class="minus">−</span> Two headers = ~2 rows footprint even when both collapsed.<br>
+      <span class="minus">−</span> Two localStorage keys to remember state.
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- OPTION B — Combined tab switch                                         -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="option" data-opt="B">
+    <div class="option-title">Option B — Combined tab switch</div>
+    <div class="option-subtitle">
+      One collapsible section “QUICK TASKS”. When expanded, a TEMPLATES | RECENT
+      tab pair shows one panel at a time.
+    </div>
+
+    <div class="state-switch" data-target="B">
+      <button class="active" data-state="running">Task Running</button>
+      <button data-state="idle">Idle</button>
+    </div>
+
+    <div class="mock">
+      <div class="mock-label">Run Agent pane ↓</div>
+
+      <div class="task-input">
+        List all Swarm services, show replicas running vs desired, flag any
+        that are not converged…
+      </div>
+      <button class="btn-run">⚡ Run Agent</button>
+
+      <div class="output" data-role="output-full">
+        <span class="label">SESSION 9dbcca8c</span>
+        <ul>
+          <li>Services (all converged, 0 failures):</li>
+          <li>kafka_broker-1: 1/1 replicas running</li>
+          <li>kafka_broker-2: 1/1 replicas running</li>
+          <li>kafka_broker-3: 1/1 replicas running</li>
+          <li>logstash_logstash: 2/2 replicas running</li>
+          <li>Overlay Networks: listing was blocked by CLI filter…</li>
+        </ul>
+        <b>ACTION NEEDED:</b>
+        <ul>
+          <li>Run <code>docker network ls --filter driver=overlay</code></li>
+        </ul>
+        <div class="output-meta"><span>7 steps · 194.9s</span><span>👍 👎 Full log →</span></div>
+      </div>
+
+      <div class="running-state">
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title"><span class="chev">▸</span>QUICK TASKS</span>
+            <span class="section-badge">87 tpl · 10 recent</span>
+          </div>
+        </div>
+        <div class="measure">Below-output footprint: <b>~40&thinsp;px / 1 row</b></div>
+      </div>
+
+      <div class="idle-state" hidden>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title active"><span class="chev">▼</span>QUICK TASKS</span>
+          </div>
+          <div class="section-body">
+            <div class="tabs">
+              <div class="tab active">Templates <span class="count">87</span></div>
+              <div class="tab">Recent <span class="count">10</span></div>
+            </div>
+            <div class="chips">
+              <span class="chip active">Swarm</span>
+              <span class="chip dim">Agent_perf</span>
+              <span class="chip dim">Container_introspect</span>
+              <span class="chip dim">Docker</span>
+              <span class="chip dim">Kafka</span>
+              <span class="chip dim">Pbs</span>
+              <span class="chip dim">+18</span>
+              <span class="or-and"><span class="active">OR</span><span>AND</span></span>
+            </div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>List all Swarm services</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Drain Swarm node</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Docker overlay network health</span><span class="chev-r">▼</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="option-tradeoff">
+      <span class="plus">+</span> Tightest when collapsed — one header row.<br>
+      <span class="plus">+</span> Single localStorage key, simpler state model.<br>
+      <span class="minus">−</span> Extra click to switch between Templates and Recent (not visible simultaneously).<br>
+      <span class="minus">−</span> Breaks the mental model of the existing CollapsibleSection groups — new “tabs inside a collapsible” pattern doesn’t appear elsewhere in DEATHSTAR.
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- OPTION C — Recent pill-row + Templates collapsible                     -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="option" data-opt="C">
+    <div class="option-title">Option C — Recent pill-row + collapsible Templates</div>
+    <div class="option-subtitle">
+      Recent is always-visible as a horizontal pill row (top 5–6). Templates
+      is a single collapsible below. One-click re-run for top recents.
+    </div>
+
+    <div class="state-switch" data-target="C">
+      <button class="active" data-state="running">Task Running</button>
+      <button data-state="idle">Idle</button>
+    </div>
+
+    <div class="mock">
+      <div class="mock-label">Run Agent pane ↓</div>
+
+      <div class="task-input">
+        List all Swarm services, show replicas running vs desired, flag any
+        that are not converged…
+      </div>
+      <button class="btn-run">⚡ Run Agent</button>
+
+      <div class="output" data-role="output-full">
+        <span class="label">SESSION 9dbcca8c</span>
+        <ul>
+          <li>Services (all converged, 0 failures):</li>
+          <li>kafka_broker-1: 1/1 replicas running</li>
+          <li>kafka_broker-2: 1/1 replicas running</li>
+          <li>kafka_broker-3: 1/1 replicas running</li>
+          <li>logstash_logstash: 2/2 replicas running</li>
+          <li>Overlay Networks: listing was blocked by CLI filter…</li>
+        </ul>
+        <b>ACTION NEEDED:</b>
+        <ul>
+          <li>Run <code>docker network ls --filter driver=overlay</code></li>
+        </ul>
+        <div class="output-meta"><span>7 steps · 194.9s</span><span>👍 👎 Full log →</span></div>
+      </div>
+
+      <div class="running-state">
+        <div class="recent-pill-row">
+          <span class="rp-label">RECENT</span>
+          <span class="recent-pill">List all Swarm services…</span>
+          <span class="recent-pill">UniFi all clients + APs</span>
+          <span class="recent-pill">Kafka broker status</span>
+          <span class="recent-pill">Docker restart loop diag</span>
+          <span class="recent-pill more">+6 ▸</span>
+        </div>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title"><span class="chev">▸</span>TEMPLATES</span>
+            <span class="section-badge">87</span>
+          </div>
+        </div>
+        <div class="measure">Below-output footprint: <b>~76&thinsp;px / 2 rows</b> (pill row + header)</div>
+      </div>
+
+      <div class="idle-state" hidden>
+        <div class="recent-pill-row">
+          <span class="rp-label">RECENT</span>
+          <span class="recent-pill">List all Swarm services…</span>
+          <span class="recent-pill">UniFi all clients + APs</span>
+          <span class="recent-pill">Kafka broker status</span>
+          <span class="recent-pill">Docker restart loop diag</span>
+          <span class="recent-pill more">+6 ▸</span>
+        </div>
+        <div class="section">
+          <div class="section-header">
+            <span class="section-title active"><span class="chev">▼</span>TEMPLATES</span>
+            <span class="section-badge">3/87</span>
+          </div>
+          <div class="section-body">
+            <div class="chips">
+              <span class="chip active">Swarm</span>
+              <span class="chip dim">Agent_perf</span>
+              <span class="chip dim">Container_introspect</span>
+              <span class="chip dim">Docker</span>
+              <span class="chip dim">Kafka</span>
+              <span class="chip dim">Pbs</span>
+              <span class="chip dim">+18</span>
+              <span class="or-and"><span class="active">OR</span><span>AND</span></span>
+            </div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>List all Swarm services</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Drain Swarm node</span><span class="chev-r">▼</span></div>
+            <div class="tpl-card"><span><span class="tag orch">Swarm</span>Docker overlay network health</span><span class="chev-r">▼</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="option-tradeoff">
+      <span class="plus">+</span> Zero-click re-run of top recents — critical during v2.36.x iteration loops.<br>
+      <span class="plus">+</span> Recent is discoverable as <em>data</em>, not as a section you have to remember to open.<br>
+      <span class="minus">−</span> Pill row always costs one row (~36&thinsp;px) — cannot be fully hidden.<br>
+      <span class="minus">−</span> Top 5–6 visible, remaining 4–5 behind a “+6 ▸” overflow (click opens a popover or expands to a full RECENT panel).<br>
+      <span class="minus">−</span> Truncation of long task text is inherent — hover tooltip needed.
+    </div>
+  </div>
+
+</div>
+
+<section style="margin-top:36px; padding-top:20px; border-top:1px solid var(--border);">
+  <div style="font-family: var(--font-mono); font-size: 13px; color: var(--fg-dim); letter-spacing: 1.5px; margin-bottom: 10px;">
+    SPACE RECLAIMED (task-running state, relative to today's GUI)
+  </div>
+  <div style="display:grid; grid-template-columns: 120px 1fr; gap: 8px 16px; font-size: 13px;">
+    <div style="color: var(--fg-dim);">Today (baseline)</div>
+    <div>
+      <div class="ratio-bar" style="width: 100%;">
+        <div class="out" style="flex: 0.30"></div>
+        <div class="tpl" style="flex: 0.70"></div>
+      </div>
+      <div class="ratio-legend"><span class="out">output pane</span><span class="tpl">templates cascade (always open)</span></div>
+    </div>
+
+    <div style="color: var(--fg-dim);">Option A</div>
+    <div>
+      <div class="ratio-bar"><div class="out" style="flex: 0.88"></div><div class="tpl" style="flex: 0.06"></div><div class="rec" style="flex: 0.06"></div></div>
+      <div class="ratio-legend"><span class="out">output</span><span class="tpl">▸ templates</span><span class="rec">▸ recent</span></div>
+    </div>
+
+    <div style="color: var(--fg-dim);">Option B</div>
+    <div>
+      <div class="ratio-bar"><div class="out" style="flex: 0.94"></div><div class="tpl" style="flex: 0.06"></div></div>
+      <div class="ratio-legend"><span class="out">output</span><span class="tpl">▸ quick tasks</span></div>
+    </div>
+
+    <div style="color: var(--fg-dim);">Option C</div>
+    <div>
+      <div class="ratio-bar"><div class="out" style="flex: 0.82"></div><div class="rec" style="flex: 0.12"></div><div class="tpl" style="flex: 0.06"></div></div>
+      <div class="ratio-legend"><span class="out">output</span><span class="rec">recent pills (always visible)</span><span class="tpl">▸ templates</span></div>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll('.state-switch').forEach(sw => {
+    sw.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const target = sw.dataset.target;
+      const state = btn.dataset.state;
+      const option = document.querySelector(`.option[data-opt="${target}"]`);
+      option.querySelectorAll('.state-switch button').forEach(b => b.classList.toggle('active', b === btn));
+      option.querySelectorAll('.running-state').forEach(el => el.hidden = (state !== 'running'));
+      option.querySelectorAll('.idle-state').forEach(el => el.hidden = (state !== 'idle'));
+    });
+  });
+</script>
+
+</body>
+</html>

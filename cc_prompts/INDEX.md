@@ -222,7 +222,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.36.6.md | v2.36.6 | fix(ui): add 30 missing Settings keys (Facts × 26 + Agent Budgets × 4) to SERVER_KEYS allowlist | DONE (bff9648) |
 | CC_PROMPT_v2.36.7.md | v2.36.7 | fix(logs): populate operations.model_used — insert seed + trace backfill | DONE (83e04aa) |
 | CC_PROMPT_v2.36.8.md | v2.36.8 | feat(agents): result_render_table + render-and-caption grammar (dark launch) | DONE (2339e0c) |
-| CC_PROMPT_v2.36.9.md | v2.36.9 | fix(agents): render-tool clobber race + verify dispatch + polish | RUNNING |
+| CC_PROMPT_v2.36.9.md | v2.36.9 | fix(agents): render-tool clobber race + verify dispatch + polish | DONE (011ef58) |
 
 ---
 
