@@ -261,7 +261,10 @@ export function SessionOutputView({ sessionId, onClose }) {
   const [keyword, setKeyword] = useState('')
   const [debouncedKw, setDebouncedKw] = useState('')
   const [count, setCount] = useState(0)
-  const bottomRef = useRef(null)
+  // v2.38.1: scope autoscroll to the lines container only — direct
+  // scrollTop writes do not bubble up to the Operations table, so
+  // the outer page stays put when filters change or the panel opens.
+  const linesContainerRef = useRef(null)
 
   // Debounce keyword
   useEffect(() => {
@@ -285,10 +288,14 @@ export function SessionOutputView({ sessionId, onClose }) {
   }, [sessionId, typeFilter, debouncedKw])
 
   useEffect(() => {
+    // v2.38.1: direct scrollTop writes do NOT propagate to scrollable
+    // ancestors — the outer Operations table no longer jumps when
+    // this effect fires on load / filter change.
     if (!loading && lines.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      const el = linesContainerRef.current
+      if (el) el.scrollTop = el.scrollHeight
     }
-  }, [loading])
+  }, [loading, lines.length])
 
   return (
     <div style={{
@@ -335,8 +342,9 @@ export function SessionOutputView({ sessionId, onClose }) {
         )}
       </div>
 
-      {/* Lines */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+      {/* Lines — ref used by v2.38.1 scoped autoscroll */}
+      <div ref={linesContainerRef}
+           style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
         {loading && (
           <div style={{ padding: '12px 10px', fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
             Loading\u2026
@@ -365,7 +373,6 @@ export function SessionOutputView({ sessionId, onClose }) {
             </div>
           )
         })}
-        <div ref={bottomRef} />
       </div>
     </div>
   )
@@ -429,6 +436,46 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
   const [ratedOnly, setRatedOnly] = useState(false)
   const [treeMode, setTreeMode]   = useState(true)
   const [flashSessionId, setFlashSessionId] = useState('')
+  // v2.38.1: flash "✓ copied" for 1.5s after click-to-copy on an ID pill.
+  const [copiedId, setCopiedId] = useState('')
+
+  // v2.38.1: click handler for the ID column and detail-row ID pills.
+  // Copies the full UUID, flashes a confirmation, falls back to
+  // document.execCommand on older browsers without clipboard API.
+  const copyId = useCallback(async (id, e) => {
+    if (e) { e.stopPropagation() }
+    if (!id) return
+    try {
+      await navigator.clipboard.writeText(id)
+    } catch {
+      // Fallback for non-HTTPS or old browsers
+      const ta = document.createElement('textarea')
+      ta.value = id
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch {}
+      document.body.removeChild(ta)
+    }
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(c => (c === id ? '' : c)), 1500)
+  }, [])
+
+  // v2.38.1: deep-link into Analysis → operation_full_context for this row.
+  const openInAnalysis = useCallback((op, e) => {
+    if (e) { e.stopPropagation() }
+    if (!op?.id) return
+    try {
+      sessionStorage.setItem('deathstar_analysis_deeplink', JSON.stringify({
+        template_id: 'operation_full_context',
+        params: { operation_id: op.id },
+      }))
+    } catch {}
+    window.dispatchEvent(new CustomEvent('navigate-to-tab', {
+      detail: { tab: 'Analysis' },
+    }))
+  }, [])
 
   // React to highlightSessionId prop changes
   useEffect(() => {
@@ -489,7 +536,7 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
         {visible.length > 0 && (
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 bg-slate-900 border-b border-slate-700">
-              <tr>{['Started','Label','Status','Duration','Model','Calls','Feedback'].map(h => (
+              <tr>{['Started','ID','Label','Status','Duration','Model','Calls','Feedback'].map(h => (
                 <th key={h} className="px-2 py-1.5 text-left text-slate-500 font-semibold uppercase text-xs whitespace-nowrap">{h}</th>
               ))}</tr>
             </thead>
@@ -504,6 +551,20 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
                         <span style={{ paddingLeft: depth * 12, color: '#334155', marginRight: 4 }}>└</span>
                       )}
                       {fmtTs(op.started_at)}
+                    </td>
+                    {/* v2.38.1: operation.id short-prefix, click-to-copy full UUID */}
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      <button
+                        onClick={(e) => copyId(op.id, e)}
+                        title={copiedId === op.id ? 'Copied!' : `Click to copy: ${op.id || '(none)'}`}
+                        className="font-mono text-xs text-blue-300 hover:text-blue-200"
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                      >
+                        {(op.id || '').slice(0, 8)}
+                        {copiedId === op.id && (
+                          <span className="ml-1 text-green-400">✓</span>
+                        )}
+                      </button>
                     </td>
                     <td className="px-2 py-1.5 text-slate-300 max-w-[280px]" title={op.label}>
                       <span className="line-clamp-2 leading-snug">{op.label ?? '—'}</span>
@@ -522,13 +583,58 @@ export function OpsView({ refreshTick, highlightSessionId = '' }) {
                   </tr>
                   {detail?.operation?.id === op.id && (
                     <tr key={`${op.id}-detail`} className="bg-slate-900">
-                      <td colSpan={7} className="px-3 py-3 space-y-3">
+                      <td colSpan={8} className="px-3 py-3 space-y-3">
                         {/* Full task text */}
                         <div>
                           <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Task</p>
                           <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-slate-800 rounded px-2 py-1.5">
                             {detail.operation.label ?? '—'}
                           </p>
+                        </div>
+
+                        {/* v2.38.1: copyable Operation ID + Session ID + deep-link to Analysis */}
+                        <div>
+                          <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Identifiers</p>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs bg-slate-800 rounded px-2 py-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-500">Operation ID:</span>
+                              <button
+                                onClick={(e) => copyId(detail.operation.id, e)}
+                                title={copiedId === detail.operation.id ? 'Copied!' : 'Click to copy'}
+                                className="font-mono text-blue-300 hover:text-blue-200"
+                                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                              >
+                                {detail.operation.id || '—'}
+                                {copiedId === detail.operation.id && (
+                                  <span className="ml-2 text-green-400">✓ copied</span>
+                                )}
+                              </button>
+                            </div>
+                            {detail.operation.session_id && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500">Session ID:</span>
+                                <button
+                                  onClick={(e) => copyId(detail.operation.session_id, e)}
+                                  title={copiedId === detail.operation.session_id ? 'Copied!' : 'Click to copy'}
+                                  className="font-mono text-blue-300 hover:text-blue-200"
+                                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                                >
+                                  {detail.operation.session_id}
+                                  {copiedId === detail.operation.session_id && (
+                                    <span className="ml-2 text-green-400">✓ copied</span>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+                            <button
+                              onClick={(e) => openInAnalysis(detail.operation, e)}
+                              className="ml-auto px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-mono text-xs rounded"
+                              style={{ borderRadius: 2 }}
+                              title="Pre-fill this operation_id in Analysis → operation_full_context"
+                            >
+                              Deep-dive in Analysis →
+                            </button>
+                          </div>
                         </div>
 
                         {/* Final answer */}

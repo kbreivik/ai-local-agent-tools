@@ -1,0 +1,1474 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.38.0.md (v2.38.0)
+Theme: feat(admin): Analysis view — sith_lord-only templated SQL diagnostics (7 templates + JSON/CSV/MD dump)
+
+Prompt content:
+
+# CC PROMPT — v2.38.0 — Analysis view (admin-only diagnostic SQL templates)
+
+## What this does
+
+Adds a new sith_lord-only "Analysis" view for operational deep-dives.
+Operators pick from a catalog of parameterized SQL templates, run them
+with inputs (usually `operation_id` or `session_id`), view the results
+as a JSON tree, and optionally download the data as JSON / CSV / Markdown
+for offline analysis.
+
+Three core design decisions locked for v1:
+
+1. **Templates only — no freeform SQL.** Every query is a registered
+   template with a typed parameter schema. Parameters are bound via
+   psycopg's `%s` placeholders, never string-interpolated. This
+   eliminates the SQL-injection risk class and means we don't need a
+   separate read-only DB role in v1. Freeform SQL can ship later as
+   v2.38.x behind an explicit `analysisFreeformEnabled` flag if Kent
+   ever wants it.
+2. **sith_lord only.** The templates expose sensitive fields
+   (final_answer content, LLM trace messages, external AI cost data).
+   imperial_officer can read the existing Logs views but not raw LLM
+   content — keep that behaviour here. Gate is server-side via new
+   `require_sith_lord` dependency reusing `role_meets()`.
+3. **Hard caps.** Every query runs with Postgres `statement_timeout=30s`
+   AND a template-declared `row_cap` (default 500, max 10k) injected as
+   a trailing `LIMIT`. Response payload has a `truncated: bool` flag.
+
+No new tables. No schema migrations. Existing tables only: `operations`,
+`tool_calls`, `agent_llm_traces`, `agent_llm_system_prompts`,
+`agent_escalations`, `external_ai_calls`, `agent_attempts`, `known_facts_current`,
+`known_facts_history`.
+
+Version bump: 2.37.2 → 2.38.0 (`.Y.0` — new user-facing subsystem, new
+router, new GUI view, new Python module).
+
+---
+
+## Change 1 — NEW `api/analysis_templates.py`
+
+Central registry of SQL templates. Each entry declares the template
+ID, title, description, SQL (parameterized), parameter schema, and
+row cap. All templates use `%s` placeholders; param values are passed
+separately to psycopg `cursor.execute` which escapes safely.
+
+```python
+"""Analysis templates registry — v2.38.0.
+
+Each template is a parameterized SQL query operators can run via
+/api/admin/analysis/run. Parameter values are bound through psycopg's
+%s placeholders (cursor.execute(sql, params)) — never string-formatted
+into the SQL body. SQL injection is not possible through this path.
+
+Tables read (existing, no schema changes):
+  operations, tool_calls, agent_llm_traces, agent_llm_system_prompts,
+  agent_escalations, external_ai_calls, agent_attempts,
+  known_facts_current, known_facts_history
+
+Row caps are enforced by appending `LIMIT %s` to every query with the
+template's row_cap value. Results marked truncated=True when the query
+returns row_cap rows (may mean more exist).
+"""
+
+TEMPLATES: dict[str, dict] = {
+
+    # ─── 1. Operation full context ─────────────────────────────────────
+    "operation_full_context": {
+        "title": "Operation — full context",
+        "description": (
+            "Joins operation row + tool_calls + agent_llm_traces steps + "
+            "system prompt + agent_escalations + external_ai_calls for a "
+            "single operation_id. One row returned with nested JSON "
+            "arrays — the go-to query for deep-diving a single run."
+        ),
+        "params": [
+            {"name": "operation_id", "type": "uuid", "required": True,
+             "description": "operations.id (UUID). Found in Logs → Operations or URL."},
+        ],
+        "row_cap": 1,
+        "sql": """
+            SELECT
+                row_to_json(o)                                              AS operation,
+                COALESCE((
+                    SELECT jsonb_agg(to_jsonb(tc) ORDER BY tc.timestamp)
+                    FROM tool_calls tc
+                    WHERE tc.operation_id = o.id
+                ), '[]'::jsonb)                                             AS tool_calls,
+                COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'step_index',   t.step_index,
+                        'agent_type',   t.agent_type,
+                        'model',        t.model,
+                        'provider',     t.provider,
+                        'finish_reason', t.finish_reason,
+                        'input_tokens', t.input_tokens,
+                        'output_tokens', t.output_tokens
+                    ) ORDER BY t.step_index)
+                    FROM agent_llm_traces t
+                    WHERE t.operation_id = o.id::text
+                ), '[]'::jsonb)                                             AS trace_steps,
+                (
+                    SELECT sp.prompt_text
+                    FROM agent_llm_system_prompts sp
+                    WHERE sp.operation_id = o.id::text
+                    LIMIT 1
+                )                                                           AS system_prompt,
+                COALESCE((
+                    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at)
+                    FROM agent_escalations e
+                    WHERE e.operation_id = o.id::text
+                ), '[]'::jsonb)                                             AS escalations,
+                COALESCE((
+                    SELECT jsonb_agg(to_jsonb(x) ORDER BY x.created_at)
+                    FROM external_ai_calls x
+                    WHERE x.operation_id = o.id::text
+                ), '[]'::jsonb)                                             AS external_ai_calls
+            FROM operations o
+            WHERE o.id = %(operation_id)s
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 2. Session — all operations ───────────────────────────────────
+    "session_all_operations": {
+        "title": "Session — all operations",
+        "description": (
+            "All operations rows sharing a session_id (includes parent + "
+            "any sub-agent runs). Ordered by started_at. Useful when a "
+            "task spawned sub-agents and you want to see the full tree."
+        ),
+        "params": [
+            {"name": "session_id", "type": "text", "required": True,
+             "description": "operations.session_id (e.g. '9a23e276')."},
+        ],
+        "row_cap": 100,
+        "sql": """
+            SELECT
+                o.id,
+                o.session_id,
+                o.parent_session_id,
+                o.label                                  AS task,
+                o.status,
+                o.started_at,
+                o.completed_at,
+                o.total_duration_ms,
+                o.model_used,
+                o.triggered_by,
+                o.owner_user,
+                LENGTH(COALESCE(o.final_answer, ''))     AS final_answer_len,
+                (
+                    SELECT t.agent_type
+                    FROM agent_llm_traces t
+                    WHERE t.operation_id = o.id::text
+                      AND t.agent_type IS NOT NULL
+                    ORDER BY t.step_index ASC
+                    LIMIT 1
+                )                                        AS agent_type,
+                (
+                    SELECT COUNT(*) FROM tool_calls tc WHERE tc.operation_id = o.id
+                )                                        AS tool_call_count
+            FROM operations o
+            WHERE o.session_id = %(session_id)s
+               OR o.parent_session_id = %(session_id)s
+            ORDER BY o.started_at ASC
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 3. Recent failures ────────────────────────────────────────────
+    "recent_failures": {
+        "title": "Recent failures / capped / escalated",
+        "description": (
+            "Operations from the last N hours that didn't complete cleanly. "
+            "Filters by agent_type if specified. Ordered by most recent "
+            "first. Quick triage query for 'what broke today?'."
+        ),
+        "params": [
+            {"name": "hours", "type": "int", "required": False, "default": 24,
+             "min": 1, "max": 720,
+             "description": "Look-back window in hours (1-720)."},
+            {"name": "agent_type", "type": "text", "required": False, "default": "any",
+             "description": "observe / investigate / execute / build / any"},
+        ],
+        "row_cap": 200,
+        "sql": """
+            SELECT
+                o.id,
+                o.session_id,
+                o.label                                  AS task,
+                o.status,
+                o.started_at,
+                o.total_duration_ms,
+                o.model_used,
+                COALESCE((
+                    SELECT t.agent_type
+                    FROM agent_llm_traces t
+                    WHERE t.operation_id = o.id::text
+                      AND t.agent_type IS NOT NULL
+                    ORDER BY t.step_index ASC
+                    LIMIT 1
+                ), 'observe')                            AS agent_type,
+                LEFT(COALESCE(o.final_answer, ''), 200)  AS final_answer_head,
+                (
+                    SELECT COUNT(*) FROM tool_calls tc
+                    WHERE tc.operation_id = o.id AND tc.status <> 'ok'
+                )                                        AS failed_tool_call_count,
+                (
+                    SELECT COUNT(*) FROM agent_escalations e
+                    WHERE e.operation_id = o.id::text
+                )                                        AS escalation_count
+            FROM operations o
+            WHERE o.status IN ('failed', 'capped', 'escalated', 'error',
+                               'escalation_failed', 'cancelled')
+              AND o.started_at > NOW() - (%(hours)s || ' hours')::INTERVAL
+              AND (%(agent_type)s = 'any' OR COALESCE((
+                    SELECT t.agent_type
+                    FROM agent_llm_traces t
+                    WHERE t.operation_id = o.id::text
+                      AND t.agent_type IS NOT NULL
+                    ORDER BY t.step_index ASC
+                    LIMIT 1
+              ), 'observe') = %(agent_type)s)
+            ORDER BY o.started_at DESC
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 4. Tool error frequency ───────────────────────────────────────
+    "tool_error_frequency": {
+        "title": "Tool error frequency",
+        "description": (
+            "Groups tool_calls where status != 'ok' by (tool_name, "
+            "error_detail) across the look-back window. Shows which "
+            "tools are failing most often and their top error messages."
+        ),
+        "params": [
+            {"name": "hours", "type": "int", "required": False, "default": 24,
+             "min": 1, "max": 720,
+             "description": "Look-back window in hours (1-720)."},
+        ],
+        "row_cap": 100,
+        "sql": """
+            SELECT
+                tc.tool_name,
+                tc.status,
+                LEFT(COALESCE(tc.error_detail, ''), 200) AS error_head,
+                COUNT(*)                                 AS occurrences,
+                MAX(tc.timestamp)                        AS last_seen,
+                COUNT(DISTINCT tc.operation_id)          AS distinct_operations
+            FROM tool_calls tc
+            WHERE tc.status <> 'ok'
+              AND tc.timestamp > NOW() - (%(hours)s || ' hours')::INTERVAL
+            GROUP BY tc.tool_name, tc.status, LEFT(COALESCE(tc.error_detail, ''), 200)
+            ORDER BY occurrences DESC
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 5. Escalations detail ─────────────────────────────────────────
+    "escalations_detail": {
+        "title": "Escalations — detail for operation",
+        "description": (
+            "All agent_escalations + external_ai_calls rows for a single "
+            "operation_id. Use to verify both tables got written when an "
+            "external AI escalation fires."
+        ),
+        "params": [
+            {"name": "operation_id", "type": "text", "required": True,
+             "description": "operations.id (UUID as text)."},
+        ],
+        "row_cap": 100,
+        "sql": """
+            SELECT
+                'escalation' AS kind,
+                e.id,
+                e.created_at AS ts,
+                e.severity,
+                e.reason,
+                e.acknowledged,
+                e.acknowledged_at,
+                e.acknowledged_by,
+                NULL::TEXT   AS provider,
+                NULL::TEXT   AS model,
+                NULL::TEXT   AS rule_fired,
+                NULL::TEXT   AS outcome,
+                NULL::TEXT   AS error_message,
+                NULL::REAL   AS est_cost_usd
+            FROM agent_escalations e
+            WHERE e.operation_id = %(operation_id)s
+            UNION ALL
+            SELECT
+                'external_ai_call' AS kind,
+                x.id::TEXT,
+                x.created_at AS ts,
+                NULL, NULL,
+                NULL::BOOLEAN, NULL, NULL,
+                x.provider,
+                x.model,
+                x.rule_fired,
+                x.outcome,
+                LEFT(COALESCE(x.error_message, ''), 300) AS error_message,
+                x.est_cost_usd
+            FROM external_ai_calls x
+            WHERE x.operation_id = %(operation_id)s
+            ORDER BY ts ASC
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 6. Entity recent attempts ─────────────────────────────────────
+    "entity_recent_attempts": {
+        "title": "Entity — recent attempts",
+        "description": (
+            "agent_attempts history for a specific entity over the last "
+            "N days. Shows outcome, tool sequence, diagnosis markers."
+        ),
+        "params": [
+            {"name": "entity_id", "type": "text", "required": True,
+             "description": "Canonical entity_id (e.g. 'proxmox:hp1-agent:9200')."},
+            {"name": "days", "type": "int", "required": False, "default": 7,
+             "min": 1, "max": 90,
+             "description": "Look-back window in days."},
+        ],
+        "row_cap": 100,
+        "sql": """
+            SELECT
+                a.id,
+                a.operation_id,
+                a.entity_id,
+                a.agent_type,
+                a.outcome,
+                a.diagnosis,
+                a.tool_sequence,
+                a.started_at,
+                a.completed_at,
+                a.total_duration_ms
+            FROM agent_attempts a
+            WHERE a.entity_id = %(entity_id)s
+              AND a.started_at > NOW() - (%(days)s || ' days')::INTERVAL
+            ORDER BY a.started_at DESC
+            LIMIT %(row_cap)s
+        """,
+    },
+
+    # ─── 7. Fact history ───────────────────────────────────────────────
+    "fact_history": {
+        "title": "Fact — current value + history",
+        "description": (
+            "All known_facts_current rows (one per source) for a fact_key, "
+            "plus full known_facts_history. Use to see how a fact has "
+            "changed over time across collectors."
+        ),
+        "params": [
+            {"name": "fact_key", "type": "text", "required": True,
+             "description": "Fact key, e.g. 'prod.swarm.service.kafka_broker-3.placement'."},
+        ],
+        "row_cap": 500,
+        "sql": """
+            SELECT
+                'current' AS kind,
+                NULL::INT AS history_id,
+                c.fact_key,
+                c.source,
+                c.value,
+                c.confidence,
+                c.verify_count,
+                c.contradiction_count,
+                c.observed_at,
+                c.updated_at,
+                NULL::TIMESTAMPTZ AS superseded_at
+            FROM known_facts_current c
+            WHERE c.fact_key = %(fact_key)s
+            UNION ALL
+            SELECT
+                'history' AS kind,
+                h.id,
+                h.fact_key,
+                h.source,
+                h.value,
+                h.confidence,
+                NULL::INT, NULL::INT,
+                h.observed_at,
+                NULL::TIMESTAMPTZ,
+                h.superseded_at
+            FROM known_facts_history h
+            WHERE h.fact_key = %(fact_key)s
+            ORDER BY observed_at DESC
+            LIMIT %(row_cap)s
+        """,
+    },
+}
+
+
+def get_template(tid: str) -> dict | None:
+    """Return the template dict or None."""
+    return TEMPLATES.get(tid)
+
+
+def list_templates() -> list[dict]:
+    """Return sanitised template metadata (no raw SQL in response)."""
+    return [
+        {
+            "id": tid,
+            "title": tpl["title"],
+            "description": tpl["description"],
+            "params": tpl["params"],
+            "row_cap": tpl["row_cap"],
+        }
+        for tid, tpl in TEMPLATES.items()
+    ]
+
+
+def validate_params(tpl: dict, raw: dict) -> dict:
+    """Coerce + validate params against the template schema.
+
+    Raises ValueError on missing required / bad type / out-of-range.
+    Returns a dict with every declared param populated (defaults filled).
+    Ignores unknown keys in `raw` — extra params are silently dropped.
+    """
+    import uuid
+    out: dict = {}
+    for pspec in tpl["params"]:
+        name = pspec["name"]
+        typ  = pspec.get("type", "text")
+        required = pspec.get("required", False)
+        val = raw.get(name)
+        if val is None or val == "":
+            if required:
+                raise ValueError(f"Missing required param: {name}")
+            val = pspec.get("default")
+        if val is None:
+            out[name] = None
+            continue
+        if typ == "int":
+            try:
+                ival = int(val)
+            except (TypeError, ValueError):
+                raise ValueError(f"Param {name} must be an integer, got {val!r}")
+            if "min" in pspec and ival < pspec["min"]:
+                raise ValueError(f"Param {name} must be >= {pspec['min']}")
+            if "max" in pspec and ival > pspec["max"]:
+                raise ValueError(f"Param {name} must be <= {pspec['max']}")
+            out[name] = ival
+        elif typ == "uuid":
+            try:
+                out[name] = str(uuid.UUID(str(val)))
+            except (TypeError, ValueError):
+                raise ValueError(f"Param {name} must be a UUID, got {val!r}")
+        else:  # text / default
+            s = str(val).strip()
+            if required and not s:
+                raise ValueError(f"Param {name} must not be empty")
+            out[name] = s
+    # row_cap is always present and bounded independently
+    row_cap = int(tpl.get("row_cap", 500))
+    out["row_cap"] = max(1, min(row_cap, 10000))
+    return out
+```
+
+**Why `%(name)s` named params instead of `%s` positional:** the SQL
+bodies are multi-line and some params appear in multiple places (e.g.
+`recent_failures` uses `%(hours)s` twice). Named params avoid the
+"which position is which?" bug class. psycopg supports both forms via
+`cursor.execute(sql, dict)`.
+
+---
+
+## Change 2 — NEW `api/routers/analysis.py`
+
+```python
+"""Admin-only analysis — run registered SQL templates with bound params.
+
+sith_lord only. Templates live in api/analysis_templates.py. This router
+handles auth, param validation, query execution with timeout, and
+response shaping (including CSV / Markdown dumps).
+"""
+import csv
+import io
+import json
+import logging
+import os
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import Request
+from fastapi.responses import PlainTextResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from api.auth import get_current_user_and_role, role_meets
+from api.analysis_templates import (
+    TEMPLATES, get_template, list_templates, validate_params,
+)
+
+log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/admin/analysis", tags=["admin-analysis"])
+
+_STATEMENT_TIMEOUT_MS = 30_000  # 30s hard cap on every query
+
+
+async def require_sith_lord(
+    principal: tuple[str, str] = Depends(get_current_user_and_role),
+) -> str:
+    """Gate: sith_lord only."""
+    username, role = principal
+    if not role_meets(role, "sith_lord"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"sith_lord role required (you are {role})",
+        )
+    return username
+
+
+def _run_template_sync(tpl: dict, bound_params: dict) -> dict:
+    """Execute one template. Returns {columns, rows, row_count, truncated,
+    latency_ms}. Raises HTTPException on DB error."""
+    import time
+    if "postgres" not in os.environ.get("DATABASE_URL", ""):
+        raise HTTPException(503, "Postgres required")
+    from api.connections import _get_conn
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        # Hard cap on statement duration — any single template > 30s aborts.
+        cur.execute(f"SET LOCAL statement_timeout = {_STATEMENT_TIMEOUT_MS}")
+        t0 = time.perf_counter()
+        cur.execute(tpl["sql"], bound_params)
+        rows = cur.fetchall()
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        columns = [d[0] for d in cur.description] if cur.description else []
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.exception("analysis template execution failed")
+        raise HTTPException(500, f"Query failed: {type(e).__name__}: {str(e)[:300]}")
+    # Normalise rows to list[dict] (psycopg returns tuples)
+    result_rows = [dict(zip(columns, r)) for r in rows]
+    row_cap = bound_params.get("row_cap", 500)
+    truncated = len(result_rows) >= row_cap
+    return {
+        "columns": columns,
+        "rows": result_rows,
+        "row_count": len(result_rows),
+        "truncated": truncated,
+        "latency_ms": latency_ms,
+    }
+
+
+def _jsonify(obj):
+    """Recursively convert non-JSON-native types (datetime, UUID, Decimal)
+    to strings for safe JSON serialisation."""
+    from datetime import date, datetime
+    from decimal import Decimal
+    import uuid as _uuid
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_jsonify(v) for v in obj]
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, _uuid.UUID):
+        return str(obj)
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
+
+@router.get("/templates")
+async def get_templates(_: str = Depends(require_sith_lord)):
+    """List all registered templates with param schemas (no raw SQL)."""
+    return {"templates": list_templates()}
+
+
+@router.post("/run")
+async def run_template(
+    body: dict,
+    _: str = Depends(require_sith_lord),
+):
+    """Run a template by id with a dict of params. Returns JSON rows."""
+    tid = (body or {}).get("template_id")
+    raw_params = (body or {}).get("params") or {}
+    tpl = get_template(tid)
+    if not tpl:
+        raise HTTPException(404, f"Unknown template: {tid}")
+    try:
+        bound = validate_params(tpl, raw_params)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = _run_template_sync(tpl, bound)
+    return {"template_id": tid, "params": bound, **_jsonify(result)}
+
+
+def _flatten_for_csv(rows: list[dict]) -> list[dict]:
+    """CSV needs scalar columns — serialise nested JSON as compact strings."""
+    out = []
+    for r in rows:
+        flat = {}
+        for k, v in r.items():
+            if isinstance(v, (dict, list)):
+                flat[k] = json.dumps(v, default=str)
+            elif v is None:
+                flat[k] = ""
+            else:
+                flat[k] = str(v)
+        out.append(flat)
+    return out
+
+
+def _render_markdown(columns: list[str], rows: list[dict]) -> str:
+    """Render rows as GitHub-flavoured markdown table. Nested JSON cells are
+    pipe-escaped and truncated to 120 chars with ellipsis."""
+    if not columns:
+        return "*(no columns)*\n"
+    lines = ["| " + " | ".join(columns) + " |",
+             "| " + " | ".join("---" for _ in columns) + " |"]
+    for r in rows:
+        cells = []
+        for c in columns:
+            v = r.get(c)
+            if isinstance(v, (dict, list)):
+                s = json.dumps(v, default=str)
+            elif v is None:
+                s = ""
+            else:
+                s = str(v)
+            s = s.replace("|", "\\|").replace("\n", " ")
+            if len(s) > 120:
+                s = s[:117] + "..."
+            cells.append(s)
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
+@router.post("/dump")
+async def dump_template(
+    body: dict,
+    format: str = Query("json", regex="^(json|csv|md)$"),
+    _: str = Depends(require_sith_lord),
+):
+    """Run a template and return the result as a downloadable attachment.
+
+    format=json (default), csv, or md. Content-Disposition triggers
+    browser download.
+    """
+    tid = (body or {}).get("template_id")
+    raw_params = (body or {}).get("params") or {}
+    tpl = get_template(tid)
+    if not tpl:
+        raise HTTPException(404, f"Unknown template: {tid}")
+    try:
+        bound = validate_params(tpl, raw_params)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = _run_template_sync(tpl, bound)
+    safe_rows = _jsonify(result["rows"])
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+    if format == "json":
+        payload = json.dumps(
+            {
+                "template_id": tid,
+                "params": bound,
+                "columns": result["columns"],
+                "row_count": result["row_count"],
+                "truncated": result["truncated"],
+                "latency_ms": result["latency_ms"],
+                "rows": safe_rows,
+                "exported_at": stamp,
+            },
+            indent=2, default=str,
+        )
+        return Response(
+            content=payload, media_type="application/json",
+            headers={"Content-Disposition":
+                     f"attachment; filename=\"analysis_{tid}_{stamp}.json\""},
+        )
+    if format == "csv":
+        flat = _flatten_for_csv(safe_rows)
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=result["columns"] or (flat[0].keys() if flat else []))
+        writer.writeheader()
+        for r in flat:
+            writer.writerow(r)
+        return PlainTextResponse(
+            content=buf.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f"attachment; filename=\"analysis_{tid}_{stamp}.csv\""},
+        )
+    # markdown
+    header = (
+        f"# Analysis dump — {tpl['title']}\n\n"
+        f"- Template: `{tid}`\n"
+        f"- Params: `{json.dumps(bound)}`\n"
+        f"- Rows: {result['row_count']}{' (truncated)' if result['truncated'] else ''}\n"
+        f"- Latency: {result['latency_ms']}ms\n"
+        f"- Exported: {stamp}\n\n"
+    )
+    body_md = _render_markdown(result["columns"], safe_rows)
+    return PlainTextResponse(
+        content=header + body_md, media_type="text/markdown",
+        headers={"Content-Disposition":
+                 f"attachment; filename=\"analysis_{tid}_{stamp}.md\""},
+    )
+```
+
+---
+
+## Change 3 — mount the router in `api/main.py`
+
+Grep for existing `app.include_router(` calls and add alongside:
+
+```python
+from api.routers import analysis as _analysis_router   # v2.38.0
+# ...
+app.include_router(_analysis_router.router)
+```
+
+Also ensure the psycopg connection pool / `_get_conn()` path is the same
+one the existing psycopg-based routers use (`api/routers/escalations.py`,
+`api/routers/logs.py` session-output block). This prompt assumes yes;
+if `_get_conn` isn't the canonical path for this codebase, CC should
+match whatever `api/routers/logs.py` uses for its raw-SQL paths.
+
+---
+
+## Change 4 — NEW `gui/src/components/AnalysisView.jsx`
+
+```jsx
+/**
+ * AnalysisView — v2.38.0 — sith_lord-only diagnostic SQL templates.
+ *
+ * Fetches template catalog from /api/admin/analysis/templates, renders
+ * a picker + param form, runs the selected template on "Run", shows
+ * results as a collapsible JSON tree. Three Download buttons (JSON /
+ * CSV / MD) hit /api/admin/analysis/dump.
+ *
+ * 403 handled gracefully — non-sith_lord users see a "requires admin
+ * role" notice instead of a broken component.
+ */
+import { useEffect, useState } from 'react'
+import { authHeaders } from '../api'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+
+function JsonTree({ data, depth = 0 }) {
+  if (data === null) return <span className="text-[var(--text-3)]">null</span>
+  if (typeof data !== 'object') {
+    const s = String(data)
+    const color = typeof data === 'number'  ? 'var(--cyan)'
+                : typeof data === 'boolean' ? 'var(--amber)'
+                : 'var(--text-2)'
+    return <span style={{ color }} title={s.length > 80 ? s : undefined}>
+      {typeof data === 'string' ? `"${s}"` : s}
+    </span>
+  }
+  const isArr = Array.isArray(data)
+  const entries = isArr ? data.map((v, i) => [i, v]) : Object.entries(data)
+  const [open, setOpen] = useState(depth < 2)
+  if (entries.length === 0) {
+    return <span className="text-[var(--text-3)]">{isArr ? '[]' : '{}'}</span>
+  }
+  return (
+    <div style={{ marginLeft: depth === 0 ? 0 : 12 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="text-[var(--text-3)] hover:text-[var(--accent)] font-mono text-xs"
+      >
+        {open ? '▼' : '▶'} {isArr ? `[${entries.length}]` : `{${entries.length}}`}
+      </button>
+      {open && (
+        <div style={{ borderLeft: '1px dashed var(--border)', paddingLeft: 8, marginTop: 2 }}>
+          {entries.map(([k, v]) => (
+            <div key={k} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.5 }}>
+              <span style={{ color: 'var(--accent)' }}>{k}</span>
+              <span style={{ color: 'var(--text-3)' }}>: </span>
+              <JsonTree data={v} depth={depth + 1} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+function ParamForm({ params, values, onChange }) {
+  if (!params || params.length === 0) {
+    return <div className="text-xs text-[var(--text-3)]">No parameters for this template.</div>
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {params.map((p) => {
+        const id = `ap-${p.name}`
+        return (
+          <label key={p.name} htmlFor={id} className="flex flex-col gap-1">
+            <span className="text-xs font-mono uppercase tracking-wider text-[var(--text-3)]">
+              {p.name}
+              {p.required ? ' *' : ''}
+              <span className="ml-2 normal-case tracking-normal text-[var(--text-3)]">
+                ({p.type}){p.default !== undefined ? `, default: ${p.default}` : ''}
+              </span>
+            </span>
+            <input
+              id={id}
+              type={p.type === 'int' ? 'number' : 'text'}
+              min={p.min}
+              max={p.max}
+              value={values[p.name] ?? ''}
+              onChange={(e) => onChange({ ...values, [p.name]: e.target.value })}
+              placeholder={p.default !== undefined ? String(p.default) : ''}
+              className="px-2 py-1 bg-[var(--bg-2)] border border-[var(--border)] rounded
+                         text-sm font-mono text-[var(--text-1)]"
+              style={{ borderRadius: 2 }}
+            />
+            {p.description && (
+              <span className="text-[10px] text-[var(--text-3)]">{p.description}</span>
+            )}
+          </label>
+        )
+      })}
+    </div>
+  )
+}
+
+
+export default function AnalysisView() {
+  const [templates, setTemplates]     = useState([])
+  const [loadErr, setLoadErr]         = useState(null)
+  const [selected, setSelected]       = useState('')
+  const [paramValues, setParamValues] = useState({})
+  const [result, setResult]           = useState(null)
+  const [running, setRunning]         = useState(false)
+  const [runErr, setRunErr]           = useState(null)
+
+  useEffect(() => {
+    fetch(`${BASE}/api/admin/analysis/templates`, { credentials: 'include', headers: authHeaders() })
+      .then(async (r) => {
+        if (r.status === 403) throw new Error('Access denied — sith_lord role required.')
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((d) => setTemplates(d.templates || []))
+      .catch((e) => setLoadErr(e.message))
+  }, [])
+
+  const currentTpl = templates.find((t) => t.id === selected)
+
+  const onSelect = (tid) => {
+    setSelected(tid)
+    setParamValues({})
+    setResult(null)
+    setRunErr(null)
+  }
+
+  const runQuery = async () => {
+    if (!selected) return
+    setRunning(true); setRunErr(null); setResult(null)
+    try {
+      const r = await fetch(`${BASE}/api/admin/analysis/run`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ template_id: selected, params: paramValues }),
+      })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`)
+      setResult(data)
+    } catch (e) {
+      setRunErr(String(e.message || e))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const download = (format) => {
+    if (!selected) return
+    const url = `${BASE}/api/admin/analysis/dump?format=${format}`
+    fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ template_id: selected, params: paramValues }),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}))
+          throw new Error(err.detail || `HTTP ${r.status}`)
+        }
+        return r.blob().then((blob) => ({ blob, r }))
+      })
+      .then(({ blob, r }) => {
+        // Read filename from Content-Disposition
+        const cd = r.headers.get('Content-Disposition') || ''
+        const match = /filename="?([^"]+)"?/i.exec(cd)
+        const filename = match ? match[1] : `analysis-${selected}.${format}`
+        const href = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = href
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(href)
+      })
+      .catch((e) => setRunErr(String(e.message || e)))
+  }
+
+  if (loadErr) {
+    return (
+      <div className="p-4 text-sm text-[var(--amber)] font-mono">
+        {loadErr}
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-4 flex flex-col gap-4 h-full overflow-auto">
+      <div>
+        <h2 className="text-[var(--accent)] font-mono uppercase tracking-wider text-sm mb-1">
+          Analysis — SQL templates
+        </h2>
+        <div className="text-xs text-[var(--text-3)]">
+          Admin-only. Pick a template, fill params, hit Run. Results are
+          capped by the template's row_cap (max 10,000). Downloads work
+          after the query has run.
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 p-3 bg-[var(--bg-2)] border border-[var(--border)]" style={{ borderRadius: 2 }}>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-mono uppercase tracking-wider text-[var(--text-3)]">Template</span>
+          <select
+            value={selected}
+            onChange={(e) => onSelect(e.target.value)}
+            className="px-2 py-1 bg-[var(--bg-1)] border border-[var(--border)] text-sm font-mono text-[var(--text-1)]"
+            style={{ borderRadius: 2 }}
+          >
+            <option value="">— pick a template —</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>{t.title}</option>
+            ))}
+          </select>
+        </label>
+        {currentTpl && (
+          <div className="text-xs text-[var(--text-2)] leading-snug">{currentTpl.description}</div>
+        )}
+        {currentTpl && (
+          <ParamForm params={currentTpl.params} values={paramValues} onChange={setParamValues} />
+        )}
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={runQuery}
+            disabled={!selected || running}
+            className="px-3 py-1 bg-[var(--accent)] text-white font-mono text-xs uppercase tracking-wider
+                       disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderRadius: 2 }}
+          >
+            {running ? 'Running…' : 'Run'}
+          </button>
+          {result && (
+            <>
+              <button onClick={() => download('json')}
+                      className="px-3 py-1 bg-[var(--bg-3)] border border-[var(--border)] text-[var(--text-1)] font-mono text-xs uppercase"
+                      style={{ borderRadius: 2 }}>
+                Dump JSON
+              </button>
+              <button onClick={() => download('csv')}
+                      className="px-3 py-1 bg-[var(--bg-3)] border border-[var(--border)] text-[var(--text-1)] font-mono text-xs uppercase"
+                      style={{ borderRadius: 2 }}>
+                Dump CSV
+              </button>
+              <button onClick={() => download('md')}
+                      className="px-3 py-1 bg-[var(--bg-3)] border border-[var(--border)] text-[var(--text-1)] font-mono text-xs uppercase"
+                      style={{ borderRadius: 2 }}>
+                Dump Markdown
+              </button>
+            </>
+          )}
+        </div>
+        {runErr && (
+          <div className="text-xs font-mono text-[var(--red)] whitespace-pre-wrap">{runErr}</div>
+        )}
+      </div>
+
+      {result && (
+        <div className="flex flex-col gap-2 p-3 bg-[var(--bg-2)] border border-[var(--border)]" style={{ borderRadius: 2 }}>
+          <div className="text-xs font-mono text-[var(--text-3)]">
+            Rows: <span className="text-[var(--text-1)]">{result.row_count}</span>
+            {result.truncated && (
+              <span className="ml-2 text-[var(--amber)]">(truncated at row_cap)</span>
+            )}
+            <span className="ml-4">Latency: {result.latency_ms}ms</span>
+            <span className="ml-4">Columns: {(result.columns || []).join(', ')}</span>
+          </div>
+          <div style={{
+            maxHeight: '60vh', overflow: 'auto',
+            background: 'var(--bg-1)', padding: 8, border: '1px solid var(--border)', borderRadius: 2
+          }}>
+            <JsonTree data={result.rows} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+---
+
+## Change 5 — Sidebar + routing
+
+Find `gui/src/components/Sidebar.jsx` and add an item to the ADMIN
+group (grep for "ADMIN" or the existing admin items like
+"Facts Permissions"). Add:
+
+```jsx
+{ label: 'Analysis', view: 'analysis', roleMin: 'sith_lord' }
+```
+
+If the sidebar already filters by role (via `roleMeets()` on the
+frontend), the item will auto-hide for non-sith_lord. If not, the
+component's own 403 handling covers it.
+
+Find the view dispatcher in `gui/src/App.jsx` (grep for existing view
+names like `'facts'`, `'traces'`, `'logs'`). Add:
+
+```jsx
+import AnalysisView from './components/AnalysisView'
+// ...
+{view === 'analysis' && <AnalysisView />}
+```
+
+If the existing view map uses a switch or lookup object, follow the
+same pattern. The aim: clicking Analysis in the sidebar shows the new
+component.
+
+---
+
+## Change 6 — Tests
+
+### 6a — `tests/test_analysis_templates_catalog.py` (NEW)
+
+Pure unit tests (no DB), run in <100ms:
+
+```python
+"""v2.38.0 — analysis_templates module — schema + param validation."""
+import pytest
+from api import analysis_templates as at
+
+
+def test_every_template_has_required_fields():
+    for tid, tpl in at.TEMPLATES.items():
+        assert "title" in tpl and tpl["title"], f"{tid}: missing title"
+        assert "description" in tpl and tpl["description"], f"{tid}: missing description"
+        assert "sql" in tpl and "%(row_cap)s" in tpl["sql"], (
+            f"{tid}: SQL must use named %(row_cap)s parameter for LIMIT"
+        )
+        assert "params" in tpl and isinstance(tpl["params"], list), f"{tid}: params not a list"
+        assert "row_cap" in tpl and 1 <= tpl["row_cap"] <= 10_000, f"{tid}: row_cap out of range"
+
+
+def test_no_template_uses_positional_placeholders():
+    """%s is ambiguous with multiple params — force named %(name)s."""
+    import re
+    POSITIONAL = re.compile(r"(?<!%)%s\b")  # %s not preceded by another %
+    for tid, tpl in at.TEMPLATES.items():
+        # Ignore the percent literal in INTERVAL '...' strings
+        assert not POSITIONAL.search(tpl["sql"]), (
+            f"{tid}: SQL contains bare %s — use %(name)s instead"
+        )
+
+
+def test_list_templates_omits_sql():
+    """list_templates() must not leak raw SQL to the client."""
+    for t in at.list_templates():
+        assert "sql" not in t
+
+
+def test_validate_params_required_missing():
+    tpl = at.get_template("operation_full_context")
+    with pytest.raises(ValueError):
+        at.validate_params(tpl, {})
+
+
+def test_validate_params_uuid_bad():
+    tpl = at.get_template("operation_full_context")
+    with pytest.raises(ValueError):
+        at.validate_params(tpl, {"operation_id": "not-a-uuid"})
+
+
+def test_validate_params_uuid_ok():
+    tpl = at.get_template("operation_full_context")
+    out = at.validate_params(tpl, {"operation_id": "9a23e276-1234-1234-1234-123456789012"})
+    assert out["operation_id"] == "9a23e276-1234-1234-1234-123456789012"
+    assert out["row_cap"] == 1
+
+
+def test_validate_params_int_defaults_and_bounds():
+    tpl = at.get_template("recent_failures")
+    # All defaults
+    out = at.validate_params(tpl, {})
+    assert out["hours"] == 24
+    assert out["agent_type"] == "any"
+    # Custom value in range
+    out2 = at.validate_params(tpl, {"hours": 5})
+    assert out2["hours"] == 5
+    # Out of range
+    with pytest.raises(ValueError):
+        at.validate_params(tpl, {"hours": 0})
+    with pytest.raises(ValueError):
+        at.validate_params(tpl, {"hours": 10_000})
+
+
+def test_validate_params_row_cap_clamped():
+    tpl = at.get_template("recent_failures")
+    out = at.validate_params(tpl, {"hours": 24})
+    assert out["row_cap"] == tpl["row_cap"]
+    assert 1 <= out["row_cap"] <= 10_000
+
+
+def test_validate_params_drops_unknown_keys():
+    tpl = at.get_template("recent_failures")
+    out = at.validate_params(tpl, {"hours": 5, "rogue": "DROP TABLE"})
+    assert "rogue" not in out
+```
+
+### 6b — `tests/test_analysis_router_auth.py` (NEW)
+
+Role gate + endpoint shape:
+
+```python
+"""v2.38.0 — /api/admin/analysis auth + shape tests."""
+import pytest
+
+
+def test_templates_endpoint_rejects_unauthenticated(test_client):
+    r = test_client.get("/api/admin/analysis/templates")
+    assert r.status_code == 401
+
+
+def test_run_endpoint_rejects_unauthenticated(test_client):
+    r = test_client.post("/api/admin/analysis/run",
+                         json={"template_id": "recent_failures", "params": {}})
+    assert r.status_code == 401
+
+
+def test_dump_endpoint_rejects_unauthenticated(test_client):
+    r = test_client.post("/api/admin/analysis/dump?format=json",
+                         json={"template_id": "recent_failures", "params": {}})
+    assert r.status_code == 401
+
+
+@pytest.mark.skipif(not _has_test_fixtures(), reason="needs auth fixtures")
+def test_stormtrooper_gets_403(test_client_stormtrooper):
+    r = test_client_stormtrooper.get("/api/admin/analysis/templates")
+    assert r.status_code == 403
+
+
+@pytest.mark.skipif(not _has_test_fixtures(), reason="needs auth fixtures")
+def test_sith_lord_templates_shape(test_client_sith_lord):
+    r = test_client_sith_lord.get("/api/admin/analysis/templates")
+    assert r.status_code == 200
+    data = r.json()
+    assert "templates" in data
+    assert len(data["templates"]) >= 7
+    for t in data["templates"]:
+        assert "id" in t and "title" in t and "params" in t
+        assert "sql" not in t  # never leak raw SQL
+```
+
+**Auth-fixture note:** DEATHSTAR already has auth test fixtures somewhere
+(used by `test_options_context_server_keys.py` and others). CC should
+match whatever fixture names / conftest patterns exist. If role-differentiated
+fixtures don't exist yet, the unauthenticated tests alone are enough to
+prove the gate is wired; role-gap tests can skip with the marker.
+
+---
+
+## Change 7 — `VERSION`
+
+```
+2.38.0
+```
+
+---
+
+## Verify
+
+```bash
+# Python module imports
+python -c "from api.analysis_templates import TEMPLATES, list_templates; \
+           assert len(TEMPLATES) >= 7; \
+           print(list_templates()[0]['id'])"
+
+# Router mounts
+grep -n "analysis" api/main.py                         # >=1
+
+# Auth gate
+grep -n "require_sith_lord" api/routers/analysis.py   # >=2 (definition + usage)
+
+# Sidebar integration
+grep -n "Analysis" gui/src/components/Sidebar.jsx      # >=1
+grep -n "AnalysisView" gui/src/App.jsx                 # >=1
+
+# Tests pass
+pytest tests/test_analysis_templates_catalog.py -v
+pytest tests/test_analysis_router_auth.py -v
+
+# Existing tests still pass
+pytest tests/test_options_context_server_keys.py -v
+pytest tests/test_logs_escalations_endpoint.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(admin): v2.38.0 Analysis view — templated SQL diagnostics
+
+New sith_lord-only view under ADMIN that lets operators run registered
+SQL queries for deep-diving operations/sessions/entities and download
+the results as JSON, CSV, or Markdown.
+
+BACKEND: new api/analysis_templates.py registers 7 parameterized SQL
+templates (operation_full_context, session_all_operations,
+recent_failures, tool_error_frequency, escalations_detail,
+entity_recent_attempts, fact_history). New api/routers/analysis.py
+mounts /api/admin/analysis/{templates,run,dump} behind the
+require_sith_lord dependency (reuses existing role_meets()). Queries
+run via psycopg with SET LOCAL statement_timeout=30_000ms plus a
+template-declared row_cap enforced as LIMIT (max 10,000). Param
+validation coerces types (uuid / int / text) and enforces
+required/min/max from the template schema; unknown keys in the request
+body are silently dropped. Named %(name)s placeholders only — a
+structural test fails CI if bare %s appears in any template SQL.
+
+FRONTEND: new gui/src/components/AnalysisView.jsx renders the catalog
+as a dropdown, builds a param form from each template's schema, shows
+results as a collapsible JSON tree, and downloads via
+Content-Disposition. 403 handled gracefully with a role-required
+notice. New sidebar entry under ADMIN; AnalysisView wired into the
+App.jsx view dispatcher.
+
+SAFETY: templates-only — no freeform SQL in v1. All queries are
+parameterized (psycopg %(name)s placeholders), so SQL injection is not
+possible through this path. list_templates() never returns raw SQL to
+the client — only {id, title, description, params, row_cap}.
+statement_timeout + row_cap + sith_lord gate are belt-and-braces.
+
+TESTS: 9 pure unit tests in tests/test_analysis_templates_catalog.py
+cover template schema validity, positional-placeholder prohibition,
+param validation (required, uuid, int bounds, default fill,
+row_cap clamping, unknown-key dropping). Auth shape tests in
+tests/test_analysis_router_auth.py confirm 401 on unauthenticated
+requests to every endpoint; role-gap tests skip gracefully if
+auth fixtures aren't available.
+
+No schema changes. No new Settings keys. No external dependencies
+(psycopg, FastAPI, already present).
+
+Post-ship followup queued: v2.38.1 can add a freeform SQL mode behind
+'analysisFreeformEnabled' Settings flag (default False) using a
+dedicated read-only DB role — or more templates as operators discover
+needs. Also: wire a 'Copy operation_id to Analysis' button from Trace
+viewer for one-click deep-dive. Neither blocks v2.38.0."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Smoke:
+
+1. Hard-refresh, log in as sith_lord. Sidebar shows ADMIN → Analysis.
+2. Click Analysis. Template dropdown populates with 7 entries.
+3. Pick "Recent failures / capped / escalated". Run. Should see rows for
+   the filebeat task (session 6d2219b9) + any others from today.
+4. Pick "Operation — full context". Paste an operation.id (from Logs →
+   Operations, or from the Trace viewer URL). Run. Single row returned
+   with nested tool_calls, trace_steps, escalations, external_ai_calls.
+5. Click Dump JSON → download `analysis_operation_full_context_<ts>.json`
+   with the same content. Open → verify the structure.
+6. Click Dump Markdown → open the `.md` → sanity-check the rendered table.
+7. Test the gate: open an incognito window, log in as stormtrooper (if
+   you have one), navigate to /api/admin/analysis/templates →
+   403 Forbidden. Sidebar Analysis item should be hidden or the view
+   should show "Access denied" cleanly.
+
+---
+
+## Scope guard — do NOT touch
+
+- Existing Logs views, escalations router, external AI router — all
+  untouched.
+- No new Settings keys, no schema migrations.
+- No freeform SQL in v1 — explicit scope decision.
+- Frontend sidebar filter logic — only an item is added; filter
+  mechanism is whatever exists.
+
+---
+
+## v2.38.x followups (not v2.38.0)
+
+- **"Copy to Analysis" deep-link** from Trace viewer, Logs → Operations,
+  and EscalationBanner → pre-populates the Analysis template picker with
+  operation_full_context + the clicked ID. Saves the paste step.
+- **Freeform SQL mode** behind `analysisFreeformEnabled` Settings flag
+  (default False). Would need a read-only DB role (`CREATE USER
+  deathstar_analyst WITH LOGIN ...` + `GRANT SELECT ON ALL TABLES`) and
+  an explicit "I understand" confirmation. Consider only if Kent hits
+  template limits.
+- **More templates** as Kent finds gaps — easy to add by appending to
+  `TEMPLATES` dict.
+- **Saved queries** — save a (template_id, params) combo as a named
+  bookmark for quick re-run.
+- **Results table view** — current UI uses JSON tree by default; a
+  spreadsheet-style table view for flat-shape results would be nicer.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-21 14:42:36
+========================================================================
+Push succeeded. v2.38.0 (commit 0250a7d) is now live on `main`.
+[STATUS] 7m10s
+
+Summary of changes:
+
+**Backend**
+- `api/analysis_templates.py` — Registry of 7 parameterized SQL templates (operation_full_context, session_all_operations, recent_failures, tool_error_frequency, escalations_detail, entity_recent_attempts, fact_history) + `validate_params()` with type coercion, bounds, and unknown-key dropping.
+- `api/routers/analysis.py` — `/api/admin/analysis/{templates,run,dump}` behind a `require_sith_lord` dependency. 30s `statement_timeout`, row_cap enforced as LIMIT, JSON/CSV/MD downloads via Content-Disposition.
+- `api/main.py` — router mounted alongside existing routers.
+
+**Frontend**
+- `gui/src/components/AnalysisView.jsx` — dropdown picker, param form, collapsible JSON tree, three dump buttons. Handles 403 gracefully.
+- `gui/src/components/Sidebar.jsx` — new ADMIN section with Analysis entry.
+- `gui/src/App.jsx` — AnalysisView imported and dispatched on `activeTab === 'Analysis'`.
+
+**Tests**
+- `tests/test_analysis_templates_catalog.py` — 9 unit tests, all passing.
+- `tests/test_analysis_router_auth.py` — 4 auth/shape tests, all passing.
+
+**VERSION** bumped 2.37.2 → 2.38.0.
+
+PROMPT COMPLETE: v2.38.0
+
+========================================================================
+EXIT CODE: 0
+DURATION:  7m10s
+========================================================================

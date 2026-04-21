@@ -1430,6 +1430,20 @@ function AppShell() {
     return () => window.removeEventListener('navigate-to-logs', handler)
   }, [])
 
+  // v2.38.1: cross-view deep-link — consumed by "Deep-dive in Analysis"
+  // in Logs → Operations, and any future button that wants to jump to
+  // a specific sidebar tab. Event pattern matches existing
+  // 'open-session-output' in LogTable.jsx. Tab name must match a key
+  // in the Sidebar NAV array (e.g. 'Analysis', 'Logs', 'Facts').
+  useEffect(() => {
+    const handler = (e) => {
+      const tab = e.detail?.tab
+      if (tab) setActiveTab(tab)
+    }
+    window.addEventListener('navigate-to-tab', handler)
+    return () => window.removeEventListener('navigate-to-tab', handler)
+  }, [])
+
   // Deep-link: #/facts or #/facts/<fact_key> opens the Facts tab.
   useEffect(() => {
     const maybeSwitchToFacts = () => {

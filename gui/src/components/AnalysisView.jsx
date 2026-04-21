@@ -9,7 +9,7 @@
  * 403 handled gracefully — non-sith_lord users see a "requires admin
  * role" notice instead of a broken component.
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { authHeaders } from '../api'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -115,6 +115,35 @@ export default function AnalysisView() {
       .then((d) => setTemplates(d.templates || []))
       .catch((e) => setLoadErr(e.message))
   }, [])
+
+  // v2.38.1: consume deep-link from Logs → Operations → Deep-dive button.
+  // Runs once on mount; a listener also consumes late-arriving events
+  // in case the operator is already on Analysis and fires from another
+  // tab. sessionStorage is read+cleared so switching away and back
+  // doesn't re-apply the deep-link.
+  const applyDeepLink = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem('deathstar_analysis_deeplink')
+      if (!raw) return
+      const dl = JSON.parse(raw)
+      sessionStorage.removeItem('deathstar_analysis_deeplink')
+      if (dl?.template_id) setSelected(dl.template_id)
+      if (dl?.params && typeof dl.params === 'object') setParamValues(dl.params)
+      // Clear any stale prior result since the selected template changed
+      setResult(null)
+      setRunErr(null)
+    } catch {
+      // Malformed sessionStorage — clear and ignore
+      try { sessionStorage.removeItem('deathstar_analysis_deeplink') } catch {}
+    }
+  }, [])
+
+  useEffect(() => {
+    applyDeepLink()
+    const handler = () => applyDeepLink()
+    window.addEventListener('navigate-to-tab', handler)
+    return () => window.removeEventListener('navigate-to-tab', handler)
+  }, [applyDeepLink])
 
   const currentTpl = templates.find((t) => t.id === selected)
 

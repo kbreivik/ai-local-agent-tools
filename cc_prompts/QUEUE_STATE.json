@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T14:42:36",
+  "updated_at": "2026-04-21T16:55:11",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2837,10 +2837,26 @@
       "filename": "CC_PROMPT_v2.38.0.md",
       "version": "v2.38.0",
       "theme": "feat(admin): Analysis view — sith_lord-only templated SQL diagnostics (7 templates + JSON/CSV/MD dump)",
+      "runner_status": "DONE",
+      "commit_sha": "0250a7d",
+      "error": "",
+      "started_at": "2026-04-21T14:42:36",
+      "finished_at": "2026-04-21T14:49:47",
+      "duration_s": 430.74494820000837,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_144236_CC_PROMPT_v2.38.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.38.1.md",
+      "version": "v2.38.1",
+      "theme": "fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-21T14:42:36",
+      "started_at": "2026-04-21T16:55:11",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
