@@ -98,17 +98,75 @@ async def get_operations(
     offset: int = 0,
     status_filter: str = "all",
 ) -> list[dict]:
-    q = select(
-        operations,
-        func.count(tool_calls.c.id).label("tool_call_count")
-    ).outerjoin(tool_calls, tool_calls.c.operation_id == operations.c.id)\
-     .group_by(operations.c.id)\
-     .order_by(desc(operations.c.started_at))\
-     .limit(limit).offset(offset)
+    """List operations with tool-call count + agent_type.
+
+    v2.37.2: agent_type is sourced from the first agent_llm_traces step
+    for each operation (same pattern as /api/logs/operations/recent),
+    since agent_type is not a column on the operations table. COALESCE
+    falls back to 'observe' so no row ever shows `?`.
+    """
+    where = ""
+    params: dict = {"lim": limit, "off": offset}
     if status_filter != "all":
-        q = q.where(operations.c.status == status_filter)
-    result = await conn.execute(q)
-    return _rows(result)
+        where = "WHERE o.status = :status"
+        params["status"] = status_filter
+
+    sql = f"""
+        SELECT
+            o.id,
+            o.session_id,
+            o.label,
+            o.started_at,
+            o.completed_at,
+            o.status,
+            o.triggered_by,
+            o.model_used,
+            o.total_duration_ms,
+            o.feedback,
+            o.feedback_at,
+            o.final_answer,
+            o.owner_user,
+            COALESCE((
+                SELECT t.agent_type
+                FROM agent_llm_traces t
+                WHERE t.operation_id = o.id::text
+                  AND t.agent_type IS NOT NULL
+                ORDER BY t.step_index ASC
+                LIMIT 1
+            ), 'observe')                                AS agent_type,
+            (
+                SELECT COUNT(*)
+                FROM tool_calls tc
+                WHERE tc.operation_id = o.id
+            )                                            AS tool_call_count
+        FROM operations o
+        {where}
+        ORDER BY o.started_at DESC
+        LIMIT :lim OFFSET :off
+    """
+
+    result = await conn.execute(text(sql), params)
+    rows = []
+    for r in result:
+        rows.append({
+            "id": str(r[0]) if r[0] else None,
+            "session_id": r[1],
+            "label": r[2],
+            "task": r[2],
+            "started_at": r[3].isoformat() if r[3] else None,
+            "completed_at": r[4].isoformat() if r[4] else None,
+            "status": r[5],
+            "triggered_by": r[6],
+            "model_used": r[7],
+            "total_duration_ms": r[8],
+            "feedback": r[9],
+            "feedback_at": r[10],
+            "final_answer": r[11],
+            "owner_user": r[12],
+            "agent_type": r[13] or "observe",
+            "tool_call_count": int(r[14]) if r[14] is not None else 0,
+        })
+    return rows
 
 
 async def get_operation(conn: AsyncConnection, op_id: str) -> dict:

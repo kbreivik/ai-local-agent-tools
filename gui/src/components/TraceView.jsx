@@ -36,7 +36,10 @@ function OperationPicker({ selected, onChange }) {
     if (!f) return opsList.slice(0, 50)
     return opsList
       .filter((o) =>
-        [o.id, o.task, o.agent_type, o.status]
+        // v2.37.2: also match on session_id so operators can paste either
+        // UUID form (session from banner OR operation.id from URL) and find
+        // the row. Also include `label` as an alias for task text.
+        [o.id, o.session_id, o.task, o.label, o.agent_type, o.status]
           .filter(Boolean)
           .join(' ')
           .toLowerCase()
@@ -50,7 +53,7 @@ function OperationPicker({ selected, onChange }) {
       <label className="text-xs text-slate-400">Operation:</label>
       <input
         type="text"
-        placeholder="filter by id / task / status"
+        placeholder="filter by session / operation id / task / status"
         className="text-xs bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 w-48"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
@@ -61,12 +64,19 @@ function OperationPicker({ selected, onChange }) {
         onChange={(e) => onChange(e.target.value || null)}
       >
         <option value="">— choose operation —</option>
-        {visible.map((o) => (
-          <option key={o.id} value={o.id}>
-            {(o.id || '').slice(0, 8)} · {o.agent_type || '?'} · {o.status || '?'} ·{' '}
-            {(o.task || '').slice(0, 60)}
-          </option>
-        ))}
+        {visible.map((o) => {
+          // v2.37.2: primary identifier is session_id (what every other UI
+          // surface — task banner, WS events, Session Output — uses). The
+          // <option value> stays as operation.id because /api/logs/operations/
+          // {op_id}/trace is keyed on operation.id.
+          const sid = (o.session_id || o.id || '').slice(0, 8)
+          return (
+            <option key={o.id} value={o.id}>
+              {sid} · {o.agent_type || '?'} · {o.status || '?'} ·{' '}
+              {(o.label || o.task || '').slice(0, 60)}
+            </option>
+          )
+        })}
       </select>
     </div>
   )
