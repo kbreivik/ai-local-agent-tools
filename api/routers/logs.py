@@ -70,6 +70,10 @@ async def get_recent_operations(
     Excludes:
       - Sub-agent operations (parent_session_id set to a non-empty value)
       - Operations with empty or null task text
+      - Direct tool fires (label starts with 'direct:') — these are
+        TOOLBOX dispatches that bypass the agent. They'd be re-dispatched
+        via the task textarea, which is an agent path they can't replay.
+        Visible in Logs → Operations instead.
       - Operations older than 30 days (noise floor)
     """
     async with get_engine().connect() as conn:
@@ -95,6 +99,7 @@ async def get_recent_operations(
                     FROM operations o
                     WHERE label IS NOT NULL
                       AND label <> ''
+                      AND label NOT LIKE 'direct:%'
                       AND owner_user = :user
                       AND (parent_session_id IS NULL OR parent_session_id = '')
                       AND started_at > NOW() - INTERVAL '30 days'
@@ -214,21 +219,113 @@ async def correlate_operation(op_id: str, window_minutes: int = Query(10, ge=1, 
 
 
 # ── Escalations ───────────────────────────────────────────────────────────────
+#
+# v2.37.1 — reads from agent_escalations (the canonical table the agent
+# runtime writes to via api.routers.escalations.record_escalation).
+# The SQLAlchemy `escalations` table (api/db/models.py) is unused at
+# runtime and left in place for now; v2.38+ will drop it.
+#
+# Column mapping for UI compatibility:
+#   agent_escalations.acknowledged    → response.resolved
+#   agent_escalations.acknowledged_at → response.resolved_at
+#   agent_escalations.created_at      → response.timestamp
+#   agent_escalations.reason          → response.reason
+#
+# Unlike /api/escalations (banner feed, unacked_only=true by default),
+# /api/logs/escalations returns ALL escalations by default — the Logs
+# view is history, not active alerts.
 
 @router.get("/escalations")
-async def get_escalations(limit: int = Query(50, ge=1, le=500)):
-    async with get_engine().connect() as conn:
-        rows = await q.get_escalations(conn, limit=limit)
-    return {"escalations": rows}
+async def get_escalations(
+    limit: int = Query(50, ge=1, le=500),
+    include_resolved: bool = Query(True, description=(
+        "Include acknowledged escalations (default True — Logs is history)"
+    )),
+):
+    import os
+    if "postgres" not in os.environ.get("DATABASE_URL", ""):
+        return {"escalations": []}
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        cur = conn.cursor()
+        where = "" if include_resolved else "WHERE acknowledged = FALSE"
+        cur.execute(
+            f"""
+            SELECT id, session_id, operation_id, reason, severity,
+                   acknowledged, acknowledged_at, acknowledged_by, created_at
+            FROM agent_escalations
+            {where}
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close(); conn.close()
+        # Map columns to the shape the frontend (LogTable EscView) expects
+        mapped = []
+        for r in rows:
+            ack_at = r.get("acknowledged_at")
+            created = r.get("created_at")
+            mapped.append({
+                "id":            r["id"],
+                "session_id":    r.get("session_id"),
+                "operation_id":  r.get("operation_id"),
+                "reason":        r.get("reason"),
+                "severity":      r.get("severity") or "warning",
+                "resolved":      bool(r.get("acknowledged", False)),
+                "resolved_at":   ack_at.isoformat() if ack_at else None,
+                "resolved_by":   r.get("acknowledged_by"),
+                "timestamp":     created.isoformat() if created else None,
+                # Context is not stored in agent_escalations; frontend
+                # tolerates a missing/empty context object.
+                "context":       {},
+            })
+        return {"escalations": mapped}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "get_escalations (v2.37.1 logs endpoint) failed: %s", e
+        )
+        return {"escalations": [], "error": str(e)}
 
 
 @router.post("/escalations/{esc_id}/resolve")
-async def resolve_escalation(esc_id: str):
-    async with get_engine().begin() as conn:
-        ok = await q.resolve_escalation(conn, esc_id)
-    if not ok:
-        raise HTTPException(404, f"Escalation '{esc_id}' not found")
-    return {"resolved": True, "id": esc_id}
+async def resolve_escalation(
+    esc_id: str,
+    user: str = Depends(get_current_user),
+):
+    import os
+    if "postgres" not in os.environ.get("DATABASE_URL", ""):
+        raise HTTPException(503, "Postgres required")
+    try:
+        from api.connections import _get_conn
+        from datetime import datetime, timezone
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE agent_escalations
+            SET acknowledged = TRUE,
+                acknowledged_at = %s,
+                acknowledged_by = %s
+            WHERE id = %s
+              AND acknowledged = FALSE
+            """,
+            (datetime.now(timezone.utc), user, esc_id),
+        )
+        updated = cur.rowcount
+        conn.commit(); cur.close(); conn.close()
+        if updated == 0:
+            # Already resolved or not found — treat not-found as 404
+            raise HTTPException(404, f"Escalation '{esc_id}' not found or already resolved")
+        return {"resolved": True, "id": esc_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Resolve failed: {e}")
 
 
 # ── Audit Log ─────────────────────────────────────────────────────────────────

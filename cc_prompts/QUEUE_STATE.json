@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T12:20:38",
+  "updated_at": "2026-04-21T13:28:04",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2789,10 +2789,26 @@
       "filename": "CC_PROMPT_v2.37.0.md",
       "version": "v2.37.0",
       "theme": "feat(ui): Templates + Recent section refactor — both collapsed by default + operator-tunable RECENT count",
+      "runner_status": "DONE",
+      "commit_sha": "598246a",
+      "error": "",
+      "started_at": "2026-04-21T12:20:38",
+      "finished_at": "2026-04-21T12:28:19",
+      "duration_s": 460.42676689999644,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_122038_CC_PROMPT_v2.37.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.37.1.md",
+      "version": "v2.37.1",
+      "theme": "fix(logs): escalations split-brain (Logs view rewired to agent_escalations table) + RECENT filters out direct: tool fires",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-21T12:20:38",
+      "started_at": "2026-04-21T13:28:04",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -68,3 +68,31 @@ def test_recent_tasks_count_in_frontend_allowlist():
     assert "recentTasksCount: 10" in src or "recentTasksCount:10" in src
     # Appears in SERVER_KEYS
     assert "'recentTasksCount'" in src or '"recentTasksCount"' in src
+
+
+def test_recent_endpoint_filters_direct_prefix():
+    """v2.37.1 — /api/logs/operations/recent must NOT include
+    operations whose label starts with 'direct:' (TOOLBOX fires)."""
+    p = REPO_ROOT / "api" / "routers" / "logs.py"
+    src = p.read_text(encoding="utf-8")
+    assert "label NOT LIKE 'direct:%'" in src, (
+        "RECENT endpoint must filter out direct:-prefixed operations"
+    )
+
+
+def test_logs_escalations_reads_agent_escalations():
+    """v2.37.1 — /api/logs/escalations must hit agent_escalations
+    (canonical table), NOT the orphaned SQLAlchemy escalations table."""
+    p = REPO_ROOT / "api" / "routers" / "logs.py"
+    src = p.read_text(encoding="utf-8")
+    # positive: reads from agent_escalations
+    assert "FROM agent_escalations" in src, (
+        "Logs escalations endpoint must read from agent_escalations"
+    )
+    # negative: no longer routes to q.get_escalations
+    assert "q.get_escalations" not in src, (
+        "v2.37.1 removed the q.get_escalations call from logs.py"
+    )
+    assert "q.resolve_escalation" not in src, (
+        "v2.37.1 removed the q.resolve_escalation call from logs.py"
+    )
