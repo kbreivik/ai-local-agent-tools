@@ -301,6 +301,43 @@ async def set_operation_final_answer(session_id: str, final_answer: str) -> None
     _enqueue(q.set_operation_final_answer, session_id=session_id, final_answer=final_answer)
 
 
+async def set_operation_final_answer_append(session_id: str, addition: str) -> None:
+    """v2.36.8 — append text to an operation's final_answer field.
+
+    Direct write (not queued) so the render-tool output is visible to the
+    operator immediately. The write is small and infrequent compared to
+    tool_call rows.
+    """
+    if not addition or not addition.strip():
+        return
+    try:
+        from sqlalchemy import text as _t
+        async with get_engine().begin() as conn:
+            existing = await conn.execute(
+                _t(
+                    "SELECT final_answer FROM operations "
+                    "WHERE session_id = :sid "
+                    "ORDER BY started_at DESC LIMIT 1"
+                ),
+                {"sid": session_id},
+            )
+            row = existing.fetchone()
+            if not row:
+                return
+            current = (row[0] or "").rstrip()
+            sep = "\n\n" if current else ""
+            new_val = current + sep + addition
+            await conn.execute(
+                _t(
+                    "UPDATE operations SET final_answer = :val "
+                    "WHERE session_id = :sid"
+                ),
+                {"val": new_val, "sid": session_id},
+            )
+    except Exception as e:
+        log.error("set_operation_final_answer_append failed: %s", e)
+
+
 async def log_audit(
     event_type: str,
     entity_id: str | None = None,

@@ -142,6 +142,15 @@ SETTINGS_KEYS: dict[str, dict] = {
     "agentToolBudget_investigate":  {"env": None, "sens": False, "default": 16, "type": "int", "group": "Agent Budgets"},
     "agentToolBudget_execute":      {"env": None, "sens": False, "default": 14, "type": "int", "group": "Agent Budgets"},
     "agentToolBudget_build":        {"env": None, "sens": False, "default": 12, "type": "int", "group": "Agent Budgets"},
+
+    # --- Render-and-caption prompt (v2.36.8) ---
+    # Dark launch: tool is always registered & allowlisted; this flag only
+    # controls whether the prompt section teaching the agent to use it is
+    # surfaced. Flip ON after verifying on a test run.
+    "renderToolPromptEnabled": {
+        "env": None, "sens": False, "default": False, "type": "bool",
+        "group": "Agent Budgets",
+    },
 }
 
 

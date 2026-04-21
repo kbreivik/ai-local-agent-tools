@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-20T22:42:12",
+  "updated_at": "2026-04-21T08:15:04",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2741,10 +2741,26 @@
       "filename": "CC_PROMPT_v2.36.7.md",
       "version": "v2.36.7",
       "theme": "fix(logs): populate operations.model_used — insert seed + trace backfill",
+      "runner_status": "DONE",
+      "commit_sha": "83e04aa",
+      "error": "",
+      "started_at": "2026-04-20T22:42:12",
+      "finished_at": "2026-04-20T22:44:51",
+      "duration_s": 159.06046429999697,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260420_224212_CC_PROMPT_v2.36.7.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.36.8.md",
+      "version": "v2.36.8",
+      "theme": "feat(agents): result_render_table + render-and-caption grammar (dark launch)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-20T22:42:12",
+      "started_at": "2026-04-21T08:15:04",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

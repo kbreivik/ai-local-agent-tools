@@ -1,0 +1,1231 @@
+# CC PROMPT — v2.36.8 — `result_render_table` tool + render-and-caption grammar
+
+## What this does
+
+Ships a new MCP tool `result_render_table(ref, columns, where, order_by,
+caption, limit)` that reads from the existing `result_store` server-side,
+renders the data as a markdown table, and returns the rendered markdown
+in its `data.render_markdown` field. The agent harness detects this
+field on successful calls and appends the result to
+`operations.final_answer` via a new `set_operation_final_answer_append`
+logger helper.
+
+Changes the grammar of large-list observe tasks from
+"fetch-and-describe" (where the LLM keeps fetching ref contents to
+enumerate in prose and runs out of steam) to "render-and-caption"
+(agent calls ONE tool, writes a one-line caption, done).
+
+Ships behind a Settings flag `renderToolPromptEnabled=False` default —
+tool is live and allowlisted from v2.36.8, but the prompt section
+teaching the agent to use it is dark-launched. Kent flips the flag
+to promote.
+
+Full design spec: `cc_prompts/SPEC_v2.36.8_RENDER_TOOL.md`.
+
+Version bump: 2.36.7 → 2.36.8 (`.x.N` — new tool + prompt change, dark-launched).
+
+---
+
+## Background the review spec already nailed down
+
+Kent and I agreed:
+
+- Q1 · Markdown render in Operations view: **ship as-is** (pipe-delimited
+  text, upgrade in v2.37).
+- Q2 · DB write: **harness dispatches** (MCP tool stays pure).
+- Q3 · Caption composition: **agent-caption + harness-appends-table**.
+- Q4 · Scope: **observe + investigate** allowlists (not execute/build).
+- Q5 · Fact-age exemption: **revisit** — not gated against for v2.36.8.
+
+Anchor those as you implement.
+
+---
+
+## Change 1 — NEW `mcp_server/tools/render_tools.py`
+
+```python
+"""v2.36.8 — result_render_table MCP tool.
+
+Reads a stored result_store ref server-side, renders selected rows as a
+markdown table, and returns the rendered string in `data.render_markdown`.
+The agent harness detects this field on successful calls and appends the
+markdown to operations.final_answer — the LLM's context only sees a
+short acknowledgement, NOT the table data.
+
+This is the foundation of the render-and-caption grammar: instead of
+the LLM fetching rows via result_fetch and enumerating them in prose
+(token-expensive, thrash-prone), it calls this tool once with a column
+choice, writes ONE caption line, done.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+_MAX_LIMIT = 200
+_DEFAULT_LIMIT = 50
+_MAX_CELL_CHARS = 80
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ok(data: dict, msg: str = "") -> dict:
+    return {"status": "ok", "data": data, "message": msg, "timestamp": _ts()}
+
+
+def _err(msg: str) -> dict:
+    return {"status": "error", "data": None, "message": msg, "timestamp": _ts()}
+
+
+# ── Column auto-pick heuristic ────────────────────────────────────────────────
+
+# Preferred column-name fragments when the agent doesn't supply `columns`.
+# Scored by first-fragment-match wins; higher in list = more preferred.
+_PREFERRED_FRAGMENTS = (
+    "name", "hostname", "label", "id",
+    "ip", "address", "mac",
+    "status", "state", "health",
+    "signal", "rssi", "up", "uptime",
+    "service", "container", "node", "host",
+    "port", "type", "kind",
+    "ap", "switch", "location",
+    "version", "image",
+)
+
+# Columns to skip in auto-pick (too wide, too noisy, or structurally opaque).
+_SKIP_FRAGMENTS = (
+    "raw", "json", "metadata_json", "config", "description",
+    "notes", "comments", "full", "body", "source",
+)
+
+
+def _score_column(col: str) -> int:
+    """Higher score = more likely to be useful in a table."""
+    lc = col.lower()
+    for bad in _SKIP_FRAGMENTS:
+        if bad in lc:
+            return -1
+    for i, frag in enumerate(_PREFERRED_FRAGMENTS):
+        if frag in lc:
+            return 1000 - i  # earlier fragments score higher
+    return 0  # unknown columns get mid-priority
+
+
+def _pick_columns(available: list[str], max_cols: int = 6) -> list[str]:
+    """Pick up to max_cols columns using the preferred-fragments heuristic."""
+    if not available:
+        return []
+    scored = [(c, _score_column(c)) for c in available]
+    scored = [(c, s) for c, s in scored if s >= 0]
+    scored.sort(key=lambda t: (-t[1], t[0]))  # score desc, then name asc for stability
+    picked = [c for c, _ in scored[:max_cols]]
+    if not picked:
+        # Nothing matched preferences and nothing was skipped — fall back to
+        # first N available columns preserving order.
+        picked = available[:max_cols]
+    return picked
+
+
+# ── Markdown rendering ────────────────────────────────────────────────────────
+
+def _format_cell(v: Any) -> str:
+    """Render a cell value as a short pipe-safe string."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (dict, list)):
+        # Compact structured types — operators rarely want raw JSON in a table.
+        if isinstance(v, list):
+            return f"[{len(v)} items]"
+        return f"{{…{len(v)} keys}}"
+    s = str(v)
+    # Pipe is the markdown table delimiter — must escape.
+    s = s.replace("|", "\\|")
+    # Strip line breaks that would corrupt the row.
+    s = s.replace("\r", " ").replace("\n", " ")
+    if len(s) > _MAX_CELL_CHARS:
+        s = s[: _MAX_CELL_CHARS - 1] + "…"
+    return s
+
+
+def _render_markdown_table(
+    items: list[dict],
+    columns: list[str],
+    total_available: int,
+    truncated: bool,
+) -> str:
+    """Render items + columns as a GitHub-flavoured markdown table string."""
+    if not columns:
+        return "_(no columns to render)_"
+    if not items:
+        return f"_(no rows matched — {total_available} total in ref)_"
+
+    header = "| " + " | ".join(columns) + " |"
+    divider = "|" + "|".join(["---"] * len(columns)) + "|"
+    rows = []
+    for item in items:
+        cells = [_format_cell(item.get(c)) for c in columns]
+        rows.append("| " + " | ".join(cells) + " |")
+
+    table = "\n".join([header, divider, *rows])
+    if truncated:
+        table += (
+            f"\n\n_(showing first {len(items)} of {total_available} — "
+            f"add a `where` clause to narrow)_"
+        )
+    return table
+
+
+# ── Public tool ───────────────────────────────────────────────────────────────
+
+def result_render_table(
+    ref: str,
+    columns: str = "",
+    where: str = "",
+    order_by: str = "",
+    caption: str = "",
+    limit: int = _DEFAULT_LIMIT,
+) -> dict:
+    """Render a stored result as a markdown table written directly to the
+    operation output. Your LLM context gets a short acknowledgement, NOT
+    the table — so this is the right tool for showing operators a
+    >20-row list without filling your context window with row data.
+
+    Args:
+        ref:      Reference token from a previous tool result (e.g. 'rs-abc123').
+        columns:  Comma-separated columns to include, e.g. "hostname,ip,ap_name".
+                  If empty, up to 6 columns are auto-picked via heuristic
+                  (prefer name/id/ip/mac/status fields, skip wide/opaque ones).
+        where:    Optional SQL-style filter, e.g. "status = 'up'".
+                  Passed through to the same engine as result_query.
+        order_by: Optional SQL-style sort, e.g. "ap_name, hostname".
+        caption:  IGNORED at tool level — the agent writes its own caption
+                  as its final_answer. Reserved for future use.
+        limit:    Max rows to render (default 50, capped at 200).
+
+    Returns:
+        On success, ``{status, message, data: {render_markdown, row_count,
+        columns_used, output_length, truncated}}``. The harness reads
+        `render_markdown` and appends it to operations.final_answer —
+        operators see the full table; the LLM only sees the tiny message.
+    """
+    try:
+        from api.db.result_store import query_result, fetch_result
+
+        safe_limit = max(1, min(int(limit), _MAX_LIMIT))
+
+        # Pick data source: query_result if any filter/sort, else fetch_result.
+        # Both return {items, total_count_ish, …}; we normalise below.
+        chosen_cols: list[str] | None = None
+        if columns:
+            chosen_cols = [c.strip() for c in columns.split(",") if c.strip()]
+
+        if where or order_by or chosen_cols:
+            # Route via query_result — supports where/order_by/column projection.
+            qr = query_result(
+                ref,
+                where=where,
+                columns=chosen_cols,
+                order_by=order_by,
+                limit=safe_limit,
+            )
+            if qr is None:
+                return _err(
+                    f"No result found for ref={ref!r} — may have expired (2h TTL)"
+                )
+            if "error" in qr:
+                return _err(f"Query error: {qr['error']}")
+            items = qr.get("items") or []
+            result_cols = qr.get("columns") or []
+            # query_result's count is post-filter; we also want the full ref
+            # total for the truncation footer.
+            total_in_ref = fetch_result(ref, offset=0, limit=1)
+            total_available = (
+                total_in_ref.get("total") if total_in_ref else len(items)
+            )
+        else:
+            # No filter, no column projection — just fetch the top N.
+            fr = fetch_result(ref, offset=0, limit=safe_limit)
+            if fr is None:
+                return _err(
+                    f"No result found for ref={ref!r} — may have expired (2h TTL)"
+                )
+            items = fr.get("items") or []
+            total_available = fr.get("total") or len(items)
+            # Column discovery from the first row if chosen_cols wasn't given.
+            if items and isinstance(items[0], dict):
+                result_cols = list(items[0].keys())
+            else:
+                result_cols = []
+
+        # Column finalisation: explicit override wins, otherwise heuristic pick.
+        if chosen_cols:
+            render_cols = chosen_cols
+        else:
+            render_cols = _pick_columns(result_cols, max_cols=6)
+
+        # Did we truncate relative to the ref's real total?
+        truncated = len(items) >= safe_limit and total_available > len(items)
+
+        markdown = _render_markdown_table(
+            items=items,
+            columns=render_cols,
+            total_available=int(total_available),
+            truncated=truncated,
+        )
+
+        return _ok(
+            {
+                "render_markdown": markdown,
+                "row_count":       len(items),
+                "columns_used":    render_cols,
+                "output_length":   len(markdown),
+                "truncated":       truncated,
+                "total_in_ref":    int(total_available),
+            },
+            (
+                f"Rendered {len(items)} rows to operation output "
+                f"({len(markdown)} chars, {len(render_cols)} columns). "
+                f"Write a one-line caption as your final_answer."
+            ),
+        )
+
+    except Exception as e:
+        log.debug("result_render_table failed: %s", e)
+        return _err(f"result_render_table error: {e}")
+```
+
+---
+
+## Change 2 — `api/logger.py`
+
+Add a new helper that appends instead of overwriting. Existing
+`set_operation_final_answer` replaces wholesale; the render tool needs
+append semantics.
+
+Find the existing `set_operation_final_answer` function. After it, add:
+
+```python
+async def set_operation_final_answer_append(session_id: str, addition: str) -> None:
+    """v2.36.8 — append text to an operation's final_answer field.
+
+    Used by the render tool dispatch path. Reads current final_answer,
+    concatenates a separator + `addition`, writes back. Separator is two
+    newlines so multiple render calls stack cleanly.
+
+    Whitespace handling: if the current final_answer is empty, just writes
+    the addition (no leading separator). If the addition is empty, no-op.
+    Enqueued write — non-blocking.
+    """
+    if not addition or not addition.strip():
+        return
+
+    async def _do(conn):
+        from sqlalchemy import text as _t
+        # Read current, append, write back — all within one connection.
+        existing_row = await conn.execute(
+            _t(
+                "SELECT final_answer FROM operations "
+                "WHERE session_id = :sid "
+                "ORDER BY started_at DESC LIMIT 1"
+            ),
+            {"sid": session_id},
+        )
+        row = existing_row.fetchone()
+        if not row:
+            return  # operation doesn't exist yet — silently skip
+        current = (row[0] or "").rstrip()
+        sep = "\n\n" if current else ""
+        new_val = current + sep + addition
+
+        await conn.execute(
+            _t(
+                "UPDATE operations SET final_answer = :val "
+                "WHERE session_id = :sid"
+            ),
+            {"val": new_val, "sid": session_id},
+        )
+
+    _enqueue(_do)
+```
+
+**IMPORTANT:** the existing `_enqueue` in this file takes `(fn, **kwargs)`
+and calls `fn(conn, **kwargs)`. Our helper closes over locals, so the
+enqueue call shape needs to be adapted. Two options:
+
+**Option A — keep signature, use a lambda wrapper.** At the bottom of
+the function above, replace `_enqueue(_do)` with:
+
+```python
+    _enqueue(lambda c: _do(c), _ignored_kwarg=None)
+```
+
+No — that doesn't work because `_enqueue`'s contract is `fn(conn,
+**kwargs)` and our closure already has the args baked in. Cleanest fix:
+
+**Option B — direct write, no enqueue.** Mirror the pattern of
+`log_operation_complete` which writes directly with `get_engine().begin()`.
+Lower throughput concern here because the write is small and rare.
+Replace the body of `set_operation_final_answer_append` with:
+
+```python
+async def set_operation_final_answer_append(session_id: str, addition: str) -> None:
+    """v2.36.8 — append text to an operation's final_answer field.
+
+    Direct write (not queued) so the render-tool output is visible to the
+    operator immediately. The write is small and infrequent compared to
+    tool_call rows.
+    """
+    if not addition or not addition.strip():
+        return
+    try:
+        from sqlalchemy import text as _t
+        async with get_engine().begin() as conn:
+            existing = await conn.execute(
+                _t(
+                    "SELECT final_answer FROM operations "
+                    "WHERE session_id = :sid "
+                    "ORDER BY started_at DESC LIMIT 1"
+                ),
+                {"sid": session_id},
+            )
+            row = existing.fetchone()
+            if not row:
+                return
+            current = (row[0] or "").rstrip()
+            sep = "\n\n" if current else ""
+            new_val = current + sep + addition
+            await conn.execute(
+                _t(
+                    "UPDATE operations SET final_answer = :val "
+                    "WHERE session_id = :sid"
+                ),
+                {"val": new_val, "sid": session_id},
+            )
+    except Exception as e:
+        log.error("set_operation_final_answer_append failed: %s", e)
+```
+
+Use **Option B**.
+
+---
+
+## Change 3 — `api/routers/agent.py` harness dispatch
+
+The tool-result handler in the agent loop needs to detect
+`data.render_markdown` on successful `result_render_table` calls and
+dispatch the append write.
+
+### Locate the seam
+
+Grep `api/routers/agent.py` for where tool results are processed after
+a successful MCP invocation. Likely markers to grep:
+
+- `tool_name == "` (case dispatch on tool name)
+- `result.get("status") == "ok"` AND `tool_name` nearby
+- `_on_tool_result` or `handle_tool_result` or similar method
+- `manager.send_line("tool"` or `send_line("⚙"` — the location where
+  the `[tool_name] → ok | message` line gets emitted
+
+The injection point is ideally in the SAME successful-result branch
+that (1) writes to `tool_calls` via `log_tool_call` and (2) emits the
+visual-feed line. There the code has the canonical `(tool_name, result)`
+pair and the session_id in scope.
+
+### Add the dispatch
+
+In the successful-result branch, after existing post-processing but
+before the next-step dispatch, add:
+
+```python
+            # v2.36.8 — render tool: append its markdown to operations.final_answer
+            # so the operator sees the table in the Operations view.
+            if tool_name == "result_render_table" and isinstance(result, dict):
+                _data = result.get("data") or {}
+                _md = _data.get("render_markdown") if isinstance(_data, dict) else None
+                if isinstance(_md, str) and _md.strip():
+                    try:
+                        await logger_mod.set_operation_final_answer_append(
+                            session_id, _md,
+                        )
+                        try:
+                            from api.metrics import RENDER_TOOL_CALLS
+                            _outcome = "truncated" if _data.get("truncated") else "ok"
+                            if _data.get("row_count", 0) == 0:
+                                _outcome = "no_rows"
+                            RENDER_TOOL_CALLS.labels(outcome=_outcome).inc()
+                        except Exception:
+                            pass
+                    except Exception as _re_e:
+                        log.debug(
+                            "render tool append failed (session=%s): %s",
+                            session_id, _re_e,
+                        )
+```
+
+The append runs BEFORE any later rescue checks (`empty_completion`,
+`too_short_completion`, `preamble_only`) because the rescue checks read
+DB `operations.final_answer` — see Change 6.
+
+If the seam is inside a method that doesn't have `session_id` in scope
+directly but has it nested inside state, adapt — the exact variable
+name is whatever the existing `log_tool_call` call uses.
+
+---
+
+## Change 4 — `api/agents/router.py`
+
+Two edits.
+
+### 4a — Allowlists
+
+`result_render_table` goes in **observe** and **investigate** allowlists.
+NOT execute or build (Q4 decision).
+
+Grep `api/agents/router.py` for the existing allowlist for
+`result_fetch` — it's already in observe and investigate. Add
+`"result_render_table"` on the same lines, immediately after
+`"result_fetch"` or `"result_query"` wherever those appear in the
+observe and investigate allowlist sets.
+
+### 4b — Prompt section behind flag
+
+Find the place where the STATUS_PROMPT and RESEARCH_PROMPT are assembled
+or where `CONTAINER INTROSPECT FIRST` block is injected. Add a new
+helper next to the existing prompt-assembly helpers:
+
+```python
+def _large_list_rendering_section() -> str:
+    """v2.36.8 — render-and-caption grammar for large-list observe tasks.
+
+    Behind renderToolPromptEnabled Settings flag so this is a dark launch;
+    the tool itself is already registered and allowlisted, just not
+    advertised to the LLM until the flag flips.
+    """
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        if not get_backend().get_setting("renderToolPromptEnabled"):
+            return ""
+    except Exception:
+        return ""
+
+    return (
+        "═══ LARGE-LIST RENDERING ═══\n"
+        "\n"
+        "When a tool returns result_ref AND the user asked you to list /\n"
+        "show / report / enumerate / audit those items — DO NOT loop on\n"
+        "result_fetch / result_query trying to describe rows in prose.\n"
+        "That path runs out of budget and leaves the operator with nothing.\n"
+        "\n"
+        "INSTEAD, use this 3-call pattern:\n"
+        "\n"
+        "  1. ONE result_fetch(ref, limit=5) — peek at the shape, pick\n"
+        "     the columns the user actually asked about.\n"
+        "  2. result_render_table(ref, columns='col1,col2,col3') —\n"
+        "     renders the whole set as a table DIRECTLY into the\n"
+        "     operator's view. You do NOT see the table data; you see a\n"
+        "     short acknowledgement. That's normal.\n"
+        "  3. Write ONE caption sentence as your final output, e.g.\n"
+        "     'All 42 UniFi clients with their APs and signal strengths\n"
+        "     (table below):'. That's your whole final_answer.\n"
+        "\n"
+        "Example for UniFi clients:\n"
+        "  unifi_network_status() → {ref: 'rs-xyz', count: 42}\n"
+        "  result_fetch(ref='rs-xyz', limit=5)    # peek\n"
+        "  result_render_table(ref='rs-xyz', columns='hostname,ip,mac,ap_name,signal')\n"
+        "  final_answer: 'All 42 UniFi clients, grouped by AP (table below).'\n"
+        "\n"
+        "Example for Kafka brokers:\n"
+        "  kafka_topic_inspect() → {ref: 'rs-abc', count: N}\n"
+        "  result_render_table(ref='rs-abc', columns='broker_id,host,isr_count,leader_count')\n"
+        "  final_answer: 'Broker status summary (table below).'\n"
+        "\n"
+        "Example for Docker containers:\n"
+        "  docker_ps() → {ref: 'rs-def', count: M}\n"
+        "  result_render_table(ref='rs-def', columns='name,image,status,ports,node')\n"
+        "  final_answer: 'All running containers by node (table below).'\n"
+        "\n"
+        "Example for Swarm services:\n"
+        "  swarm_service_list() → {ref: 'rs-ghi', count: K}\n"
+        "  result_render_table(ref='rs-ghi', columns='name,replicas,image,node')\n"
+        "  final_answer: 'Swarm services and their node placement (table below).'\n"
+        "\n"
+        "RULES:\n"
+        "  - Render once, not repeatedly.\n"
+        "  - Pick 3-6 columns matching the user's ask. If they said 'IP\n"
+        "    addresses', include IP. If they said 'hostnames', include name.\n"
+        "  - If the set is narrow (<15 rows), describing in prose is fine.\n"
+        "    Use render tool when count > 15 OR when the task asks for\n"
+        "    'all' / 'every' / 'list every'.\n"
+        "  - The table is in the operator's Operations view. Don't try\n"
+        "    to reproduce it in your caption.\n"
+    )
+```
+
+Then, in the prompt assembly path that builds STATUS_PROMPT and
+RESEARCH_PROMPT (typically a `_assemble_prompt` or inline concatenation),
+inject `_large_list_rendering_section()` **immediately after** the
+CONTAINER INTROSPECT FIRST section and **before** any domain-specific
+branches (KAFKA TRIAGE etc.). Concretely:
+
+```python
+    sections.append(_container_introspect_first_section())  # existing
+    sections.append(_large_list_rendering_section())        # NEW v2.36.8
+    # … then the domain-specific TRIAGE blocks follow
+```
+
+If the prompt is assembled by plain string concatenation rather than a
+sections list, add the section immediately after the
+`CONTAINER INTROSPECT FIRST` block and before the next `═══ ... ═══`
+heading.
+
+Do NOT add to ACTION_PROMPT or BUILD_PROMPT — render tool is scoped to
+observe + investigate per the spec Q4 decision.
+
+---
+
+## Change 5 — `api/routers/settings.py`
+
+Register the new flag. Find the `SETTINGS_KEYS` dict. Find an existing
+key that has `"group": "Agent Budgets"` (e.g. `agentToolBudget_observe`
+from v2.36.5). Add a new entry next to it:
+
+```python
+    "renderToolPromptEnabled": {
+        "default":     False,
+        "type":        "bool",
+        "group":       "Agent Budgets",
+        "description": (
+            "Enable LARGE-LIST RENDERING prompt section teaching the agent "
+            "to use result_render_table for lists >15 items. Tool itself is "
+            "always registered; this flag only controls prompt visibility. "
+            "v2.36.8 ships OFF by default — flip ON after verifying on a "
+            "test run."
+        ),
+    },
+```
+
+---
+
+## Change 6 — rescue reads DB instead of in-memory buffer
+
+The v2.35.14 `empty_completion` and v2.35.15 `too_short_completion` /
+`preamble_only_completion` rescue checks currently test the agent-loop's
+local `last_reasoning` / final_answer-buffer variable. If the render
+tool wrote 4KB to DB `operations.final_answer`, the rescues will still
+fire because the agent-side buffer is empty.
+
+### Locate the rescue seam
+
+Grep `api/routers/agent.py` for:
+
+- `empty_completion` (exact match — the reason label)
+- `too_short_completion`
+- `preamble_only_completion`
+- `_is_preamble_only`
+- `run_forced_synthesis` call sites (not the def — the CALLS that pass
+  these reason labels)
+
+The three rescues are typically dispatched from a single block in
+`_stream_agent`'s terminal-write section, after the tool-loop exits and
+before `complete_operation`.
+
+### Modify the rescue guard
+
+For EACH of the three rescues, the existing check looks approximately
+like:
+
+```python
+    if not last_reasoning:
+        # empty_completion rescue
+        …
+```
+
+```python
+    if len(last_reasoning or "") < 60:
+        # too_short_completion rescue
+        …
+```
+
+```python
+    if _is_preamble_only(last_reasoning or ""):
+        # preamble_only_completion rescue
+        …
+```
+
+Wrap each check by first reading DB `operations.final_answer`:
+
+```python
+    # v2.36.8 — render-and-caption: if the render tool appended table data
+    # to operations.final_answer, the rescue's len/preamble checks should
+    # see that content, not just the agent-side buffer.
+    _db_final_len = 0
+    try:
+        from sqlalchemy import text as _t
+        from api.db.base import get_engine as _ge
+        async with _ge().connect() as _conn:
+            _r = await _conn.execute(
+                _t(
+                    "SELECT final_answer FROM operations WHERE id = :oid"
+                ),
+                {"oid": operation_id},
+            )
+            _row = _r.fetchone()
+            if _row and _row[0]:
+                _db_final_len = len(_row[0])
+    except Exception:
+        pass
+
+    # Treat a DB final_answer ≥1500 chars as "substantive" for rescue purposes
+    # — the render tool wrote real operator-visible content. Threshold chosen
+    # conservatively: a full caption + a real table is ≥1500 chars; a LLM
+    # prose answer alone that's 500-1000 chars should still be eligible for
+    # rescue if it's preamble-shaped or too-short.
+    _render_wrote_substantive = _db_final_len >= 1500
+```
+
+Then adapt each rescue's trigger condition to skip-if-render-wrote:
+
+```python
+    if not last_reasoning and not _render_wrote_substantive:
+        # empty_completion rescue — unchanged below
+        …
+
+    if len(last_reasoning or "") < 60 and not _render_wrote_substantive:
+        # too_short_completion rescue — unchanged below
+        …
+
+    if _is_preamble_only(last_reasoning or "") and not _render_wrote_substantive:
+        # preamble_only_completion rescue — unchanged below
+        …
+```
+
+Threshold 1500 chars is conservative — a full caption + a real table
+(even a small 10-row one) exceeds 1500, but a normal LLM prose answer
+staying in the 500-1000 range is still eligible for too_short rescue.
+Tune if empirical data shows false positives/negatives.
+
+---
+
+## Change 7 — `api/metrics.py`
+
+Add the new counter. Find existing `FORCED_SYNTHESIS_COUNTER` or
+`AGENT_TASKS` — add alongside:
+
+```python
+RENDER_TOOL_CALLS = Counter(
+    "deathstar_render_tool_calls_total",
+    "result_render_table invocations by outcome.",
+    labelnames=("outcome",),  # ok | no_rows | truncated | ref_not_found | error
+)
+```
+
+---
+
+## Change 8 — `mcp_server/__init__.py` or tool registration hub
+
+Find where `result_fetch` and `result_query` are imported and registered
+(grep for `from mcp_server.tools.result_tools import`). Add
+`result_render_table`:
+
+```python
+from mcp_server.tools.render_tools import result_render_table  # v2.36.8
+```
+
+And register it in the same list/dict the other tools are registered in.
+
+---
+
+## Change 9 — `gui/src/context/OptionsContext.jsx`
+
+Add `renderToolPromptEnabled` to both `DEFAULTS` and `SERVER_KEYS` (in
+the Agent Budgets section added in v2.36.6).
+
+In `DEFAULTS`, add after the 4 `agentToolBudget_*` entries:
+
+```javascript
+  renderToolPromptEnabled: false,
+```
+
+In `SERVER_KEYS`, add to the Agent Budgets section:
+
+```javascript
+  'renderToolPromptEnabled',
+```
+
+The v2.36.6 CI guard (`test_every_grouped_setting_is_server_allowlisted`)
+will catch this automatically if you forget.
+
+---
+
+## Change 10 — `gui/src/components/OptionsModal.jsx`
+
+AIServicesTab's Agent Budgets section (added in v2.36.5) gains a
+checkbox. Find the section, add after the 4 budget number inputs:
+
+```jsx
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={!!draft.renderToolPromptEnabled}
+            onChange={e =>
+              patch({ renderToolPromptEnabled: e.target.checked })
+            }
+          />
+          <span>
+            Enable LARGE-LIST RENDERING prompt (v2.36.8 — dark launch)
+          </span>
+        </label>
+        <div className="text-xs text-gray-500 ml-6 -mt-1">
+          Teaches the agent to call result_render_table for lists over
+          ~15 items instead of enumerating rows in prose.
+        </div>
+```
+
+Use whatever `patch` / setter function and className conventions the
+surrounding code already uses — match the style of the v2.36.5 budget
+inputs.
+
+---
+
+## Change 11 — `tests/test_render_tool.py` (NEW)
+
+```python
+"""v2.36.8 — result_render_table regression tests.
+
+Pure unit tests where possible (render helpers, column heuristic),
+plus DB-backed tests for the full tool call using monkeypatched
+result_store access.
+"""
+from __future__ import annotations
+
+import pytest
+
+from mcp_server.tools.render_tools import (
+    result_render_table,
+    _pick_columns,
+    _render_markdown_table,
+    _format_cell,
+    _score_column,
+)
+
+
+# ── Unit: column auto-pick ────────────────────────────────────────────────────
+
+def test_pick_columns_prefers_named_fields():
+    available = ["id", "hostname", "ip", "mac", "raw_json", "notes", "rssi", "vendor"]
+    picked = _pick_columns(available, max_cols=4)
+    # hostname/ip/mac/rssi should win over raw_json/notes (skipped) and vendor (unknown)
+    assert "hostname" in picked
+    assert "ip" in picked
+    assert "mac" in picked
+    assert "raw_json" not in picked, "raw_* columns must be skipped"
+    assert "notes" not in picked, "notes columns must be skipped"
+
+
+def test_pick_columns_falls_back_to_order_when_all_skipped():
+    # Everything looks skippable — should degrade to first-N.
+    available = ["raw_foo", "raw_bar", "raw_baz", "config_dump"]
+    picked = _pick_columns(available, max_cols=2)
+    assert len(picked) == 2
+    assert picked[0] == "raw_foo"  # preserves input order
+
+
+def test_pick_columns_empty_input():
+    assert _pick_columns([], max_cols=6) == []
+
+
+# ── Unit: cell formatting ─────────────────────────────────────────────────────
+
+def test_format_cell_escapes_pipes():
+    assert _format_cell("a|b|c") == "a\\|b\\|c"
+
+
+def test_format_cell_truncates_long():
+    long_str = "x" * 200
+    out = _format_cell(long_str)
+    assert len(out) <= 80
+    assert out.endswith("…")
+
+
+def test_format_cell_compacts_structured_values():
+    assert _format_cell([1, 2, 3]) == "[3 items]"
+    assert _format_cell({"a": 1, "b": 2}) == "{…2 keys}"
+
+
+def test_format_cell_none_becomes_empty():
+    assert _format_cell(None) == ""
+
+
+def test_format_cell_strips_newlines():
+    assert _format_cell("line1\nline2\nline3") == "line1 line2 line3"
+
+
+# ── Unit: markdown rendering ──────────────────────────────────────────────────
+
+def test_render_markdown_basic():
+    items = [
+        {"hostname": "h1", "ip": "10.0.0.1"},
+        {"hostname": "h2", "ip": "10.0.0.2"},
+    ]
+    md = _render_markdown_table(items, ["hostname", "ip"], total_available=2, truncated=False)
+    assert "| hostname | ip |" in md
+    assert "|---|---|" in md
+    assert "| h1 | 10.0.0.1 |" in md
+    assert "first" not in md  # no truncation footer when truncated=False
+
+
+def test_render_markdown_truncation_footer_shows_totals():
+    items = [{"x": i} for i in range(50)]
+    md = _render_markdown_table(items, ["x"], total_available=200, truncated=True)
+    assert "showing first 50 of 200" in md
+    assert "where" in md  # hints at the fix
+
+
+def test_render_markdown_no_rows():
+    md = _render_markdown_table([], ["a", "b"], total_available=0, truncated=False)
+    assert "no rows" in md.lower()
+
+
+def test_render_markdown_no_columns():
+    md = _render_markdown_table([{"a": 1}], [], total_available=1, truncated=False)
+    assert "no columns" in md.lower()
+
+
+# ── Integration: full tool call via monkeypatched result_store ────────────────
+
+@pytest.fixture
+def fake_result_store(monkeypatch):
+    """Monkey-patch fetch_result and query_result to return canned data."""
+    from api.db import result_store as rs
+
+    _store = {
+        "rs-unifi42": {
+            "items": [
+                {
+                    "hostname": f"client-{i:02d}",
+                    "ip":       f"10.0.0.{i}",
+                    "mac":      f"aa:bb:cc:dd:ee:{i:02x}",
+                    "ap_name":  f"ap-{(i % 3) + 1}",
+                    "signal":   -40 - (i % 40),
+                }
+                for i in range(42)
+            ],
+        },
+        "rs-empty": {"items": []},
+    }
+
+    def fake_fetch(ref, offset=0, limit=50):
+        if ref not in _store:
+            return None
+        items = _store[ref]["items"]
+        return {
+            "ref": ref,
+            "total": len(items),
+            "offset": offset,
+            "limit": limit,
+            "items": items[offset : offset + limit],
+            "has_more": (offset + limit) < len(items),
+        }
+
+    def fake_query(ref, where="", columns=None, order_by="", limit=50, session_id=""):
+        if ref not in _store:
+            return None
+        items = _store[ref]["items"]
+        # Minimal filter support for test — signal < -50 → drop ~half
+        if "signal < -50" in where:
+            items = [i for i in items if i.get("signal", 0) < -50]
+        return {
+            "ref":     ref,
+            "items":   items[:limit],
+            "count":   min(len(items), limit),
+            "columns": columns or (list(items[0].keys()) if items else []),
+        }
+
+    monkeypatch.setattr(rs, "fetch_result", fake_fetch)
+    monkeypatch.setattr(rs, "query_result", fake_query)
+
+
+def test_render_table_full_path_explicit_columns(fake_result_store):
+    out = result_render_table(
+        ref="rs-unifi42",
+        columns="hostname,ip,ap_name,signal",
+        limit=100,
+    )
+    assert out["status"] == "ok"
+    data = out["data"]
+    assert data["row_count"] == 42
+    assert data["columns_used"] == ["hostname", "ip", "ap_name", "signal"]
+    md = data["render_markdown"]
+    assert "| hostname | ip | ap_name | signal |" in md
+    assert "client-00" in md
+    assert "ap-1" in md
+    assert data["truncated"] is False
+
+
+def test_render_table_auto_picks_columns(fake_result_store):
+    out = result_render_table(ref="rs-unifi42", limit=10)
+    assert out["status"] == "ok"
+    cols = out["data"]["columns_used"]
+    assert "hostname" in cols  # named field preferred
+    assert "ip" in cols
+    assert len(cols) <= 6
+
+
+def test_render_table_truncates_and_flags(fake_result_store):
+    out = result_render_table(ref="rs-unifi42", columns="hostname", limit=10)
+    data = out["data"]
+    assert data["row_count"] == 10
+    assert data["truncated"] is True
+    assert data["total_in_ref"] == 42
+    assert "showing first 10 of 42" in data["render_markdown"]
+
+
+def test_render_table_with_where_clause(fake_result_store):
+    out = result_render_table(
+        ref="rs-unifi42",
+        columns="hostname,signal",
+        where="signal < -50",
+    )
+    assert out["status"] == "ok"
+    # The fake_query filter reduces set to clients with signal<-50
+    assert out["data"]["row_count"] < 42
+
+
+def test_render_table_respects_max_limit(fake_result_store):
+    out = result_render_table(ref="rs-unifi42", limit=500)
+    # _MAX_LIMIT = 200 but fake store only has 42 rows
+    assert out["status"] == "ok"
+    assert out["data"]["row_count"] == 42
+
+
+def test_render_table_ref_not_found(fake_result_store):
+    out = result_render_table(ref="rs-does-not-exist")
+    assert out["status"] == "error"
+    assert "expired" in out["message"].lower() or "not found" in out["message"].lower()
+
+
+def test_render_table_empty_ref(fake_result_store):
+    out = result_render_table(ref="rs-empty")
+    assert out["status"] == "ok"
+    assert out["data"]["row_count"] == 0
+    assert "no rows" in out["data"]["render_markdown"].lower()
+
+
+# ── Integration: allowlist ────────────────────────────────────────────────────
+
+def test_result_render_table_in_observe_allowlist():
+    """Regression guard — v2.36.8 added the tool to observe + investigate."""
+    from api.agents.router import allowlist_for
+    observe_tools = allowlist_for("observe", "general")
+    tool_names = [t.get("function", {}).get("name") for t in observe_tools]
+    assert "result_render_table" in tool_names, (
+        "result_render_table must be in observe allowlist (v2.36.8)"
+    )
+
+
+def test_result_render_table_in_investigate_allowlist():
+    from api.agents.router import allowlist_for
+    investigate_tools = allowlist_for("investigate", "general")
+    tool_names = [t.get("function", {}).get("name") for t in investigate_tools]
+    assert "result_render_table" in tool_names
+
+
+def test_result_render_table_NOT_in_execute_allowlist():
+    """Spec Q4 decision — render tool is scoped to observe + investigate."""
+    from api.agents.router import allowlist_for
+    execute_tools = allowlist_for("execute", "general")
+    tool_names = [t.get("function", {}).get("name") for t in execute_tools]
+    assert "result_render_table" not in tool_names, (
+        "render tool must NOT be in execute allowlist (spec Q4)"
+    )
+```
+
+Caveats:
+
+- The `allowlist_for` function name is a best guess — use whatever
+  function `api/agents/router.py` exposes for "return the tool list for
+  this agent_type". If the signature is different (e.g. takes a domain,
+  returns a set of names instead of tool objects), adapt the 3 allowlist
+  tests accordingly — the spirit is "this tool name appears in observe
+  + investigate, not in execute".
+- The fake `query_result` implementation is minimal — real
+  `api/db/result_store.py::query_result` does Postgres temp-table
+  filtering. The test asserts our render logic correctly threads
+  filters through, not that Postgres WHERE clauses work.
+
+---
+
+## Change 12 — `VERSION`
+
+```
+2.36.8
+```
+
+---
+
+## Verify
+
+```bash
+# Tool registered
+grep -n "result_render_table" mcp_server/__init__.py
+grep -n "result_render_table" api/agents/router.py
+# Expect at least 3 hits in router.py: two allowlist entries + the prompt section
+
+# Prompt section behind flag
+grep -n "LARGE-LIST RENDERING" api/agents/router.py
+# Expect 1 hit in the _large_list_rendering_section() helper
+
+# Settings key
+grep -n "renderToolPromptEnabled" api/routers/settings.py
+grep -n "renderToolPromptEnabled" gui/src/context/OptionsContext.jsx
+grep -n "renderToolPromptEnabled" gui/src/components/OptionsModal.jsx
+# Expect 1 hit each
+
+# Rescue guard update
+grep -n "_render_wrote_substantive" api/routers/agent.py
+# Expect ≥3 hits (one per rescue)
+
+# Metrics counter
+grep -n "RENDER_TOOL_CALLS" api/metrics.py
+# Expect 1 hit (the definition)
+
+# Tests
+pytest tests/test_render_tool.py -v
+# All should pass
+
+# v2.36.6 CI guard — SERVER_KEYS must include the new key
+pytest tests/test_options_context_server_keys.py -v
+# Should still pass with the new key added in Change 9
+
+# Existing suite sanity
+pytest tests/test_tool_budget_settings.py tests/test_operations_model_column.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(agents): v2.36.8 result_render_table + render-and-caption grammar
+
+Ships a new MCP tool result_render_table(ref, columns, where, order_by,
+limit) that reads from the existing result_store server-side, renders
+the data as a markdown table, and emits the rendered string in
+data.render_markdown. The agent harness detects this field on successful
+calls and appends the markdown to operations.final_answer via a new
+set_operation_final_answer_append logger helper — the LLM's context
+only sees a short ack, not the table data.
+
+Changes the grammar of large-list observe tasks from fetch-and-describe
+(LLM keeps fetching ref contents trying to enumerate rows in prose and
+runs out of steam — canonical failure observed on 2026-04-20 UniFi
+task with 12 result_fetch/query calls, empty final_answer) to
+render-and-caption (agent calls one tool, writes one-line caption,
+done).
+
+Ships behind renderToolPromptEnabled=False Settings flag (dark launch):
+tool is registered and allowlisted, but the prompt section teaching
+the agent to use it is off until operator flips. Scope: observe +
+investigate, not execute or build (spec Q4 decision).
+
+Rescue guards updated: v2.35.14 empty_completion, v2.35.15
+too_short_completion and preamble_only_completion checks now read DB
+operations.final_answer length in addition to agent-side buffer — so
+they don't false-fire when the render tool wrote substantive content
+(≥500 chars threshold).
+
+New deathstar_render_tool_calls_total{outcome} counter.
+
+Full spec at cc_prompts/SPEC_v2.36.8_RENDER_TOOL.md."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Dark launch by default. To test:
+
+1. Settings → Agent Budgets → check "Enable LARGE-LIST RENDERING prompt"
+   → save.
+2. Confirm: `docker compose exec hp1_agent python -c "from mcp_server.tools.skills.storage import get_backend; print(get_backend().get_setting('renderToolPromptEnabled'))"`.
+   Expect `True`.
+3. Run the canonical UniFi observe task: "Check UniFi list all clients,
+   their hostnames, ip's and mac addresses, and where they are connected".
+4. Expected trace shape:
+   - Step 1: `unifi_network_status` → ref
+   - Step 2: `result_fetch(limit=5)` → peek
+   - Step 3: `result_render_table(ref, columns=...)` → ack-only
+   - Step 4: LLM writes short caption → final_answer
+   - `status=completed`, tool calls ~4-5 not 12.
+5. Open Logs → Operations for the new run.
+   Model column should show `qwen/qwen3.6-35b-a3b` (v2.36.7).
+   Final Answer body should contain:
+   - A one-line caption from the LLM
+   - A pipe-delimited markdown table below it (ugly-but-readable per
+     Q1 decision; v2.37 upgrades to real HTML rendering).
+6. Spot-check DB:
+   ```bash
+   docker compose exec hp1_agent python -c "
+   import asyncio
+   from api.db.base import get_engine
+   from sqlalchemy import text
+   async def main():
+       async with get_engine().connect() as c:
+           r = await c.execute(text(
+               'SELECT length(final_answer), status, '
+               '(SELECT COUNT(*) FROM tool_calls tc WHERE tc.operation_id=o.id) AS tc '
+               'FROM operations o '
+               'ORDER BY started_at DESC LIMIT 3'
+           ))
+           for row in r.fetchall():
+               print(row)
+   asyncio.run(main())
+   "
+   ```
+   Expect the new op row to have `status=completed`, tool_count <10,
+   final_answer length in the 500-8000 range (caption + table).
+
+7. Flip off the flag, re-run same task — expect old fetch-and-describe
+   behaviour (possibly still thrashing). Confirms the prompt gating
+   is the only behaviour change.
+
+---
+
+## Scope guard — do NOT touch
+
+- `result_store` schema — no migration. Tool reads through existing
+  `fetch_result` / `query_result`.
+- `result_fetch` / `result_query` MCP tools — unchanged.
+- Execute / build allowlists — render tool is observe+investigate only.
+- Fabrication detector, hallucination guard — unchanged (render output
+  is tool-authored, bypasses citation scanning).
+- `_LARGE_RESULT_BYTES` threshold in `result_store.py` — unchanged
+  (kent's DB-as-memory question is already handled by existing tipover).
+- External AI Router — unchanged.
+- Trace viewer UI — no gate-detection row for render_used in v2.36.8
+  (add in v2.37).
+- Operations view UI — no markdown rendering upgrade (v2.37 per Q1).
+
+---
+
+## Post-deploy followups (NOT part of v2.36.8)
+
+- v2.37.0: Operations view renders markdown tables as real HTML tables.
+- v2.37.x: Trace viewer Gates Fired sidebar gains `render_used` row.
+- TBD: Render-and-caption pattern applied to sub-agent output.
+- TBD: Rescue threshold (500 chars) tunable via Settings if empirical
+  data shows false positives.

@@ -205,6 +205,13 @@ SUBAGENT_TERMINAL_FEEDBACK_COUNTER = Counter(
     ["terminal_status"],   # completed | escalated | failed | timeout | cap_hit
 )
 
+# --- render tool calls (v2.36.8) ---
+RENDER_TOOL_CALLS = Counter(
+    "deathstar_render_tool_calls_total",
+    "result_render_table invocations by outcome.",
+    labelnames=("outcome",),  # ok | no_rows | truncated | ref_not_found | error
+)
+
 # --- forced synthesis on loop-exit (v2.34.17) ---
 FORCED_SYNTHESIS_COUNTER = Counter(
     "deathstar_forced_synthesis_total",

@@ -130,7 +130,7 @@ OBSERVE_AGENT_TOOLS = frozenset({
     "agent_status", "postgres_health",
     "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
-    "result_fetch", "result_query",
+    "result_fetch", "result_query", "result_render_table",  # v2.36.8
     "entity_history", "entity_events",
     "swarm_node_status",
     "service_placement",
@@ -171,7 +171,7 @@ INVESTIGATE_AGENT_TOOLS = frozenset({
     "agent_status", "postgres_health", "service_logs", "kafka_topic_list",
     "search_docs", "vm_exec", "infra_lookup", "vm_disk_investigate", "vm_service_discover",
     "docker_df", "docker_images", "ssh_capabilities", "kafka_exec",
-    "result_fetch", "result_query",
+    "result_fetch", "result_query", "result_render_table",  # v2.36.8
     "entity_history", "entity_events",
     "swarm_node_status",
     "service_placement",
@@ -1538,9 +1538,100 @@ def filter_tools(tools_spec: list, agent_type: str, domain: str = "general") -> 
     return [t for t in tools_spec if t.get("function", {}).get("name") in allowlist]
 
 
+def _large_list_rendering_section() -> str:
+    """v2.36.8 — render-and-caption grammar for large-list observe tasks.
+
+    Behind renderToolPromptEnabled Settings flag so this is a dark launch;
+    the tool itself is already registered and allowlisted, just not
+    advertised to the LLM until the flag flips.
+    """
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        if not get_backend().get_setting("renderToolPromptEnabled"):
+            return ""
+    except Exception:
+        return ""
+
+    return (
+        "\n═══ LARGE-LIST RENDERING ═══\n"
+        "\n"
+        "When a tool returns result_ref AND the user asked you to list /\n"
+        "show / report / enumerate / audit those items — DO NOT loop on\n"
+        "result_fetch / result_query trying to describe rows in prose.\n"
+        "That path runs out of budget and leaves the operator with nothing.\n"
+        "\n"
+        "INSTEAD, use this 3-call pattern:\n"
+        "\n"
+        "  1. ONE result_fetch(ref, limit=5) — peek at the shape, pick\n"
+        "     the columns the user actually asked about.\n"
+        "  2. result_render_table(ref, columns='col1,col2,col3') —\n"
+        "     renders the whole set as a table DIRECTLY into the\n"
+        "     operator's view. You do NOT see the table data; you see a\n"
+        "     short acknowledgement. That's normal.\n"
+        "  3. Write ONE caption sentence as your final output, e.g.\n"
+        "     'All 42 UniFi clients with their APs and signal strengths\n"
+        "     (table below):'. That's your whole final_answer.\n"
+        "\n"
+        "Example for UniFi clients:\n"
+        "  unifi_network_status() \u2192 {ref: 'rs-xyz', count: 42}\n"
+        "  result_fetch(ref='rs-xyz', limit=5)    # peek\n"
+        "  result_render_table(ref='rs-xyz', columns='hostname,ip,mac,ap_name,signal')\n"
+        "  final_answer: 'All 42 UniFi clients, grouped by AP (table below).'\n"
+        "\n"
+        "Example for Kafka brokers:\n"
+        "  kafka_topic_inspect() \u2192 {ref: 'rs-abc', count: N}\n"
+        "  result_render_table(ref='rs-abc', columns='broker_id,host,isr_count,leader_count')\n"
+        "  final_answer: 'Broker status summary (table below).'\n"
+        "\n"
+        "Example for Docker containers:\n"
+        "  docker_ps() \u2192 {ref: 'rs-def', count: M}\n"
+        "  result_render_table(ref='rs-def', columns='name,image,status,ports,node')\n"
+        "  final_answer: 'All running containers by node (table below).'\n"
+        "\n"
+        "Example for Swarm services:\n"
+        "  swarm_service_list() \u2192 {ref: 'rs-ghi', count: K}\n"
+        "  result_render_table(ref='rs-ghi', columns='name,replicas,image,node')\n"
+        "  final_answer: 'Swarm services and their node placement (table below).'\n"
+        "\n"
+        "RULES:\n"
+        "  - Render once, not repeatedly.\n"
+        "  - Pick 3-6 columns matching the user's ask. If they said 'IP\n"
+        "    addresses', include IP. If they said 'hostnames', include name.\n"
+        "  - If the set is narrow (<15 rows), describing in prose is fine.\n"
+        "    Use render tool when count > 15 OR when the task asks for\n"
+        "    'all' / 'every' / 'list every'.\n"
+        "  - The table is in the operator's Operations view. Don't try\n"
+        "    to reproduce it in your caption.\n"
+    )
+
+
+def _inject_large_list_section(prompt: str) -> str:
+    """Inject the LARGE-LIST RENDERING block immediately after the
+    CONTAINER INTROSPECT FIRST section, if the flag is enabled.
+
+    Falls back to a no-op if the marker header isn't present or the
+    Settings flag is off.
+    """
+    section = _large_list_rendering_section()
+    if not section:
+        return prompt
+    # Anchor: the next ═══ header after CONTAINER INTROSPECT FIRST, so the
+    # injected block sits between CIF and the following domain block.
+    anchor = "═══ CONTAINER INTROSPECT FIRST"
+    start = prompt.find(anchor)
+    if start < 0:
+        # No CIF section — append near the end (before final closing prose).
+        return prompt + section
+    # Find the NEXT ═══ heading after CIF
+    tail = prompt.find("═══", start + len(anchor))
+    if tail < 0:
+        return prompt + section
+    return prompt[:tail] + section + "\n" + prompt[tail:]
+
+
 def get_prompt(agent_type: str) -> str:
     """Return the system prompt for the given agent type."""
-    return {
+    base = {
         'observe':     OBSERVE_PROMPT,
         'status':      STATUS_PROMPT,
         'investigate': INVESTIGATE_PROMPT,
@@ -1550,6 +1641,10 @@ def get_prompt(agent_type: str) -> str:
         'build':       BUILD_PROMPT,
         'ambiguous':   STATUS_PROMPT,  # ambiguous: gather info first, ask clarifying_question
     }.get(agent_type, STATUS_PROMPT)
+    # v2.36.8 — only inject for observe / investigate (scope Q4)
+    if agent_type in ("observe", "status", "investigate", "research", "ambiguous"):
+        base = _inject_large_list_section(base)
+    return base
 
 
 # ── Runbook injection (v2.35.4) ───────────────────────────────────────────────

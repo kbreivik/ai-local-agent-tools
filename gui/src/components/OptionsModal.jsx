@@ -845,6 +845,24 @@ function AIServicesTab({ draft, update }) {
             </div>
           ))}
         </div>
+
+        {/* v2.36.8 — LARGE-LIST RENDERING prompt toggle (dark launch) */}
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={!!draft.renderToolPromptEnabled}
+              onChange={e => update('renderToolPromptEnabled', e.target.checked)}
+            />
+            <span>
+              Enable LARGE-LIST RENDERING prompt (v2.36.8 — dark launch)
+            </span>
+          </label>
+          <div className="text-xs text-gray-500 ml-6 mt-1">
+            Teaches the agent to call result_render_table for lists over
+            ~15 items instead of enumerating rows in prose.
+          </div>
+        </div>
       </div>
     </div>
   )

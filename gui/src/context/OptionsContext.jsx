@@ -91,6 +91,7 @@ const DEFAULTS = {
   agentToolBudget_investigate: 16,
   agentToolBudget_execute:     14,
   agentToolBudget_build:       12,
+  renderToolPromptEnabled:     false,  // v2.36.8 — dark launch
 
   // Coordinator
   coordinatorPriorAttemptsEnabled: true,
@@ -149,6 +150,7 @@ const SERVER_KEYS = new Set([
   // Agent Budgets (v2.36.5 — v2.36.6 allowlisted)
   'agentToolBudget_observe', 'agentToolBudget_investigate',
   'agentToolBudget_execute', 'agentToolBudget_build',
+  'renderToolPromptEnabled',  // v2.36.8
 ])
 
 function isMasked(v) {

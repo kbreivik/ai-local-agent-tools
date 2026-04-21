@@ -764,6 +764,25 @@ def result_query(ref: str, where: str = "", columns: str = "",
 
 
 @mcp.tool()
+def result_render_table(ref: str, columns: str = "", where: str = "",
+                         order_by: str = "", caption: str = "",
+                         limit: int = 50) -> dict:
+    """v2.36.8 — render a stored result as a markdown table DIRECTLY into the
+    operator's Operations view. Your LLM context only gets a short
+    acknowledgement, NOT the table rows.
+
+    Use for large lists (>15 rows) when the user asked to list / enumerate
+    / show / report those items. Pair with a one-line caption as your
+    final_answer. See system-prompt LARGE-LIST RENDERING section.
+
+    Example: result_render_table(ref="rs-abc", columns="hostname,ip,mac,ap_name")
+    """
+    from mcp_server.tools.render_tools import result_render_table as _rrt
+    return _rrt(ref=ref, columns=columns, where=where, order_by=order_by,
+                caption=caption, limit=limit)
+
+
+@mcp.tool()
 def swarm_service_force_update(service_name: str, manager_label: str = "") -> dict:
     """Force-update a Swarm service to recover from network/scheduling failures.
     Runs 'docker service update --force' on a manager. Requires plan_action() first.

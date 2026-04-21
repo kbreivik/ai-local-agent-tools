@@ -1207,6 +1207,35 @@ async def _run_single_agent_step(
             return ""
         if substantive_tool_calls < 1:
             return ""
+        # v2.36.8 — render-and-caption: if the render tool appended table data
+        # to operations.final_answer, the rescue's len/preamble checks should
+        # see that content, not just the agent-side buffer. Threshold 500 chars
+        # is generous: a one-row table plus headers is ~150 chars; 500 means
+        # at least a few rows. Skip rescue when the render tool wrote
+        # substantive operator-visible content.
+        _render_wrote_substantive = False
+        try:
+            from sqlalchemy import text as _t
+            from api.db.base import get_engine as _ge
+            async with _ge().connect() as _conn:
+                _r = await _conn.execute(
+                    _t(
+                        "SELECT final_answer FROM operations WHERE id = :oid"
+                    ),
+                    {"oid": operation_id},
+                )
+                _row = _r.fetchone()
+                if _row and _row[0] and len(_row[0]) >= 500:
+                    _render_wrote_substantive = True
+        except Exception:
+            pass
+        if _render_wrote_substantive:
+            log.info(
+                "rescue skipped op=%s reason=%s — render tool wrote substantive final_answer",
+                operation_id, rescue_reason,
+            )
+            _empty_completion_synth_done = True
+            return ""
         _empty_completion_synth_done = True
         log.warning(
             "agent loop %s detected op=%s fa_len=%d tools=%d subst=%d; "
@@ -2905,6 +2934,30 @@ async def _run_single_agent_step(
                     operation_id, fn_name, fn_args, result,
                     _lm_model(), duration_ms
                 )
+
+                # v2.36.8 — render tool: append its markdown to operations.final_answer
+                # so the operator sees the table in the Operations view.
+                if fn_name == "result_render_table" and isinstance(result, dict):
+                    _data = result.get("data") or {}
+                    _md = _data.get("render_markdown") if isinstance(_data, dict) else None
+                    if isinstance(_md, str) and _md.strip():
+                        try:
+                            await logger_mod.set_operation_final_answer_append(
+                                session_id, _md,
+                            )
+                            try:
+                                from api.metrics import RENDER_TOOL_CALLS
+                                _outcome = "truncated" if _data.get("truncated") else "ok"
+                                if _data.get("row_count", 0) == 0:
+                                    _outcome = "no_rows"
+                                RENDER_TOOL_CALLS.labels(outcome=_outcome).inc()
+                            except Exception:
+                                pass
+                        except Exception as _re_e:
+                            log.debug(
+                                "render tool append failed (session=%s): %s",
+                                session_id, _re_e,
+                            )
 
                 # Immutable audit row for destructive / remote-exec tools (v2.31.2)
                 try:
