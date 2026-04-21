@@ -35,6 +35,7 @@ import VMHostsSection from './components/VMHostsSection'
 import EscalationBanner from './components/EscalationBanner'
 import ExternalAIConfirmModal from './components/ExternalAIConfirmModal'
 import ExternalAICallsView from './components/ExternalAICallsView'
+import AnalysisView from './components/AnalysisView'
 import WindowsSection from './components/WindowsSection'
 import RunbooksPanel from './components/RunbooksPanel'
 import DiscoveredView from './components/DiscoveredView'
@@ -1700,6 +1701,14 @@ function AppShell() {
             <div className="flex flex-1 overflow-auto min-h-0">
               <div className="flex-1 overflow-auto" style={{ background: 'var(--bg-0)' }}>
                 <ExternalAICallsView />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Analysis' && (
+            <div className="flex flex-1 overflow-auto min-h-0">
+              <div className="flex-1 overflow-auto" style={{ background: 'var(--bg-0)' }}>
+                <AnalysisView />
               </div>
             </div>
           )}

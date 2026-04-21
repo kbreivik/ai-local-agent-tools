@@ -47,6 +47,7 @@ from api.routers.kafka_overview import router as kafka_overview_router
 from api.routers.gates import router as gates_router
 from api.routers.facts import router as facts_router
 from api.routers.external_ai import router as external_ai_router
+from api.routers.analysis import router as analysis_router  # v2.38.0
 from api.db.entity_maintenance import init_maintenance
 from api.routers.settings import seed_defaults as _seed_settings, sync_env_from_db as _sync_env
 from api.constants import APP_NAME, APP_VERSION, DEFAULT_API_PORT, DEFAULT_GUI_PORT
@@ -624,6 +625,7 @@ app.include_router(kafka_overview_router)
 app.include_router(gates_router)
 app.include_router(facts_router)
 app.include_router(external_ai_router)
+app.include_router(analysis_router)
 
 
 def _get_host_ips() -> dict:

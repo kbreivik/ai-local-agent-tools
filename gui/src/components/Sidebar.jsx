@@ -46,6 +46,9 @@ const NAV = [
     { key: 'Settings',  icon: '◉', label: 'Facts Permissions',settingsTab: 'Facts Permissions'},
     { key: 'Settings',  icon: '◎', label: 'Access',     settingsTab: 'Access'     },
   ]},
+  { section: 'ADMIN', items: [
+    { key: 'Analysis', icon: '⚐', label: 'Analysis' },
+  ]},
 ]
 
 const orbStyle = {

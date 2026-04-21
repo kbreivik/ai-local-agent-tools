@@ -224,7 +224,9 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.36.8.md | v2.36.8 | feat(agents): result_render_table + render-and-caption grammar (dark launch) | DONE (2339e0c) |
 | CC_PROMPT_v2.36.9.md | v2.36.9 | fix(agents): render-tool clobber race + verify dispatch + polish | DONE (011ef58) |
 | CC_PROMPT_v2.37.0.md | v2.37.0 | feat(ui): Templates + Recent section refactor — both collapsed by default + operator-tunable RECENT count | DONE (598246a) |
-| CC_PROMPT_v2.37.1.md | v2.37.1 | fix(logs): escalations split-brain (Logs view rewired to agent_escalations table) + RECENT filters out direct: tool fires | RUNNING |
+| CC_PROMPT_v2.37.1.md | v2.37.1 | fix(logs): escalations split-brain (Logs view rewired to agent_escalations table) + RECENT filters out direct: tool fires | DONE (7c63d9a) |
+| CC_PROMPT_v2.37.2.md | v2.37.2 | fix(ui): Trace picker shows session_id + agent_type populated in operations list | DONE (6b01917) |
+| CC_PROMPT_v2.38.0.md | v2.38.0 | feat(admin): Analysis view — sith_lord-only templated SQL diagnostics (7 templates + JSON/CSV/MD dump) | RUNNING |
 
 ---
 
