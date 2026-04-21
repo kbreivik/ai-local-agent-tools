@@ -1,9 +1,14 @@
 /**
  * TaskTemplates — collapsible one-click task shortcuts for the agent.
  * Grouped by domain. Clicking fills the task textarea via setTask().
+ *
+ * v2.37.0: migrated from inline useState(false) to CollapsibleSection
+ * (storageKey='task-templates') so the open/closed state persists across
+ * reloads. defaultOpen={false} reclaims vertical space for live output.
  */
 import { useState } from 'react'
 import { useTask } from '../context/TaskContext'
+import CollapsibleSection from './CollapsibleSection'
 
 const TEMPLATES = [
   {
@@ -130,33 +135,21 @@ const TEMPLATES = [
 
 export default function TaskTemplates() {
   const { setTask } = useTask()
-  const [open, setOpen] = useState(false)
   const [activeGroup, setActiveGroup] = useState(null)
 
   const pick = (task) => {
     setTask(task)
-    setOpen(false)
     setActiveGroup(null)
   }
 
   return (
-    <div style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-      {/* Header row */}
-      <button
-        onClick={() => { setOpen(o => !o); setActiveGroup(null) }}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '5px 12px', background: 'none', border: 'none', cursor: 'pointer',
-          fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.08em',
-          color: open ? 'var(--text-2)' : 'var(--text-3)',
-        }}
+    <div style={{ flexShrink: 0 }}>
+      <CollapsibleSection
+        title="TEMPLATES"
+        defaultOpen={false}
+        storageKey="task-templates"
       >
-        <span>TEMPLATES</span>
-        <span style={{ fontSize: 8, color: 'var(--text-3)' }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {open && (
-        <div style={{ padding: '0 8px 8px' }}>
+        <div>
           {/* Group tabs */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
             {TEMPLATES.map(g => (
@@ -213,7 +206,7 @@ export default function TaskTemplates() {
             </div>
           )}
         </div>
-      )}
+      </CollapsibleSection>
     </div>
   )
 }

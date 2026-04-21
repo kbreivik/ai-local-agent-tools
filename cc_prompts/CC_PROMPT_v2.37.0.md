@@ -1,0 +1,820 @@
+# CC PROMPT — v2.37.0 — Templates + Recent section refactor
+
+## What this does
+
+Addresses the limited task-output vertical space during active agent runs.
+Ships three tightly-scoped changes:
+
+1. **Templates migrated to `CollapsibleSection`** (v2.36.4) with
+   `defaultOpen={false}` and localStorage-persisted state keyed
+   `collapse:task-templates`. The current
+   `TaskTemplates.jsx` uses its own `useState(false)` which resets per
+   page load — operators can't lock it closed. Swap to the canonical
+   wrapper and the state persists across reloads.
+
+2. **New `RECENT` section** below Templates using the same
+   `CollapsibleSection` wrapper, same keyboard/visual pattern. Shows
+   the N most-recently-run tasks (deduplicated by exact task text,
+   keeping the most recent occurrence). Click a row → fills the task
+   textarea via `useTask().setTask(...)` — identical UX to Templates.
+   Does NOT auto-run; operator still presses Run Agent.
+
+3. **`recentTasksCount` Settings key** — operator-tunable count
+   (default 10, range 1–50) so Kent can cap this wide or narrow without
+   a redeploy. Goes in the Appearance tab per the v2.28.7 convention
+   for UI layout settings.
+
+Backend addition: `GET /api/logs/operations/recent?limit=N` returns
+deduped recent operations for the authenticated user.
+
+Design spar archive: `docs/mockups/v2.37.0_templates_recent_round1.html`
+(Option A picked).
+
+Version bump: 2.36.9 → 2.37.0 (`.Y.x` — new user-facing subsystem:
+new section + new endpoint + new Settings key; multi-file; architectural
+pattern change for Templates).
+
+---
+
+## Change 1 — NEW `GET /api/logs/operations/recent`
+
+Locate the existing operations endpoint(s). Likely in
+`api/routers/logs.py` or `api/routers/operations.py`. Grep:
+
+```bash
+grep -rn "operations" api/routers/ | grep -iE "get|router"
+```
+
+Add a new endpoint next to the existing operations list endpoint:
+
+```python
+@router.get("/operations/recent")
+async def get_recent_operations(
+    limit: int = Query(10, ge=1, le=50),
+    user: str = Depends(get_current_user),
+):
+    """v2.37.0 — return the N most recently run operations for this user,
+    deduplicated by exact task text (most recent occurrence kept). Used
+    by the GUI's RECENT panel.
+
+    Excludes:
+      - Sub-agent operations (parent_session_id IS NOT NULL)
+      - Operations with empty or null task text
+      - Operations older than 30 days (noise floor)
+    """
+    from api.db.base import get_engine
+    from sqlalchemy import text
+    async with get_engine().connect() as conn:
+        rows = await conn.execute(
+            text(
+                """
+                SELECT task, status, operation_id, started_at, agent_type, age_seconds
+                FROM (
+                    SELECT DISTINCT ON (task)
+                        task,
+                        status,
+                        id            AS operation_id,
+                        started_at,
+                        agent_type,
+                        EXTRACT(EPOCH FROM (NOW() - started_at))::INT AS age_seconds
+                    FROM operations
+                    WHERE task IS NOT NULL
+                      AND task <> ''
+                      AND owner_user = :user
+                      AND parent_session_id IS NULL
+                      AND started_at > NOW() - INTERVAL '30 days'
+                    ORDER BY task, started_at DESC
+                ) subq
+                ORDER BY started_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"user": user, "limit": limit},
+        )
+        items = [
+            {
+                "task":         r[0],
+                "status":       r[1],
+                "operation_id": str(r[2]) if r[2] else None,
+                "agent_type":   r[4] or "observe",
+                "age_seconds":  int(r[5]) if r[5] is not None else 0,
+            }
+            for r in rows.fetchall()
+        ]
+    return {"items": items, "count": len(items)}
+```
+
+**IMPORTANT — verify schema first.** The query assumes these columns exist
+on `operations`: `task`, `status`, `id`, `started_at`, `agent_type`,
+`owner_user`, `parent_session_id`. Grep `api/db/queries.py` +
+`api/db/base.py` to confirm. If `agent_type` is named differently (e.g.
+`task_type`), adapt the SELECT. If `parent_session_id` isn't present,
+fall back to excluding operations where `triggered_by = 'subagent'` or
+similar — the goal is "don't show sub-agent internals in user's recent
+list".
+
+If the project uses a different auth dependency name, match it.
+
+---
+
+## Change 2 — `recentTasksCount` Settings registration
+
+In `api/routers/settings.py`, find the `SETTINGS_KEYS` dict. Locate the
+"Appearance" group (keys with `"group": "Appearance"` — theme, density,
+radius from v2.28.7). Add:
+
+```python
+    "recentTasksCount": {
+        "default":     10,
+        "type":        "int",
+        "group":       "Appearance",
+        "description": (
+            "Number of recent agent tasks to show in the RECENT section "
+            "below the task templates. Deduplicated by exact task text — "
+            "only the most recent occurrence of each unique task shows. "
+            "Range 1–50."
+        ),
+    },
+```
+
+Validation: keep `type: "int"`; if the settings layer has min/max, add
+`"min": 1, "max": 50`. If not, the GUI input enforces via `min`/`max`
+attributes (Change 5).
+
+---
+
+## Change 3 — `OptionsContext.jsx` DEFAULTS + SERVER_KEYS
+
+In `gui/src/context/OptionsContext.jsx`, add `recentTasksCount`:
+
+- To `DEFAULTS`: `recentTasksCount: 10,`
+- To `SERVER_KEYS`: `'recentTasksCount',`
+
+Place both next to the Appearance-group keys already present (density,
+accent, fontScale, etc. — whatever v2.28.7 and v2.28.8 added). The
+v2.36.6 CI guard `test_every_grouped_setting_is_server_allowlisted`
+will catch omission from either.
+
+---
+
+## Change 4 — NEW `gui/src/components/RecentTasks.jsx`
+
+```jsx
+/**
+ * RecentTasks — v2.37.0
+ *
+ * Shows the N most recently run agent tasks (deduped by exact task text),
+ * fetched from /api/logs/operations/recent. Click a row fills the task
+ * textarea via useTask().setTask() — same UX as TaskTemplates. Does NOT
+ * auto-run the agent.
+ *
+ * N is operator-tunable via the `recentTasksCount` Settings key
+ * (default 10, range 1–50). The section uses CollapsibleSection with
+ * defaultOpen={false} and storageKey='recent-tasks' so state persists
+ * across reloads independently of Templates.
+ *
+ * Re-fetches when:
+ *   - the component mounts
+ *   - the window regains focus (so freshly-run tasks show up)
+ *   - the recentTasksCount setting changes
+ */
+import { useEffect, useState, useCallback } from 'react'
+import { useTask } from '../context/TaskContext'
+import { useOptions } from '../context/OptionsContext'
+import CollapsibleSection from './CollapsibleSection'
+
+const AGENT_COLORS = {
+  observe:     'var(--cyan)',
+  status:      'var(--cyan)',
+  investigate: 'var(--accent)',
+  research:    'var(--accent)',
+  execute:     'var(--amber)',
+  action:      'var(--amber)',
+  build:       'var(--green)',
+  ambiguous:   'var(--cyan)',
+}
+
+const STATUS_COLORS = {
+  completed: 'var(--green)',
+  ok:        'var(--green)',
+  failed:    'var(--red)',
+  error:     'var(--red)',
+  cancelled: 'var(--text-3)',
+  escalated: 'var(--amber)',
+  capped:    'var(--amber)',
+}
+
+function ago(seconds) {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
+  return `${Math.floor(seconds / 86400)}d`
+}
+
+export default function RecentTasks() {
+  const { setTask } = useTask()
+  const { options } = useOptions()
+  const limit = Math.max(1, Math.min(50, parseInt(options?.recentTasksCount ?? 10, 10) || 10))
+
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const fetchRecent = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const res = await fetch(
+        `/api/logs/operations/recent?limit=${limit}`,
+        { credentials: 'include' },
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setItems(Array.isArray(data.items) ? data.items : [])
+    } catch (e) {
+      setError(String(e).slice(0, 120))
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [limit])
+
+  useEffect(() => { fetchRecent() }, [fetchRecent])
+
+  // Refetch on window focus so new runs appear without full reload
+  useEffect(() => {
+    const onFocus = () => { fetchRecent() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [fetchRecent])
+
+  const pick = (task) => {
+    setTask(task)
+  }
+
+  return (
+    <CollapsibleSection
+      title={`RECENT · ${items.length}`}
+      defaultOpen={false}
+      storageKey="recent-tasks"
+    >
+      {loading && items.length === 0 && (
+        <div style={{
+          fontFamily: 'var(--font-mono)', fontSize: 9,
+          color: 'var(--text-3)', padding: '4px 0',
+        }}>
+          loading…
+        </div>
+      )}
+      {error && (
+        <div style={{
+          fontFamily: 'var(--font-mono)', fontSize: 9,
+          color: 'var(--red)', padding: '4px 0',
+        }}>
+          error: {error}
+        </div>
+      )}
+      {!loading && !error && items.length === 0 && (
+        <div style={{
+          fontFamily: 'var(--font-mono)', fontSize: 9,
+          color: 'var(--text-3)', padding: '4px 0',
+        }}>
+          No recent tasks yet. Runs you start will show up here.
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {items.map((item, idx) => {
+          const color = AGENT_COLORS[item.agent_type] || 'var(--cyan)'
+          const statusColor = STATUS_COLORS[item.status] || 'var(--text-3)'
+          return (
+            <button
+              key={`${item.operation_id}-${idx}`}
+              onClick={() => pick(item.task)}
+              title={item.task}
+              style={{
+                textAlign: 'left',
+                padding: '4px 8px',
+                fontSize: 9,
+                fontFamily: 'var(--font-mono)',
+                letterSpacing: '0.03em',
+                background: 'var(--bg-2)',
+                border: '1px solid var(--border)',
+                borderLeft: `2px solid ${color}`,
+                borderRadius: 2,
+                cursor: 'pointer',
+                color: 'var(--text-2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                transition: 'background 0.12s',
+                width: '100%',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-2)'}
+            >
+              <span style={{
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {item.task}
+              </span>
+              <span style={{
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 8,
+              }}>
+                <span style={{ color: statusColor }}>●</span>
+                <span style={{ color: 'var(--text-3)' }}>{ago(item.age_seconds)}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </CollapsibleSection>
+  )
+}
+```
+
+Styling notes:
+- Font sizes match existing `TaskTemplates.jsx` (9px mono, `var(--bg-2)` + border-left accent).
+- Title shows live item count so operators can see "RECENT · 10" (cap-indicative).
+- Hover state matches templates (`var(--bg-3)` background swap).
+- Status dot + age pill on the right for glanceable context.
+- Tooltip on hover shows full task text (`title={item.task}`).
+
+---
+
+## Change 5 — `TaskTemplates.jsx` migration to `CollapsibleSection`
+
+Replace the current manual `useState(false)` + inline button header with
+the canonical wrapper. Preserves all current group/filter/pick behaviour;
+ONLY the outer collapsible container changes.
+
+Find in `gui/src/components/TaskTemplates.jsx`:
+
+```jsx
+export default function TaskTemplates() {
+  const { setTask } = useTask()
+  const [open, setOpen] = useState(false)
+  const [activeGroup, setActiveGroup] = useState(null)
+
+  const pick = (task) => {
+    setTask(task)
+    setOpen(false)
+    setActiveGroup(null)
+  }
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+      {/* Header row */}
+      <button
+        onClick={() => { setOpen(o => !o); setActiveGroup(null) }}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '5px 12px', background: 'none', border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.08em',
+          color: open ? 'var(--text-2)' : 'var(--text-3)',
+        }}
+      >
+        <span>TEMPLATES</span>
+        <span style={{ fontSize: 8, color: 'var(--text-3)' }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 8px 8px' }}>
+```
+
+Replace with:
+
+```jsx
+import CollapsibleSection from './CollapsibleSection'
+
+export default function TaskTemplates() {
+  const { setTask } = useTask()
+  const [activeGroup, setActiveGroup] = useState(null)
+
+  const pick = (task) => {
+    setTask(task)
+    setActiveGroup(null)
+  }
+
+  return (
+    <div style={{ flexShrink: 0 }}>
+      <CollapsibleSection
+        title="TEMPLATES"
+        defaultOpen={false}
+        storageKey="task-templates"
+      >
+        <div>
+```
+
+And the closing pattern. Find:
+
+```jsx
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+Replace with:
+
+```jsx
+          )}
+        </div>
+      </CollapsibleSection>
+    </div>
+  )
+}
+```
+
+**Note:** the `CollapsibleSection` wrapper already supplies its own
+header + body padding + border styling (`border border-white/5
+rounded` + `p-3`). The legacy `borderBottom: '1px solid var(--border)'`
+wrapping `<div>` is removed because RecentTasks below has its own
+bordered section, and `CollapsibleSection`'s own border provides the
+separation. Visual result: cleaner section stacking.
+
+Keep all the `TEMPLATES` array + group/filter/pick logic exactly as is
+— only the outer shell changed. The `open` / `setOpen` state and the
+manual header button are gone because `CollapsibleSection` owns them
+now and persists via localStorage.
+
+---
+
+## Change 6 — Mount `RecentTasks` below `TaskTemplates`
+
+Find where `<TaskTemplates />` is rendered. Grep:
+
+```bash
+grep -rn "TaskTemplates" gui/src/
+```
+
+Most likely in `gui/src/components/CommandPanel.jsx` or directly in
+`gui/src/App.jsx` near the Run Agent block. Add the RecentTasks import
+and render it directly below:
+
+```jsx
+import TaskTemplates from './TaskTemplates'
+import RecentTasks from './RecentTasks'     // NEW v2.37.0
+```
+
+And in the render:
+
+```jsx
+      <TaskTemplates />
+      <RecentTasks />                        // NEW v2.37.0
+```
+
+The two components stack naturally — each is a self-contained
+`CollapsibleSection` with its own persisted state.
+
+---
+
+## Change 7 — `OptionsModal.jsx` Appearance tab input
+
+Find the Appearance tab rendering (grep for `Appearance` or the density/
+accent controls from v2.28.7). Add a number input next to the other
+Appearance fields:
+
+```jsx
+        <label className="flex items-center gap-2 text-sm">
+          <span style={{ minWidth: 140 }}>Recent tasks count</span>
+          <input
+            type="number"
+            min="1"
+            max="50"
+            value={draft.recentTasksCount ?? 10}
+            onChange={e => patch({
+              recentTasksCount: Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)),
+            })}
+            className="w-16 px-2 py-1 bg-[var(--bg-2)] border border-white/10 rounded"
+          />
+        </label>
+        <div className="text-xs text-gray-500 ml-[148px] -mt-1">
+          Number of unique recent tasks shown in the RECENT section
+          below templates (deduplicated by task text). Default 10.
+        </div>
+```
+
+Match the exact `patch({...})` / className pattern used by the
+surrounding Appearance fields. The 140px label min-width aligns with the
+other Appearance labels.
+
+---
+
+## Change 8 — Tests
+
+### 8a — Backend endpoint test
+
+`tests/test_recent_operations_endpoint.py` (NEW):
+
+```python
+"""v2.37.0 — GET /api/logs/operations/recent tests."""
+import pytest
+from datetime import datetime, timezone, timedelta
+
+
+@pytest.mark.asyncio
+async def test_recent_deduplicates_by_exact_task(postgres_engine, test_client):
+    """Same task text run 3 times → 1 row in response, most recent."""
+    task = "Check Kafka broker status"
+    # Seed three operations with the same task text, different started_at
+    from sqlalchemy import text
+    async with postgres_engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO operations (id, session_id, task, status, owner_user, "
+            "started_at, agent_type) VALUES "
+            "(gen_random_uuid(), 's1', :t, 'completed', 'testuser', NOW() - INTERVAL '3 hours', 'observe'),"
+            "(gen_random_uuid(), 's2', :t, 'completed', 'testuser', NOW() - INTERVAL '2 hours', 'observe'),"
+            "(gen_random_uuid(), 's3', :t, 'completed', 'testuser', NOW() - INTERVAL '1 hour',  'observe')"
+        ), {"t": task})
+
+    res = test_client.get("/api/logs/operations/recent?limit=10")
+    assert res.status_code == 200
+    data = res.json()
+    matching = [i for i in data["items"] if i["task"] == task]
+    assert len(matching) == 1, f"expected 1 deduped row, got {len(matching)}"
+    # Must be the most recent occurrence — age under 2 hours
+    assert matching[0]["age_seconds"] < 3600 * 2
+
+
+@pytest.mark.asyncio
+async def test_recent_excludes_subagent_operations(postgres_engine, test_client):
+    """Sub-agent ops (parent_session_id IS NOT NULL) must not appear."""
+    from sqlalchemy import text
+    async with postgres_engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO operations (id, session_id, task, status, owner_user, "
+            "started_at, parent_session_id, agent_type) VALUES "
+            "(gen_random_uuid(), 's_sub', 'Internal sub-agent task', 'completed', "
+            "'testuser', NOW(), 'parent-sid', 'execute')"
+        ))
+    res = test_client.get("/api/logs/operations/recent?limit=50")
+    tasks = [i["task"] for i in res.json()["items"]]
+    assert "Internal sub-agent task" not in tasks
+
+
+@pytest.mark.asyncio
+async def test_recent_scopes_to_current_user(postgres_engine, test_client):
+    """Ops from other users must not appear in the current user's Recent."""
+    from sqlalchemy import text
+    async with postgres_engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO operations (id, session_id, task, status, owner_user, started_at) "
+            "VALUES (gen_random_uuid(), 's_other', 'Other users task', 'completed', "
+            "'other_user', NOW())"
+        ))
+    res = test_client.get("/api/logs/operations/recent?limit=50")
+    tasks = [i["task"] for i in res.json()["items"]]
+    assert "Other users task" not in tasks
+
+
+@pytest.mark.asyncio
+async def test_recent_respects_limit_param(postgres_engine, test_client):
+    """limit param is honoured and clamped to 1..50."""
+    res = test_client.get("/api/logs/operations/recent?limit=3")
+    assert res.status_code == 200
+    assert len(res.json()["items"]) <= 3
+
+    # Out-of-range gets clamped (FastAPI Query(ge=1, le=50) → 422)
+    res_low = test_client.get("/api/logs/operations/recent?limit=0")
+    assert res_low.status_code == 422
+    res_high = test_client.get("/api/logs/operations/recent?limit=100")
+    assert res_high.status_code == 422
+```
+
+Reuse whatever `postgres_engine` + `test_client` fixtures are already
+configured in the test suite. If no such fixtures exist, mark with
+`pytest.mark.skipif(not HAS_PG, reason="postgres not available")` —
+the structural guard (Change 9) runs regardless.
+
+### 8b — Structural CI guard
+
+`tests/test_recent_tasks_wiring.py` (NEW):
+
+```python
+"""v2.37.0 — structural guards for the RECENT section wiring.
+
+These are cheap file-level checks so future refactors can't silently
+drop the feature. If these fail, the feature is shipping broken.
+"""
+import pathlib
+
+
+REPO_ROOT = pathlib.Path(__file__).parent.parent
+
+
+def test_recent_tasks_component_exists():
+    p = REPO_ROOT / "gui" / "src" / "components" / "RecentTasks.jsx"
+    assert p.exists(), "RecentTasks.jsx must exist (v2.37.0)"
+    src = p.read_text(encoding="utf-8")
+    assert "CollapsibleSection" in src
+    assert "storageKey=\"recent-tasks\"" in src
+    assert "defaultOpen={false}" in src
+    assert "/api/logs/operations/recent" in src
+    assert "setTask" in src
+
+
+def test_recent_tasks_mounted_in_parent():
+    """RecentTasks must be imported + rendered next to TaskTemplates."""
+    candidates = [
+        REPO_ROOT / "gui" / "src" / "components" / "CommandPanel.jsx",
+        REPO_ROOT / "gui" / "src" / "App.jsx",
+    ]
+    matches = [p for p in candidates
+               if p.exists() and "RecentTasks" in p.read_text(encoding="utf-8")]
+    assert matches, (
+        "RecentTasks must be imported + rendered in CommandPanel.jsx or App.jsx"
+    )
+
+
+def test_templates_uses_collapsible_section():
+    """TaskTemplates must use the canonical CollapsibleSection wrapper
+    (v2.37.0 migration — no more inline useState(false) for open)."""
+    p = REPO_ROOT / "gui" / "src" / "components" / "TaskTemplates.jsx"
+    src = p.read_text(encoding="utf-8")
+    assert "CollapsibleSection" in src, (
+        "TaskTemplates must import + use CollapsibleSection (v2.37.0)"
+    )
+    assert "storageKey=\"task-templates\"" in src, (
+        "TaskTemplates must use storageKey='task-templates' for persistence"
+    )
+    assert "defaultOpen={false}" in src, (
+        "TaskTemplates must default to collapsed"
+    )
+
+
+def test_recent_tasks_count_setting_registered():
+    """recentTasksCount Settings key must exist in api/routers/settings.py."""
+    p = REPO_ROOT / "api" / "routers" / "settings.py"
+    src = p.read_text(encoding="utf-8")
+    assert "recentTasksCount" in src
+
+
+def test_recent_tasks_count_in_frontend_allowlist():
+    """recentTasksCount must be in OptionsContext DEFAULTS + SERVER_KEYS.
+    The v2.36.6 CI guard would also catch this; explicit assertion here
+    makes the v2.37.0 expectation visible."""
+    p = REPO_ROOT / "gui" / "src" / "context" / "OptionsContext.jsx"
+    src = p.read_text(encoding="utf-8")
+    # Appears in DEFAULTS
+    assert "recentTasksCount: 10" in src or "recentTasksCount:10" in src
+    # Appears in SERVER_KEYS
+    assert "'recentTasksCount'" in src or '"recentTasksCount"' in src
+```
+
+---
+
+## Change 9 — `VERSION`
+
+```
+2.37.0
+```
+
+---
+
+## Verify
+
+```bash
+# New files exist
+test -f gui/src/components/RecentTasks.jsx
+test -f tests/test_recent_operations_endpoint.py
+test -f tests/test_recent_tasks_wiring.py
+
+# TaskTemplates migration landed
+grep -cn "CollapsibleSection" gui/src/components/TaskTemplates.jsx       # >=2 (import + usage)
+grep -cn "storageKey=\"task-templates\"" gui/src/components/TaskTemplates.jsx  # >=1
+grep -cn "defaultOpen={false}" gui/src/components/TaskTemplates.jsx      # >=1
+
+# Settings key registered
+grep -n "recentTasksCount" api/routers/settings.py                       # >=1
+grep -n "recentTasksCount" gui/src/context/OptionsContext.jsx            # >=2 (DEFAULTS + SERVER_KEYS)
+grep -n "recentTasksCount" gui/src/components/OptionsModal.jsx           # >=1
+
+# Endpoint wired
+grep -n "/operations/recent" api/routers/                                # >=1 (wherever logs router lives)
+
+# RecentTasks mounted
+grep -rn "<RecentTasks" gui/src/                                         # >=1
+
+# Tests pass
+pytest tests/test_recent_operations_endpoint.py -v
+pytest tests/test_recent_tasks_wiring.py -v
+
+# Existing guards still pass (v2.36.6)
+pytest tests/test_options_context_server_keys.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(ui): v2.37.0 Templates + Recent section refactor
+
+Goal: reclaim task-output vertical space when an agent run is active.
+Templates and a new Recent section both collapse by default via the
+canonical CollapsibleSection wrapper with localStorage-persisted state.
+
+TEMPLATES migration: swaps the inline useState(false) in TaskTemplates.jsx
+for CollapsibleSection wrapper (v2.36.4) with defaultOpen={false} and
+storageKey='task-templates'. State now persists across page reloads and
+matches the pattern used elsewhere in AI Services settings + sidebar
+groups. All group/filter/pick behaviour preserved — only outer shell
+changed.
+
+RECENT section: new RecentTasks.jsx component rendered below Templates.
+Fetches GET /api/logs/operations/recent?limit=N, deduplicates by exact
+task text (most recent occurrence kept), displays as pipe-delimited rows
+with agent_type color strip + status dot + age. Click a row fills the
+task textarea via useTask().setTask() — same UX as Templates, no
+auto-run. Re-fetches on window focus so freshly-run tasks appear
+without full reload.
+
+New endpoint GET /api/logs/operations/recent (api/routers/logs.py):
+returns deduped recent ops scoped to the authenticated user
+(owner_user match), excludes sub-agent operations
+(parent_session_id IS NOT NULL), 30-day noise floor. limit param
+clamped to 1..50 via FastAPI Query(ge=1, le=50).
+
+New Settings key recentTasksCount (Appearance group, default 10, range
+1-50). Registered in SETTINGS_KEYS, OptionsContext DEFAULTS +
+SERVER_KEYS (v2.36.6 CI guard), OptionsModal Appearance tab.
+
+Tests: 4 endpoint tests (dedup, subagent exclusion, user scoping,
+limit clamping), 5 structural guards (RecentTasks component exists +
+correctly configured, mounted next to TaskTemplates, TaskTemplates
+migrated, setting registered in backend + frontend).
+
+Design spar archive: docs/mockups/v2.37.0_templates_recent_round1.html
+(Option A picked)."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Smoke test:
+
+1. Hard-refresh the browser (Ctrl+Shift+R). Open Dashboard / Commands page.
+2. Confirm the Run Agent area below the task input shows:
+   - `> TEMPLATES` (collapsed, chevron points right)
+   - `> RECENT · N` (collapsed, chevron points right)
+3. Click `> RECENT` — should expand, show last N unique tasks you've run.
+   Click any row → task text should populate the task textarea.
+   Press Run Agent manually.
+4. Start a new task, wait for it to complete, hit the browser's focus
+   elsewhere and back — RECENT should re-fetch and the new task should
+   appear at the top.
+5. Open Settings → Appearance. Change "Recent tasks count" to 3, save.
+   Reload. RECENT should now cap at 3 rows.
+6. Close both TEMPLATES and RECENT. Reload page. Both stay closed
+   (localStorage persistence working).
+7. Open both. Reload page. Both stay open (same persistence).
+8. Run a long task. Confirm the output pane below the input has
+   markedly more vertical space than pre-v2.37.0 (both sections
+   collapsed by default).
+
+Edge cases:
+
+- Fresh user / empty DB: RECENT shows "No recent tasks yet."
+- Backend unreachable: RECENT shows "error: HTTP 503" or similar
+- User with other-user ops in DB: only sees their own tasks
+
+---
+
+## Scope guard — do NOT touch
+
+- Template content in TaskTemplates.jsx — no new or removed templates.
+- Runbooks / RunbooksPanel / SubtaskOfferBanner — unrelated surfaces.
+- Existing `/api/logs/operations` list endpoint — new endpoint is
+  additive at `/operations/recent`, the list endpoint keeps its shape.
+- `operations` table schema — the endpoint only reads existing columns.
+- External AI Router — unchanged.
+- Render tool from v2.36.8/9 — unchanged.
+
+---
+
+## Post-deploy followups (not v2.37.0)
+
+- v2.37.1 (if Recent usage is high): right-click on a RECENT row → pin
+  to top, or delete from history.
+- v2.37.x: "Rename / note" feature on Recent rows — attach a one-line
+  description so "List all Swarm services..." becomes "Pre-deploy
+  swarm check" for readability.
+- v2.37.x: Operations view markdown-to-HTML rendering (deferred from
+  v2.36.8 per Q1).

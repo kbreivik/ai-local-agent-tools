@@ -151,6 +151,22 @@ SETTINGS_KEYS: dict[str, dict] = {
         "env": None, "sens": False, "default": False, "type": "bool",
         "group": "Agent Budgets",
     },
+
+    # --- Appearance (v2.37.0) ---
+    # Number of unique recent agent tasks to show in the RECENT section
+    # below task templates. Deduplicated by exact task text — only the
+    # most recent occurrence of each unique task shows. Range 1–50.
+    "recentTasksCount": {
+        "env": None, "sens": False, "default": 10, "type": "int",
+        "min": 1, "max": 50,
+        "group": "Appearance",
+        "description": (
+            "Number of recent agent tasks to show in the RECENT section "
+            "below the task templates. Deduplicated by exact task text — "
+            "only the most recent occurrence of each unique task shows. "
+            "Range 1–50."
+        ),
+    },
 }
 
 

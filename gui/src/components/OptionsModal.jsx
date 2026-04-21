@@ -1159,6 +1159,21 @@ function DisplayTab({ draft, update }) {
         </div>
       </Field>
 
+      <Field label="Recent tasks count"
+        hint="Number of unique recent tasks shown in the RECENT section below templates (deduplicated by task text). Range 1–50. Default 10.">
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1} max={50}
+            value={draft.recentTasksCount ?? 10}
+            onChange={e => update('recentTasksCount',
+              Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))}
+            className="w-20 bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-2 py-1.5 text-xs text-[color:var(--text-1)] focus:outline-none"
+          />
+          <span className="text-xs text-[color:var(--text-3)]">rows</span>
+        </div>
+      </Field>
+
     </div>
   )
 }

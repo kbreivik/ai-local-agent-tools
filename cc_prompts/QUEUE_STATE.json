@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T11:35:49",
+  "updated_at": "2026-04-21T12:20:38",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2780,6 +2780,22 @@
       "finished_at": "2026-04-21T11:35:49",
       "duration_s": 541.4304309000145,
       "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_112647_CC_PROMPT_v2.36.9.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.37.0.md",
+      "version": "v2.37.0",
+      "theme": "feat(ui): Templates + Recent section refactor — both collapsed by default + operator-tunable RECENT count",
+      "runner_status": "RUNNING",
+      "commit_sha": "",
+      "error": "",
+      "started_at": "2026-04-21T12:20:38",
+      "finished_at": "",
+      "duration_s": 0.0,
+      "log_file": "",
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,

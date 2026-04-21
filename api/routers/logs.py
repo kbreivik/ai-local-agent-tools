@@ -49,6 +49,76 @@ async def get_operations(
     return {"operations": rows}
 
 
+@router.get("/operations/recent")
+async def get_recent_operations(
+    limit: int = Query(10, ge=1, le=50),
+    user: str = Depends(get_current_user),
+):
+    """v2.37.0 — return the N most recently run operations for this user,
+    deduplicated by exact task text (most recent occurrence kept). Used
+    by the GUI's RECENT panel below the task templates.
+
+    Schema notes (operations table on this project):
+      - Task text lives in the `label` column (returned as `task` to the
+        frontend so the UI code stays shape-agnostic).
+      - `parent_session_id` was backfilled with a default of '' rather
+        than NULL, so both cases must be excluded for "top-level only".
+      - `agent_type` is not stored on `operations`; it's sourced from
+        the first `agent_llm_traces` step for the operation when
+        available, otherwise defaults to 'observe'.
+
+    Excludes:
+      - Sub-agent operations (parent_session_id set to a non-empty value)
+      - Operations with empty or null task text
+      - Operations older than 30 days (noise floor)
+    """
+    async with get_engine().connect() as conn:
+        rows = await conn.execute(
+            text(
+                """
+                SELECT label, status, operation_id, started_at, agent_type, age_seconds
+                FROM (
+                    SELECT DISTINCT ON (label)
+                        label,
+                        status,
+                        o.id         AS operation_id,
+                        started_at,
+                        COALESCE((
+                            SELECT t.agent_type
+                            FROM agent_llm_traces t
+                            WHERE t.operation_id = o.id::text
+                              AND t.agent_type IS NOT NULL
+                            ORDER BY t.step_index ASC
+                            LIMIT 1
+                        ), 'observe') AS agent_type,
+                        EXTRACT(EPOCH FROM (NOW() - started_at))::INT AS age_seconds
+                    FROM operations o
+                    WHERE label IS NOT NULL
+                      AND label <> ''
+                      AND owner_user = :user
+                      AND (parent_session_id IS NULL OR parent_session_id = '')
+                      AND started_at > NOW() - INTERVAL '30 days'
+                    ORDER BY label, started_at DESC
+                ) subq
+                ORDER BY started_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"user": user, "limit": limit},
+        )
+        items = [
+            {
+                "task":         r[0],
+                "status":       r[1],
+                "operation_id": str(r[2]) if r[2] else None,
+                "agent_type":   r[4] or "observe",
+                "age_seconds":  int(r[5]) if r[5] is not None else 0,
+            }
+            for r in rows.fetchall()
+        ]
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/operations/{op_id}")
 async def get_operation(op_id: str):
     async with get_engine().connect() as conn:

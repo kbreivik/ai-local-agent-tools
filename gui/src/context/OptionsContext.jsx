@@ -112,6 +112,9 @@ const DEFAULTS = {
   uiDensity:      'normal',    // 'compact'|'normal'|'comfortable'
   borderRadius:   'sharp',     // 'sharp'|'soft'|'round'
   fontStyle:      'mono',      // 'mono'|'mixed'|'sans'
+
+  // Appearance — command panel (v2.37.0)
+  recentTasksCount: 10,        // 1..50 — RECENT section cap
 }
 
 // Keys managed by the server. Only these are sent to / fetched from the API.
@@ -151,6 +154,9 @@ const SERVER_KEYS = new Set([
   'agentToolBudget_observe', 'agentToolBudget_investigate',
   'agentToolBudget_execute', 'agentToolBudget_build',
   'renderToolPromptEnabled',  // v2.36.8
+
+  // Appearance (v2.37.0)
+  'recentTasksCount',
 ])
 
 function isMasked(v) {
