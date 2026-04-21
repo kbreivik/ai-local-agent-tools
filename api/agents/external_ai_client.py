@@ -353,13 +353,31 @@ async def synthesize_replace(
 
     Raises ExternalAI* on failure. Caller wraps this in try/except to
     produce the halt-on-failure behaviour.
-    """
-    from mcp_server.tools.skills.storage import get_backend
-    backend = get_backend()
 
-    provider = (backend.get_setting("externalProvider") or "claude").strip().lower()
-    api_key = (backend.get_setting("externalApiKey") or "").strip()
-    model = (backend.get_setting("externalModel") or "").strip()
+    v2.38.3: reads via api.settings_manager.get_setting so sensitive
+    keys (externalApiKey is in SENSITIVE_KEYS) are decrypted before
+    use. Pre-v2.38.3 this function read via the raw backend primitive
+    which returned ciphertext — resulting in HTTP 401 auth failures
+    on every external AI call.
+    """
+    from api.settings_manager import get_setting
+    from api.routers.settings import SETTINGS_KEYS
+
+    def _read(key: str, default: str = "") -> str:
+        """Read a Settings value through the decrypting path. Returns
+        stripped string or default on any error / empty value."""
+        try:
+            val = get_setting(key, SETTINGS_KEYS).get("value")
+        except Exception as e:
+            log.warning("external_ai: failed to read setting %r: %s", key, e)
+            return default
+        if val is None:
+            return default
+        return str(val).strip() or default
+
+    provider = _read("externalProvider", "claude").lower()
+    api_key  = _read("externalApiKey")
+    model    = _read("externalModel")
 
     if not api_key:
         raise ExternalAIAuthError("externalApiKey is not set")

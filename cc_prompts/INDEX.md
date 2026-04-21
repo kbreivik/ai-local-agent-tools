@@ -228,7 +228,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.37.2.md | v2.37.2 | fix(ui): Trace picker shows session_id + agent_type populated in operations list | DONE (6b01917) |
 | CC_PROMPT_v2.38.0.md | v2.38.0 | feat(admin): Analysis view — sith_lord-only templated SQL diagnostics (7 templates + JSON/CSV/MD dump) | DONE (0250a7d) |
 | CC_PROMPT_v2.38.1.md | v2.38.1 | fix(ui): Operations ID column + Analysis deep-link + raw-output scroll scope fix | DONE (c0c3d4b) |
-| CC_PROMPT_v2.38.2.md | v2.38.2 | fix(ui): CommandPanel unified scroll region — single outer scroll with min-h-0, task input pinned at top | RUNNING |
+| CC_PROMPT_v2.38.2.md | v2.38.2 | fix(ui): CommandPanel unified scroll region — single outer scroll with min-h-0, task input pinned at top | DONE (1807cd8) |
+| CC_PROMPT_v2.38.3.md | v2.38.3 | fix(agents): external AI auth 401 — synthesize_replace reads via settings_manager.get_setting (decrypts) instead of raw backend (ciphertext) | RUNNING |
 
 ---
 

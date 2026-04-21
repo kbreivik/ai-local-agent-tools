@@ -1,0 +1,630 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.38.2.md (v2.38.2)
+Theme: fix(ui): CommandPanel unified scroll region — single outer scroll with min-h-0, task input pinned at top
+
+Prompt content:
+
+# CC PROMPT — v2.38.2 — CommandPanel unified scroll region
+
+## What this does
+
+Fixes the "panel isn't scrollable for the full height, just some sections"
+report on the Commands slide-in panel (toggle icon next to sidebar) and
+the Commands main tab. Browser zoom made it worse because every child
+grows while the viewport stays the same.
+
+### Root cause
+
+`gui/src/components/CommandPanel.jsx` inner column (`<div className="flex
+flex-col h-full">`) stacks ~9 siblings — task input, AgentFeed, full-output
+shortcut, live trace, ChoiceBar, ClarificationWidget, TaskTemplates,
+RecentTasks, tag filter bar, tool list. Only the last one (the tool
+list) has `flex-1 overflow-y-auto`. Everything else has no flex-shrink
+and no overflow.
+
+Flex items default to `min-height: auto`, which means a `flex-1` child
+cannot shrink below its own content's intrinsic height. The tool list
+with 50+ items therefore can't shrink even when its siblings above
+collectively demand more space than the panel has. When Templates and
+Recent are both open the sum of the "natural-height" siblings easily
+exceeds 100% of the panel; the tool list gets squeezed to near-zero or
+pushed below the viewport, and nothing else scrolls because nothing
+else has an overflow container.
+
+Browser zoom compounds this: every child scales with zoom but the
+viewport height doesn't, so total content overflow grows linearly with
+zoom factor.
+
+### Fix
+
+Restructure to exactly two zones:
+
+1. **Sticky top** (`shrink-0`, never scrolls) — task input textarea +
+   Run button + agent message only.
+2. **Single outer scroll region** (`flex-1 overflow-y-auto min-h-0`) —
+   everything else: AgentFeed, full-output shortcut, live trace,
+   ChoiceBar, ClarificationWidget, TaskTemplates, RecentTasks, tag
+   filter bar, AND the tool list as plain flow.
+
+Drop the tool list's own `flex-1 overflow-y-auto` — it becomes plain
+content inside the outer scroll. Add `min-h-0` to the outer column so
+the scroll region can actually shrink below content height.
+
+Same fix applies to both `mode="panel"` (slide-in 360px) and `mode="tab"`
+(main tab full-width) — they share the same `inner` variable in the
+component. The existing nested scroll on the live-trace box (maxHeight:
+100, overflowY: auto) is preserved as-is — it's a 100px clamp, rarely
+needs to scroll, and nested scrolling of that small region is fine.
+
+Version bump: 2.38.1 → 2.38.2 (`.x.2` — single-file UI fix, no schema,
+no new deps, no new Settings).
+
+---
+
+## Change 1 — `gui/src/components/CommandPanel.jsx`
+
+Find the `inner` assignment (currently around line ~257):
+
+```jsx
+  const inner = (
+    <div className="flex flex-col h-full" data-component="CommandPanel">
+      {/* Agent task input */}
+      <div className={`border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
+```
+
+Replace the `className` on the outer div to add `min-h-0` so the
+flex-1 scroll child below can actually shrink under pressure:
+
+```jsx
+  const inner = (
+    <div className="flex flex-col h-full min-h-0" data-component="CommandPanel">
+      {/* Agent task input — pinned at top, never scrolls */}
+      <div className={`border-b border-slate-700 bg-slate-900 shrink-0 ${isTab ? 'px-4 py-3' : 'px-3 py-2'}`}>
+```
+
+Now find the end of the task input block (around line ~280), after
+`{agentMsg && <p>...}`:
+
+```jsx
+        {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
+      </div>
+      {/* Inline agent feed — below Run button, above tool list */}
+      <AgentFeed />
+```
+
+Wrap EVERYTHING after the closing `</div>` of the task input block in
+a single scrollable section. Replace the block from `<AgentFeed />`
+through the closing `</div>` of the tool list (around line ~377 — the
+one that contains `{visible.map(item => <ToolCard ... />)}`) with:
+
+```jsx
+        {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
+      </div>
+
+      {/* v2.38.2: SINGLE outer scroll region — everything below the task
+          input scrolls as one. Previously only the tool list had its own
+          overflow container which starved the other sections of height
+          when templates/recent were expanded or the browser was zoomed. */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Inline agent feed — below Run button, above tool list */}
+        <AgentFeed />
+        {/* Full output shortcut — shown when not running and output exists */}
+        {!isRunning && outputLines.length > 0 && (
+          <div style={{ padding: '4px 12px 0' }}>
+            <button onClick={() => onResult && onResult('Output')}
+              style={{ width: '100%', fontSize: 9, color: 'var(--text-3)', background: 'none',
+                       border: '1px solid var(--border)', borderRadius: 2, padding: '3px 8px',
+                       cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', textAlign: 'left' }}>
+              ◫ View full output trace →
+            </button>
+          </div>
+        )}
+        {/* Live trace — shown while running. Keeps its own maxHeight=100
+            nested scroll because it's a bounded snapshot of the last 5
+            lines and we don't want it to grow with many outputLines. */}
+        {isRunning && (
+          <div style={{ margin: '4px 12px 0', padding: '6px 8px', background: 'var(--bg-2)',
+                        border: '1px solid var(--border)', borderRadius: 2, fontFamily: 'var(--font-mono)',
+                        fontSize: 9, color: 'var(--text-3)', maxHeight: 100, overflowY: 'auto' }}>
+            {outputLines.slice(-5).map((line, i) => (
+              <div key={i} style={{
+                color: line.type === 'tool' ? (line.status === 'error' ? 'var(--red)' : line.status === 'ok' ? 'var(--green)' : 'var(--text-2)')
+                     : line.type === 'halt' ? 'var(--red)' : 'var(--text-3)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 1,
+              }}>
+                {line.type === 'tool' ? `⚙ ${line.content}` : line.type === 'step' ? `── ${line.content}`
+                 : line.type === 'reasoning' ? `💭 ${line.content?.slice(0, 80)}`
+                 : line.type === 'halt' ? `⚠ ${line.content}` : line.content}
+              </div>
+            ))}
+            <div style={{ color: 'var(--accent)' }}>▋</div>
+          </div>
+        )}
+        <ChoiceBar choices={pendingChoices} onPick={pickChoice} dark />
+        <ClarificationWidget dark />
+        <TaskTemplates />
+        <RecentTasks />
+
+        {/* Tag filter bar — scrolls with content in v2.38.2 (was shrink-0
+            sticky before, which contributed to height starvation). */}
+        <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
+          {allTags.map(tag => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTags(prev => {
+                const next = new Set(prev)
+                next.has(tag) ? next.delete(tag) : next.add(tag)
+                return next
+              })}
+              className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                selectedTags.has(tag)
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+              }`}
+            >
+              {humanizeCategory(tag)}
+            </button>
+          ))}
+          {selectedTags.size > 0 && (
+            <button
+              onClick={() => setSelectedTags(new Set())}
+              className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-500 hover:text-slate-300 ml-1"
+            >
+              ✕ clear
+            </button>
+          )}
+          {allTags.length > 0 && (
+            <div className="ml-auto flex items-center gap-0 border border-slate-600 rounded overflow-hidden text-xs shrink-0">
+              <button
+                onClick={() => setAndMode(false)}
+                className={`px-2 py-0.5 transition-colors ${!andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                OR
+              </button>
+              <button
+                onClick={() => setAndMode(true)}
+                className={`px-2 py-0.5 transition-colors ${andMode ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              >
+                AND
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tool list — v2.38.2: plain flow inside the outer scroll, no
+            own overflow container. 2-column grid in tab mode, single
+            column in panel mode. */}
+        <div className={isTab ? 'px-4 py-3' : 'px-3 py-2'}>
+          {loading && <p className="text-xs text-slate-500 animate-pulse">Loading…</p>}
+          {!loading && visible.length === 0 && (
+            <p className="text-xs text-slate-600">No items match the selected tags.</p>
+          )}
+          <div className={isTab ? 'grid grid-cols-2 gap-x-4' : ''}>
+            {visible.map(item => (
+              <ToolCard key={item.name} tool={item} onResult={onResult} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+```
+
+**Notes on the rewrite:**
+
+- The task input block at the top is untouched — same `shrink-0`, same
+  textarea, same Run button, same agentMsg. It stays pinned.
+- `AgentFeed`, full-output shortcut, live trace, ChoiceBar,
+  ClarificationWidget, TaskTemplates, RecentTasks, tag filter, and
+  tool list all move inside the new `<div className="flex-1
+  overflow-y-auto min-h-0">`.
+- The `flexShrink: 0` inline style on the full-output shortcut wrapper
+  is removed — it's no longer inside a flex container.
+- The live trace keeps its own `maxHeight: 100, overflowY: 'auto'`
+  because it's a bounded "tail" view intentionally clamped. Nested
+  scroll of a 100px region is fine.
+- The tag filter bar loses `shrink-0` — it scrolls with content now.
+  If Kent wants it sticky in a future prompt, v2.38.3 can add a
+  `position: sticky; top: 0` on that div; not done here to keep the
+  fix tight.
+- The tool list's outer wrapper loses `flex-1 overflow-y-auto` and
+  becomes plain padding-only content.
+
+**Scope guard — do NOT touch:**
+
+- `humanizeTool`, `humanizeCategory`, `CATEGORY_COLOR`,
+  `normaliseSkillParams`, `deriveTags`, `TrafficLightButton`,
+  `ParamField`, `ToolCard` — all unchanged.
+- The `if (isTab)` branch at the bottom that wraps `inner` in the
+  tab-mode header — unchanged.
+- The task input textarea props (`rows`, `minHeight`, placeholder)
+  — unchanged.
+- Any state (`items`, `loading`, `selectedTags`, `andMode`,
+  `agentMsg`), effects, or helpers — unchanged.
+- Imports, context consumption — unchanged.
+
+---
+
+## Change 2 — `VERSION`
+
+```
+2.38.2
+```
+
+---
+
+## Change 3 — Tests
+
+### NEW `tests/test_command_panel_scroll_structure.py`
+
+Pure-file parsing, <100ms, no runtime:
+
+```python
+"""v2.38.2 — CommandPanel scroll structure regression guards.
+
+Locks in the v2.38.2 restructure: single outer scroll region for
+everything below the task input, no inner scroll on the tool list.
+"""
+import pathlib
+import re
+
+REPO_ROOT = pathlib.Path(__file__).parent.parent
+PANEL = REPO_ROOT / "gui" / "src" / "components" / "CommandPanel.jsx"
+
+
+def _src() -> str:
+    return PANEL.read_text(encoding="utf-8")
+
+
+def test_outer_column_has_min_h_0():
+    """The CommandPanel outer column must have min-h-0 so its flex-1
+    scroll child can actually shrink below content height."""
+    src = _src()
+    assert 'data-component="CommandPanel"' in src, "marker div missing"
+    # Outer must include both h-full and min-h-0
+    assert re.search(
+        r'<div\s+className="flex\s+flex-col\s+h-full\s+min-h-0"\s+data-component="CommandPanel"',
+        src,
+    ), "outer CommandPanel div must have 'flex flex-col h-full min-h-0' (v2.38.2)"
+
+
+def test_single_outer_scroll_region_present():
+    """Exactly one flex-1 overflow-y-auto min-h-0 wrapper below the
+    task input. Previously the tool list had its own which fought for
+    space with unscrollable siblings."""
+    src = _src()
+    # The wrapper div class — tolerate either attribute order
+    patterns = [
+        'flex-1 overflow-y-auto min-h-0',
+        'overflow-y-auto flex-1 min-h-0',
+        'flex-1 min-h-0 overflow-y-auto',
+    ]
+    matches = sum(src.count(p) for p in patterns)
+    assert matches >= 1, (
+        "CommandPanel must have a single 'flex-1 overflow-y-auto min-h-0' "
+        "wrapper div containing the scrollable body (v2.38.2)"
+    )
+
+
+def test_tool_list_lost_its_own_scroll():
+    """The tool list must no longer carry 'flex-1 overflow-y-auto' —
+    that was the v2.38.1-and-earlier pattern that broke when Templates
+    / Recent were open."""
+    src = _src()
+    # Extract a window around the tool list's visible.map() call
+    m = re.search(r'\{visible\.map\(item\s*=>', src)
+    assert m, "could not locate visible.map() in CommandPanel.jsx"
+    # Look backwards a few hundred chars for any wrapper div class
+    window = src[max(0, m.start() - 600): m.start()]
+    # The old pattern included flex-1 overflow-y-auto. Neither should
+    # appear within the ~600 chars immediately before visible.map().
+    assert 'flex-1 overflow-y-auto' not in window, (
+        "tool list wrapper must not have 'flex-1 overflow-y-auto' "
+        "anymore — v2.38.2 moved scrolling to the outer wrapper"
+    )
+
+
+def test_task_input_block_still_has_shrink_0():
+    """The task input / Run button block must remain pinned as shrink-0."""
+    src = _src()
+    # The task input header div is the one containing 'Agent Task'
+    assert re.search(
+        r'shrink-0[^}]*Agent Task',
+        src,
+        flags=re.DOTALL,
+    ), "task input block must retain 'shrink-0' (v2.38.2 keeps it pinned)"
+
+
+def test_live_trace_nested_scroll_preserved():
+    """The live-trace panel keeps its own maxHeight=100 + overflowY=auto
+    because it's a bounded tail view. Don't accidentally remove it."""
+    src = _src()
+    assert 'maxHeight: 100' in src, "live-trace maxHeight must remain"
+    # Find the live-trace block and confirm overflowY: 'auto' is on the
+    # same element
+    assert re.search(
+        r"maxHeight:\s*100,\s*overflowY:\s*'auto'",
+        src,
+    ), "live-trace nested scroll (maxHeight:100 + overflowY:'auto') must be preserved"
+
+
+def test_recent_and_templates_inside_scroll_region():
+    """TaskTemplates and RecentTasks must render after the scroll
+    wrapper opens (they can't sit above it or they'll steal space)."""
+    src = _src()
+    # Find the outer scroll wrapper and the two children
+    wrapper_m = re.search(
+        r'<div className="flex-1 overflow-y-auto min-h-0">',
+        src,
+    )
+    tt_m = re.search(r'<TaskTemplates\s*/>', src)
+    rt_m = re.search(r'<RecentTasks\s*/>', src)
+    assert wrapper_m, "scroll wrapper not found"
+    assert tt_m and rt_m, "TaskTemplates / RecentTasks not found"
+    assert wrapper_m.start() < tt_m.start(), (
+        "TaskTemplates must render inside (after) the scroll wrapper"
+    )
+    assert wrapper_m.start() < rt_m.start(), (
+        "RecentTasks must render inside (after) the scroll wrapper"
+    )
+```
+
+---
+
+## Verify
+
+```bash
+# Code state
+grep -n 'data-component="CommandPanel"' gui/src/components/CommandPanel.jsx   # 1
+grep -n 'min-h-0' gui/src/components/CommandPanel.jsx                         # >=2 (outer + inner)
+grep -n 'flex-1 overflow-y-auto min-h-0' gui/src/components/CommandPanel.jsx  # 1
+grep -c 'flex-1 overflow-y-auto' gui/src/components/CommandPanel.jsx          # 1 — was >=2 before
+
+# Tests pass
+pytest tests/test_command_panel_scroll_structure.py -v
+
+# v2.38.0-.1 tests still pass
+pytest tests/test_analysis_deeplink_wiring.py -v
+pytest tests/test_analysis_templates_catalog.py -v
+pytest tests/test_analysis_router_auth.py -v
+
+# Earlier structural guards still pass
+pytest tests/test_options_context_server_keys.py -v
+pytest tests/test_recent_tasks_wiring.py -v
+```
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(ui): v2.38.2 CommandPanel unified scroll region
+
+Fixes Kent's report: 'when opening commands with toggle icon next to
+sidebar menu it isn't scrollable for the full height, just some
+sections, zooming in browser worsens it'.
+
+Root cause in gui/src/components/CommandPanel.jsx: the outer column
+(<div className=\"flex flex-col h-full\">) stacked ~9 siblings but
+only the tool list at the bottom had 'flex-1 overflow-y-auto'.
+Everything else — AgentFeed, full-output shortcut, live trace,
+ChoiceBar, ClarificationWidget, TaskTemplates, RecentTasks, tag
+filter — had no flex-shrink and no overflow container. Flex's default
+min-height:auto means a flex-1 child cannot shrink below its own
+content's intrinsic height, so 50+ tool cards couldn't compress even
+when Templates and Recent were both expanded and their combined
+natural heights exceeded the panel. Result: content gets squeezed or
+pushed below viewport with nothing else to scroll. Browser zoom
+compounds this linearly because every child scales with zoom but the
+viewport doesn't.
+
+Fix restructures to exactly two zones: (1) task input + Run button
+stays pinned at top with shrink-0, (2) a single outer scroll region
+(flex-1 overflow-y-auto min-h-0) contains everything else including
+the tool list as plain flow. Tool list loses its own flex-1
+overflow-y-auto. Outer column gains min-h-0 so the scroll child can
+actually shrink. Tag filter bar loses shrink-0 and scrolls with
+content — sticky version can be added in a future fix if wanted.
+
+Live-trace panel keeps its own maxHeight:100 + overflowY:auto because
+it's a bounded 5-line tail view; nested scroll on a 100px region
+doesn't fight the outer scroll in practice.
+
+Same fix handles both mode='panel' (360px slide-in) and mode='tab'
+(Commands main tab) — they share the same 'inner' JSX variable.
+
+6 structural tests in tests/test_command_panel_scroll_structure.py
+lock in the restructure: outer has min-h-0, exactly one 'flex-1
+overflow-y-auto min-h-0' wrapper exists, tool list wrapper no longer
+has flex-1 overflow-y-auto in the ~600 chars before visible.map(),
+task input retains shrink-0, live-trace keeps its maxHeight:100 +
+overflowY:auto, TaskTemplates + RecentTasks render inside the scroll
+wrapper.
+
+No schema changes, no new Settings keys, no new deps. Single file
+touched: gui/src/components/CommandPanel.jsx."
+git push origin main
+```
+
+---
+
+## Deploy + smoke
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+Smoke plan:
+
+1. Hard-refresh. Click the Commands toggle icon (⌨) next to the
+   sidebar brand. The 360px panel opens on the right of the sidebar.
+2. Confirm the task input + Run button stay at the top — they should
+   never scroll. Scroll the panel body.
+3. Expand the TEMPLATES collapsible. The whole panel stays usable —
+   you can scroll down past templates to reach RECENT, tag filter,
+   and the tool list with no content cut off.
+4. Expand RECENT too. Everything still scrolls cleanly.
+5. Zoom the browser to 125%, then 150%. The panel still scrolls
+   through its entire content — no more "some sections scrollable"
+   dead zones.
+6. Open the Commands main tab (click "Commands" in the header). Same
+   behaviour end-to-end: task input pinned at top, single scroll
+   region below, 2-column tool grid renders inside the scroll.
+7. Start an agent run from the panel — live trace appears with its
+   own bounded 100px height + inner scroll for the last 5 lines.
+   Outer panel still scrolls normally. When run completes, live
+   trace disappears and the "+ View full output trace" button
+   appears.
+
+---
+
+## Scope guard — DO NOT TOUCH
+
+- Any other component — only `gui/src/components/CommandPanel.jsx`.
+- The task input textarea's rows / minHeight / placeholder / styling.
+- `TrafficLightButton`, `ToolCard`, `ParamField` — unchanged.
+- `TaskTemplates`, `RecentTasks` — unchanged (still rendered as
+  children, no prop changes).
+- `AgentFeed`, `ChoiceBar`, `ClarificationWidget` — unchanged.
+- Backend — no API changes.
+- Schema — no migrations.
+- Settings — no new keys.
+
+---
+
+## Followups (not v2.38.2)
+
+- v2.38.3 could make the tag filter bar sticky at the top of the
+  scroll region (`position: sticky; top: 0; z-index: 1; background:
+  var(--bg-1)`) so it stays visible while scrolling through tools.
+  Skipped here to avoid scope creep — Kent can decide if he wants
+  that after using v2.38.2.
+- Eventually: the OptionsContext commandsPanelDefault already allows
+  the panel to default to visible. Consider also persisting the
+  panel's internal scroll position between sessions.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-21 18:26:51
+========================================================================
+Committed and pushed as `1807cd8`. The v2.38.2 fix restructures `CommandPanel.jsx` into a pinned `shrink-0` task input + single `flex-1 overflow-y-auto min-h-0` scroll region that contains AgentFeed, full-output shortcut, live trace, ChoiceBar, ClarificationWidget, TaskTemplates, RecentTasks, tag filter, and the tool list. All 6 new structural tests plus 33 prior-version regression tests pass. VERSION bumped to 2.38.2.
+[STATUS] 2m32s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m32s
+========================================================================
