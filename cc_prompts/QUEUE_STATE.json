@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-21T08:15:04",
+  "updated_at": "2026-04-21T11:26:47",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2757,10 +2757,26 @@
       "filename": "CC_PROMPT_v2.36.8.md",
       "version": "v2.36.8",
       "theme": "feat(agents): result_render_table + render-and-caption grammar (dark launch)",
+      "runner_status": "DONE",
+      "commit_sha": "2339e0c",
+      "error": "",
+      "started_at": "2026-04-21T08:15:04",
+      "finished_at": "2026-04-21T08:24:40",
+      "duration_s": 575.6928047999972,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260421_081504_CC_PROMPT_v2.36.8.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.36.9.md",
+      "version": "v2.36.9",
+      "theme": "fix(agents): render-tool clobber race + verify dispatch + polish",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-21T08:15:04",
+      "started_at": "2026-04-21T11:26:47",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

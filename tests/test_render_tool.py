@@ -91,7 +91,10 @@ def test_render_markdown_basic():
         {"hostname": "h1", "ip": "10.0.0.1"},
         {"hostname": "h2", "ip": "10.0.0.2"},
     ]
-    md = _render_markdown_table(items, ["hostname", "ip"], total_available=2, truncated=False)
+    md = _render_markdown_table(
+        items, ["hostname", "ip"],
+        post_filter_total=2, pre_filter_total=2, truncated=False,
+    )
     assert "| hostname | ip |" in md
     assert "|---|---|" in md
     assert "| h1 | 10.0.0.1 |" in md
@@ -100,18 +103,27 @@ def test_render_markdown_basic():
 
 def test_render_markdown_truncation_footer_shows_totals():
     items = [{"x": i} for i in range(50)]
-    md = _render_markdown_table(items, ["x"], total_available=200, truncated=True)
+    md = _render_markdown_table(
+        items, ["x"],
+        post_filter_total=200, pre_filter_total=200, truncated=True,
+    )
     assert "showing first 50 of 200" in md
     assert "where" in md  # hints at the fix
 
 
 def test_render_markdown_no_rows():
-    md = _render_markdown_table([], ["a", "b"], total_available=0, truncated=False)
+    md = _render_markdown_table(
+        [], ["a", "b"],
+        post_filter_total=0, pre_filter_total=0, truncated=False,
+    )
     assert "no rows" in md.lower()
 
 
 def test_render_markdown_no_columns():
-    md = _render_markdown_table([{"a": 1}], [], total_available=1, truncated=False)
+    md = _render_markdown_table(
+        [{"a": 1}], [],
+        post_filter_total=1, pre_filter_total=1, truncated=False,
+    )
     assert "no columns" in md.lower()
 
 
@@ -158,10 +170,13 @@ def fake_result_store(monkeypatch):
         # Minimal filter support for test — signal < -50 → drop ~half
         if "signal < -50" in where:
             items = [i for i in items if i.get("signal", 0) < -50]
+        # Contract: `count` is post-filter, PRE-limit (v2.36.9 footer depends
+        # on this to distinguish truncation from "filter matched everything").
+        post_filter_count = len(items)
         return {
             "ref":     ref,
             "items":   items[:limit],
-            "count":   min(len(items), limit),
+            "count":   post_filter_count,
             "columns": columns or (list(items[0].keys()) if items else []),
         }
 
@@ -269,3 +284,47 @@ def test_result_render_table_NOT_in_execute_allowlists():
         assert "result_render_table" not in allowlist, (
             f"render tool must NOT be in {name} allowlist (spec Q4)"
         )
+
+
+# ── v2.36.9 — filtered-footer behaviour and dispatch regression guard ────────
+
+def test_render_table_where_clause_footer_cites_both_totals(fake_result_store):
+    """v2.36.9 — footer must cite BOTH the filtered match count AND
+    the pre-filter ref total so operators can see the filter worked."""
+    # fake_query filters signal < -50 → subset of the 42-row ref
+    out = result_render_table(
+        ref="rs-unifi42",
+        columns="hostname,signal",
+        where="signal < -50",
+        limit=5,   # force truncation
+    )
+    data = out["data"]
+    assert out["status"] == "ok"
+    assert data["pre_filter_total"] == 42
+    assert data["post_filter_total"] <= 42
+    md = data["render_markdown"]
+    if data["truncated"]:
+        # Footer must name both numbers when filtering and truncating
+        assert "of 42" in md or "out of 42" in md
+        assert "matching filter" in md
+
+
+def test_dispatch_wired_in_agent_loop():
+    """v2.36.9 — regression guard: the render tool dispatch must be
+    wired in api/routers/agent.py. If this test fails, the feature
+    is shipping as a no-op for operators (tool runs, markdown lost)."""
+    import pathlib
+    agent_py = pathlib.Path(__file__).parent.parent / "api" / "routers" / "agent.py"
+    src = agent_py.read_text(encoding="utf-8")
+    assert "result_render_table" in src, (
+        "dispatch check: 'result_render_table' missing from agent.py — "
+        "v2.36.8 feature is unwired"
+    )
+    assert "set_operation_final_answer_append" in src, (
+        "dispatch check: 'set_operation_final_answer_append' missing from "
+        "agent.py — render tool output cannot reach DB"
+    )
+    assert "render_markdown" in src, (
+        "dispatch check: 'render_markdown' field extraction missing from "
+        "agent.py — dispatch is shaped wrong"
+    )

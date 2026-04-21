@@ -1348,3 +1348,12 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-21 08:15:04
 ========================================================================
+PROMPT COMPLETE: v2.36.8
+[STATUS] 9m35s
+
+Shipped v2.36.8 — new `result_render_table` MCP tool, `set_operation_final_answer_append` logger helper, agent harness dispatch, observe + investigate allowlists, `renderToolPromptEnabled` dark-launch flag, DB-aware rescue guard, `RENDER_TOOL_CALLS` counter, GUI checkbox, 25 passing tests (plus 14 existing guards still green). Commit 2339e0c pushed to main.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  9m35s
+========================================================================

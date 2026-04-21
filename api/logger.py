@@ -338,6 +338,47 @@ async def set_operation_final_answer_append(session_id: str, addition: str) -> N
         log.error("set_operation_final_answer_append failed: %s", e)
 
 
+async def set_operation_final_answer_prepend(session_id: str, prefix: str) -> None:
+    """v2.36.9 — prepend text ABOVE the existing final_answer.
+
+    Used by the end-of-run cleanup path when the render tool appended
+    a table mid-run. The cleanup needs to place the agent's caption
+    ABOVE the table, not below it, for correct reading order.
+
+    Mirrors set_operation_final_answer_append: direct write, two-newline
+    separator between prefix and existing content, no-op when prefix is
+    empty, no-op when the operation row doesn't exist yet.
+    """
+    if not prefix or not prefix.strip():
+        return
+    try:
+        from sqlalchemy import text as _t
+        async with get_engine().begin() as conn:
+            existing = await conn.execute(
+                _t(
+                    "SELECT final_answer FROM operations "
+                    "WHERE session_id = :sid "
+                    "ORDER BY started_at DESC LIMIT 1"
+                ),
+                {"sid": session_id},
+            )
+            row = existing.fetchone()
+            if not row:
+                return
+            current = (row[0] or "").lstrip()
+            sep = "\n\n" if current else ""
+            new_val = prefix.rstrip() + sep + current
+            await conn.execute(
+                _t(
+                    "UPDATE operations SET final_answer = :val "
+                    "WHERE session_id = :sid"
+                ),
+                {"val": new_val, "sid": session_id},
+            )
+    except Exception as e:
+        log.error("set_operation_final_answer_prepend failed: %s", e)
+
+
 async def log_audit(
     event_type: str,
     entity_id: str | None = None,

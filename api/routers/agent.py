@@ -1145,6 +1145,7 @@ async def _run_single_agent_step(
         os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5")
     )
     _fabrication_detected_once = False  # whether guard_attempts was bumped by fab detector
+    _render_tool_calls = 0          # v2.36.9 — count result_render_table dispatches this step
     # v2.34.14: LLM trace persistence — track delta index so we only store new messages per step
     _trace_prev_msg_count = 0
     _trace_step_index = 0
@@ -1209,10 +1210,12 @@ async def _run_single_agent_step(
             return ""
         # v2.36.8 — render-and-caption: if the render tool appended table data
         # to operations.final_answer, the rescue's len/preamble checks should
-        # see that content, not just the agent-side buffer. Threshold 500 chars
-        # is generous: a one-row table plus headers is ~150 chars; 500 means
-        # at least a few rows. Skip rescue when the render tool wrote
-        # substantive operator-visible content.
+        # see that content, not just the agent-side buffer.
+        # v2.36.9 — raised from 500 to 1500. A full caption + even a small
+        # 10-row table exceeds 1500 chars; a normal LLM prose answer staying
+        # in the 500-1000 range should remain eligible for too_short /
+        # preamble_only rescue so we don't false-suppress a legitimate rescue
+        # when the render tool wrote a trivially small table.
         _render_wrote_substantive = False
         try:
             from sqlalchemy import text as _t
@@ -1225,7 +1228,7 @@ async def _run_single_agent_step(
                     {"oid": operation_id},
                 )
                 _row = _r.fetchone()
-                if _row and _row[0] and len(_row[0]) >= 500:
+                if _row and _row[0] and len(_row[0]) >= 1500:
                     _render_wrote_substantive = True
         except Exception:
             pass
@@ -2935,8 +2938,12 @@ async def _run_single_agent_step(
                     _lm_model(), duration_ms
                 )
 
-                # v2.36.8 — render tool: append its markdown to operations.final_answer
-                # so the operator sees the table in the Operations view.
+                # v2.36.8-dispatch (tightened v2.36.9) — render tool: append
+                # rendered markdown to operations.final_answer so the operator
+                # sees the table in the Operations view. LLM context stays
+                # small (only the short ack message), the operator-facing
+                # field gets the full rendered output. Counter is read at
+                # cleanup time to decide caption-prepend vs wholesale-overwrite.
                 if fn_name == "result_render_table" and isinstance(result, dict):
                     _data = result.get("data") or {}
                     _md = _data.get("render_markdown") if isinstance(_data, dict) else None
@@ -2945,6 +2952,7 @@ async def _run_single_agent_step(
                             await logger_mod.set_operation_final_answer_append(
                                 session_id, _md,
                             )
+                            _render_tool_calls += 1   # v2.36.9 — seen by cleanup
                             try:
                                 from api.metrics import RENDER_TOOL_CALLS
                                 _outcome = "truncated" if _data.get("truncated") else "ok"
@@ -3550,6 +3558,7 @@ async def _run_single_agent_step(
         "completion_tokens":      total_completion_tokens,
         "run_facts":              _run_facts,  # v2.35.2 — in-run fact snapshot
         "fabrication_detected":   bool(_fabrication_detected_once),  # v2.35.2
+        "render_tool_calls":      _render_tool_calls,   # v2.36.9
     }
 
 
@@ -4252,6 +4261,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
     all_tool_history: list = []  # v2.33.13: cross-step tool call log
     all_run_facts: dict = {}     # v2.35.2: in-run fact snapshot (across coordinator steps)
     any_fabrication_detected = False   # v2.35.2: any step fired fabrication detector
+    _any_render_fired = False    # v2.36.9: any step called the render tool with output
     agg_positive = 0
     agg_negative = 0
     agg_steps = 0
@@ -4346,6 +4356,8 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             all_run_facts.update(_step_run_facts)
         if step_result.get("fabrication_detected"):
             any_fabrication_detected = True
+        if step_result.get("render_tool_calls", 0) > 0:
+            _any_render_fired = True   # v2.36.9 — switch cleanup to prepend path
         agg_positive += step_result["positive_signals"]
         agg_negative += step_result["negative_signals"]
         agg_steps    += step_result["steps_taken"]
@@ -4621,9 +4633,19 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
         if last_reasoning:
             try:
-                await logger_mod.set_operation_final_answer(session_id, last_reasoning)
+                if _any_render_fired:
+                    # v2.36.9 — render tool appended table mid-run; prepend
+                    # the agent's caption ABOVE the table so ordering is
+                    # caption-then-table, not table-then-clobbered-by-caption.
+                    await logger_mod.set_operation_final_answer_prepend(
+                        session_id, last_reasoning,
+                    )
+                else:
+                    await logger_mod.set_operation_final_answer(
+                        session_id, last_reasoning,
+                    )
             except Exception as _sfa_e:
-                log.debug("set_operation_final_answer failed: %s", _sfa_e)
+                log.debug("final_answer write failed: %s", _sfa_e)
 
         # ── v2.35.2: agent_observation fact writer ───────────────────────────
         # Only successful + non-suspect runs are allowed to persist facts into

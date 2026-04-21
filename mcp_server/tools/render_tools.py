@@ -111,12 +111,22 @@ def _format_cell(v: Any) -> str:
 def _render_markdown_table(
     items: list[dict],
     columns: list[str],
-    total_available: int,
+    post_filter_total: int,
+    pre_filter_total: int,
     truncated: bool,
 ) -> str:
-    """Render items + columns as a GitHub-flavoured markdown table string."""
+    """Render items + columns as a GitHub-flavoured markdown table string.
+
+    Footer distinguishes filtered from unfiltered totals so operators
+    aren't misled when a `where` clause is in play.
+    """
     if not items:
-        return f"_(no rows matched — {total_available} total in ref)_"
+        if pre_filter_total > 0 and post_filter_total == 0:
+            return (
+                f"_(no rows matched your filter — {pre_filter_total} "
+                f"total rows exist in the ref)_"
+            )
+        return f"_(no rows matched — {pre_filter_total} total in ref)_"
     if not columns:
         return "_(no columns to render)_"
 
@@ -129,9 +139,14 @@ def _render_markdown_table(
 
     table = "\n".join([header, divider, *rows])
     if truncated:
+        filtered_note = ""
+        if post_filter_total < pre_filter_total:
+            filtered_note = (
+                f" matching filter out of {pre_filter_total} in ref"
+            )
         table += (
-            f"\n\n_(showing first {len(items)} of {total_available} — "
-            f"add a `where` clause to narrow)_"
+            f"\n\n_(showing first {len(items)} of {post_filter_total}"
+            f"{filtered_note} — narrow further with a tighter `where` clause)_"
         )
     return table
 
@@ -143,7 +158,6 @@ def result_render_table(
     columns: str = "",
     where: str = "",
     order_by: str = "",
-    caption: str = "",
     limit: int = _DEFAULT_LIMIT,
 ) -> dict:
     """Render a stored result as a markdown table written directly to the
@@ -159,8 +173,6 @@ def result_render_table(
         where:    Optional SQL-style filter, e.g. "status = 'up'".
                   Passed through to the same engine as result_query.
         order_by: Optional SQL-style sort, e.g. "ap_name, hostname".
-        caption:  IGNORED at tool level — the agent writes its own caption
-                  as its final_answer. Reserved for future use.
         limit:    Max rows to render (default 50, capped at 200).
 
     Returns:
@@ -196,13 +208,20 @@ def result_render_table(
             if "error" in qr:
                 return _err(f"Query error: {qr['error']}")
             items = qr.get("items") or []
-            result_cols = qr.get("columns") or []
-            # query_result's count is post-filter; we also want the full ref
-            # total for the truncation footer.
-            total_in_ref = fetch_result(ref, offset=0, limit=1)
-            total_available = (
-                total_in_ref.get("total") if total_in_ref else len(items)
-            )
+            # query_result's count is post-filter. Separate out the
+            # pre-filter total for the footer so operators can see both
+            # "matched your filter" vs "exists in the ref at all".
+            post_filter_total = qr.get("count")
+            if post_filter_total is None:
+                post_filter_total = len(items)
+            # Pre-filter total via a bounded fetch (limit=1 is enough —
+            # we only want the `total` scalar).
+            _pre = fetch_result(ref, offset=0, limit=1)
+            pre_filter_total = _pre.get("total") if _pre else post_filter_total
+            total_available = post_filter_total   # for the legacy field
+            # v2.36.9 — removed dead `result_cols = qr.get("columns") or []`.
+            # In the common (where+columns) path it is immediately shadowed
+            # by chosen_cols in the finalisation block below.
         else:
             # No filter, no column projection — just fetch the top N.
             fr = fetch_result(ref, offset=0, limit=safe_limit)
@@ -211,18 +230,23 @@ def result_render_table(
                     f"No result found for ref={ref!r} — may have expired (2h TTL)"
                 )
             items = fr.get("items") or []
-            total_available = fr.get("total") or len(items)
-            # Column discovery from the first row if chosen_cols wasn't given.
-            if items and isinstance(items[0], dict):
-                result_cols = list(items[0].keys())
-            else:
-                result_cols = []
+            post_filter_total = fr.get("total") or len(items)
+            pre_filter_total = post_filter_total
+            total_available = post_filter_total
 
-        # Column finalisation: explicit override wins, otherwise heuristic pick.
+        # Column finalisation: explicit override wins, otherwise derive from
+        # the first row and run the preferred-fragments heuristic. Derivation
+        # is identical for both branches so the where-without-columns case
+        # still auto-picks.
         if chosen_cols:
             render_cols = chosen_cols
         else:
-            render_cols = _pick_columns(result_cols, max_cols=6)
+            available_cols = (
+                list(items[0].keys())
+                if items and isinstance(items[0], dict)
+                else []
+            )
+            render_cols = _pick_columns(available_cols, max_cols=6)
 
         # Did we truncate relative to the ref's real total?
         truncated = len(items) >= safe_limit and total_available > len(items)
@@ -230,18 +254,22 @@ def result_render_table(
         markdown = _render_markdown_table(
             items=items,
             columns=render_cols,
-            total_available=int(total_available),
+            post_filter_total=int(post_filter_total),
+            pre_filter_total=int(pre_filter_total),
             truncated=truncated,
         )
 
         return _ok(
             {
-                "render_markdown": markdown,
-                "row_count":       len(items),
-                "columns_used":    render_cols,
-                "output_length":   len(markdown),
-                "truncated":       truncated,
-                "total_in_ref":    int(total_available),
+                "render_markdown":   markdown,
+                "row_count":         len(items),
+                "columns_used":      render_cols,
+                "output_length":     len(markdown),
+                "truncated":         truncated,
+                "post_filter_total": int(post_filter_total),
+                "pre_filter_total":  int(pre_filter_total),
+                # Legacy field retained for back-compat
+                "total_in_ref":      int(pre_filter_total),
             },
             (
                 f"Rendered {len(items)} rows to operation output "
