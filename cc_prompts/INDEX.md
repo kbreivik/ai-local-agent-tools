@@ -234,7 +234,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.38.5.md | v2.38.5 | fix(ui): Logs sub-pages gain full YYYY-MM-DD HH:MM:SS timestamps + shared CopyableId for every DB UUID (escalations/tool calls/external AI/session output) | DONE (e5bb971) |
 | CC_PROMPT_v2.38.6.md | v2.38.6 | feat(agents): force-external-AI toggle — bypass router + confirmation gate, amber ⚡ button in CommandPanel | DONE (f9e15bd) |
 | CC_PROMPT_v2.38.7.md | v2.38.7 | fix(agents): enrich force-external prerun context from known_facts — external AI gets real infra evidence instead of empty context | DONE (b4c83c2) |
-| CC_PROMPT_v2.38.8.md | v2.38.8 | fix(ui): wrap toolbox (tag filter + tool/skill list) in CollapsibleSection — collapsed by default | RUNNING |
+| CC_PROMPT_v2.38.8.md | v2.38.8 | fix(ui): wrap toolbox (tag filter + tool/skill list) in CollapsibleSection — collapsed by default | DONE (bee397f) |
+| CC_PROMPT_v2.38.9.md | v2.38.9 | fix(ui): TOOLBOX CollapsibleSection wrong prop name (label → title) | RUNNING |
 
 ---
 

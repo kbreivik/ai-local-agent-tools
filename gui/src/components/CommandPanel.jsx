@@ -416,7 +416,7 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
         <CollapsibleSection
           storageKey="toolbox"
           defaultOpen={false}
-          label={`TOOLBOX${items.length > 0 ? ` (${items.length})` : ''}`}
+          title={`TOOLBOX${items.length > 0 ? ` (${items.length})` : ''}`}
         >
           {/* Tag filter bar */}
           <div className={`flex gap-1 border-b border-slate-700 flex-wrap items-center ${isTab ? 'px-4 py-2' : 'px-3 py-2'}`}>
