@@ -4083,6 +4083,14 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
     except Exception as _pre_e:
         log.debug("preflight resolve skipped: %s", _pre_e)
 
+    # v2.39.3 — skill preflight: inject relevant skills before agent loop
+    _preflight_skills_block = ""
+    try:
+        from api.agents.preflight import preflight_skills as _pskills
+        _preflight_skills_block = _pskills(task, first_intent)
+    except Exception as _pse:
+        log.debug("preflight_skills failed: %s", _pse)
+
     # v2.34.9: inject MCP tool signatures so the agent calls tools with exact kwargs
     try:
         from api.agents.router import allowlist_for as _aw, format_tool_signatures_section as _fsig
@@ -4327,6 +4335,12 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         # v2.35.1 — prepend PREFLIGHT FACTS above RELEVANT PAST OUTCOMES.
         if _preflight_facts_block:
             injected_sections.insert(0, _preflight_facts_block)
+        if _preflight_skills_block:
+            # Insert after facts (index 1) so facts stay at top
+            injected_sections.insert(
+                1 if _preflight_facts_block else 0,
+                _preflight_skills_block
+            )
 
         if injected_sections:
             injection = "\n\n".join(injected_sections) + "\n\n"

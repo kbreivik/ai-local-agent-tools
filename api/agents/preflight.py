@@ -986,3 +986,104 @@ def format_preflight_facts_section(preflight: PreflightResult,
         lines.append("")
 
     return "\n".join(lines)
+
+
+# ── Skill preflight (v2.39.3) ─────────────────────────────────────────────────
+
+_AGENT_TYPE_CATEGORIES: dict[str, list[str]] = {
+    "observe":     ["monitoring", "compute", "networking", "storage", "general"],
+    "status":      ["monitoring", "compute", "networking", "storage", "general"],
+    "investigate": ["monitoring", "compute", "networking", "storage", "general"],
+    "research":    ["monitoring", "compute", "networking", "storage", "general"],
+    "execute":     ["compute", "networking", "storage", "general"],
+    "action":      ["compute", "networking", "storage", "general"],
+    "build":       ["general"],
+}
+
+_TASK_CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "compute":    ["proxmox", "vm", "lxc", "container", "docker", "swarm", "node", "worker",
+                   "disk", "cpu", "memory", "uptime", "journal", "log"],
+    "networking": ["network", "fortigate", "unifi", "nginx", "dns", "firewall", "interface",
+                   "vpn", "route", "ping", "port", "latency"],
+    "storage":    ["pbs", "truenas", "backup", "disk", "volume", "pool", "snapshot"],
+    "monitoring": ["elastic", "kibana", "grafana", "wazuh", "alert", "metric", "health",
+                   "status", "check", "monitor"],
+    "kafka":      ["kafka", "broker", "topic", "consumer", "lag", "partition", "isr"],
+}
+
+
+def _score_skill_for_task(skill: dict, task_lower: str, agent_categories: list[str]) -> int:
+    """Score a skill 0-10 for relevance. Higher = more relevant."""
+    score = 0
+    cat = (skill.get("category") or "general").lower()
+    if cat in agent_categories:
+        score += 2
+    # Name/description keyword overlap
+    name = (skill.get("name") or "").lower()
+    desc = (skill.get("description") or "").lower()
+    combined = name + " " + desc
+    task_words = set(w for w in task_lower.split() if len(w) > 3)
+    matches = sum(1 for w in task_words if w in combined)
+    score += min(matches * 2, 6)
+    # Lifecycle bonus
+    if skill.get("lifecycle_state") == "promoted":
+        score += 2
+    return score
+
+
+def preflight_skills(task: str, agent_type: str, max_skills: int = 10) -> str:
+    """Return an 'AVAILABLE SKILLS' block for injection into the system prompt.
+
+    Queries the skill registry, scores each skill for relevance to the task
+    and agent_type, returns the top max_skills as a compact formatted block.
+    Returns empty string on any failure (safe fallback — never raises).
+
+    Format:
+        ═══ AVAILABLE SKILLS (pre-matched) ═══
+        - skill_name: one-line description
+        ...
+        Call skill_execute(name=..., ...) directly. skill_search() still available
+        for skills not listed here.
+    """
+    try:
+        from mcp_server.tools.skills.registry import list_skills
+        skills = list_skills(enabled_only=True)
+    except Exception as _e:
+        log.debug("preflight_skills: list_skills failed: %s", _e)
+        return ""
+
+    if not skills:
+        return ""
+
+    task_lower = task.lower()
+    agent_categories = _AGENT_TYPE_CATEGORIES.get(agent_type, ["general"])
+
+    # Boost categories mentioned in task
+    for cat, kws in _TASK_CATEGORY_KEYWORDS.items():
+        if any(kw in task_lower for kw in kws):
+            if cat not in agent_categories:
+                agent_categories = agent_categories + [cat]
+
+    scored = []
+    for s in skills:
+        score = _score_skill_for_task(s, task_lower, agent_categories)
+        if score > 0:
+            scored.append((score, s))
+
+    scored.sort(key=lambda x: -x[0])
+    top = scored[:max_skills]
+
+    if not top:
+        return ""
+
+    lines = ["═══ AVAILABLE SKILLS (pre-matched) ═══"]
+    for _, s in top:
+        name = s.get("name", "")
+        desc = (s.get("description") or "").split("\n")[0][:80]
+        if name:
+            lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+    lines.append(
+        "Call skill_execute(name=..., ...) for any of the above. "
+        "skill_search() still available for skills not listed here."
+    )
+    return "\n".join(lines)

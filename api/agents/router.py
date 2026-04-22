@@ -444,9 +444,10 @@ the vm_exec allowlist/metachar filter. See investigate-agent prompt for
 the full overlay-diagnosis pattern.
 
 DYNAMIC SKILLS:
-Skills are not listed in the tool manifest individually.
-To use a skill: call skill_search(query=...) to find it, then skill_execute(name=..., params={...}).
-Never guess skill names — always search first.
+If an AVAILABLE SKILLS section appears above the system prompt, those skills
+are pre-matched for this task — call skill_execute(name=...) directly.
+For skills not listed there: call skill_search(query=...) first, then
+skill_execute(name=..., params={...}). Never guess skill names.
 
 ENTITY HISTORY:
 - entity_history(entity_id=..., hours=24) — what fields changed recently
