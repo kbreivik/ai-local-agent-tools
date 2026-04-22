@@ -660,6 +660,11 @@ class RunRequest(BaseModel):
         max_length=4096,
     )
     session_id: str = Field(default="", max_length=128)
+    force_external: bool = Field(
+        default=False,
+        description="Skip local agent loop and route directly to external AI. "
+                    "Bypasses router decision and confirmation modal.",
+    )
 
 
 class RunResponse(BaseModel):
@@ -815,15 +820,19 @@ async def _maybe_route_to_external_ai(
     scope_entity: str,
     is_prerun: bool,
     prior_failed_attempts_7d: int = 0,
+    force: bool = False,
 ) -> str | None:
     """Run the v2.36.1 router. If it fires, gate on v2.36.2 confirmation and
     call the v2.36.3 external AI. Return the synthesis text on success,
     None on no-op, or raise a sentinel-failure string via ExternalAIError.
 
     Caller treats a non-None return as the final_answer (REPLACE mode).
+
+    force=True (v2.38.6): skip router decision and confirmation modal entirely.
+    Operator explicitly chose external AI — treat as pre-approved.
     """
     from api.agents.external_router import (
-        should_escalate_to_external_ai, record_decision, RouterState,
+        should_escalate_to_external_ai, record_decision, RouterState, RouterDecision,
     )
     from mcp_server.tools.skills.storage import get_backend
 
@@ -832,24 +841,50 @@ async def _maybe_route_to_external_ai(
     except Exception:
         _cap = 3
 
-    state = RouterState(
-        agent_type=agent_type,
-        task_text=task,
-        scope_entity=scope_entity,
-        tool_calls_made=tool_calls_made,
-        tool_budget=tool_budget,
-        diagnosis_emitted=diagnosis_emitted,
-        consecutive_tool_failures=consecutive_tool_failures,
-        halluc_guard_exhausted=halluc_guard_exhausted,
-        fabrication_detected_count=fabrication_detected_count,
-        external_calls_this_op=external_calls_this_op,
-        external_calls_cap=_cap,
-        prior_failed_attempts_7d=prior_failed_attempts_7d,
-    )
-    decision = should_escalate_to_external_ai(state, is_prerun=is_prerun)
-    record_decision(decision)
-    if not decision.escalate:
-        return None
+    if force:
+        # v2.38.6 — operator explicitly chose external AI; skip router.
+        # Still respect per-op cap as hard safety limit.
+        if external_calls_this_op >= _cap:
+            await manager.send_line(
+                "step",
+                f"[external-ai] force=True but per-op cap reached "
+                f"({external_calls_this_op}/{_cap}) — not calling external AI",
+                status="warning", session_id=session_id,
+            )
+            return None
+        try:
+            from api.metrics import EXTERNAL_ROUTING_DECISIONS
+            EXTERNAL_ROUTING_DECISIONS.labels(
+                decision="escalated", rule="force_external",
+            ).inc()
+        except Exception:
+            pass
+        # Synthetic decision so downstream code that reads decision.* still works
+        decision = RouterDecision(
+            escalate=True,
+            rule_fired="force_external",
+            reason="operator chose to send directly to external AI",
+            mode="replace",
+        )
+    else:
+        state = RouterState(
+            agent_type=agent_type,
+            task_text=task,
+            scope_entity=scope_entity,
+            tool_calls_made=tool_calls_made,
+            tool_budget=tool_budget,
+            diagnosis_emitted=diagnosis_emitted,
+            consecutive_tool_failures=consecutive_tool_failures,
+            halluc_guard_exhausted=halluc_guard_exhausted,
+            fabrication_detected_count=fabrication_detected_count,
+            external_calls_this_op=external_calls_this_op,
+            external_calls_cap=_cap,
+            prior_failed_attempts_7d=prior_failed_attempts_7d,
+        )
+        decision = should_escalate_to_external_ai(state, is_prerun=is_prerun)
+        record_decision(decision)
+        if not decision.escalate:
+            return None
 
     # Read provider/model/output_mode
     try:
@@ -869,16 +904,25 @@ async def _maybe_route_to_external_ai(
         )
         output_mode = "replace"
 
-    # Confirmation gate
-    confirm_decision = await wait_for_external_ai_confirmation(
-        session_id=session_id,
-        operation_id=operation_id,
-        provider=provider,
-        model=model,
-        rule_fired=decision.rule_fired,
-        reason=decision.reason,
-        output_mode=output_mode,
-    )
+    # Confirmation gate — skipped when force=True (operator already chose this)
+    if force:
+        confirm_decision = "approved"
+        await manager.send_line(
+            "step",
+            f"[external-ai] force=True — bypassing confirmation gate "
+            f"({provider}/{model or 'default'})",
+            status="ok", session_id=session_id,
+        )
+    else:
+        confirm_decision = await wait_for_external_ai_confirmation(
+            session_id=session_id,
+            operation_id=operation_id,
+            provider=provider,
+            model=model,
+            rule_fired=decision.rule_fired,
+            reason=decision.reason,
+            output_mode=output_mode,
+        )
     if confirm_decision != "approved":
         await manager.send_line(
             "step",
@@ -3915,7 +3959,8 @@ async def _spawn_and_wait_subagent(
 
 async def _stream_agent(task: str, session_id: str, operation_id: str,
                         owner_user: str = "admin", parent_context: str = "",
-                        parent_session_id: str = ""):
+                        parent_session_id: str = "",
+                        force_external: bool = False):
     """Run the full agent loop, streaming every step to WebSocket clients."""
     from openai import OpenAI
     from api.agents.router import classify_task, filter_tools, get_prompt, detect_domain
@@ -4284,6 +4329,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             scope_entity=_scope_entity,
             is_prerun=True,
             prior_failed_attempts_7d=_prior_failed,
+            force=force_external,
         )
         if _prerun_synth:
             # REPLACE mode pre-run: skip the local agent entirely
@@ -4834,7 +4880,10 @@ async def run_agent(req: RunRequest, background_tasks: BackgroundTasks,
     operation_id = await logger_mod.log_operation(
         session_id, req.task, owner_user=user, model_used=_lm_model(),
     )
-    background_tasks.add_task(_stream_agent, req.task, session_id, operation_id, user)
+    background_tasks.add_task(
+        _stream_agent, req.task, session_id, operation_id, user,
+        force_external=req.force_external,
+    )
     return RunResponse(
         session_id=session_id,
         operation_id=operation_id,

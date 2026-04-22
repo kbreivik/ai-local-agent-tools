@@ -141,11 +141,11 @@ export async function regenerateSkill(skillName) {
   return r.json()
 }
 
-export async function runAgent(task, sessionId = '') {
+export async function runAgent(task, sessionId = '', forceExternal = false) {
   const r = await fetch(`${BASE}/api/agent/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ task, session_id: sessionId }),
+    body: JSON.stringify({ task, session_id: sessionId, force_external: forceExternal }),
   })
   return r.json()
 }

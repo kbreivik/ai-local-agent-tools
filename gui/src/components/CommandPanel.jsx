@@ -300,15 +300,18 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
           : [...selectedTags].some(t => item.tags.includes(t))
       )
 
+  const [forceExternal, setForceExternal] = useState(false)
+
   const runAgentTask = async () => {
     if (!task.trim() || runState !== 'idle') return
-    // Immediately go amber — don't wait for API
     setRunState('running')
     setAgentMsg('')
     clearChoices()
     markRunning()
+    const _force = forceExternal
+    setForceExternal(false)   // reset after submit — explicit per-run decision
     try {
-      const r = await runAgent(task)
+      const r = await runAgent(task, '', _force)
       setAgentMsg(`Session ${r.session_id?.slice(0, 8)}`)
       onResult?.()
     } catch (e) {
@@ -341,11 +344,26 @@ export default function CommandPanel({ onResult, mode = 'panel' }) {
           className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 resize-vertical focus:outline-none focus:border-blue-500"
           style={{ minHeight: isTab ? 120 : 80 }}
         />
-        <TrafficLightButton
-          runState={runState}
-          onRun={runAgentTask}
-          taskEmpty={!task.trim()}
-        />
+        <div className="flex items-center gap-2 mt-2">
+          <TrafficLightButton
+            runState={runState}
+            onRun={runAgentTask}
+            taskEmpty={!task.trim()}
+          />
+          <button
+            onClick={() => setForceExternal(f => !f)}
+            disabled={runState !== 'idle'}
+            title={forceExternal ? 'External AI: ON — click to cancel' : 'Send directly to External AI'}
+            className={`text-xs px-2 py-1 border font-mono uppercase tracking-wider transition-colors ${
+              forceExternal
+                ? 'border-[var(--amber)] text-[var(--amber)] bg-[rgba(204,136,0,0.12)]'
+                : 'border-slate-600 text-slate-500 hover:border-slate-400 hover:text-slate-300'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+            style={{ borderRadius: 'var(--radius-btn)' }}
+          >
+            {forceExternal ? '⚡ EXT AI ON' : '⚡ Ext AI'}
+          </button>
+        </div>
         {agentMsg && <p className="text-xs text-slate-400 mt-1">{agentMsg}</p>}
       </div>
 

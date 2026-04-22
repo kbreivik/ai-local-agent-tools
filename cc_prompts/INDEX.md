@@ -232,7 +232,7 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.38.3.md | v2.38.3 | fix(agents): external AI auth 401 — synthesize_replace reads via settings_manager.get_setting (decrypts) instead of raw backend (ciphertext) | DONE (5924490) |
 | CC_PROMPT_v2.38.4.md | v2.38.4 | fix(ui): external AI failure visibility — done/ok masking replaced with done/failed + reason + halt line at three routing call sites | DONE (b859766) |
 | CC_PROMPT_v2.38.5.md | v2.38.5 | fix(ui): Logs sub-pages gain full YYYY-MM-DD HH:MM:SS timestamps + shared CopyableId for every DB UUID (escalations/tool calls/external AI/session output) | DONE (e5bb971) |
-| CC_PROMPT_v2.38.6.md | v2.38.6 | feat(agents): force-external-AI toggle — bypass router + confirmation gate, amber ⚡ button in CommandPanel | PENDING |
+| CC_PROMPT_v2.38.6.md | v2.38.6 | feat(agents): force-external-AI toggle — bypass router + confirmation gate, amber ⚡ button in CommandPanel | RUNNING |
 
 ---
 
