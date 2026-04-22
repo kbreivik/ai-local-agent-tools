@@ -236,8 +236,8 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.38.7.md | v2.38.7 | fix(agents): enrich force-external prerun context from known_facts — external AI gets real infra evidence instead of empty context | DONE (b4c83c2) |
 | CC_PROMPT_v2.38.8.md | v2.38.8 | fix(ui): wrap toolbox (tag filter + tool/skill list) in CollapsibleSection — collapsed by default | DONE (bee397f) |
 | CC_PROMPT_v2.38.9.md | v2.38.9 | fix(ui): TOOLBOX CollapsibleSection wrong prop name (label → title) | DONE |
-| CC_PROMPT_v2.39.0.md | v2.39.0 | feat(facts): external_services + vm_hosts fact extractors — reachability, latency, IP, hostname, load, disk | RUNNING |
-| CC_PROMPT_v2.39.1.md | v2.39.1 | feat(facts): UniFi + FortiGate fact extractors — device states, client count, interface status | PENDING |
+| CC_PROMPT_v2.39.0.md | v2.39.0 | feat(facts): external_services + vm_hosts fact extractors — reachability, latency, IP, hostname, load, disk | DONE (d843b01) |
+| CC_PROMPT_v2.39.1.md | v2.39.1 | feat(facts): UniFi + FortiGate fact extractors — device states, client count, interface status | RUNNING |
 | CC_PROMPT_v2.39.2.md | v2.39.2 | feat(facts): enrich Kafka + Swarm extractors — broker online, ISR, under-replicated, service convergence | PENDING |
 | CC_PROMPT_v2.39.3.md | v2.39.3 | feat(agents): skill preflight — inject relevant skills into system prompt before agent loop | PENDING |
 | CC_PROMPT_v2.39.4.md | v2.39.4 | feat(agents): skill preflight Prometheus counter + WS skills_matched event + snapshot update | PENDING |

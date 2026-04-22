@@ -132,13 +132,30 @@ class UniFiCollector(BaseCollector):
         site = os.environ.get("UNIFI_SITE", "default")
 
         if api_key:
-            return _collect_apikey(host, port, api_key, site, conn_label, conn_id)
+            snapshot = _collect_apikey(host, port, api_key, site, conn_label, conn_id)
         elif username and password:
-            return _collect_session(host, port, username, password, site, conn_label, conn_id)
+            snapshot = _collect_session(host, port, username, password, site, conn_label, conn_id)
         else:
             return {"health": "error", "devices": [],
                     "error": "UniFi: set api_key (recommended) OR username+password",
                     "connection_label": conn_label, "connection_id": conn_id}
+
+        # v2.39.1: best-effort fact extraction
+        try:
+            from api.facts.extractors import extract_facts_from_unifi_snapshot
+            from api.db.known_facts import batch_upsert_facts
+            from api.metrics import FACTS_UPSERTED_COUNTER
+            facts = extract_facts_from_unifi_snapshot(snapshot, conn_label)
+            result = batch_upsert_facts(facts, actor="collector")
+            for action, count in result.items():
+                if count > 0:
+                    FACTS_UPSERTED_COUNTER.labels(
+                        source="unifi_collector", action=action
+                    ).inc(count)
+        except Exception as _fe:
+            log.warning("Fact extraction failed for unifi: %s", _fe)
+
+        return snapshot
 
 
 def _collect_apikey(host, port, api_key, site, conn_label, conn_id) -> dict:

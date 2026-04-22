@@ -209,7 +209,7 @@ class FortiGateCollector(BaseCollector):
             else:
                 health = "healthy"
 
-            return {
+            snapshot = {
                 "health": health,
                 "hostname": hostname,
                 "version": version,
@@ -221,6 +221,23 @@ class FortiGateCollector(BaseCollector):
                 "connection_label": conn_label,
                 "connection_id": conn_id,
             }
+
+            # v2.39.1: best-effort fact extraction
+            try:
+                from api.facts.extractors import extract_facts_from_fortigate_snapshot
+                from api.db.known_facts import batch_upsert_facts
+                from api.metrics import FACTS_UPSERTED_COUNTER
+                facts = extract_facts_from_fortigate_snapshot(snapshot, conn_label)
+                result = batch_upsert_facts(facts, actor="collector")
+                for action, count in result.items():
+                    if count > 0:
+                        FACTS_UPSERTED_COUNTER.labels(
+                            source="fortigate_collector", action=action
+                        ).inc(count)
+            except Exception as _fe:
+                log.warning("Fact extraction failed for fortigate: %s", _fe)
+
+            return snapshot
 
         except httpx.HTTPStatusError as e:
             log.warning("FortiGateCollector HTTP error %s: %s", conn_label, e)
