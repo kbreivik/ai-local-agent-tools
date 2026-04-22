@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-22T12:05:13",
+  "updated_at": "2026-04-22T12:07:19",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -2949,10 +2949,26 @@
       "filename": "CC_PROMPT_v2.38.7.md",
       "version": "v2.38.7",
       "theme": "fix(agents): enrich force-external prerun context from known_facts — external AI gets real infra evidence instead of empty context",
+      "runner_status": "DONE",
+      "commit_sha": "b4c83c2",
+      "error": "",
+      "started_at": "2026-04-22T12:05:13",
+      "finished_at": "2026-04-22T12:07:16",
+      "duration_s": 122.7916520999861,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260422_120513_CC_PROMPT_v2.38.7.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.38.8.md",
+      "version": "v2.38.8",
+      "theme": "fix(ui): wrap toolbox (tag filter + tool/skill list) in CollapsibleSection — collapsed by default",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-22T12:05:13",
+      "started_at": "2026-04-22T12:07:19",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
