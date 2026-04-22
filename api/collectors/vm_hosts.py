@@ -555,7 +555,24 @@ class VMHostsCollector(BaseCollector):
         ok    = sum(1 for v in vms if v.get("dot") in ("green", "amber"))
         red   = sum(1 for v in vms if v.get("dot") == "red")
         health = "healthy" if red == 0 else ("degraded" if ok > 0 else "error")
-        return {"health": health, "vms": vms, "total": total, "ok": ok, "issues": red}
+        snapshot = {"health": health, "vms": vms, "total": total, "ok": ok, "issues": red}
+
+        # v2.39.0: best-effort fact extraction
+        try:
+            from api.facts.extractors import extract_facts_from_vm_hosts_snapshot
+            from api.db.known_facts import batch_upsert_facts
+            from api.metrics import FACTS_UPSERTED_COUNTER
+            facts = extract_facts_from_vm_hosts_snapshot(snapshot)
+            result = batch_upsert_facts(facts, actor="collector")
+            for action, count in result.items():
+                if count > 0:
+                    FACTS_UPSERTED_COUNTER.labels(
+                        source="vm_hosts_collector", action=action
+                    ).inc(count)
+        except Exception as _fe:
+            log.warning("Fact extraction failed for vm_hosts: %s", _fe)
+
+        return snapshot
 
     def to_entities(self, state: dict):
         """Return one Entity per polled VM host.

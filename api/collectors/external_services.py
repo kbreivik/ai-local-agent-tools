@@ -125,7 +125,24 @@ class ExternalServicesCollector(BaseCollector):
         has_error = any(s["dot"] == "red" for s in cards if s["dot"] != "grey")
         has_warn = any(s["dot"] == "amber" for s in cards if s["dot"] != "grey")
         health = "critical" if has_error else "degraded" if has_warn else "healthy"
-        return {"health": health, "services": cards}
+        snapshot = {"health": health, "services": cards}
+
+        # v2.39.0: best-effort fact extraction
+        try:
+            from api.facts.extractors import extract_facts_from_external_services_snapshot
+            from api.db.known_facts import batch_upsert_facts
+            from api.metrics import FACTS_UPSERTED_COUNTER
+            facts = extract_facts_from_external_services_snapshot(snapshot)
+            result = batch_upsert_facts(facts, actor="collector")
+            for action, count in result.items():
+                if count > 0:
+                    FACTS_UPSERTED_COUNTER.labels(
+                        source="external_services_collector", action=action
+                    ).inc(count)
+        except Exception as _fe:
+            log.warning("Fact extraction failed for external_services: %s", _fe)
+
+        return snapshot
 
     def _probe_connection(self, conn: dict, health_cfg: dict) -> dict:
         """Probe a single connection using its platform health config."""
