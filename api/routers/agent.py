@@ -34,6 +34,7 @@ from api.agents.context import (
 )
 from api.agents.step_llm import call_llm_step, LlmStepResult
 from api.agents.step_guard import run_stop_path_guards, GuardOutcome
+from api.agents.step_facts import process_tool_result
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -2520,178 +2521,11 @@ async def _run_single_agent_step(
                     "content": tool_content + tool_content_suffix,
                 })
 
-                # ── v2.33.12: zero-result pivot detection ────────────────────
-                # If a tool returns 0 results 3+ times in a row, inject a
-                # harness nudge so the agent stops repeating a broken filter.
-                _count = _result_count(result if isinstance(result, dict) else {})
-                if _count is not None:
-                    if _count == 0:
-                        state.zero_streaks[fn_name] = state.zero_streaks.get(fn_name, 0) + 1
-                    else:
-                        state.zero_streaks[fn_name] = 0
-                        state.nonzero_seen[fn_name] = max(state.nonzero_seen.get(fn_name, 0), _count)
-
-                # v2.33.13: record a compact state.tool_history entry for contradiction
-                # detection. Store only the count in `result` so we don't retain
-                # large tool payloads across the whole run.
-                state.tool_history.append({
-                    "tool":   fn_name,
-                    "args":   fn_args if isinstance(fn_args, dict) else {},
-                    "result": {"total": _count if _count is not None else 0},
-                    "step":   step,
-                })
-
-                # ── v2.35.2: in-run cross-tool contradiction detection ───────
-                # Extract structured facts from the tool result, compare
-                # against prior fact values observed in this run, inject a
-                # harness advisory on disagreement. Survivors will be written
-                # to known_facts at source=agent_observation on completion.
-                try:
-                    from api.facts.tool_extractors import extract_facts_from_tool_result
-                    _new_facts = extract_facts_from_tool_result(
-                        fn_name,
-                        fn_args if isinstance(fn_args, dict) else {},
-                        result if isinstance(result, dict) else {},
-                    )
-                except Exception as _fe:
-                    log.debug("tool fact extraction failed: %s", _fe)
-                    _new_facts = []
-
-                for _nf in _new_facts:
-                    _fk = _nf.get("fact_key")
-                    if not _fk:
-                        continue
-                    _nv = _nf.get("value")
-                    _prior = state.run_facts.get(_fk)
-                    if _prior is not None and _prior.get("value") != _nv:
-                        try:
-                            _prior_snip = json.dumps(_prior.get("value"), default=str)[:80]
-                            _new_snip = json.dumps(_nv, default=str)[:80]
-                        except Exception:
-                            _prior_snip = str(_prior.get("value"))[:80]
-                            _new_snip = str(_nv)[:80]
-                        _contra_msg = (
-                            f"[harness] Contradiction detected within this run: "
-                            f"{_fk} — step {_prior.get('step')} "
-                            f"({_prior.get('tool')}) said {_prior_snip}, "
-                            f"step {step} ({fn_name}) says {_new_snip}. "
-                            f"Resolve before concluding. The {_fk} field in your "
-                            f"EVIDENCE block must cite only ONE value or explicitly "
-                            f"note the conflict."
-                        )
-                        state.propose_state.queued_harness_messages.append(_contra_msg)
-                        await manager.send_line(
-                            "step",
-                            f"[contradiction] {_fk} disagrees across "
-                            f"step {_prior.get('step')} → step {step}",
-                            status="warning", session_id=session_id,
-                        )
-                        try:
-                            from api.metrics import INRUN_CONTRADICTION_COUNTER
-                            _parts = _fk.split(".")
-                            _prefix = ".".join(_parts[:3]) if len(_parts) >= 3 else _fk
-                            INRUN_CONTRADICTION_COUNTER.labels(
-                                fact_key_prefix=_prefix,
-                            ).inc()
-                        except Exception:
-                            pass
-                    state.run_facts[_fk] = {
-                        "value":     _nv,
-                        "step":      step,
-                        "tool":      fn_name,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "raw":       _nf,
-                    }
-
-                if (
-                    state.zero_streaks.get(fn_name, 0) >= 3
-                    and state.nonzero_seen.get(fn_name, 0) > 0
-                    and fn_name not in state.zero_pivot_fired
-                ):
-                    state.zero_pivot_fired.add(fn_name)
-                    _prior_n = state.nonzero_seen[fn_name]
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"HARNESS NUDGE: Your last 3 calls to {fn_name} returned 0 results. "
-                            f"Earlier in this task, {fn_name} returned {_prior_n} result(s). "
-                            "Your filter is likely too narrow. Your next step must either "
-                            "(a) synthesize from the non-zero call's output, "
-                            "(b) broaden the filter (drop level/service/host constraints), or "
-                            "(c) switch to a different tool. "
-                            "Do NOT repeat the same narrow-filter pattern."
-                        ),
-                    })
-                    await manager.broadcast({
-                        "type":              "zero_result_pivot",
-                        "session_id":        session_id,
-                        "tool":              fn_name,
-                        "consecutive_zeros": state.zero_streaks[fn_name],
-                        "prior_nonzero":     _prior_n,
-                        "timestamp":         datetime.now(timezone.utc).isoformat(),
-                    })
-                    await manager.send_line(
-                        "step",
-                        f"[pivot] {fn_name} returned 0 · {state.zero_streaks[fn_name]}× in a row "
-                        f"(earlier: {_prior_n}) — nudging agent to broaden or pivot",
-                        status="warning", session_id=session_id,
-                    )
-                elif (
-                    state.zero_streaks.get(fn_name, 0) >= 4
-                    and fn_name not in state.zero_pivot_fired
-                ):
-                    state.zero_pivot_fired.add(fn_name)
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            f"HARNESS NUDGE: {fn_name} has returned 0 results for 4 consecutive calls "
-                            "in this task and has never returned any data. It may not be the right tool "
-                            "for this question. Switch to a different approach or call propose_subtask."
-                        ),
-                    })
-                    await manager.broadcast({
-                        "type":              "zero_result_pivot",
-                        "session_id":        session_id,
-                        "tool":              fn_name,
-                        "consecutive_zeros": state.zero_streaks[fn_name],
-                        "prior_nonzero":     0,
-                        "timestamp":         datetime.now(timezone.utc).isoformat(),
-                    })
-                    await manager.send_line(
-                        "step",
-                        f"[pivot] {fn_name} returned 0 · {state.zero_streaks[fn_name]}× with no prior "
-                        "data — nudging agent to switch tools",
-                        status="warning", session_id=session_id,
-                    )
-
-                # ── v2.33.15: live diagnostics snapshot ──────────────────────
-                # Emit a compact state snapshot after each tool call so the GUI
-                # can surface budget/DIAGNOSIS/zero-streak state before the run
-                # exhausts budget and draws a shallow conclusion.
-                try:
-                    _diag_budget = _tool_budget_for(agent_type)
-                    _diag_used = len(state.tools_used_names)
-                    _diag_has_diagnosis = (
-                        "DIAGNOSIS:" in (state.last_reasoning or "")
-                        if agent_type in ("research", "investigate")
-                        else True
-                    )
-                    await manager.broadcast({
-                        "type":                 "agent_diagnostics",
-                        "session_id":           session_id,
-                        "agent_type":           agent_type,
-                        "tools_used":           _diag_used,
-                        "budget":               _diag_budget,
-                        "budget_pct":           int((_diag_used / max(_diag_budget, 1)) * 100),
-                        "has_diagnosis":        _diag_has_diagnosis,
-                        "zero_streaks":         {k: v for k, v in state.zero_streaks.items() if v > 0},
-                        "max_nonzero_by_tool":  dict(state.nonzero_seen),
-                        "pivot_nudges_fired":   list(state.zero_pivot_fired),
-                        "subtask_proposed":     "propose_subtask" in state.tools_used_names,
-                        "timestamp":            datetime.now(timezone.utc).isoformat(),
-                    })
-                except Exception as _diag_e:
-                    log.debug("agent_diagnostics broadcast failed: %s", _diag_e)
+                await process_tool_result(
+                    state, fn_name, fn_args, result, step, messages,
+                    manager=manager, session_id=session_id,
+                    operation_id=operation_id,
+                )
 
                 _is_hard_failure = result_status in ("failed", "escalated") or (fn_name == "escalate" and result_status != "blocked")
                 _is_degraded = result_status == "degraded"

@@ -505,3 +505,12 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-22 21:02:57
 ========================================================================
+Test fix pushed as `3fb8033`. All 11 hallucination guard tests pass. The other 24 failures from the earlier run (auth, router, pull_jobs, dashboard, etc.) are pre-existing and unrelated to this refactor.
+[STATUS] 42m11s
+
+PROMPT COMPLETE: v2.41.2
+
+========================================================================
+EXIT CODE: 0
+DURATION:  42m11s
+========================================================================
