@@ -34,15 +34,23 @@ def test_subagent_spawn_counter_metric_name():
     assert SUBAGENT_SPAWN_COUNTER._name == "deathstar_subagent_spawns"
 
 
+def _dispatch_src() -> str:
+    """v2.41.5: propose_subtask handler moved from agent.py to
+    api/agents/step_tools.py. Scan both so the pattern checks still find it."""
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    agent = (root / "api" / "routers" / "agent.py").read_text(encoding="utf-8")
+    tools = (root / "api" / "agents" / "step_tools.py").read_text(encoding="utf-8")
+    return agent + "\n" + tools
+
+
 def test_legacy_task_arg_is_promoted_to_objective():
     """v2.34.4 auto-promotion: when the LLM passes task=... but no objective,
     the harness must treat task as the in-band objective. This test reads
     agent.py directly to confirm the promotion code is present — a live
     end-to-end test would need an LLM.
     """
-    from pathlib import Path
-    src = Path(__file__).parent.parent / "api" / "routers" / "agent.py"
-    body = src.read_text(encoding="utf-8")
+    body = _dispatch_src()
     # Auto-promotion lines must be present
     assert "if not _pst_objective and _pst_task:" in body, (
         "v2.34.4 auto-promotion of legacy task -> objective is missing — "
@@ -60,9 +68,7 @@ def test_proposal_only_counter_increments_on_legacy_fallback_branch():
     """The proposal-only path must increment SUBAGENT_SPAWN_COUNTER. Confirms
     the canary is wired into the only branch that should ever fire it.
     """
-    from pathlib import Path
-    src = Path(__file__).parent.parent / "api" / "routers" / "agent.py"
-    body = src.read_text(encoding="utf-8")
+    body = _dispatch_src()
     assert 'outcome="proposal_only"' in body, (
         "proposal_only counter increment missing from legacy fallback — "
         "we lose visibility into v2.34.0-style regressions."

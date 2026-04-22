@@ -311,20 +311,23 @@ def test_render_table_where_clause_footer_cites_both_totals(fake_result_store):
 
 def test_dispatch_wired_in_agent_loop():
     """v2.36.9 — regression guard: the render tool dispatch must be
-    wired in api/routers/agent.py. If this test fails, the feature
-    is shipping as a no-op for operators (tool runs, markdown lost)."""
+    wired in the agent loop. If this test fails, the feature is shipping
+    as a no-op for operators (tool runs, markdown lost).
+    v2.41.5: dispatch logic extracted to api/agents/step_tools.py — scan both."""
     import pathlib
-    agent_py = pathlib.Path(__file__).parent.parent / "api" / "routers" / "agent.py"
-    src = agent_py.read_text(encoding="utf-8")
+    root = pathlib.Path(__file__).parent.parent
+    agent_src = (root / "api" / "routers" / "agent.py").read_text(encoding="utf-8")
+    tools_src = (root / "api" / "agents" / "step_tools.py").read_text(encoding="utf-8")
+    src = agent_src + "\n" + tools_src
     assert "result_render_table" in src, (
-        "dispatch check: 'result_render_table' missing from agent.py — "
+        "dispatch check: 'result_render_table' missing — "
         "v2.36.8 feature is unwired"
     )
     assert "set_operation_final_answer_append" in src, (
-        "dispatch check: 'set_operation_final_answer_append' missing from "
-        "agent.py — render tool output cannot reach DB"
+        "dispatch check: 'set_operation_final_answer_append' missing — "
+        "render tool output cannot reach DB"
     )
     assert "render_markdown" in src, (
-        "dispatch check: 'render_markdown' field extraction missing from "
-        "agent.py — dispatch is shaped wrong"
+        "dispatch check: 'render_markdown' field extraction missing — "
+        "dispatch is shaped wrong"
     )
