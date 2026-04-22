@@ -61,9 +61,12 @@ def test_min_substantive_aliases_match_canonical():
 # ── agent.py wiring ──────────────────────────────────────────────────────────
 
 def _agent_src() -> str:
-    return (
-        Path(__file__).parent.parent / "api" / "routers" / "agent.py"
-    ).read_text(encoding="utf-8")
+    # v2.41.2: guard logic extracted into api/agents/step_guard.py — return
+    # both files concatenated so source-scan assertions still find the markers.
+    root = Path(__file__).parent.parent
+    router = (root / "api" / "routers" / "agent.py").read_text(encoding="utf-8")
+    guard = (root / "api" / "agents" / "step_guard.py").read_text(encoding="utf-8")
+    return router + "\n" + guard
 
 
 def test_substantive_counter_increments_on_non_meta_tool():
