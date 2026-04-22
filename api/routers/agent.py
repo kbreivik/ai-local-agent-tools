@@ -803,6 +803,56 @@ class _PrerunShortCircuit(Exception):
     pass
 
 
+def _build_prerun_external_context(
+    task: str,
+    preflight_facts_block: str = "",
+    max_facts: int = 60,
+) -> str:
+    """Build a context digest for force-external prerun calls.
+
+    synthesize_replace at prerun has no tool-call history to flatten —
+    the message list is just [system_prompt, user_task]. This helper
+    pulls real infrastructure state from known_facts so that external AI
+    has evidence to synthesise from rather than responding 'I don't know'.
+
+    Returns a formatted string injected as the `digest` param of
+    synthesize_replace. Empty string on any failure (safe fallback).
+    """
+    parts: list[str] = []
+
+    # 1. Preflight facts (entity-specific, highest signal)
+    if preflight_facts_block and preflight_facts_block.strip():
+        parts.append(preflight_facts_block.strip())
+
+    # 2. Broad infra facts from known_facts — top confident rows
+    try:
+        from api.db.known_facts import get_confident_facts
+        rows = get_confident_facts(min_confidence=0.7, max_rows=max_facts)
+        if rows:
+            lines = ["INFRASTRUCTURE STATE (from knowledge store):"]
+            for r in rows:
+                key = r.get("fact_key", "")
+                val = r.get("fact_value", "")
+                conf = r.get("confidence", 0.0)
+                if isinstance(val, (list, dict)):
+                    import json as _json
+                    val = _json.dumps(val)
+                lines.append(f"  {key} = {val}  (confidence={conf:.2f})")
+            parts.append("\n".join(lines))
+    except Exception as _e:
+        log.debug("_build_prerun_external_context: known_facts query failed: %s", _e)
+
+    if not parts:
+        return ""
+
+    header = (
+        "NOTE: The following facts were gathered by infrastructure collectors "
+        "and represent current known state. Use this as your primary evidence. "
+        "Do NOT invent values not present here.\n\n"
+    )
+    return header + "\n\n".join(parts)
+
+
 async def _maybe_route_to_external_ai(
     *,
     session_id: str,
@@ -821,6 +871,7 @@ async def _maybe_route_to_external_ai(
     is_prerun: bool,
     prior_failed_attempts_7d: int = 0,
     force: bool = False,
+    prerun_digest: str = "",
 ) -> str | None:
     """Run the v2.36.1 router. If it fires, gate on v2.36.2 confirmation and
     call the v2.36.3 external AI. Return the synthesis text on success,
@@ -829,7 +880,8 @@ async def _maybe_route_to_external_ai(
     Caller treats a non-None return as the final_answer (REPLACE mode).
 
     force=True (v2.38.6): skip router decision and confirmation modal entirely.
-    Operator explicitly chose external AI — treat as pre-approved.
+    prerun_digest (v2.38.7): infrastructure context injected into synthesize_replace
+    digest param so external AI has evidence at prerun time (no tool history yet).
     """
     from api.agents.external_router import (
         should_escalate_to_external_ai, record_decision, RouterState, RouterDecision,
@@ -985,7 +1037,7 @@ async def _maybe_route_to_external_ai(
     try:
         result = await synthesize_replace(
             task=task, agent_type=agent_type,
-            messages=messages, digest=digest_text,
+            messages=messages, digest=(prerun_digest or digest_text),
             context_max_chars=12000, timeout_s=45.0,
         )
     except ExternalAIError as e:
@@ -4317,6 +4369,18 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         except Exception:
             pass
 
+        # v2.38.7 — build context digest for force-external prerun so
+        # Claude Sonnet has real infrastructure evidence to synthesise from.
+        _prerun_ext_digest = ""
+        if force_external:
+            try:
+                _prerun_ext_digest = _build_prerun_external_context(
+                    task=task,
+                    preflight_facts_block=_preflight_facts_block,
+                )
+            except Exception as _pec_e:
+                log.debug("prerun external context build failed: %s", _pec_e)
+
         _prerun_synth = await _maybe_route_to_external_ai(
             session_id=session_id, operation_id=operation_id,
             task=task, agent_type=first_intent,
@@ -4330,6 +4394,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
             is_prerun=True,
             prior_failed_attempts_7d=_prior_failed,
             force=force_external,
+            prerun_digest=_prerun_ext_digest,
         )
         if _prerun_synth:
             # REPLACE mode pre-run: skip the local agent entirely
