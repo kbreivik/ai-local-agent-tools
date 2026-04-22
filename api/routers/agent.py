@@ -842,12 +842,40 @@ def _build_prerun_external_context(
     except Exception as _e:
         log.debug("_build_prerun_external_context: known_facts query failed: %s", _e)
 
+    # 3. Entity history — recent changes and events for preflight candidates
+    try:
+        from api.db.entity_history import get_recent_changes_summary, get_events
+        from api.agents.preflight import tier1_regex_extract
+
+        candidates = tier1_regex_extract(task)
+        entity_ids = [c.entity_id for c in candidates[:5]]  # cap to avoid bloat
+
+        history_lines: list[str] = []
+        for eid in entity_ids:
+            summary = get_recent_changes_summary(eid, hours=24)
+            if summary:
+                history_lines.append(f"  {eid}: {summary}")
+            warn_events = get_events(eid, hours=24, severity="warning", limit=2)
+            crit_events = get_events(eid, hours=24, severity="critical", limit=2)
+            for ev in (crit_events + warn_events):
+                ev_str = ev.get("description") or ev.get("event_type", "")
+                if ev_str:
+                    history_lines.append(f"  {eid} [{ev.get('severity','?')}]: {ev_str}")
+
+        if history_lines:
+            parts.append(
+                "RECENT ENTITY ACTIVITY (last 24h):\n" + "\n".join(history_lines)
+            )
+    except Exception as _eh:
+        log.debug("_build_prerun_external_context: entity history failed: %s", _eh)
+
     if not parts:
         return ""
 
     header = (
-        "NOTE: The following facts were gathered by infrastructure collectors "
-        "and represent current known state. Use this as your primary evidence. "
+        "NOTE: The following facts and recent activity were gathered by "
+        "infrastructure collectors and represent current known state. "
+        "Use this as your primary evidence. "
         "Do NOT invent values not present here.\n\n"
     )
     return header + "\n\n".join(parts)
