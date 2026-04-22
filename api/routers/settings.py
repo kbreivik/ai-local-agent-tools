@@ -107,6 +107,13 @@ SETTINGS_KEYS: dict[str, dict] = {
     # Runbook injection — enforced in v2.35.4 (augment is default rollout)
     "runbookInjectionMode":              {"env": None, "sens": False, "default": "augment", "type": "str", "group": "Facts & Knowledge"},
     "runbookClassifierMode":             {"env": None, "sens": False, "default": "keyword", "type": "str", "group": "Facts & Knowledge"},
+    "runbookSemanticThreshold": {
+        "type": "float",
+        "default": 0.55,
+        "group": "Facts & Knowledge",
+        "label": "Runbook semantic similarity threshold",
+        "description": "Cosine similarity threshold for semantic runbook matching (0.0-1.0). Lower = more permissive.",
+    },
     # Preflight — settings registered now, consumed in v2.35.1
     "preflightPanelMode":                {"env": None, "sens": False, "default": "always_visible", "type": "str",  "group": "Facts & Knowledge"},
     "preflightDisambiguationTimeout":    {"env": None, "sens": False, "default": 300,              "type": "int",  "group": "Facts & Knowledge"},

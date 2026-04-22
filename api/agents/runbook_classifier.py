@@ -24,12 +24,19 @@ log = logging.getLogger(__name__)
 
 def select_runbook(task: str, agent_type: str, settings: dict | None = None) -> dict | None:
     """Return {runbook, score, matched_keywords} for the best runbook, or None."""
-    settings = settings or {}
-    mode = settings.get("runbookClassifierMode", "keyword") or "keyword"
+    s = settings or {}
+    mode = s.get("runbookClassifierMode", "keyword") or "keyword"
     if mode == "keyword":
         return _keyword_select(task, agent_type)
     if mode == "semantic":
-        return _semantic_select(task, agent_type)
+        result = _semantic_select(
+            task, agent_type,
+            threshold=float(s.get("runbookSemanticThreshold", 0.55)),
+        )
+        # Fall back to keyword if embedding unavailable
+        if result is None:
+            result = _keyword_select(task, agent_type)
+        return result
     if mode == "llm":
         return _llm_select(task, agent_type)
     return None
@@ -80,9 +87,91 @@ def _keyword_select(task: str, agent_type: str) -> dict | None:
     }
 
 
-def _semantic_select(task: str, agent_type: str) -> dict | None:
-    # Stub for v2.35.5 — embedding-based
-    return None
+# Module-level embedding cache for runbooks (60s TTL)
+_runbook_embed_cache: dict[str, list[float]] = {}
+_runbook_embed_cache_ts: float = 0.0
+_RUNBOOK_EMBED_CACHE_TTL = 60.0
+
+
+def _embed(text: str) -> list[float] | None:
+    """Embed text using the RAG model (bge-small-en-v1.5). Returns None on failure."""
+    try:
+        from api.rag.doc_search import embed
+        return embed(text)
+    except Exception as _e:
+        log.debug("runbook_classifier._embed failed: %s", _e)
+        return None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _semantic_select(task: str, agent_type: str,
+                     threshold: float = 0.55) -> dict | None:
+    """Embedding-based runbook selection using bge-small-en-v1.5.
+
+    Embeds each runbook as '<title>: <keywords joined>' and scores against
+    the task embedding. Returns the highest-scoring runbook above threshold,
+    filtered by agent_type. Falls back to None if embedding unavailable.
+    """
+    import time as _t
+    global _runbook_embed_cache, _runbook_embed_cache_ts
+
+    task_vec = _embed(task[:512])
+    if task_vec is None:
+        return None  # embedding not available — caller falls back to keyword
+
+    try:
+        from api.db.runbooks import list_active_runbooks_for_agent_type
+        candidates = list_active_runbooks_for_agent_type(agent_type)
+    except Exception as e:
+        log.debug("runbook_classifier._semantic_select: list query failed: %s", e)
+        return None
+
+    if not candidates:
+        return None
+
+    # Rebuild cache if stale
+    now = _t.monotonic()
+    if now - _runbook_embed_cache_ts > _RUNBOOK_EMBED_CACHE_TTL:
+        _runbook_embed_cache = {}
+        _runbook_embed_cache_ts = now
+
+    scored = []
+    for rb in candidates:
+        rb_id = str(rb.get("id") or rb.get("title", ""))
+        if rb_id not in _runbook_embed_cache:
+            title = rb.get("title") or ""
+            kws = " ".join(rb.get("triage_keywords") or [])
+            rb_text = f"{title}: {kws}"[:512]
+            vec = _embed(rb_text)
+            if vec is None:
+                continue
+            _runbook_embed_cache[rb_id] = vec
+
+        rb_vec = _runbook_embed_cache.get(rb_id)
+        if rb_vec is None:
+            continue
+
+        sim = _cosine(task_vec, rb_vec)
+        if sim >= threshold:
+            scored.append((sim, int(rb.get("priority", 100)), rb))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    sim, _prio, rb = scored[0]
+    return {
+        "runbook":          rb,
+        "score":            round(sim, 4),
+        "matched_keywords": [],   # semantic — no discrete keyword list
+    }
 
 
 def _llm_select(task: str, agent_type: str) -> dict | None:

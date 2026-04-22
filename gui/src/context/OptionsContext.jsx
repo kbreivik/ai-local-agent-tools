@@ -81,6 +81,7 @@ const DEFAULTS = {
   factAgeRejectionMinConfidence:     0.85,
   runbookInjectionMode:              'augment',
   runbookClassifierMode:             'keyword',
+  runbookSemanticThreshold:          0.55,
   preflightPanelMode:                'always_visible',
   preflightDisambiguationTimeout:    300,
   preflightLLMFallbackEnabled:       true,
@@ -146,7 +147,7 @@ const SERVER_KEYS = new Set([
   'factHalfLifeHours_agent_volatile',
   'factVerifyCountCap',
   'factAgeRejectionMode', 'factAgeRejectionMaxAgeMin', 'factAgeRejectionMinConfidence',
-  'runbookInjectionMode', 'runbookClassifierMode',
+  'runbookInjectionMode', 'runbookClassifierMode', 'runbookSemanticThreshold',
   'preflightPanelMode', 'preflightDisambiguationTimeout',
   'preflightLLMFallbackEnabled', 'preflightLLMFallbackMaxTokens',
 
