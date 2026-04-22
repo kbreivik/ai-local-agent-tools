@@ -1045,14 +1045,23 @@ def preflight_skills(task: str, agent_type: str, max_skills: int = 10) -> str:
         Call skill_execute(name=..., ...) directly. skill_search() still available
         for skills not listed here.
     """
+    def _bump(outcome: str) -> None:
+        try:
+            from api.metrics import PREFLIGHT_SKILLS_COUNTER
+            PREFLIGHT_SKILLS_COUNTER.labels(outcome=outcome).inc()
+        except Exception:
+            pass
+
     try:
         from mcp_server.tools.skills.registry import list_skills
         skills = list_skills(enabled_only=True)
     except Exception as _e:
         log.debug("preflight_skills: list_skills failed: %s", _e)
+        _bump("error")
         return ""
 
     if not skills:
+        _bump("empty")
         return ""
 
     task_lower = task.lower()
@@ -1074,6 +1083,7 @@ def preflight_skills(task: str, agent_type: str, max_skills: int = 10) -> str:
     top = scored[:max_skills]
 
     if not top:
+        _bump("empty")
         return ""
 
     lines = ["═══ AVAILABLE SKILLS (pre-matched) ═══"]
@@ -1086,4 +1096,5 @@ def preflight_skills(task: str, agent_type: str, max_skills: int = 10) -> str:
         "Call skill_execute(name=..., ...) for any of the above. "
         "skill_search() still available for skills not listed here."
     )
+    _bump("matched")
     return "\n".join(lines)

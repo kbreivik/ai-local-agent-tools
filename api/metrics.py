@@ -336,6 +336,12 @@ PREFLIGHT_FACT_SOURCE_COUNTER = Counter(
     ["source"],   # inventory_match | direct_entity | ambiguous_skip | no_facts_found
 )
 
+PREFLIGHT_SKILLS_COUNTER = Counter(
+    "deathstar_preflight_skills_total",
+    "Skill preflight outcomes",
+    ["outcome"],   # matched | empty | error
+)
+
 # --- runbook injection (v2.35.4) ---
 RUNBOOK_MATCHES_COUNTER = Counter(
     "deathstar_runbook_matches_total",

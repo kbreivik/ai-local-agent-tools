@@ -4053,6 +4053,14 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         )
         _preflight_result = preflight_resolve(task, first_intent)
         _preflight_facts_block = format_preflight_facts_section(_preflight_result)
+        # v2.39.3 — skill preflight: match skills relevant to the task. Must run
+        # before the preflight WS broadcast so skills_matched can be included.
+        _preflight_skills_block = ""
+        try:
+            from api.agents.preflight import preflight_skills as _pskills
+            _preflight_skills_block = _pskills(task, first_intent)
+        except Exception as _pse:
+            log.debug("preflight_skills failed: %s", _pse)
         # Emit a preflight event on the websocket so the Preflight Panel can render.
         try:
             await manager.broadcast({
@@ -4060,6 +4068,10 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 "session_id": session_id,
                 "operation_id": operation_id,
                 "preflight": _preflight_result.as_dict(),
+                "skills_matched": len([
+                    ln for ln in _preflight_skills_block.splitlines()
+                    if ln.startswith("- ")
+                ]) if _preflight_skills_block else 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         except Exception:
@@ -4082,14 +4094,7 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 log.debug("preflight op status update failed: %s", _pop_e)
     except Exception as _pre_e:
         log.debug("preflight resolve skipped: %s", _pre_e)
-
-    # v2.39.3 — skill preflight: inject relevant skills before agent loop
-    _preflight_skills_block = ""
-    try:
-        from api.agents.preflight import preflight_skills as _pskills
-        _preflight_skills_block = _pskills(task, first_intent)
-    except Exception as _pse:
-        log.debug("preflight_skills failed: %s", _pse)
+        _preflight_skills_block = ""
 
     # v2.34.9: inject MCP tool signatures so the agent calls tools with exact kwargs
     try:
