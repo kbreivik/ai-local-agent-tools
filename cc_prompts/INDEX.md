@@ -243,9 +243,10 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.39.4.md | v2.39.4 | feat(agents): skill preflight Prometheus counter + WS skills_matched event + snapshot update | DONE (1171d4d) |
 | CC_PROMPT_v2.40.0.md | v2.40.0 | fix(db): remove orphaned escalations SQLAlchemy table + dead helpers in queries.py | DONE (5ef0372) |
 | CC_PROMPT_v2.40.1.md | v2.40.1 | feat(agents): semantic runbook classifier — bge-small-en-v1.5 cosine with keyword fallback | DONE (513a1b6) |
-| CC_PROMPT_v2.40.2.md | v2.40.2 | feat(agents): enrich external AI prerun context with entity history (last 24h changes + events) | RUNNING |
-| CC_PROMPT_v2.40.3.md | v2.40.3 | refactor(agents): extract gate/synthesis helpers into api/agents/gates.py | PENDING |
+| CC_PROMPT_v2.40.2.md | v2.40.2 | feat(agents): enrich external AI prerun context with entity history (last 24h changes + events) | DONE (ebedea8) |
+| CC_PROMPT_v2.40.3.md | v2.40.3 | refactor(agents): extract gate/synthesis helpers into api/agents/gates.py | RUNNING |
 | CC_PROMPT_v2.40.4.md | v2.40.4 | refactor(agents): extract context-building helpers into api/agents/context.py | PENDING |
+| CC_PROMPT_v2.41.0.md | v2.41.0 | refactor(agents): StepState dataclass — consolidate _run_single_agent_step accumulators | PENDING |
 
 ---
 
