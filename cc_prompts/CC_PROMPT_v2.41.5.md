@@ -1,0 +1,231 @@
+# CC PROMPT — v2.41.5 — refactor(agents): extract step_tools.py — tool dispatch
+
+## Context
+
+SPEC: `cc_prompts/SPEC_v2.41_AGENT_SPLIT.md`
+Depends on: v2.41.4 must be DONE first.
+
+The largest single extraction: the per-tool-call dispatch loop (~900 lines).
+This covers the `for tc in msg.tool_calls:` block including all intercepted
+tool handlers (plan_action, clarifying_question, propose_subtask, audit_log,
+escalate, render_table) and the generic MCP fallthrough.
+
+Pure refactor — zero logic change.
+
+Version bump: 2.41.4 → 2.41.5.
+
+---
+
+## What step_tools.py handles
+
+The section to extract is the `for tc in msg.tool_calls:` loop body, beginning
+after the `messages.append({"role": "assistant", ...})` that adds the assistant
+turn, through the `messages.append({"role": "tool", ...})` that adds each tool
+result. `process_tool_result()` (step_facts.py) has already been extracted and
+runs after the message append.
+
+Sub-sections within the loop body:
+1. Tool allowlist check — reject if not in agent's allowed set
+2. vm_exec write-pattern detection — flag as destructive
+3. Global destructive-lock check (plan_lock.is_locked_by_other)
+4. Per-tc budget trim (too many tool calls in one batch)
+5. `fn_name` parse + `fn_args` JSON decode
+6. MuninnDB before_tool_call hook
+7. Blackout window check
+8. Intercepted tool handlers (plan_action, clarifying_question, propose_subtask,
+   audit_log, escalate, render_table)
+9. Generic MCP dispatch (default fallthrough)
+10. vm_exec allowlist enforcement
+11. Result status extraction
+12. audit write (agent_actions)
+13. Fact-age rejection
+14. GUI stream (`send_line("tool", ...)`)
+15. Tool result summarization (`_summarize_tool_result`)
+16. `messages.append({"role": "tool", ...})`
+
+The extracted function returns a `ToolsDispatchResult` with a loop-control signal.
+
+---
+
+## Change 1 — create `api/agents/step_tools.py`
+
+CC must read the actual `for tc in msg.tool_calls:` block from the current
+`api/routers/agent.py` and move it verbatim into the new module, replacing
+all local variable references with `state.*` (from StepState, already applied
+in v2.41.0).
+
+The module header:
+
+```python
+"""step_tools — tool call dispatch per step — v2.41.5.
+
+Extracted from api/routers/agent.py _run_single_agent_step.
+
+dispatch_tool_calls() processes all tool calls in a single LLM step.
+Returns a ToolsDispatchResult indicating whether the loop should
+continue, break, or proceed normally.
+"""
+from __future__ import annotations
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+
+class ToolLoopAction(Enum):
+    CONTINUE = "continue"   # inject a harness message + loop back
+    BREAK    = "break"      # tool caused a hard stop
+    NORMAL   = "normal"     # all tools ran; loop continues normally
+
+
+@dataclass
+class ToolsDispatchResult:
+    action: ToolLoopAction = ToolLoopAction.NORMAL
+    destructive_calls_delta: int = 0    # increment _destructive_calls by this
+    tool_failures_delta: int = 0        # increment _tool_failures by this
+
+
+async def dispatch_tool_calls(
+    state,              # StepState
+    msg,                # LLM message with .tool_calls
+    messages: list,
+    tools_spec: list,
+    *,
+    manager,
+    session_id: str,
+    operation_id: str,
+    agent_type: str,
+    task: str,
+    step: int,
+    client,
+    owner_user: str,
+    parent_session_id: str = "",
+    is_final_step: bool = True,
+    allowed_tools: frozenset,
+    destructive_tools: frozenset,
+    tool_budget: int,
+) -> ToolsDispatchResult:
+```
+
+Then CC copies the body of the `for tc in msg.tool_calls:` loop verbatim,
+replacing all former local variables with `state.*` as per the v2.41.0 mapping.
+
+Key substitutions to verify:
+- `tools_used_names` → `state.tools_used_names`
+- `substantive_tool_calls` → `state.substantive_tool_calls`
+- `plan_action_called` → `state.plan_action_called`
+- `_last_blocked_tool` → `state.last_blocked_tool`
+- `positive_signals` / `negative_signals` → `state.*`
+- `_audit_logged` → `state.audit_logged`
+- `_degraded_findings` → `state.degraded_findings`
+- `_render_tool_calls` → `state.render_tool_calls`
+- `_propose_state` → `state.propose_state`
+- `final_status` → `state.final_status`
+
+Where the current code uses `continue` (within the tc loop to skip remaining
+tc processing), preserve it — it still means "next tc in the batch".
+
+Where the current code uses `break` to exit the while loop (e.g. after a
+`halt` on escalation), convert to:
+```python
+    return ToolsDispatchResult(action=ToolLoopAction.BREAK)
+```
+and ensure any `_destructive_calls_delta` / `_tool_failures_delta` increments
+are tracked in the result.
+
+The extracted function also calls `process_tool_result(state, ...)` from
+step_facts.py at the end of each tc — this is already wired (v2.41.3).
+
+---
+
+## Change 2 — `api/routers/agent.py` — wire dispatch_tool_calls
+
+Add import:
+```python
+from api.agents.step_tools import dispatch_tool_calls, ToolLoopAction
+```
+
+Inside `_run_single_agent_step`, locate:
+
+```python
+            # Build assistant message for history
+            messages.append({...})
+```
+
+After that append, replace the entire `for tc in msg.tool_calls:` loop with:
+
+```python
+            _tr = await dispatch_tool_calls(
+                state, msg, messages, tools_spec,
+                manager=manager, session_id=session_id,
+                operation_id=operation_id, agent_type=agent_type,
+                task=task, step=step, client=client,
+                owner_user=owner_user, parent_session_id=parent_session_id,
+                is_final_step=is_final_step,
+                allowed_tools=_allowed_tools,   # compute before the call
+                destructive_tools=DESTRUCTIVE_TOOLS,
+                tool_budget=_tool_budget,
+            )
+            _destructive_calls += _tr.destructive_calls_delta
+            _tool_failures     += _tr.tool_failures_delta
+            if _tr.action == ToolLoopAction.BREAK:
+                break
+            if _tr.action == ToolLoopAction.CONTINUE:
+                continue
+```
+
+Note: `_allowed_tools` is the frozenset of tools allowed for this agent_type
+and domain — already computed earlier in the loop for the pre-flight allowlist
+check. Pass it explicitly.
+
+---
+
+## Change 3 — verify final line count
+
+```bash
+wc -l api/routers/agent.py
+```
+
+Target: ≤ 3500 lines. With step_llm (~150), step_guard (~200), step_facts (~140),
+step_synth (~120), step_tools (~900) extracted, agent.py should be comfortably
+under 3500 from its original 5523.
+
+---
+
+## Verification
+
+```bash
+python -c "from api.agents.step_tools import dispatch_tool_calls; print('ok')"
+python -c "from api.agents import step_llm, step_guard, step_facts, step_synth, step_tools; print('all ok')"
+python -m pytest tests/ -x -q 2>&1 | tail -15
+wc -l api/routers/agent.py
+```
+
+Run a live agent task (observe type) via Commands page and verify it completes.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.41.4` → `2.41.5`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "refactor(agents): v2.41.5 extract step_tools.py — tool dispatch — agent.py now NNN lines"
+git push origin main
+```
+
+(Replace NNN with actual wc -l output.)
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
