@@ -32,6 +32,7 @@ from api.agents.context import (
     _extract_working_memory,
     _build_subagent_context,
 )
+from api.agents.step_llm import call_llm_step, LlmStepResult
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -1433,159 +1434,15 @@ async def _run_single_agent_step(
                     await manager.broadcast(_payload)
                 break
 
-            # Inject working memory into context for step > 1
-            if step > 1 and state.working_memory and len(messages) >= 2:
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i]["role"] == "user" and isinstance(messages[i].get("content"), str):
-                        if not messages[i]["content"].startswith("[Step"):
-                            messages[i] = {
-                                **messages[i],
-                                "content": f"{state.working_memory}\n{messages[i]['content']}",
-                            }
-                        break
-
-            await manager.send_line("step", f"── Step {step} ──", session_id=session_id)
-
-            # For audit_log-only likely steps: hint to skip thinking
-            _prior_step_tools = [tc.function.name for tc in (msg.tool_calls or [])] if step > 1 and 'msg' in dir() else []
-            if _should_disable_thinking(_prior_step_tools, step, max_steps):
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i]["role"] == "user":
-                        content = messages[i]["content"]
-                        if isinstance(content, str) and "/no_think" not in content:
-                            messages[i] = {**messages[i], "content": content + "\n/no_think"}
-                        break
-
-            import time as _time
-            _step_t0 = _time.monotonic()
-
-            # v2.34.16 — flush any queued harness messages (sub-agent terminal
-            # feedback) BEFORE the next completion call, so the parent sees
-            # the outcome right away instead of learning about it later.
-            if state.propose_state.queued_harness_messages:
-                for _qm in state.propose_state.queued_harness_messages:
-                    messages.append({"role": "system", "content": _qm})
-                state.propose_state.queued_harness_messages.clear()
-
-            try:
-                response = client.chat.completions.create(
-                    model=_lm_model(),
-                    messages=messages,
-                    tools=tools_spec,
-                    tool_choice="auto",
-                    temperature=0.1,
-                    max_tokens=2048,
-                    extra_body={"min_p": 0.1},
-                )
-            except Exception as e:
-                await manager.broadcast({
-                    "type": "error", "session_id": session_id,
-                    "content": f"LM Studio error: {e}", "status": "error",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+            _llm = await call_llm_step(
+                state, client, messages, tools_spec, step, max_steps, system_prompt,
+                manager=manager, session_id=session_id, operation_id=operation_id,
+                agent_type=agent_type, is_final_step=is_final_step,
+            )
+            if _llm.hard_error:
                 state.final_status = "error"
                 break
-
-            if hasattr(response, 'usage') and response.usage:
-                state.total_prompt_tokens     += getattr(response.usage, 'prompt_tokens', 0) or 0
-                state.total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
-
-            msg = response.choices[0].message
-            finish = response.choices[0].finish_reason
-
-            # ── v2.34.14 LLM trace persistence ────────────────────────────
-            # Store the new messages added since the previous step (the
-            # "delta") plus the raw response dict so every completion is
-            # recoverable post-hoc. System prompt is written once on step 0.
-            try:
-                _msgs_delta = messages[state.trace_prev_msg_count:]
-                state.trace_prev_msg_count = len(messages)
-                _resp_raw: dict = {}
-                try:
-                    _resp_raw = response.model_dump()  # type: ignore[attr-defined]
-                except Exception:
-                    try:
-                        _resp_raw = response.to_dict()  # type: ignore[attr-defined]
-                    except Exception:
-                        _resp_raw = {
-                            "choices": [{
-                                "finish_reason": finish,
-                                "message": {
-                                    "content": msg.content or "",
-                                    "tool_calls": [
-                                        {"id": tc.id, "function": {
-                                            "name": tc.function.name,
-                                            "arguments": tc.function.arguments,
-                                        }}
-                                        for tc in (msg.tool_calls or [])
-                                    ],
-                                },
-                            }],
-                            "usage": (
-                                {
-                                    "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0) or 0,
-                                    "completion_tokens": getattr(response.usage, 'completion_tokens', 0) or 0,
-                                    "total_tokens": (
-                                        (getattr(response.usage, 'prompt_tokens', 0) or 0)
-                                        + (getattr(response.usage, 'completion_tokens', 0) or 0)
-                                    ),
-                                }
-                                if hasattr(response, 'usage') and response.usage else {}
-                            ),
-                        }
-                from api.logger import log_llm_step
-                await log_llm_step(
-                    operation_id=operation_id,
-                    step_index=state.trace_step_index,
-                    messages_delta=_msgs_delta,
-                    response_raw=_resp_raw,
-                    system_prompt=(system_prompt if state.trace_step_index == 0 else None),
-                    tools_manifest=(tools_spec if state.trace_step_index == 0 else None),
-                    agent_type=agent_type,
-                    is_subagent=state.trace_is_subagent,
-                    parent_op_id=state.trace_parent_op_id,
-                    temperature=0.1,
-                    model=_extract_response_model(response, fallback=_lm_model()),
-                    provider="lm_studio",
-                )
-                state.trace_step_index += 1
-            except Exception as _trace_e:
-                log.debug("log_llm_step failed: %s", _trace_e)
-
-            # Opt-in full LLM exchange logging (LOG_LLM_EXCHANGES=1)
-            if os.environ.get("LOG_LLM_EXCHANGES", "").lower() in ("1", "true", "yes"):
-                from api.logger import log_llm_exchange
-                await log_llm_exchange(
-                    operation_id, step, messages,
-                    response_text=msg.content or "",
-                    tool_calls=[{"function": {"name": tc.function.name}} for tc in (msg.tool_calls or [])],
-                    prompt_tokens=getattr(response.usage, 'prompt_tokens', 0) or 0 if hasattr(response, 'usage') and response.usage else 0,
-                    completion_tokens=getattr(response.usage, 'completion_tokens', 0) or 0 if hasattr(response, 'usage') and response.usage else 0,
-                    model=_lm_model(),
-                    duration_ms=int((_time.monotonic() - _step_t0) * 1000),
-                )
-
-            # v2.35.17 — final_answer rule: only assistant content from a
-            # step that both (a) finished with finish_reason='stop' AND
-            # (b) emitted NO tool_calls counts as a synthesis. Content
-            # emitted alongside tool_calls is pre-action reasoning under
-            # OpenAI chat-completions semantics ("I'll check the UniFi..."),
-            # not a user-facing synthesis. v2.35.16 only checked finish
-            # reason, which left a hole when the LLM produced both content
-            # AND a tool_call in the same response (op 07d326a1, fa_len=53).
-            # If no step qualifies, state.last_reasoning stays empty and the
-            # v2.35.14 empty_completion rescue fires run_forced_synthesis.
-            # v2.35.15 too_short/preamble_only rescues become
-            # belt-and-suspenders rather than the primary path.
-            if finish == "stop" and not msg.tool_calls:
-                state.last_reasoning = msg.content or ""
-
-            if msg.content:
-                await manager.send_line("reasoning", msg.content, session_id=session_id)
-                # Extract working memory from <think> content for inter-step continuity
-                _wm = _extract_working_memory(msg.content, step)
-                if _wm:
-                    state.working_memory = _wm
+            response, finish, msg = _llm.response, _llm.finish, _llm.msg
 
             if finish == "stop" or not msg.tool_calls:
                 # Safety guard: action agent with destructive task must call plan_action
