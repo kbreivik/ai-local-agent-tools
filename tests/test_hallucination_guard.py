@@ -70,14 +70,20 @@ def test_substantive_counter_increments_on_non_meta_tool():
     """The substantive counter must be incremented exactly where the loop
     records a tool call — next to `tools_used_names.append(fn_name)`.
     Without this, the guard can never fire.
+
+    v2.41.0: counter lives on StepState as `substantive_tool_calls` and is
+    mutated via `state.substantive_tool_calls += 1` in agent.py.
     """
     src = _agent_src()
-    assert "substantive_tool_calls: int = 0" in src, (
-        "substantive_tool_calls counter missing from agent loop init — "
+    step_state_src = (
+        Path(__file__).parent.parent / "api" / "agents" / "step_state.py"
+    ).read_text(encoding="utf-8")
+    assert "substantive_tool_calls: int = 0" in step_state_src, (
+        "substantive_tool_calls counter missing from StepState — "
         "the hallucination guard cannot distinguish meta from real tool calls."
     )
     assert "if fn_name not in META_TOOLS:" in src
-    assert "substantive_tool_calls += 1" in src
+    assert "state.substantive_tool_calls += 1" in src
 
 
 def test_hallucination_guard_block_is_present():
@@ -93,7 +99,9 @@ def test_hallucination_guard_block_is_present():
     assert "halluc-guard" in src
     # v2.34.14: guard now retries + fails loudly instead of the old
     # "fire once → accept with HARNESS WARNING" fallback.
-    assert "_halluc_guard_attempts" in src
+    # v2.41.0: guard counter migrated from `_halluc_guard_attempts` local to
+    # `state.halluc_guard_attempts` (StepState dataclass).
+    assert "state.halluc_guard_attempts" in src
     assert "AGENT_HALLUC_GUARD_MAX_ATTEMPTS" in src
     assert "hallucination_guard_exhausted" in src
 
@@ -101,12 +109,14 @@ def test_hallucination_guard_block_is_present():
 def test_guard_retries_then_fails_loudly():
     """v2.34.14: guard must retry up to N times before failing the task —
     never silently accept fabricated evidence.
+
+    v2.41.0: guard state consolidated into StepState.
     """
     src = _agent_src()
-    assert "_halluc_guard_attempts += 1" in src
-    assert "_halluc_guard_max" in src
+    assert "state.halluc_guard_attempts += 1" in src
+    assert "state.halluc_guard_max" in src
     # Ensure there is a branch that breaks the loop with failure status
-    assert "final_status = \"failed\"" in src
+    assert 'state.final_status = "failed"' in src
 
 
 def test_hallucination_counter_is_exported():

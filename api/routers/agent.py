@@ -982,42 +982,23 @@ async def _run_single_agent_step(
         {"role": "user", "content": task},
     ]
 
-    # ── Per-run feedback accumulators ─────────────────────────────────────────
-    # v2.34.16: dedup state for propose_subtask + queued sub-agent terminal
-    # feedback. Parent-run scoped; does NOT persist across runs.
+    # ── Per-run feedback accumulators (v2.41.0: consolidated into StepState) ──
     from api.agents.propose_dedup import ProposeState
-    _propose_state = ProposeState()
-    tools_used_names: list = []
-    tool_history: list = []  # v2.33.13: full per-call log for contradiction detection
-    substantive_tool_calls: int = 0  # v2.34.8: non-META tool calls (hallucination guard)
-    positive_signals = 0
-    negative_signals = 0
-    total_prompt_tokens = 0
-    total_completion_tokens = 0
-    _audit_logged = False        # allow at most one audit_log call per run
-    _degraded_findings: list[str] = []  # research agents: degraded results are findings, not halts
-    plan_action_called = plan_already_approved   # pre-set if already approved
-    _last_blocked_tool = None    # name of most recently blocked tool
-    _working_memory: str = ""    # compact facts from <think> blocks for inter-step continuity
-    _budget_nudge_fired = False  # v2.33.3: ensure 70% handoff nudge fires at most once
-    _hallucination_block_fired = False  # v2.34.8: legacy flag retained for downstream inspection
-    # v2.34.14: hallucination guard now retries up to MAX_GUARD_ATTEMPTS before
-    # failing loudly, instead of "fire once then accept with warning". Fabrication
-    # detector shares this counter — a detected fabrication costs one attempt.
-    _halluc_guard_attempts = 0
-    _halluc_guard_max = int(os.environ.get("AGENT_HALLUC_GUARD_MAX_ATTEMPTS", "3"))
-    _fabrication_min_cites = int(os.environ.get("AGENT_FABRICATION_MIN_CITES", "3"))
-    _fabrication_score_threshold = float(
-        os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5")
+    from api.agents.step_state import StepState
+    state = StepState(
+        session_id=session_id,
+        operation_id=operation_id,
+        agent_type=agent_type,
+        task=task,
+        parent_session_id=parent_session_id,
+        plan_action_called=plan_already_approved,
+        halluc_guard_max=int(os.environ.get("AGENT_HALLUC_GUARD_MAX_ATTEMPTS", "3")),
+        fabrication_min_cites=int(os.environ.get("AGENT_FABRICATION_MIN_CITES", "3")),
+        fabrication_score_threshold=float(os.environ.get("AGENT_FABRICATION_SCORE_THRESHOLD", "0.5")),
+        trace_is_subagent=bool(parent_session_id),
+        propose_state=ProposeState(),
     )
-    _fabrication_detected_once = False  # whether guard_attempts was bumped by fab detector
-    _render_tool_calls = 0          # v2.36.9 — count result_render_table dispatches this step
-    # v2.34.14: LLM trace persistence — track delta index so we only store new messages per step
-    _trace_prev_msg_count = 0
-    _trace_step_index = 0
-    _trace_is_subagent = bool(parent_session_id)
-    _trace_parent_op_id: str | None = None
-    if _trace_is_subagent and parent_session_id:
+    if state.trace_is_subagent and parent_session_id:
         try:
             from api.db.base import get_engine as _get_eng_for_trace
             from api.db import queries as _q_for_trace
@@ -1026,18 +1007,9 @@ async def _run_single_agent_step(
                     _c_for_trace, parent_session_id
                 )
                 if _parent_op:
-                    _trace_parent_op_id = _parent_op.get("id")
+                    state.trace_parent_op_id = _parent_op.get("id")
         except Exception:
-            _trace_parent_op_id = None
-    # v2.33.12: zero-result pivot detection — per-tool tracking for the current task
-    _zero_streaks: dict[str, int] = {}       # tool_name -> consecutive zero count
-    _nonzero_seen: dict[str, int] = {}       # tool_name -> best non-zero count seen
-    _zero_pivot_fired: set[str] = set()      # tools we've already nudged about
-    # v2.35.2: in-run cross-tool fact tracking — key → {value, step, tool, timestamp, raw}
-    # Populated by the tool fact extractor; mismatches inject a harness
-    # contradiction advisory; survivors of a completed run are upserted into
-    # known_facts at source=agent_observation.
-    _run_facts: dict[str, dict] = {}
+            state.trace_parent_op_id = None
 
     step = 0
     _MAX_STEPS_BY_TYPE = {"status": 12, "observe": 12, "research": 12, "investigate": 12, "action": 20, "execute": 20, "build": 15}
@@ -1046,16 +1018,14 @@ async def _run_single_agent_step(
     # Unlike max_steps (LLM inference rounds), this counts actual tool invocations.
     # When exhausted, the harness forces a summary — no more tool calls allowed.
     # v2.36.5: budget now sourced from Settings via _tool_budget_for(agent_type).
-    final_status = "completed"
-    last_reasoning = ""
 
     # v2.35.14 — fire forced_synthesis at most once on the natural-completion
-    # path (last_reasoning empty + >=1 substantive tool call). Each terminal
+    # path (state.last_reasoning empty + >=1 substantive tool call). Each terminal
     # happy-path branch consults this guard before broadcasting "done".
     # v2.35.15 — extended from single empty-check to three-way dispatch
     # (empty / too_short / preamble_only). Each reason rides the same
     # once-per-run guard and gets a distinct metric label.
-    _empty_completion_synth_done = False
+    state.empty_completion_synth_done = False
 
     async def _maybe_force_empty_synthesis() -> str:
         """Run forced_synthesis when the loop exits naturally with a
@@ -1063,16 +1033,15 @@ async def _run_single_agent_step(
         tool calls were made.
 
         Returns the synthesis text (or "" on no-op / failure). Idempotent:
-        sets ``_empty_completion_synth_done`` after the first attempt so
+        sets ``state.empty_completion_synth_done`` after the first attempt so
         re-entries on the same operation_id do not double-fire.
         """
-        nonlocal _empty_completion_synth_done, last_reasoning, _trace_step_index
-        if _empty_completion_synth_done:
+        if state.empty_completion_synth_done:
             return ""
-        rescue_reason = _classify_terminal_final_answer(last_reasoning or "")
+        rescue_reason = _classify_terminal_final_answer(state.last_reasoning or "")
         if rescue_reason is None:
             return ""
-        if substantive_tool_calls < 1:
+        if state.substantive_tool_calls < 1:
             return ""
         # v2.36.8 — render-and-caption: if the render tool appended table data
         # to operations.final_answer, the rescue's len/preamble checks should
@@ -1103,14 +1072,14 @@ async def _run_single_agent_step(
                 "rescue skipped op=%s reason=%s — render tool wrote substantive final_answer",
                 operation_id, rescue_reason,
             )
-            _empty_completion_synth_done = True
+            state.empty_completion_synth_done = True
             return ""
-        _empty_completion_synth_done = True
+        state.empty_completion_synth_done = True
         log.warning(
             "agent loop %s detected op=%s fa_len=%d tools=%d subst=%d; "
             "invoking forced_synthesis",
-            rescue_reason, operation_id, len(last_reasoning or ""),
-            len(tools_used_names), substantive_tool_calls,
+            rescue_reason, operation_id, len(state.last_reasoning or ""),
+            len(state.tools_used_names), state.substantive_tool_calls,
         )
         try:
             from api.agents.forced_synthesis import run_forced_synthesis
@@ -1121,9 +1090,9 @@ async def _run_single_agent_step(
                 messages=messages,
                 agent_type=agent_type,
                 reason=rescue_reason,
-                tool_count=len(tools_used_names),
+                tool_count=len(state.tools_used_names),
                 budget=_budget_for_synth,
-                actual_tool_names=tools_used_names,
+                actual_tool_names=state.tools_used_names,
                 operation_id=operation_id,
                 actual_tool_calls=[
                     {
@@ -1131,14 +1100,14 @@ async def _run_single_agent_step(
                         "status": tc.get("status"),
                         "result": tc.get("result") or tc.get("content"),
                     }
-                    for tc in (tool_history or [])
+                    for tc in (state.tool_history or [])
                 ],
             )
-            # Only replace last_reasoning when the synthesis is substantive;
+            # Only replace state.last_reasoning when the synthesis is substantive;
             # a too-short or drifted synthesis must not overwrite a possibly
             # useful existing preamble.
             if synth_text and len(synth_text.strip()) >= 60:
-                last_reasoning = synth_text
+                state.last_reasoning = synth_text
                 try:
                     await manager.send_line(
                         "reasoning", synth_text, session_id=session_id,
@@ -1149,7 +1118,7 @@ async def _run_single_agent_step(
                     from api.logger import log_llm_step
                     await log_llm_step(
                         operation_id=operation_id,
-                        step_index=_trace_step_index,
+                        step_index=state.trace_step_index,
                         messages_delta=[
                             {"role": "system", "content": harness_msg}
                         ],
@@ -1160,13 +1129,13 @@ async def _run_single_agent_step(
                             }
                         },
                         agent_type=agent_type,
-                        is_subagent=_trace_is_subagent,
-                        parent_op_id=_trace_parent_op_id,
+                        is_subagent=state.trace_is_subagent,
+                        parent_op_id=state.trace_parent_op_id,
                         temperature=0.3,
                         model=_extract_response_model(raw_resp, fallback=_lm_model()),
                         provider="lm_studio",
                     )
-                    _trace_step_index += 1
+                    state.trace_step_index += 1
                 except Exception as _te:
                     log.debug(
                         "%s trace log failed: %s", rescue_reason, _te,
@@ -1195,14 +1164,14 @@ async def _run_single_agent_step(
                     "status":     "cancelled",
                     "timestamp":  datetime.now(timezone.utc).isoformat(),
                 })
-                final_status = "cancelled"
+                state.final_status = "cancelled"
                 break
 
             step += 1
 
             exceeded, reason = _cap_exceeded(
                 started_monotonic=_run_started,
-                total_tokens=total_prompt_tokens + total_completion_tokens,
+                total_tokens=state.total_prompt_tokens + state.total_completion_tokens,
                 destructive_calls=_destructive_calls,
                 tool_failures=_tool_failures,
             )
@@ -1240,9 +1209,9 @@ async def _run_single_agent_step(
                     messages=messages,
                     agent_type=agent_type,
                     reason=_cap_reason_key,
-                    tool_count=len(tools_used_names),
+                    tool_count=len(state.tools_used_names),
                     budget=_budget_cap,
-                    actual_tool_names=tools_used_names,
+                    actual_tool_names=state.tools_used_names,
                     # v2.35.13 — DB-sourced fallback via operation_id
                     operation_id=operation_id,
                     # v2.35.12 — pass rich history as backup source
@@ -1252,44 +1221,44 @@ async def _run_single_agent_step(
                             "status": tc.get("status"),
                             "result": tc.get("result") or tc.get("content"),
                         }
-                        for tc in (tool_history or [])
+                        for tc in (state.tool_history or [])
                     ],
                 )
                 if synthesis_text:
-                    last_reasoning = synthesis_text
+                    state.last_reasoning = synthesis_text
                 else:
-                    last_reasoning = (
+                    state.last_reasoning = (
                         f"Task stopped — {reason}. Partial findings above may be "
                         f"useful; re-run with a narrower task if needed."
                     )
-                await manager.send_line("reasoning", last_reasoning, session_id=session_id)
+                await manager.send_line("reasoning", state.last_reasoning, session_id=session_id)
 
                 try:
                     from api.logger import log_llm_step
                     await log_llm_step(
                         operation_id=operation_id,
-                        step_index=_trace_step_index,
+                        step_index=state.trace_step_index,
                         messages_delta=[{"role": "system", "content": harness_msg}],
                         response_raw=raw_resp or {"forced_synthesis": {"reason": _cap_reason_key,
                                                                         "text": synthesis_text}},
                         agent_type=agent_type,
-                        is_subagent=_trace_is_subagent,
-                        parent_op_id=_trace_parent_op_id,
+                        is_subagent=state.trace_is_subagent,
+                        parent_op_id=state.trace_parent_op_id,
                         temperature=0.3,
                         model=_extract_response_model(raw_resp, fallback=_lm_model()),
                         provider="lm_studio",
                     )
-                    _trace_step_index += 1
+                    state.trace_step_index += 1
                 except Exception as _te:
                     log.debug("forced synthesis trace log failed: %s", _te)
 
                 if is_final_step:
                     await manager.broadcast({
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
-                        "content": last_reasoning, "status": "ok", "choices": [],
+                        "content": state.last_reasoning, "status": "ok", "choices": [],
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
-                final_status = "capped"
+                state.final_status = "capped"
                 break
 
             # v2.32.5: Tool call budget enforcement
@@ -1306,13 +1275,13 @@ async def _run_single_agent_step(
                 from api.agents.orchestrator import _resolve_nudge_threshold
                 _nudge_threshold = _resolve_nudge_threshold(_agent_settings())
                 _budget_threshold = int(_nudge_threshold * _tool_budget)
-                _tools_used_count = len(tools_used_names)
-                _subtask_proposed = "propose_subtask" in tools_used_names
-                _diagnosis_emitted = "DIAGNOSIS:" in (last_reasoning or "")
+                _tools_used_count = len(state.tools_used_names)
+                _subtask_proposed = "propose_subtask" in state.tools_used_names
+                _diagnosis_emitted = "DIAGNOSIS:" in (state.last_reasoning or "")
                 if (_tools_used_count >= _budget_threshold
                         and not _subtask_proposed
                         and not _diagnosis_emitted
-                        and not _budget_nudge_fired):
+                        and not state.budget_nudge_fired):
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1339,16 +1308,16 @@ async def _run_single_agent_step(
                         f"nudging agent toward propose_subtask",
                         status="ok", session_id=session_id,
                     )
-                    _budget_nudge_fired = True
+                    state.budget_nudge_fired = True
 
-            if len(tools_used_names) >= _tool_budget:
+            if len(state.tools_used_names) >= _tool_budget:
                 await manager.send_line(
                     "step",
-                    f"[budget] Tool call budget reached ({len(tools_used_names)}/{_tool_budget}) "
+                    f"[budget] Tool call budget reached ({len(state.tools_used_names)}/{_tool_budget}) "
                     f"— forcing synthesis",
                     status="ok", session_id=session_id,
                 )
-                final_status = "capped"
+                state.final_status = "capped"
                 from api.agents.forced_synthesis import run_forced_synthesis
                 synthesis_text, harness_msg, raw_resp = run_forced_synthesis(
                     client=client,
@@ -1356,9 +1325,9 @@ async def _run_single_agent_step(
                     messages=messages,
                     agent_type=agent_type,
                     reason="budget_cap",
-                    tool_count=len(tools_used_names),
+                    tool_count=len(state.tools_used_names),
                     budget=_tool_budget,
-                    actual_tool_names=tools_used_names,
+                    actual_tool_names=state.tools_used_names,
                     # v2.35.13 — DB-sourced fallback via operation_id
                     operation_id=operation_id,
                     # v2.35.12 — pass rich history as backup source
@@ -1368,11 +1337,11 @@ async def _run_single_agent_step(
                             "status": tc.get("status"),
                             "result": tc.get("result") or tc.get("content"),
                         }
-                        for tc in (tool_history or [])
+                        for tc in (state.tool_history or [])
                     ],
                 )
                 if synthesis_text:
-                    last_reasoning = synthesis_text
+                    state.last_reasoning = synthesis_text
                     await manager.send_line("reasoning", synthesis_text, session_id=session_id)
 
                 # Persist the forced step to the LLM trace
@@ -1380,18 +1349,18 @@ async def _run_single_agent_step(
                     from api.logger import log_llm_step
                     await log_llm_step(
                         operation_id=operation_id,
-                        step_index=_trace_step_index,
+                        step_index=state.trace_step_index,
                         messages_delta=[{"role": "system", "content": harness_msg}],
                         response_raw=raw_resp or {"forced_synthesis": {"reason": "budget_cap",
                                                                         "text": synthesis_text}},
                         agent_type=agent_type,
-                        is_subagent=_trace_is_subagent,
-                        parent_op_id=_trace_parent_op_id,
+                        is_subagent=state.trace_is_subagent,
+                        parent_op_id=state.trace_parent_op_id,
                         temperature=0.3,
                         model=_extract_response_model(raw_resp, fallback=_lm_model()),
                         provider="lm_studio",
                     )
-                    _trace_step_index += 1
+                    state.trace_step_index += 1
                 except Exception as _te:
                     log.debug("forced synthesis trace log failed: %s", _te)
 
@@ -1404,19 +1373,19 @@ async def _run_single_agent_step(
                         task=task,
                         agent_type=agent_type,
                         messages=messages,
-                        tool_calls_made=len(tools_used_names),
+                        tool_calls_made=len(state.tools_used_names),
                         tool_budget=_tool_budget,
-                        diagnosis_emitted="DIAGNOSIS:" in (last_reasoning or ""),
+                        diagnosis_emitted="DIAGNOSIS:" in (state.last_reasoning or ""),
                         consecutive_tool_failures=_tool_failures,
-                        halluc_guard_exhausted=(_halluc_guard_attempts >= _halluc_guard_max),
-                        fabrication_detected_count=(1 if _fabrication_detected_once else 0),
+                        halluc_guard_exhausted=(state.halluc_guard_attempts >= state.halluc_guard_max),
+                        fabrication_detected_count=(1 if state.fabrication_detected_once else 0),
                         external_calls_this_op=0,
                         scope_entity=parent_session_id or "",
                         is_prerun=False,
                         prior_failed_attempts_7d=0,
                     )
                     if _router_synth:
-                        last_reasoning = _router_synth
+                        state.last_reasoning = _router_synth
                 except Exception as _re:
                     # v2.38.4 — louder logging + UI surface. Previous code
                     # logged a single-line warning and fell through silently
@@ -1430,7 +1399,7 @@ async def _run_single_agent_step(
                     _external_ai_route_error = (
                         f"{type(_re).__name__}: {str(_re)[:240]}"
                     )
-                    final_status = "escalation_failed"
+                    state.final_status = "escalation_failed"
                     try:
                         await manager.send_line(
                             "halt",
@@ -1441,17 +1410,17 @@ async def _run_single_agent_step(
                         pass
 
                 if is_final_step:
-                    choices = _extract_choices(last_reasoning) if last_reasoning else None
+                    choices = _extract_choices(state.last_reasoning) if state.last_reasoning else None
                     if _external_ai_route_error:
                         _done_status = "failed"
                         _done_content = (
                             f"[EXTERNAL AI ESCALATION FAILED: {_external_ai_route_error}]\n\n"
-                            f"{last_reasoning or f'Agent reached tool budget ({_tool_budget}).'}"
+                            f"{state.last_reasoning or f'Agent reached tool budget ({_tool_budget}).'}"
                         )
                         _done_reason = "escalation_failed"
                     else:
                         _done_status = "ok"
-                        _done_content = last_reasoning or f"Agent reached tool budget ({_tool_budget})."
+                        _done_content = state.last_reasoning or f"Agent reached tool budget ({_tool_budget})."
                         _done_reason = None
                     _payload = {
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
@@ -1465,13 +1434,13 @@ async def _run_single_agent_step(
                 break
 
             # Inject working memory into context for step > 1
-            if step > 1 and _working_memory and len(messages) >= 2:
+            if step > 1 and state.working_memory and len(messages) >= 2:
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i]["role"] == "user" and isinstance(messages[i].get("content"), str):
                         if not messages[i]["content"].startswith("[Step"):
                             messages[i] = {
                                 **messages[i],
-                                "content": f"{_working_memory}\n{messages[i]['content']}",
+                                "content": f"{state.working_memory}\n{messages[i]['content']}",
                             }
                         break
 
@@ -1493,10 +1462,10 @@ async def _run_single_agent_step(
             # v2.34.16 — flush any queued harness messages (sub-agent terminal
             # feedback) BEFORE the next completion call, so the parent sees
             # the outcome right away instead of learning about it later.
-            if _propose_state.queued_harness_messages:
-                for _qm in _propose_state.queued_harness_messages:
+            if state.propose_state.queued_harness_messages:
+                for _qm in state.propose_state.queued_harness_messages:
                     messages.append({"role": "system", "content": _qm})
-                _propose_state.queued_harness_messages.clear()
+                state.propose_state.queued_harness_messages.clear()
 
             try:
                 response = client.chat.completions.create(
@@ -1514,12 +1483,12 @@ async def _run_single_agent_step(
                     "content": f"LM Studio error: {e}", "status": "error",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-                final_status = "error"
+                state.final_status = "error"
                 break
 
             if hasattr(response, 'usage') and response.usage:
-                total_prompt_tokens     += getattr(response.usage, 'prompt_tokens', 0) or 0
-                total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
+                state.total_prompt_tokens     += getattr(response.usage, 'prompt_tokens', 0) or 0
+                state.total_completion_tokens += getattr(response.usage, 'completion_tokens', 0) or 0
 
             msg = response.choices[0].message
             finish = response.choices[0].finish_reason
@@ -1529,8 +1498,8 @@ async def _run_single_agent_step(
             # "delta") plus the raw response dict so every completion is
             # recoverable post-hoc. System prompt is written once on step 0.
             try:
-                _msgs_delta = messages[_trace_prev_msg_count:]
-                _trace_prev_msg_count = len(messages)
+                _msgs_delta = messages[state.trace_prev_msg_count:]
+                state.trace_prev_msg_count = len(messages)
                 _resp_raw: dict = {}
                 try:
                     _resp_raw = response.model_dump()  # type: ignore[attr-defined]
@@ -1567,19 +1536,19 @@ async def _run_single_agent_step(
                 from api.logger import log_llm_step
                 await log_llm_step(
                     operation_id=operation_id,
-                    step_index=_trace_step_index,
+                    step_index=state.trace_step_index,
                     messages_delta=_msgs_delta,
                     response_raw=_resp_raw,
-                    system_prompt=(system_prompt if _trace_step_index == 0 else None),
-                    tools_manifest=(tools_spec if _trace_step_index == 0 else None),
+                    system_prompt=(system_prompt if state.trace_step_index == 0 else None),
+                    tools_manifest=(tools_spec if state.trace_step_index == 0 else None),
                     agent_type=agent_type,
-                    is_subagent=_trace_is_subagent,
-                    parent_op_id=_trace_parent_op_id,
+                    is_subagent=state.trace_is_subagent,
+                    parent_op_id=state.trace_parent_op_id,
                     temperature=0.1,
                     model=_extract_response_model(response, fallback=_lm_model()),
                     provider="lm_studio",
                 )
-                _trace_step_index += 1
+                state.trace_step_index += 1
             except Exception as _trace_e:
                 log.debug("log_llm_step failed: %s", _trace_e)
 
@@ -1604,19 +1573,19 @@ async def _run_single_agent_step(
             # not a user-facing synthesis. v2.35.16 only checked finish
             # reason, which left a hole when the LLM produced both content
             # AND a tool_call in the same response (op 07d326a1, fa_len=53).
-            # If no step qualifies, last_reasoning stays empty and the
+            # If no step qualifies, state.last_reasoning stays empty and the
             # v2.35.14 empty_completion rescue fires run_forced_synthesis.
             # v2.35.15 too_short/preamble_only rescues become
             # belt-and-suspenders rather than the primary path.
             if finish == "stop" and not msg.tool_calls:
-                last_reasoning = msg.content or ""
+                state.last_reasoning = msg.content or ""
 
             if msg.content:
                 await manager.send_line("reasoning", msg.content, session_id=session_id)
                 # Extract working memory from <think> content for inter-step continuity
                 _wm = _extract_working_memory(msg.content, step)
                 if _wm:
-                    _working_memory = _wm
+                    state.working_memory = _wm
 
             if finish == "stop" or not msg.tool_calls:
                 # Safety guard: action agent with destructive task must call plan_action
@@ -1627,7 +1596,7 @@ async def _run_single_agent_step(
                 })
                 _task_words = set(re.findall(r'\b\w+\b', task.lower()))
                 _has_destructive_intent = bool(_task_words & _DESTRUCTIVE_TASK_WORDS)
-                _plan_called = "plan_action" in tools_used_names
+                _plan_called = "plan_action" in state.tools_used_names
 
                 if (agent_type in ("action", "execute") and _has_destructive_intent
                         and not _plan_called and step < max_steps - 2):
@@ -1652,17 +1621,17 @@ async def _run_single_agent_step(
 
                 # ── v2.34.14 hallucination guard (replaces "fire once → accept") ─
                 # Reject final_answer if the agent has made too few substantive
-                # (non-META) tool calls. Retries up to _halluc_guard_max times with
+                # (non-META) tool calls. Retries up to state.halluc_guard_max times with
                 # escalating correction messages. On exhaustion, fails loudly —
                 # no `[HARNESS WARNING]` escape hatch, no silent acceptance.
                 _min_subst = MIN_SUBSTANTIVE_BY_TYPE.get(agent_type, 1)
-                if substantive_tool_calls < _min_subst:
-                    _halluc_guard_attempts += 1
-                    _hallucination_block_fired = True
-                    if _halluc_guard_attempts < _halluc_guard_max:
+                if state.substantive_tool_calls < _min_subst:
+                    state.halluc_guard_attempts += 1
+                    state.hallucination_block_fired = True
+                    if state.halluc_guard_attempts < state.halluc_guard_max:
                         _esc_msg = {
                             1: (
-                                f"You finalised after {substantive_tool_calls} "
+                                f"You finalised after {state.substantive_tool_calls} "
                                 f"substantive tool call(s). Call at least {_min_subst} "
                                 "data-gathering tools BEFORE your final answer. Do NOT "
                                 "write an EVIDENCE block citing tools you have not called. "
@@ -1676,7 +1645,7 @@ async def _run_single_agent_step(
                                 "with reason='insufficient_tool_access' — do NOT fabricate "
                                 "tool output."
                             ),
-                        }.get(_halluc_guard_attempts, (
+                        }.get(state.halluc_guard_attempts, (
                             "Final warning: call real data-returning tools or escalate. "
                             "Fabricated evidence will cause this task to fail."
                         ))
@@ -1695,7 +1664,7 @@ async def _run_single_agent_step(
                                 agent_type=agent_type, outcome="retried"
                             ).inc()
                             HALLUC_GUARD_ATTEMPTS_COUNTER.labels(
-                                attempt=str(_halluc_guard_attempts),
+                                attempt=str(state.halluc_guard_attempts),
                                 agent_type=agent_type,
                             ).inc()
                         except Exception:
@@ -1703,18 +1672,18 @@ async def _run_single_agent_step(
                         await manager.broadcast({
                             "type":              "hallucination_block",
                             "session_id":        session_id,
-                            "substantive_count": substantive_tool_calls,
+                            "substantive_count": state.substantive_tool_calls,
                             "required":          _min_subst,
-                            "attempt":           _halluc_guard_attempts,
-                            "max_attempts":      _halluc_guard_max,
+                            "attempt":           state.halluc_guard_attempts,
+                            "max_attempts":      state.halluc_guard_max,
                             "agent_type":        agent_type,
                             "timestamp":         datetime.now(timezone.utc).isoformat(),
                         })
                         await manager.send_line(
                             "step",
                             f"[halluc-guard] final_answer blocked "
-                            f"(attempt {_halluc_guard_attempts}/{_halluc_guard_max}) — "
-                            f"{substantive_tool_calls}/{_min_subst} substantive tool calls. "
+                            f"(attempt {state.halluc_guard_attempts}/{state.halluc_guard_max}) — "
+                            f"{state.substantive_tool_calls}/{_min_subst} substantive tool calls. "
                             "Forcing retry.",
                             status="warning", session_id=session_id,
                         )
@@ -1728,15 +1697,15 @@ async def _run_single_agent_step(
                             ).inc()
                         except Exception:
                             pass
-                        last_reasoning = (
+                        state.last_reasoning = (
                             f"Task failed: hallucination_guard_exhausted. Agent "
-                            f"finalised {_halluc_guard_max} attempts without "
+                            f"finalised {state.halluc_guard_max} attempts without "
                             f"{_min_subst} substantive tool calls. Rejecting run "
                             "to prevent fabricated evidence reaching operator."
                         )
                         await manager.send_line(
                             "halt",
-                            f"[halluc-guard] exhausted after {_halluc_guard_max} attempts — "
+                            f"[halluc-guard] exhausted after {state.halluc_guard_max} attempts — "
                             "failing task to block fabricated evidence.",
                             status="failed", session_id=session_id,
                         )
@@ -1748,25 +1717,25 @@ async def _run_single_agent_step(
                                 task=task,
                                 agent_type=agent_type,
                                 messages=messages,
-                                tool_calls_made=len(tools_used_names),
+                                tool_calls_made=len(state.tools_used_names),
                                 tool_budget=_tool_budget,
                                 diagnosis_emitted=False,
                                 consecutive_tool_failures=_tool_failures,
                                 halluc_guard_exhausted=True,
-                                fabrication_detected_count=(2 if _fabrication_detected_once else 0),
+                                fabrication_detected_count=(2 if state.fabrication_detected_once else 0),
                                 external_calls_this_op=0,
                                 scope_entity=parent_session_id or "",
                                 is_prerun=False,
                             )
                             if _router_synth:
-                                last_reasoning = _router_synth
-                                final_status = "completed"
+                                state.last_reasoning = _router_synth
+                                state.final_status = "completed"
                                 if is_final_step:
                                     await manager.broadcast({
                                         "type":       "done",
                                         "session_id": session_id,
                                         "agent_type": agent_type,
-                                        "content":    last_reasoning,
+                                        "content":    state.last_reasoning,
                                         "status":     "ok",
                                         "choices":    [],
                                         "timestamp":  datetime.now(timezone.utc).isoformat(),
@@ -1789,21 +1758,21 @@ async def _run_single_agent_step(
                                 )
                             except Exception:
                                 pass
-                            final_status = "escalation_failed"
+                            state.final_status = "escalation_failed"
 
                         if is_final_step:
                             await manager.broadcast({
                                 "type":       "done",
                                 "session_id": session_id,
                                 "agent_type": agent_type,
-                                "content":    last_reasoning,
+                                "content":    state.last_reasoning,
                                 "status":     "failed",
                                 "choices":    [],
                                 "reason":     "hallucination_guard_exhausted",
                                 "timestamp":  datetime.now(timezone.utc).isoformat(),
                             })
-                        if final_status != "escalation_failed":
-                            final_status = "failed"
+                        if state.final_status != "escalation_failed":
+                            state.final_status = "failed"
                         break
 
                 # ── v2.34.14 fabrication detector ────────────────────────────
@@ -1814,18 +1783,18 @@ async def _run_single_agent_step(
                     from api.agents.fabrication_detector import is_fabrication
                     _fab_fired, _fab_detail = is_fabrication(
                         msg.content or "",
-                        tools_used_names,
-                        min_cites=_fabrication_min_cites,
-                        score_threshold=_fabrication_score_threshold,
+                        state.tools_used_names,
+                        min_cites=state.fabrication_min_cites,
+                        score_threshold=state.fabrication_score_threshold,
                     )
                 except Exception as _fe:
                     log.debug("fabrication_detector error: %s", _fe)
                     _fab_fired, _fab_detail = False, {
                         "score": 0.0, "cited": [], "actual": [], "fabricated": [],
                     }
-                if _fab_fired and not _fabrication_detected_once:
-                    _fabrication_detected_once = True
-                    _halluc_guard_attempts += 1
+                if _fab_fired and not state.fabrication_detected_once:
+                    state.fabrication_detected_once = True
+                    state.halluc_guard_attempts += 1
                     try:
                         from api.metrics import FABRICATION_DETECTED_COUNTER
                         FABRICATION_DETECTED_COUNTER.labels(
@@ -1841,7 +1810,7 @@ async def _run_single_agent_step(
                         len(_fab_detail.get("fabricated", [])),
                         _fab_detail.get("score", 0.0),
                     )
-                    if _halluc_guard_attempts < _halluc_guard_max:
+                    if state.halluc_guard_attempts < state.halluc_guard_max:
                         _fab_names = ", ".join(_fab_detail["fabricated"][:5]) or "(unknown)"
                         if msg.content:
                             messages.append({"role": "assistant", "content": msg.content})
@@ -1880,7 +1849,7 @@ async def _run_single_agent_step(
                             ).inc()
                         except Exception:
                             pass
-                        last_reasoning = (
+                        state.last_reasoning = (
                             f"Task failed: hallucination_guard_exhausted "
                             f"(fabrication detected — score {_fab_detail.get('score', 0.0):.2f}, "
                             f"{len(_fab_detail.get('fabricated', []))} uncalled tool(s) cited)."
@@ -1898,25 +1867,25 @@ async def _run_single_agent_step(
                                 task=task,
                                 agent_type=agent_type,
                                 messages=messages,
-                                tool_calls_made=len(tools_used_names),
+                                tool_calls_made=len(state.tools_used_names),
                                 tool_budget=_tool_budget,
                                 diagnosis_emitted=False,
                                 consecutive_tool_failures=_tool_failures,
                                 halluc_guard_exhausted=True,
-                                fabrication_detected_count=(2 if _fabrication_detected_once else 0),
+                                fabrication_detected_count=(2 if state.fabrication_detected_once else 0),
                                 external_calls_this_op=0,
                                 scope_entity=parent_session_id or "",
                                 is_prerun=False,
                             )
                             if _router_synth:
-                                last_reasoning = _router_synth
-                                final_status = "completed"
+                                state.last_reasoning = _router_synth
+                                state.final_status = "completed"
                                 if is_final_step:
                                     await manager.broadcast({
                                         "type":       "done",
                                         "session_id": session_id,
                                         "agent_type": agent_type,
-                                        "content":    last_reasoning,
+                                        "content":    state.last_reasoning,
                                         "status":     "ok",
                                         "choices":    [],
                                         "timestamp":  datetime.now(timezone.utc).isoformat(),
@@ -1939,27 +1908,27 @@ async def _run_single_agent_step(
                                 )
                             except Exception:
                                 pass
-                            final_status = "escalation_failed"
+                            state.final_status = "escalation_failed"
 
                         if is_final_step:
                             await manager.broadcast({
                                 "type":       "done",
                                 "session_id": session_id,
                                 "agent_type": agent_type,
-                                "content":    last_reasoning,
+                                "content":    state.last_reasoning,
                                 "status":     "failed",
                                 "choices":    [],
                                 "reason":     "hallucination_guard_exhausted",
                                 "timestamp":  datetime.now(timezone.utc).isoformat(),
                             })
-                        if final_status != "escalation_failed":
-                            final_status = "failed"
+                        if state.final_status != "escalation_failed":
+                            state.final_status = "failed"
                         break
 
                 # Synthesise degraded findings if present and summary is thin
-                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                if state.degraded_findings and (not state.last_reasoning or len(state.last_reasoning) < 100):
                     try:
-                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_ctx = "\n".join(f"- {f}" for f in state.degraded_findings)
                         _synth_resp = client.chat.completions.create(
                             model=_lm_model(),
                             messages=[
@@ -1994,19 +1963,19 @@ async def _run_single_agent_step(
                         )
                         _synth_text = _synth_resp.choices[0].message.content or ""
                         if _synth_text.strip():
-                            last_reasoning = _synth_text.strip()
+                            state.last_reasoning = _synth_text.strip()
                             await manager.send_line("reasoning", _synth_text, session_id=session_id)
                     except Exception as _se:
                         log.debug("Stop-path synthesis failed: %s", _se)
                 # v2.35.14: empty-completion rescue on natural exit
                 await _maybe_force_empty_synthesis()
-                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                choices = _extract_choices(state.last_reasoning) if state.last_reasoning else None
                 if is_final_step:
                     payload = {
                         "type":       "done",
                         "session_id": session_id,
                         "agent_type": agent_type,
-                        "content":    last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "content":    state.last_reasoning if state.last_reasoning else f"Agent finished after {step} steps.",
                         "status":     "ok",
                         "choices":    choices or [],
                         "timestamp":  datetime.now(timezone.utc).isoformat(),
@@ -2042,11 +2011,11 @@ async def _run_single_agent_step(
                         _vargs = json.loads(_btc.function.arguments)
                         _vcmd = _vargs.get('command', '').lower()
                         if any(p in _vcmd for p in _VM_WRITE_PATTERNS):
-                            if 'plan_action' not in tools_used_names:
+                            if 'plan_action' not in state.tools_used_names:
                                 _destructive_req = _destructive_req | {'vm_exec(write)'}
                     except Exception:
                         pass
-            if _destructive_req and "plan_action" not in tools_used_names:
+            if _destructive_req and "plan_action" not in state.tools_used_names:
                 block_msg = (
                     "STOP. You requested destructive tool(s) "
                     f"{sorted(_destructive_req)} without calling plan_action() first. "
@@ -2106,7 +2075,7 @@ async def _run_single_agent_step(
             # tool_call_id contract is preserved on the next turn.
             _proposed_tcs = list(msg.tool_calls or [])
             _tool_budget = _tool_budget_for(agent_type)
-            _remaining = _tool_budget - len(tools_used_names)
+            _remaining = _tool_budget - len(state.tools_used_names)
             _dropped_tcs: list = []
             if _remaining <= 0:
                 _dropped_tcs = _proposed_tcs
@@ -2166,7 +2135,7 @@ async def _run_single_agent_step(
                 else:
                     _nudge = (
                         f"[harness] Tool budget exhausted "
-                        f"({len(tools_used_names)}/{_tool_budget}). Produce "
+                        f"({len(state.tools_used_names)}/{_tool_budget}). Produce "
                         f"your final_answer now based on evidence gathered, "
                         f"or call escalate() if you cannot."
                     )
@@ -2175,9 +2144,9 @@ async def _run_single_agent_step(
             halt = False
             for tc in _proposed_tcs:
                 fn_name = tc.function.name
-                tools_used_names.append(fn_name)
+                state.tools_used_names.append(fn_name)
                 if fn_name not in META_TOOLS:
-                    substantive_tool_calls += 1  # v2.34.8: hallucination guard counter
+                    state.substantive_tool_calls += 1  # v2.34.8: hallucination guard counter
                 tool_content_suffix = ""  # v2.32.2: populated by auto-verify after destructive tools
                 try:
                     fn_args = json.loads(tc.function.arguments)
@@ -2197,7 +2166,7 @@ async def _run_single_agent_step(
                 t0 = time.monotonic()
                 # Block duplicate audit_log calls — the model tends to loop on it.
                 # One audit_log per session is sufficient.
-                if fn_name == "audit_log" and _audit_logged:
+                if fn_name == "audit_log" and state.audit_logged:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -2212,7 +2181,7 @@ async def _run_single_agent_step(
                     )
                     continue
                 if fn_name == "audit_log":
-                    _audit_logged = True
+                    state.audit_logged = True
 
                 try:
                     if fn_name == "plan_action":
@@ -2226,7 +2195,7 @@ async def _run_single_agent_step(
                         except Exception:
                             active_bo = None
                         if active_bo:
-                            plan_action_called = True  # prevent re-trigger loop
+                            state.plan_action_called = True  # prevent re-trigger loop
                             result = {
                                 "status":   "blocked",
                                 "approved": False,
@@ -2248,7 +2217,7 @@ async def _run_single_agent_step(
                             })
                             continue  # skip the real plan_action handling below
 
-                        plan_action_called = True
+                        state.plan_action_called = True
                         # Try to acquire the global destructive lock
                         lock_ok = await plan_lock.acquire(session_id, owner_user)
                         if not lock_ok:
@@ -2276,11 +2245,11 @@ async def _run_single_agent_step(
                             if not _plan_summary or not _plan_steps:
                                 # Don't broadcast plan_pending with empty content.
                                 # Release the lock we just acquired, report error
-                                # back to the model, keep plan_action_called=False
+                                # back to the model, keep state.plan_action_called=False
                                 # so the safety gate will still trigger next time.
                                 await plan_lock.release(session_id)
-                                plan_action_called = False
-                                negative_signals += 1
+                                state.plan_action_called = False
+                                state.negative_signals += 1
                                 result = {
                                     "status":   "error",
                                     "approved": False,
@@ -2324,8 +2293,8 @@ async def _run_single_agent_step(
                                 _n_fleet = sum(1 for s in enriched_steps if s.get("radius") == "fleet")
                                 if _n_fleet > 1:
                                     await plan_lock.release(session_id)
-                                    plan_action_called = False
-                                    negative_signals += 1
+                                    state.plan_action_called = False
+                                    state.negative_signals += 1
                                     result = {
                                         "status":   "error",
                                         "approved": False,
@@ -2360,7 +2329,7 @@ async def _run_single_agent_step(
                                     from api.memory.feedback import record_feedback_signal as _rfs
                                     approved = await wait_for_confirmation(session_id)
                                     if approved:
-                                        positive_signals += 1
+                                        state.positive_signals += 1
                                         asyncio.create_task(_rfs(
                                             task, "plan_approved", plan["summary"][:120]
                                         ))
@@ -2373,7 +2342,7 @@ async def _run_single_agent_step(
                                         }
                                         await manager.send_line("step", "[plan] Approved — executing plan.", status="ok", session_id=session_id)
                                     else:
-                                        negative_signals += 1
+                                        state.negative_signals += 1
                                         asyncio.create_task(_rfs(
                                             task, "plan_cancelled", plan["summary"][:120]
                                         ))
@@ -2391,7 +2360,7 @@ async def _run_single_agent_step(
                         # Intercept: broadcast question to GUI, suspend until answered
                         question = fn_args.get("question", "")
                         options  = fn_args.get("options") or []
-                        negative_signals += 1   # task was ambiguous — mild negative signal
+                        state.negative_signals += 1   # task was ambiguous — mild negative signal
                         from api.memory.feedback import record_feedback_signal as _rfs
                         asyncio.create_task(_rfs(
                             task, "clarification_needed", question[:120]
@@ -2433,7 +2402,7 @@ async def _run_single_agent_step(
                             mark_rejected as _mark_rejected,
                         )
                         _dedup = _handle_pst(
-                            _pst_args, _propose_state, step_index=step,
+                            _pst_args, state.propose_state, step_index=step,
                         )
                         _pst_dedup_key = _dedup.get("key")
                         if _dedup.get("status") == "duplicate_proposal":
@@ -2464,7 +2433,7 @@ async def _run_single_agent_step(
                                 params=_pst_args, result=_dup_result, model_used=_lm_model(),
                                 duration_ms=0, status="ok",
                             )
-                            tools_used_names.append("propose_subtask")
+                            state.tools_used_names.append("propose_subtask")
                             try:
                                 AGENT_TOOL_CALLS.labels(
                                     agent_type=agent_type, tool="propose_subtask"
@@ -2515,7 +2484,7 @@ async def _run_single_agent_step(
                             # Compute parent's remaining tool budget at this moment
                             _parent_budget = _tool_budget_for(agent_type)
                             _parent_remaining = max(
-                                0, _parent_budget - len(tools_used_names)
+                                0, _parent_budget - len(state.tools_used_names)
                             )
                             # Pull any partial DIAGNOSIS text from the assistant's
                             # prior reasoning so the sub-agent has situational context
@@ -2548,7 +2517,7 @@ async def _run_single_agent_step(
                                     parent_agent_type=agent_type,
                                     parent_diagnosis=_parent_diag,
                                     parent_budget_tools=_parent_budget,
-                                    parent_tools_used=len(tools_used_names),
+                                    parent_tools_used=len(state.tools_used_names),
                                 )
                             except Exception as _se:
                                 log.warning("sub-agent spawn crashed: %s", _se)
@@ -2573,7 +2542,7 @@ async def _run_single_agent_step(
                                 # v2.34.16 — dedup map: spawned → terminal
                                 try:
                                     _mark_spawned(
-                                        _propose_state, _pst_dedup_key,
+                                        state.propose_state, _pst_dedup_key,
                                         _spawn.get("sub_task_id") or "",
                                     )
                                     from api.agents.propose_dedup import (
@@ -2592,7 +2561,7 @@ async def _run_single_agent_step(
                                             _fab_detail if isinstance(_fab_detail, dict) else None
                                         ),
                                         halluc_guard_detail=_guard_detail,
-                                        state=_propose_state,
+                                        state=state.propose_state,
                                         dedup_key=_pst_dedup_key,
                                     )
                                 except Exception as _dse:
@@ -2624,8 +2593,8 @@ async def _run_single_agent_step(
                                         f"[harness] Sub-agent output was flagged "
                                         f"(halluc_guard_fired={_sub_halluc_fired}, "
                                         f"fabrication_detected={_sub_fab_detected}, "
-                                        f"substantive_tool_calls="
-                                        f"{_sub_guard.get('substantive_tool_calls', 0)}). "
+                                        f"state.substantive_tool_calls="
+                                        f"{_sub_guard.get('state.substantive_tool_calls', 0)}). "
                                         "Do NOT synthesise a conclusion from this sub-agent "
                                         "output. Your options: (a) continue the investigation "
                                         "yourself with your remaining tool budget, (b) call "
@@ -2647,7 +2616,7 @@ async def _run_single_agent_step(
                                         SUBAGENT_SPAWN_COUNTER, BUDGET_NUDGE_COUNTER,
                                     )
                                     SUBAGENT_SPAWN_COUNTER.labels(outcome="spawned").inc()
-                                    if _budget_nudge_fired:
+                                    if state.budget_nudge_fired:
                                         BUDGET_NUDGE_COUNTER.labels(
                                             outcome="proposed_and_spawned").inc()
                                 except Exception:
@@ -2678,7 +2647,7 @@ async def _run_single_agent_step(
                                     else:
                                         _outcome = "rejected_budget"
                                     SUBAGENT_SPAWN_COUNTER.labels(outcome=_outcome).inc()
-                                    if _budget_nudge_fired:
+                                    if state.budget_nudge_fired:
                                         BUDGET_NUDGE_COUNTER.labels(
                                             outcome="proposed_and_refused").inc()
                                 except Exception:
@@ -2686,7 +2655,7 @@ async def _run_single_agent_step(
                                 # v2.34.16 — dedup map: rejected
                                 try:
                                     _mark_rejected(
-                                        _propose_state, _pst_dedup_key, _outcome,
+                                        state.propose_state, _pst_dedup_key, _outcome,
                                     )
                                 except Exception:
                                     pass
@@ -2766,7 +2735,7 @@ async def _run_single_agent_step(
                             params=_pst_args, result=_pst_result, model_used=_lm_model(),
                             duration_ms=0, status="ok",
                         )
-                        tools_used_names.append("propose_subtask")
+                        state.tools_used_names.append("propose_subtask")
                         try:
                             AGENT_TOOL_CALLS.labels(
                                 agent_type=agent_type, tool="propose_subtask"
@@ -2775,9 +2744,9 @@ async def _run_single_agent_step(
                             pass
                         continue  # let model write final answer
 
-                    elif fn_name == "escalate" and agent_type in ("action", "execute") and not plan_action_called:
+                    elif fn_name == "escalate" and agent_type in ("action", "execute") and not state.plan_action_called:
                         # Fix 2: Block premature escalation — agent must plan first
-                        _last_blocked_tool = "escalate"
+                        state.last_blocked_tool = "escalate"
                         result = {
                             "status": "blocked",
                             "message": (
@@ -2795,7 +2764,7 @@ async def _run_single_agent_step(
                             status="ok", session_id=session_id,
                         )
                     else:
-                        _last_blocked_tool = None   # successful tool call clears blocked state
+                        state.last_blocked_tool = None   # successful tool call clears blocked state
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, lambda n=fn_name, a=fn_args: invoke_tool(n, a)
                         )
@@ -2826,7 +2795,7 @@ async def _run_single_agent_step(
                             status="error", session_id=session_id,
                         )
                     log.debug("Tool %r raised exception:", fn_name, exc_info=True)
-                    negative_signals += 1
+                    state.negative_signals += 1
                     from api.memory.feedback import record_feedback_signal as _rfs
                     asyncio.create_task(_rfs(task, "tool_error", f"{fn_name}: {str(e)[:80]}"))
 
@@ -2881,7 +2850,7 @@ async def _run_single_agent_step(
                             await logger_mod.set_operation_final_answer_append(
                                 session_id, _md,
                             )
-                            _render_tool_calls += 1   # v2.36.9 — seen by cleanup
+                            state.render_tool_calls += 1   # v2.36.9 — seen by cleanup
                             try:
                                 from api.metrics import RENDER_TOOL_CALLS
                                 _outcome = "truncated" if _data.get("truncated") else "ok"
@@ -2910,7 +2879,7 @@ async def _run_single_agent_step(
                             result_summary=result_msg,
                             duration_ms=duration_ms,
                             owner_user=owner_user,
-                            was_planned=plan_action_called,
+                            was_planned=state.plan_action_called,
                         )
                 except Exception as _ae:
                     log.debug("agent_actions write failed: %s", _ae)
@@ -2965,7 +2934,7 @@ async def _run_single_agent_step(
                         result_status = "error"
                         result_msg = result["message"]
                         for _qm in _rej_msgs:
-                            _propose_state.queued_harness_messages.append(_qm)
+                            state.propose_state.queued_harness_messages.append(_qm)
                         try:
                             from api.metrics import FACT_AGE_REJECTIONS_COUNTER
                             FACT_AGE_REJECTIONS_COUNTER.labels(
@@ -2981,7 +2950,7 @@ async def _run_single_agent_step(
                                 result_status = result.get("status", result_status)
                                 result_msg = result.get("message", result_msg)
                         for _qm in _rej_msgs:
-                            _propose_state.queued_harness_messages.append(_qm)
+                            state.propose_state.queued_harness_messages.append(_qm)
                         try:
                             from api.metrics import FACT_AGE_REJECTIONS_COUNTER
                             FACT_AGE_REJECTIONS_COUNTER.labels(
@@ -3021,15 +2990,15 @@ async def _run_single_agent_step(
                 _count = _result_count(result if isinstance(result, dict) else {})
                 if _count is not None:
                     if _count == 0:
-                        _zero_streaks[fn_name] = _zero_streaks.get(fn_name, 0) + 1
+                        state.zero_streaks[fn_name] = state.zero_streaks.get(fn_name, 0) + 1
                     else:
-                        _zero_streaks[fn_name] = 0
-                        _nonzero_seen[fn_name] = max(_nonzero_seen.get(fn_name, 0), _count)
+                        state.zero_streaks[fn_name] = 0
+                        state.nonzero_seen[fn_name] = max(state.nonzero_seen.get(fn_name, 0), _count)
 
-                # v2.33.13: record a compact tool_history entry for contradiction
+                # v2.33.13: record a compact state.tool_history entry for contradiction
                 # detection. Store only the count in `result` so we don't retain
                 # large tool payloads across the whole run.
-                tool_history.append({
+                state.tool_history.append({
                     "tool":   fn_name,
                     "args":   fn_args if isinstance(fn_args, dict) else {},
                     "result": {"total": _count if _count is not None else 0},
@@ -3057,7 +3026,7 @@ async def _run_single_agent_step(
                     if not _fk:
                         continue
                     _nv = _nf.get("value")
-                    _prior = _run_facts.get(_fk)
+                    _prior = state.run_facts.get(_fk)
                     if _prior is not None and _prior.get("value") != _nv:
                         try:
                             _prior_snip = json.dumps(_prior.get("value"), default=str)[:80]
@@ -3074,7 +3043,7 @@ async def _run_single_agent_step(
                             f"EVIDENCE block must cite only ONE value or explicitly "
                             f"note the conflict."
                         )
-                        _propose_state.queued_harness_messages.append(_contra_msg)
+                        state.propose_state.queued_harness_messages.append(_contra_msg)
                         await manager.send_line(
                             "step",
                             f"[contradiction] {_fk} disagrees across "
@@ -3090,7 +3059,7 @@ async def _run_single_agent_step(
                             ).inc()
                         except Exception:
                             pass
-                    _run_facts[_fk] = {
+                    state.run_facts[_fk] = {
                         "value":     _nv,
                         "step":      step,
                         "tool":      fn_name,
@@ -3099,12 +3068,12 @@ async def _run_single_agent_step(
                     }
 
                 if (
-                    _zero_streaks.get(fn_name, 0) >= 3
-                    and _nonzero_seen.get(fn_name, 0) > 0
-                    and fn_name not in _zero_pivot_fired
+                    state.zero_streaks.get(fn_name, 0) >= 3
+                    and state.nonzero_seen.get(fn_name, 0) > 0
+                    and fn_name not in state.zero_pivot_fired
                 ):
-                    _zero_pivot_fired.add(fn_name)
-                    _prior_n = _nonzero_seen[fn_name]
+                    state.zero_pivot_fired.add(fn_name)
+                    _prior_n = state.nonzero_seen[fn_name]
                     messages.append({
                         "role": "system",
                         "content": (
@@ -3121,21 +3090,21 @@ async def _run_single_agent_step(
                         "type":              "zero_result_pivot",
                         "session_id":        session_id,
                         "tool":              fn_name,
-                        "consecutive_zeros": _zero_streaks[fn_name],
+                        "consecutive_zeros": state.zero_streaks[fn_name],
                         "prior_nonzero":     _prior_n,
                         "timestamp":         datetime.now(timezone.utc).isoformat(),
                     })
                     await manager.send_line(
                         "step",
-                        f"[pivot] {fn_name} returned 0 · {_zero_streaks[fn_name]}× in a row "
+                        f"[pivot] {fn_name} returned 0 · {state.zero_streaks[fn_name]}× in a row "
                         f"(earlier: {_prior_n}) — nudging agent to broaden or pivot",
                         status="warning", session_id=session_id,
                     )
                 elif (
-                    _zero_streaks.get(fn_name, 0) >= 4
-                    and fn_name not in _zero_pivot_fired
+                    state.zero_streaks.get(fn_name, 0) >= 4
+                    and fn_name not in state.zero_pivot_fired
                 ):
-                    _zero_pivot_fired.add(fn_name)
+                    state.zero_pivot_fired.add(fn_name)
                     messages.append({
                         "role": "system",
                         "content": (
@@ -3148,13 +3117,13 @@ async def _run_single_agent_step(
                         "type":              "zero_result_pivot",
                         "session_id":        session_id,
                         "tool":              fn_name,
-                        "consecutive_zeros": _zero_streaks[fn_name],
+                        "consecutive_zeros": state.zero_streaks[fn_name],
                         "prior_nonzero":     0,
                         "timestamp":         datetime.now(timezone.utc).isoformat(),
                     })
                     await manager.send_line(
                         "step",
-                        f"[pivot] {fn_name} returned 0 · {_zero_streaks[fn_name]}× with no prior "
+                        f"[pivot] {fn_name} returned 0 · {state.zero_streaks[fn_name]}× with no prior "
                         "data — nudging agent to switch tools",
                         status="warning", session_id=session_id,
                     )
@@ -3165,9 +3134,9 @@ async def _run_single_agent_step(
                 # exhausts budget and draws a shallow conclusion.
                 try:
                     _diag_budget = _tool_budget_for(agent_type)
-                    _diag_used = len(tools_used_names)
+                    _diag_used = len(state.tools_used_names)
                     _diag_has_diagnosis = (
-                        "DIAGNOSIS:" in (last_reasoning or "")
+                        "DIAGNOSIS:" in (state.last_reasoning or "")
                         if agent_type in ("research", "investigate")
                         else True
                     )
@@ -3179,10 +3148,10 @@ async def _run_single_agent_step(
                         "budget":               _diag_budget,
                         "budget_pct":           int((_diag_used / max(_diag_budget, 1)) * 100),
                         "has_diagnosis":        _diag_has_diagnosis,
-                        "zero_streaks":         {k: v for k, v in _zero_streaks.items() if v > 0},
-                        "max_nonzero_by_tool":  dict(_nonzero_seen),
-                        "pivot_nudges_fired":   list(_zero_pivot_fired),
-                        "subtask_proposed":     "propose_subtask" in tools_used_names,
+                        "zero_streaks":         {k: v for k, v in state.zero_streaks.items() if v > 0},
+                        "max_nonzero_by_tool":  dict(state.nonzero_seen),
+                        "pivot_nudges_fired":   list(state.zero_pivot_fired),
+                        "subtask_proposed":     "propose_subtask" in state.tools_used_names,
                         "timestamp":            datetime.now(timezone.utc).isoformat(),
                     })
                 except Exception as _diag_e:
@@ -3198,8 +3167,8 @@ async def _run_single_agent_step(
                 if _is_degraded and _is_investigate:
                     # Research/investigate/observe agents: degraded is a FINDING, not a halt.
                     # Accumulate and keep going — synthesis fires at end of run.
-                    negative_signals += 1
-                    _degraded_findings.append(f"{fn_name}: {result_msg[:120]}")
+                    state.negative_signals += 1
+                    state.degraded_findings.append(f"{fn_name}: {result_msg[:120]}")
                     await manager.send_line(
                         "step",
                         f"[degraded] {fn_name} reported degraded — continuing investigation",
@@ -3207,7 +3176,7 @@ async def _run_single_agent_step(
                     )
 
                 elif _is_hard_failure or (_is_degraded and not _is_investigate):
-                    negative_signals += 1
+                    state.negative_signals += 1
                     from api.memory.feedback import record_feedback_signal as _rfs2
                     asyncio.create_task(_rfs2(
                         task, "escalation", f"{fn_name} returned {result_status}: {result_msg[:80]}"
@@ -3241,7 +3210,7 @@ async def _run_single_agent_step(
                     # Synthesis: explain root cause + steps before halting
                     try:
                         _synth_ctx = "\n".join(
-                            [f"- {f}" for f in _degraded_findings]
+                            [f"- {f}" for f in state.degraded_findings]
                             or [f"- {fn_name} returned {result_status}: {result_msg[:120]}"]
                         )
                         _synth_resp = client.chat.completions.create(
@@ -3278,12 +3247,12 @@ async def _run_single_agent_step(
                         )
                         _synth_text = _synth_resp.choices[0].message.content or ""
                         if _synth_text.strip():
-                            last_reasoning = _synth_text.strip()
+                            state.last_reasoning = _synth_text.strip()
                             await manager.send_line("reasoning", _synth_text, session_id=session_id)
                     except Exception as _se:
                         log.debug("Halt synthesis failed: %s", _se)
                     halt = True
-                    final_status = "escalated"
+                    state.final_status = "escalated"
                     break
 
             # Trim message history to cap token growth
@@ -3307,11 +3276,11 @@ async def _run_single_agent_step(
             # as a confused "done" signal — don't treat it as completion; let loop continue.
             _step_names = [tc.function.name for tc in msg.tool_calls]
             if (_step_names and all(n == "audit_log" for n in _step_names)
-                    and _last_blocked_tool != "escalate"):
+                    and state.last_blocked_tool != "escalate"):
                 # Synthesise degraded findings before broadcasting done
-                if _degraded_findings and (not last_reasoning or len(last_reasoning) < 100):
+                if state.degraded_findings and (not state.last_reasoning or len(state.last_reasoning) < 100):
                     try:
-                        _synth_ctx = "\n".join(f"- {f}" for f in _degraded_findings)
+                        _synth_ctx = "\n".join(f"- {f}" for f in state.degraded_findings)
                         _synth_resp = client.chat.completions.create(
                             model=_lm_model(),
                             messages=[
@@ -3346,18 +3315,18 @@ async def _run_single_agent_step(
                         )
                         _synth_text = _synth_resp.choices[0].message.content or ""
                         if _synth_text.strip():
-                            last_reasoning = _synth_text.strip()
+                            state.last_reasoning = _synth_text.strip()
                             await manager.send_line("reasoning", _synth_text, session_id=session_id)
                     except Exception as _se:
                         log.debug("Audit-log completion synthesis failed: %s", _se)
                 # v2.35.14: empty-completion rescue when an audit_log-only step
                 # ends the run with no assistant text emitted (op 1ebb7047).
                 await _maybe_force_empty_synthesis()
-                choices = _extract_choices(last_reasoning) if last_reasoning else None
+                choices = _extract_choices(state.last_reasoning) if state.last_reasoning else None
                 if is_final_step:
                     await manager.broadcast({
                         "type": "done", "session_id": session_id, "agent_type": agent_type,
-                        "content": last_reasoning if last_reasoning else f"Agent finished after {step} steps.",
+                        "content": state.last_reasoning if state.last_reasoning else f"Agent finished after {step} steps.",
                         "status": "ok", "choices": choices or [],
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
@@ -3387,15 +3356,15 @@ async def _run_single_agent_step(
                 )
                 forced_text = force_response.choices[0].message.content or ""
                 if forced_text:
-                    last_reasoning = forced_text
+                    state.last_reasoning = forced_text
                     await manager.send_line("reasoning", forced_text, session_id=session_id)
             except Exception as _fe:
                 log.debug("Force summary call failed: %s", _fe)
 
             # Investigate agent: if degraded findings accumulated but no synthesis yet, do it now
-            if _degraded_findings and (not last_reasoning or len(last_reasoning) < 80):
+            if state.degraded_findings and (not state.last_reasoning or len(state.last_reasoning) < 80):
                 try:
-                    _synth_ctx2 = "\n".join(f"- {f}" for f in _degraded_findings)
+                    _synth_ctx2 = "\n".join(f"- {f}" for f in state.degraded_findings)
                     _synth_resp2 = client.chat.completions.create(
                         model=_lm_model(),
                         messages=[
@@ -3430,19 +3399,19 @@ async def _run_single_agent_step(
                     )
                     _synth_text2 = _synth_resp2.choices[0].message.content or ""
                     if _synth_text2.strip():
-                        last_reasoning = _synth_text2.strip()
+                        state.last_reasoning = _synth_text2.strip()
                         await manager.send_line("reasoning", _synth_text2, session_id=session_id)
                 except Exception as _se2:
                     log.debug("Post-loop synthesis failed: %s", _se2)
 
             # v2.35.14: empty-completion rescue when the loop exhausted
             # max_steps and the post-loop force_summary call also produced
-            # nothing useful (last_reasoning still empty).
+            # nothing useful (state.last_reasoning still empty).
             await _maybe_force_empty_synthesis()
             if is_final_step:
                 await manager.broadcast({
                     "type": "done", "session_id": session_id, "agent_type": agent_type,
-                    "content": last_reasoning or f"Agent reached max steps ({max_steps}).",
+                    "content": state.last_reasoning or f"Agent reached max steps ({max_steps}).",
                     "status": "ok", "choices": [],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
@@ -3453,11 +3422,11 @@ async def _run_single_agent_step(
             "content": f"Agent loop error: {e}", "status": "error",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        final_status = "error"
+        state.final_status = "error"
 
     # If the agent halted (escalated), the while loop broke without a done/error
     # broadcast — send one now so any waiting WebSocket clients can close.
-    if final_status == "escalated":
+    if state.final_status == "escalated":
         await manager.broadcast({
             "type": "error", "session_id": session_id,
             "agent_type": agent_type,
@@ -3466,29 +3435,16 @@ async def _run_single_agent_step(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
-    if total_prompt_tokens or total_completion_tokens:
+    if state.total_prompt_tokens or state.total_completion_tokens:
         await manager.send_line(
             "step",
-            f"[tokens] prompt={total_prompt_tokens} completion={total_completion_tokens} "
-            f"total={total_prompt_tokens + total_completion_tokens}",
+            f"[tokens] prompt={state.total_prompt_tokens} completion={state.total_completion_tokens} "
+            f"total={state.total_prompt_tokens + state.total_completion_tokens}",
             status="ok", session_id=session_id,
         )
 
-    return {
-        "output":                 last_reasoning,
-        "tools_used":             tools_used_names,
-        "substantive_tool_calls": substantive_tool_calls,  # v2.34.8
-        "tool_history":           tool_history,  # v2.33.13: for contradiction detection
-        "final_status":           final_status,
-        "positive_signals":       positive_signals,
-        "negative_signals":       negative_signals,
-        "steps_taken":            step,
-        "prompt_tokens":          total_prompt_tokens,
-        "completion_tokens":      total_completion_tokens,
-        "run_facts":              _run_facts,  # v2.35.2 — in-run fact snapshot
-        "fabrication_detected":   bool(_fabrication_detected_once),  # v2.35.2
-        "render_tool_calls":      _render_tool_calls,   # v2.36.9
-    }
+    state.steps_taken = step
+    return state.to_result_dict()
 
 
 async def _spawn_and_wait_subagent(
