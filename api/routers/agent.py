@@ -35,6 +35,7 @@ from api.agents.context import (
 from api.agents.step_llm import call_llm_step, LlmStepResult
 from api.agents.step_guard import run_stop_path_guards, GuardOutcome
 from api.agents.step_facts import process_tool_result
+from api.agents.step_synth import maybe_force_empty_synthesis
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -1030,127 +1031,6 @@ async def _run_single_agent_step(
     # once-per-run guard and gets a distinct metric label.
     state.empty_completion_synth_done = False
 
-    async def _maybe_force_empty_synthesis() -> str:
-        """Run forced_synthesis when the loop exits naturally with a
-        missing / near-empty / preamble-only final_answer but substantive
-        tool calls were made.
-
-        Returns the synthesis text (or "" on no-op / failure). Idempotent:
-        sets ``state.empty_completion_synth_done`` after the first attempt so
-        re-entries on the same operation_id do not double-fire.
-        """
-        if state.empty_completion_synth_done:
-            return ""
-        rescue_reason = _classify_terminal_final_answer(state.last_reasoning or "")
-        if rescue_reason is None:
-            return ""
-        if state.substantive_tool_calls < 1:
-            return ""
-        # v2.36.8 — render-and-caption: if the render tool appended table data
-        # to operations.final_answer, the rescue's len/preamble checks should
-        # see that content, not just the agent-side buffer.
-        # v2.36.9 — raised from 500 to 1500. A full caption + even a small
-        # 10-row table exceeds 1500 chars; a normal LLM prose answer staying
-        # in the 500-1000 range should remain eligible for too_short /
-        # preamble_only rescue so we don't false-suppress a legitimate rescue
-        # when the render tool wrote a trivially small table.
-        _render_wrote_substantive = False
-        try:
-            from sqlalchemy import text as _t
-            from api.db.base import get_engine as _ge
-            async with _ge().connect() as _conn:
-                _r = await _conn.execute(
-                    _t(
-                        "SELECT final_answer FROM operations WHERE id = :oid"
-                    ),
-                    {"oid": operation_id},
-                )
-                _row = _r.fetchone()
-                if _row and _row[0] and len(_row[0]) >= 1500:
-                    _render_wrote_substantive = True
-        except Exception:
-            pass
-        if _render_wrote_substantive:
-            log.info(
-                "rescue skipped op=%s reason=%s — render tool wrote substantive final_answer",
-                operation_id, rescue_reason,
-            )
-            state.empty_completion_synth_done = True
-            return ""
-        state.empty_completion_synth_done = True
-        log.warning(
-            "agent loop %s detected op=%s fa_len=%d tools=%d subst=%d; "
-            "invoking forced_synthesis",
-            rescue_reason, operation_id, len(state.last_reasoning or ""),
-            len(state.tools_used_names), state.substantive_tool_calls,
-        )
-        try:
-            from api.agents.forced_synthesis import run_forced_synthesis
-            _budget_for_synth = _tool_budget_for(agent_type)
-            synth_text, harness_msg, raw_resp = run_forced_synthesis(
-                client=client,
-                model=_lm_model(),
-                messages=messages,
-                agent_type=agent_type,
-                reason=rescue_reason,
-                tool_count=len(state.tools_used_names),
-                budget=_budget_for_synth,
-                actual_tool_names=state.tools_used_names,
-                operation_id=operation_id,
-                actual_tool_calls=[
-                    {
-                        "name":   tc.get("tool") or tc.get("tool_name") or tc.get("name"),
-                        "status": tc.get("status"),
-                        "result": tc.get("result") or tc.get("content"),
-                    }
-                    for tc in (state.tool_history or [])
-                ],
-            )
-            # Only replace state.last_reasoning when the synthesis is substantive;
-            # a too-short or drifted synthesis must not overwrite a possibly
-            # useful existing preamble.
-            if synth_text and len(synth_text.strip()) >= 60:
-                state.last_reasoning = synth_text
-                try:
-                    await manager.send_line(
-                        "reasoning", synth_text, session_id=session_id,
-                    )
-                except Exception:
-                    pass
-                try:
-                    from api.logger import log_llm_step
-                    await log_llm_step(
-                        operation_id=operation_id,
-                        step_index=state.trace_step_index,
-                        messages_delta=[
-                            {"role": "system", "content": harness_msg}
-                        ],
-                        response_raw=raw_resp or {
-                            "forced_synthesis": {
-                                "reason": rescue_reason,
-                                "text":   synth_text,
-                            }
-                        },
-                        agent_type=agent_type,
-                        is_subagent=state.trace_is_subagent,
-                        parent_op_id=state.trace_parent_op_id,
-                        temperature=0.3,
-                        model=_extract_response_model(raw_resp, fallback=_lm_model()),
-                        provider="lm_studio",
-                    )
-                    state.trace_step_index += 1
-                except Exception as _te:
-                    log.debug(
-                        "%s trace log failed: %s", rescue_reason, _te,
-                    )
-            return synth_text or ""
-        except Exception as e:
-            log.warning(
-                "forced_synthesis on %s failed op=%s: %s",
-                rescue_reason, operation_id, e,
-            )
-            return ""
-
     try:
         import time as _time
         _run_started = _time.monotonic()
@@ -1505,7 +1385,12 @@ async def _run_single_agent_step(
                     except Exception as _se:
                         log.debug("Stop-path synthesis failed: %s", _se)
                 # v2.35.14: empty-completion rescue on natural exit
-                await _maybe_force_empty_synthesis()
+                await maybe_force_empty_synthesis(
+                    state, client, messages,
+                    manager=manager, session_id=session_id,
+                    operation_id=operation_id, agent_type=agent_type,
+                    tool_budget=_tool_budget_for(agent_type),
+                )
                 choices = _extract_choices(state.last_reasoning) if state.last_reasoning else None
                 if is_final_step:
                     payload = {
@@ -2691,7 +2576,12 @@ async def _run_single_agent_step(
                         log.debug("Audit-log completion synthesis failed: %s", _se)
                 # v2.35.14: empty-completion rescue when an audit_log-only step
                 # ends the run with no assistant text emitted (op 1ebb7047).
-                await _maybe_force_empty_synthesis()
+                await maybe_force_empty_synthesis(
+                    state, client, messages,
+                    manager=manager, session_id=session_id,
+                    operation_id=operation_id, agent_type=agent_type,
+                    tool_budget=_tool_budget_for(agent_type),
+                )
                 choices = _extract_choices(state.last_reasoning) if state.last_reasoning else None
                 if is_final_step:
                     await manager.broadcast({
@@ -2777,7 +2667,12 @@ async def _run_single_agent_step(
             # v2.35.14: empty-completion rescue when the loop exhausted
             # max_steps and the post-loop force_summary call also produced
             # nothing useful (state.last_reasoning still empty).
-            await _maybe_force_empty_synthesis()
+            await maybe_force_empty_synthesis(
+                state, client, messages,
+                manager=manager, session_id=session_id,
+                operation_id=operation_id, agent_type=agent_type,
+                tool_budget=_tool_budget_for(agent_type),
+            )
             if is_final_step:
                 await manager.broadcast({
                     "type": "done", "session_id": session_id, "agent_type": agent_type,
