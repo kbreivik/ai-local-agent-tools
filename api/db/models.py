@@ -89,18 +89,6 @@ status_snapshots = Table(
     _ts_col("timestamp", nullable=False, server_default=func.now()),
 )
 
-escalations = Table(
-    "escalations", metadata,
-    _uuid_col("id", primary_key=True),
-    _fk_uuid_col("operation_id", "operations.id", nullable=True),
-    Column("tool_call_id", Text, nullable=True),
-    Column("reason", Text, nullable=False),
-    _json_col("context"),
-    Column("resolved", Boolean, nullable=False, server_default="false"),
-    _ts_col("resolved_at"),
-    _ts_col("timestamp", nullable=False, server_default=func.now()),
-)
-
 audit_log = Table(
     "audit_log", metadata,
     _uuid_col("id", primary_key=True),

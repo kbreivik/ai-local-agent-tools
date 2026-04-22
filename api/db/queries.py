@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from api.db.models import (
     operations, tool_calls, status_snapshots,
-    escalations, audit_log,
+    audit_log,
 )
 from api.db.base import DB_BACKEND
 
@@ -353,58 +353,6 @@ async def get_snapshots(
     return _rows(result)
 
 
-# ── Escalations ───────────────────────────────────────────────────────────────
-
-async def create_escalation(
-    conn: AsyncConnection,
-    operation_id: str | None,
-    tool_call_id: str | None,
-    reason: str,
-    context: dict,
-) -> str:
-    esc_id = _new_id()
-    await conn.execute(escalations.insert().values(
-        id=esc_id,
-        operation_id=operation_id,
-        tool_call_id=tool_call_id,
-        reason=reason,
-        context=_json(context),
-        resolved=False,
-        timestamp=_now(),
-    ))
-    return esc_id
-
-
-async def get_escalations(
-    conn: AsyncConnection,
-    unresolved_first: bool = True,
-    limit: int = 50,
-) -> list[dict]:
-    q = select(escalations).order_by(
-        escalations.c.resolved,
-        desc(escalations.c.timestamp),
-    ).limit(limit)
-    result = await conn.execute(q)
-    return _rows(result)
-
-
-async def resolve_escalation(conn: AsyncConnection, esc_id: str) -> bool:
-    r = await conn.execute(
-        update(escalations)
-        .where(escalations.c.id == esc_id)
-        .values(resolved=True, resolved_at=_now())
-    )
-    return r.rowcount > 0
-
-
-async def count_unresolved_escalations(conn: AsyncConnection) -> int:
-    r = await conn.execute(
-        select(func.count()).select_from(escalations)
-        .where(escalations.c.resolved == False)  # noqa: E712
-    )
-    return r.scalar() or 0
-
-
 # ── Audit Log ─────────────────────────────────────────────────────────────────
 
 async def create_audit_entry(
@@ -489,8 +437,22 @@ async def get_stats(conn: AsyncConnection) -> dict:
     )
     model_calls = r.scalar() or 0
 
-    # Unresolved escalations
-    unresolved = await count_unresolved_escalations(conn)
+    # Unresolved escalations — read from agent_escalations (canonical table)
+    try:
+        from api.connections import _get_conn as _pg
+        _ec = _pg()
+        if _ec:
+            _cur = _ec.cursor()
+            _cur.execute(
+                "SELECT COUNT(*) FROM agent_escalations WHERE acknowledged = FALSE"
+            )
+            unresolved = (_cur.fetchone() or [0])[0]
+            _cur.close()
+            _ec.close()
+        else:
+            unresolved = 0
+    except Exception:
+        unresolved = 0
 
     # Total tool calls
     r = await conn.execute(select(func.count()).select_from(tool_calls))

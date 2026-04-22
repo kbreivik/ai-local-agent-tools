@@ -240,7 +240,9 @@ bash cc_prompts/run_queue.sh             # run all
 | CC_PROMPT_v2.39.1.md | v2.39.1 | feat(facts): UniFi + FortiGate fact extractors — device states, client count, interface status | DONE (124504d) |
 | CC_PROMPT_v2.39.2.md | v2.39.2 | feat(facts): enrich Kafka + Swarm extractors — broker online, ISR, under-replicated, service convergence | DONE (8c06160) |
 | CC_PROMPT_v2.39.3.md | v2.39.3 | feat(agents): skill preflight — inject relevant skills into system prompt before agent loop | DONE (e02f108) |
-| CC_PROMPT_v2.39.4.md | v2.39.4 | feat(agents): skill preflight Prometheus counter + WS skills_matched event + snapshot update | RUNNING |
+| CC_PROMPT_v2.39.4.md | v2.39.4 | feat(agents): skill preflight Prometheus counter + WS skills_matched event + snapshot update | DONE (1171d4d) |
+| CC_PROMPT_v2.40.0.md | v2.40.0 | fix(db): remove orphaned escalations SQLAlchemy table + dead helpers in queries.py | RUNNING |
+| CC_PROMPT_v2.40.1.md | v2.40.1 | feat(agents): semantic runbook classifier — bge-small-en-v1.5 cosine with keyword fallback | PENDING |
 
 ---
 
