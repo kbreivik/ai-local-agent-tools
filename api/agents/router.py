@@ -467,6 +467,26 @@ When a tool returns {"ref": "rs-...", "count": N, "preview": [...]}:
 - Preview already contains first 5 items — use for quick answers without extra tool calls
 - References expire after 2 hours
 
+═══ ENTITY NAME MAPPING ═══
+Infrastructure entities have multiple names depending on context. Always use
+the correct name for the context:
+
+vm_exec(host=...)       — use the connection label (e.g. "ds-docker-manager-02")
+                          OR the short Swarm hostname (e.g. "manager-02") — both work.
+                          vm_exec resolves via suffix matching.
+
+docker node inspect     — use the SWARM hostname (e.g. "manager-02"), NOT the
+                          connection label. Swarm does not know connection labels.
+                          Source: prod.swarm.node.{hostname}.* facts.
+
+docker service inspect  — use the SERVICE NAME (e.g. "kafka_broker-1"), NOT the
+                          container ID or image name.
+
+Known mappings (from facts):
+  Swarm hostname → connection label: prod.swarm.node.{n}.connection_label
+  Swarm hostname → IP:               prod.swarm.node.{n}.connection_ip
+  Proxmox VM name → status:          prod.proxmox.vm.{n}.status
+
 VM HOST COMMANDS:
 - Call vm_disk_investigate(host=...) FIRST for disk investigations — runs complete analysis
 - Only use vm_exec for follow-up checks after vm_disk_investigate
@@ -632,6 +652,26 @@ If no doc context was injected, rely on training knowledge and note the source.
 RUNBOOK CHECK (ALWAYS DO FIRST):
 At the START of any investigation, call runbook_search("<problem keyword>") to check
 if a proven procedure exists. If found, cite it in evidence and follow its steps.
+
+═══ ENTITY NAME MAPPING ═══
+Infrastructure entities have multiple names depending on context. Always use
+the correct name for the context:
+
+vm_exec(host=...)       — use the connection label (e.g. "ds-docker-manager-02")
+                          OR the short Swarm hostname (e.g. "manager-02") — both work.
+                          vm_exec resolves via suffix matching.
+
+docker node inspect     — use the SWARM hostname (e.g. "manager-02"), NOT the
+                          connection label. Swarm does not know connection labels.
+                          Source: prod.swarm.node.{hostname}.* facts.
+
+docker service inspect  — use the SERVICE NAME (e.g. "kafka_broker-1"), NOT the
+                          container ID or image name.
+
+Known mappings (from facts):
+  Swarm hostname → connection label: prod.swarm.node.{n}.connection_label
+  Swarm hostname → IP:               prod.swarm.node.{n}.connection_ip
+  Proxmox VM name → status:          prod.proxmox.vm.{n}.status
 
 ═══ CONTAINER INTROSPECT FIRST — BEFORE RAW docker exec ═══
 Whenever an investigation would lead you to call vm_exec with a

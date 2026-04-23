@@ -544,6 +544,10 @@ class VMHostsCollector(BaseCollector):
                         vms.append(result)
                 except Exception as e:
                     c = futures[future]
+                    log.warning(
+                        "[vm_hosts] SSH poll failed for %s (%s): %s",
+                        c.get("label"), c.get("host"), str(e)[:200],
+                    )
                     vms.append({
                         "id": c.get("label", c.get("host")),
                         "label": c.get("label", c.get("host")),

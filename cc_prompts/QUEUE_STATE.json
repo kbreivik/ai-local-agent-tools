@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-23T10:00:07",
+  "updated_at": "2026-04-23T10:24:54",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -3381,10 +3381,26 @@
       "filename": "CC_PROMPT_v2.43.4.md",
       "version": "v2.43.4",
       "theme": "fix(facts): write prod.swarm.cluster.overlay_networks from collector net_id_to_name map",
+      "runner_status": "DONE",
+      "commit_sha": "1019023",
+      "error": "",
+      "started_at": "2026-04-23T10:00:07",
+      "finished_at": "2026-04-23T10:00:58",
+      "duration_s": 50.77959489997011,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260423_100007_CC_PROMPT_v2.43.4.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.43.5.md",
+      "version": "v2.43.5",
+      "theme": "fix(facts+agents): swarm hostname↔connection_label cross-ref facts + entity name mapping prompt section",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-23T10:00:07",
+      "started_at": "2026-04-23T10:24:54",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

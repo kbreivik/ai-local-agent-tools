@@ -148,6 +148,13 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
             elif _is_manager:
                 # Explicitly record False so preflight knows it was checked
                 _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector", False)
+        # v2.43.5: cross-reference Swarm hostname → vm_host connection label/IP
+        if node.get("connection_label"):
+            _add(facts, f"{fkey_base}.connection_label", "swarm_collector",
+                 node["connection_label"])
+        if node.get("connection_ip"):
+            _add(facts, f"{fkey_base}.connection_ip", "swarm_collector",
+                 node["connection_ip"])
         nodes_total += 1
         if str(node.get("state", "")).lower() == "ready":
             nodes_ready += 1

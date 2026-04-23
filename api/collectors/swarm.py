@@ -204,6 +204,21 @@ class SwarmCollector(BaseCollector):
                     "os": f"{platform.get('OS','')}/{platform.get('Architecture','')}",
                 })
 
+            # v2.43.5: enrich nodes with vm_host connection_label
+            # so facts can map Swarm hostname → SSH connection label
+            try:
+                from api.db.infra_inventory import resolve_host
+                for node in node_data:
+                    hn = node.get("hostname", "")
+                    if not hn:
+                        continue
+                    entry = resolve_host(hn)
+                    if entry:
+                        node["connection_label"] = entry.get("label", "")
+                        node["connection_ip"]    = (entry.get("ips") or [""])[0]
+            except Exception as _nl:
+                log.debug("[Swarm] node label resolution failed: %s", _nl)
+
             # ── Services ───────────────────────────────────────────────────────
             services = client.services.list()
             svc_data = []
