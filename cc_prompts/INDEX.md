@@ -39,4 +39,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.44.4.md | v2.44.4 | fix(docker): narrow .dockerignore — include tests/integration/ in container image | DONE (19052a2) |
 | CC_PROMPT_v2.44.5.md | v2.44.5 | fix(tests): move TestCase+TEST_CASES to api/db/test_definitions.py — always in container | DONE (f7259b3) |
 | CC_PROMPT_v2.44.6.md | v2.44.6 | fix(tests): correct get_test_cases field names (timeout_s, expect_tools, agent_type) | DONE (b6f1ef4) |
-| CC_PROMPT_v2.44.7.md | v2.44.7 | fix(tests): wire suite_id+test_ids through run — apply suite config + fix http client | RUNNING |
+| CC_PROMPT_v2.44.7.md | v2.44.7 | fix(tests): wire suite_id+test_ids through run — apply suite config + fix http client | DONE (e48a3db) |
+| CC_PROMPT_v2.44.8.md | v2.44.8 | feat(ui): AnalysisView — grouped dropdown, search, date quick-selects, table view, history sidebar | RUNNING |

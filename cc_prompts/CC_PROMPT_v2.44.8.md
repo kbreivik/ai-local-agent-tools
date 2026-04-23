@@ -1,3 +1,36 @@
+# CC PROMPT — v2.44.8 — feat(ui): AnalysisView overhaul — grouped dropdown, date quick-selects, search filter
+
+## What this does
+
+Replaces the single flat `<select>` in AnalysisView with:
+
+1. **Grouped dropdown** — templates grouped by category (Operations, Diagnostics,
+   Facts, Safety) with `<optgroup>` labels, showing template description on hover.
+
+2. **Quick-select date filters** — for templates with `hours` or `days` params,
+   show preset buttons: Last 1h · 6h · 24h · 7d · 30d. Clicking auto-fills the
+   param and runs immediately.
+
+3. **Search/filter** — text input above the dropdown that filters template titles
+   in real time so you can type "fact" or "escalation" and narrow instantly.
+
+4. **Template info card** — when a template is selected, show its description +
+   param list more clearly in a proper card, not just inline text.
+
+5. **Recent runs sidebar** — narrow left column showing last 8 queries run this
+   session (template name + row_count + latency). Click to re-apply params.
+
+6. **Results as table** — when result.columns exist, render as a proper sticky-
+   header table instead of JSON tree. Keep JSON tree as fallback for complex
+   nested results (like operation_full_context). Toggle button to switch views.
+
+Version bump: 2.44.7 → 2.44.8.
+
+---
+
+## Change — replace `gui/src/components/AnalysisView.jsx` entirely
+
+```jsx
 /**
  * AnalysisView — v2.44.8
  * Admin-only SQL template runner. sith_lord only.
@@ -206,7 +239,7 @@ export default function AnalysisView() {
     } catch (e) {
       setRunErr(String(e.message || e))
     } finally {
-      setRunning(false)
+      setRunning(false) 
     }
   }
 
@@ -392,3 +425,26 @@ export default function AnalysisView() {
     </div>
   )
 }
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.44.7` → `2.44.8`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(ui): v2.44.8 AnalysisView — grouped dropdown, search, date quick-selects, table view, history sidebar"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
