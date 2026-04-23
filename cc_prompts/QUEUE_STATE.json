@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-23T18:21:41",
+  "updated_at": "2026-04-23T18:49:30",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -3637,10 +3637,26 @@
       "filename": "CC_PROMPT_v2.45.0.md",
       "version": "v2.45.0",
       "theme": "fix(tests): use caller JWT token in test runner — no re-login needed",
+      "runner_status": "DONE",
+      "commit_sha": "065bbc6",
+      "error": "",
+      "started_at": "2026-04-23T18:21:41",
+      "finished_at": "2026-04-23T18:22:35",
+      "duration_s": 54.60961139999563,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260423_182141_CC_PROMPT_v2.45.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.45.1.md",
+      "version": "v2.45.1",
+      "theme": "fix(tests): use create_internal_token for test runner — replaces stale localStorage JWT",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-23T18:21:41",
+      "started_at": "2026-04-23T18:49:30",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

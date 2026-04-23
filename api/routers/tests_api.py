@@ -141,14 +141,18 @@ async def _run_tests_bg(
         if test_ids:
             cases_to_run = [tc for tc in cases_to_run if tc.id in test_ids]
 
-        # Use the caller's token directly — no re-login needed.
-        _auth_headers = {"Authorization": f"Bearer {caller_token}"} if caller_token else {}
+        # Generate a fresh internal JWT — the caller's token may be stale
+        # (localStorage token from before v2.30.1 httpOnly cookie switch).
+        # The WS connection uses ?token= (no cookie), so must be a valid JWT.
+        from api.auth import create_internal_token
+        _fresh_token = create_internal_token(expires_minutes=90)
+        _auth_headers = {"Authorization": f"Bearer {_fresh_token}"} if _fresh_token else {}
         async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
             results = await run_all_tests(
                 categories=categories or None,
                 http=http,
                 args=None,
-                token=caller_token,
+                token=_fresh_token,
             )
 
         save_results(results)
