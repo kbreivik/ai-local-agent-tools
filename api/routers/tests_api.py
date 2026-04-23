@@ -90,40 +90,83 @@ async def _run_tests_bg(
     test_ids: list[str] | None = None,
     suite_id: str | None = None,
     memory_enabled: bool | None = None,
+    memory_backend: str | None = None,
+    suite_name: str = "",
 ) -> None:
     global _running
     _running = True
     try:
+        # ── 1. Load suite config if suite_id provided ─────────────────────
+        if suite_id:
+            try:
+                from api.db import test_runs as _tr
+                suites = _tr.list_suites()
+                suite = next((s for s in suites if s["id"] == suite_id), None)
+                if suite:
+                    suite_name = suite_name or suite.get("name", "")
+                    cfg = suite.get("config") or {}
+                    if not categories:
+                        categories = suite.get("categories") or []
+                    if not test_ids:
+                        test_ids = suite.get("test_ids") or []
+                    if memory_enabled is None:
+                        memory_enabled = cfg.get("memoryEnabled", True)
+                    if memory_backend is None:
+                        memory_backend = cfg.get("memoryBackend", "muninndb")
+            except Exception as _se:
+                import logging; logging.getLogger(__name__).debug("suite load: %s", _se)
+
+        # ── 2. Apply memory settings ──────────────────────────────────────
         if memory_enabled is not None:
             try:
                 from api.settings_manager import set_setting
                 set_setting("memoryEnabled", memory_enabled)
-            except Exception:
-                pass
+            except Exception: pass
+        if memory_backend is not None:
+            try:
+                from api.settings_manager import set_setting
+                set_setting("memoryBackend", memory_backend)
+            except Exception: pass
 
-        from api.db.test_definitions import TestCase, TEST_CASES
+        # ── 3. Run tests ──────────────────────────────────────────────────
+        from api.db.test_definitions import TEST_CASES
         from tests.integration.test_agent import run_all_tests, save_results
-        results = await run_all_tests(categories=categories)
+        import httpx
+
+        # Filter cases
+        cases_to_run = TEST_CASES
+        if categories:
+            cases_to_run = [tc for tc in cases_to_run if tc.category in categories]
+        if test_ids:
+            cases_to_run = [tc for tc in cases_to_run if tc.id in test_ids]
+
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            results = await run_all_tests(
+                categories=categories or None,
+                http=http,
+                args=None,
+            )
+
         save_results(results)
 
-        # v2.44.1: persist to DB
+        # ── 4. Persist to DB ──────────────────────────────────────────────
         try:
             from api.db import test_runs as tr_db_inner
-            # save_results writes to RESULTS_PATH — read it back to get aggregate stats
             results_data = {}
             try:
                 results_data = json.loads(RESULTS_PATH.read_text())
             except Exception:
                 results_data = {}
 
-            categories_str = ",".join(categories) if categories else "all"
             run_id = tr_db_inner.create_run(
-                suite_name=categories_str,
+                suite_id=suite_id,
+                suite_name=suite_name or ((",".join(categories)) if categories else "all"),
                 config={
                     "categories": categories or [],
                     "test_ids": test_ids or [],
                     "suite_id": suite_id,
                     "memoryEnabled": memory_enabled,
+                    "memoryBackend": memory_backend,
                 },
                 triggered_by="api",
             )
@@ -139,8 +182,8 @@ async def _run_tests_bg(
         except Exception as _dbe:
             import logging
             logging.getLogger(__name__).debug("DB persist failed: %s", _dbe)
+
     except Exception as e:
-        # Write error result
         import json as _json
         from datetime import datetime, timezone
         RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -154,30 +197,25 @@ async def _run_tests_bg(
 
 
 @router.post("/run")
-async def run_tests(req: RunTestsRequest, background_tasks: BackgroundTasks):
-    """Trigger test suite. Runs in background — poll /api/tests/results."""
+async def run_tests(
+    body: RunTestsRequest,
+    background_tasks: BackgroundTasks,
+    _: str = Depends(get_current_user),
+):
     global _running
     if _running:
-        return {"status": "already_running", "message": "Test run already in progress"}
-
-    valid_cats = {"status", "research", "ambiguous", "action", "safety"}
-    if req.categories:
-        unknown = set(req.categories) - valid_cats
-        if unknown:
-            return {"status": "error", "message": f"Unknown categories: {unknown}"}
-
+        return {"status": "already_running",
+                "message": "A test run is already in progress."}
     background_tasks.add_task(
         _run_tests_bg,
-        req.categories,
-        req.test_ids,
-        req.suite_id,
-        req.memory_enabled,
+        categories=body.categories,
+        test_ids=body.test_ids,
+        suite_id=body.suite_id,
+        memory_enabled=body.memory_enabled,
+        suite_name="",
     )
-    return {
-        "status":  "started",
-        "message": f"Running {'all' if not req.categories else req.categories} tests in background",
-        "poll":    "/api/tests/results",
-    }
+    return {"status": "started",
+            "message": f"Test run started (suite={body.suite_id}, categories={body.categories}, ids={len(body.test_ids or [])} tests)"}
 
 
 # ── Suites ────────────────────────────────────────────────────────────────────
