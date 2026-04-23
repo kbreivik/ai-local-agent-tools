@@ -93,16 +93,22 @@ def delete_suite(suite_id: str) -> bool:
 # ── Runs ──────────────────────────────────────────────────────────────────────
 
 def create_run(suite_id: str = None, suite_name: str = '', config: dict = None,
-               triggered_by: str = 'manual') -> str:
+               triggered_by: str = 'manual', started_at=None) -> str:
     if not _is_pg():
         return str(uuid.uuid4())
     try:
         conn = _conn(); cur = conn.cursor()
         run_id = str(uuid.uuid4())
-        cur.execute("""
-            INSERT INTO test_runs (id, suite_id, suite_name, config, triggered_by)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (run_id, suite_id, suite_name, json.dumps(config or {}), triggered_by))
+        if started_at is not None:
+            cur.execute("""
+                INSERT INTO test_runs (id, suite_id, suite_name, config, triggered_by, started_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (run_id, suite_id, suite_name, json.dumps(config or {}), triggered_by, started_at))
+        else:
+            cur.execute("""
+                INSERT INTO test_runs (id, suite_id, suite_name, config, triggered_by)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (run_id, suite_id, suite_name, json.dumps(config or {}), triggered_by))
         conn.commit(); cur.close(); conn.close()
         return run_id
     except Exception as e:
@@ -111,18 +117,27 @@ def create_run(suite_id: str = None, suite_name: str = '', config: dict = None,
 
 
 def finish_run(run_id: str, total: int, passed: int, score_pct: float,
-               weighted_pct: float = 0.0, error: str = '') -> None:
+               weighted_pct: float = 0.0, error: str = '', finished_at=None) -> None:
     if not _is_pg():
         return
     try:
         conn = _conn(); cur = conn.cursor()
         status = 'error' if error else 'completed'
-        cur.execute("""
-            UPDATE test_runs SET
-                finished_at=NOW(), status=%s, total=%s, passed=%s,
-                failed=%s, score_pct=%s, weighted_pct=%s, error=%s
-            WHERE id=%s
-        """, (status, total, passed, total - passed, score_pct, weighted_pct, error, run_id))
+        _fin = finished_at if finished_at is not None else 'NOW()'
+        if finished_at is not None:
+            cur.execute("""
+                UPDATE test_runs SET
+                    finished_at=%s, status=%s, total=%s, passed=%s,
+                    failed=%s, score_pct=%s, weighted_pct=%s, error=%s
+                WHERE id=%s
+            """, (finished_at, status, total, passed, total - passed, score_pct, weighted_pct, error, run_id))
+        else:
+            cur.execute("""
+                UPDATE test_runs SET
+                    finished_at=NOW(), status=%s, total=%s, passed=%s,
+                    failed=%s, score_pct=%s, weighted_pct=%s, error=%s
+                WHERE id=%s
+            """, (status, total, passed, total - passed, score_pct, weighted_pct, error, run_id))
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         log.debug("finish_run: %s", e)

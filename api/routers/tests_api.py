@@ -132,7 +132,10 @@ async def _run_tests_bg(
         # ── 3. Run tests ──────────────────────────────────────────────────
         from api.db.test_definitions import TEST_CASES
         from tests.integration.test_agent import run_all_tests, save_results
+        from datetime import datetime, timezone
         import httpx
+
+        _t_start = datetime.now(timezone.utc)
 
         # Filter cases
         cases_to_run = TEST_CASES
@@ -156,6 +159,7 @@ async def _run_tests_bg(
             )
 
         save_results(results)
+        _t_end = datetime.now(timezone.utc)
 
         # ── 4. Persist to DB ──────────────────────────────────────────────
         try:
@@ -177,6 +181,7 @@ async def _run_tests_bg(
                     "memoryBackend": memory_backend,
                 },
                 triggered_by="api",
+                started_at=_t_start,
             )
             for r in results_data.get("results", []):
                 tr_db_inner.insert_result(run_id, r)
@@ -186,6 +191,7 @@ async def _run_tests_bg(
                 passed=results_data.get("passed", 0),
                 score_pct=results_data.get("score_pct", 0),
                 weighted_pct=results_data.get("weighted_pct", 0),
+                finished_at=_t_end,
             )
         except Exception as _dbe:
             import logging

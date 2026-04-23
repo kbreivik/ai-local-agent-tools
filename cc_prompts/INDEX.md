@@ -45,4 +45,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.0.md | v2.45.0 | fix(tests): use caller JWT token in test runner — no re-login needed | DONE (065bbc6) |
 | CC_PROMPT_v2.45.1.md | v2.45.1 | fix(tests): use create_internal_token for test runner — replaces stale localStorage JWT | DONE (87e6a04) |
 | CC_PROMPT_v2.45.2.md | v2.45.2 | feat(ui): TestsPanel auto-refresh — poll running state, live amber indicator, manual refresh | DONE (4bc185f) |
-| CC_PROMPT_v2.45.3.md | v2.45.3 | feat(ui): SuitesTab last-run duration + score badge per suite | RUNNING |
+| CC_PROMPT_v2.45.3.md | v2.45.3 | feat(ui): SuitesTab last-run duration + score badge per suite | DONE (b2fd83d) |
+| CC_PROMPT_v2.45.4.md | v2.45.4 | fix(tests): record accurate run timestamps — stamp before/after run_all_tests | RUNNING |
