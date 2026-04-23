@@ -20,7 +20,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 
@@ -92,6 +92,7 @@ async def _run_tests_bg(
     memory_enabled: bool | None = None,
     memory_backend: str | None = None,
     suite_name: str = "",
+    caller_token: str = "",
 ) -> None:
     global _running
     _running = True
@@ -140,30 +141,14 @@ async def _run_tests_bg(
         if test_ids:
             cases_to_run = [tc for tc in cases_to_run if tc.id in test_ids]
 
-        # Acquire a JWT token for the test runner
-        _test_token = ""
-        try:
-            import httpx as _hx
-            import os as _os
-            _pw = _os.environ.get("ADMIN_PASSWORD", "superduperadmin")
-            _lr = _hx.post(
-                "http://localhost:8000/api/auth/login",
-                json={"username": "admin", "password": _pw},
-                timeout=5,
-            )
-            if _lr.status_code == 200:
-                _test_token = _lr.json().get("access_token", "")
-        except Exception as _te:
-            import logging
-            logging.getLogger(__name__).warning("test runner: token acquisition failed: %s", _te)
-
-        _auth_headers = {"Authorization": f"Bearer {_test_token}"} if _test_token else {}
+        # Use the caller's token directly — no re-login needed.
+        _auth_headers = {"Authorization": f"Bearer {caller_token}"} if caller_token else {}
         async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
             results = await run_all_tests(
                 categories=categories or None,
                 http=http,
                 args=None,
-                token=_test_token,
+                token=caller_token,
             )
 
         save_results(results)
@@ -217,6 +202,7 @@ async def _run_tests_bg(
 
 @router.post("/run")
 async def run_tests(
+    request: Request,
     body: RunTestsRequest,
     background_tasks: BackgroundTasks,
     _: str = Depends(get_current_user),
@@ -225,6 +211,12 @@ async def run_tests(
     if _running:
         return {"status": "already_running",
                 "message": "A test run is already in progress."}
+
+    # Extract the caller's Bearer token — pass it to the test runner so it can
+    # make authenticated requests to /api/agent/run and the WebSocket.
+    auth_header = request.headers.get("Authorization", "")
+    caller_token = auth_header.removeprefix("Bearer ").strip()
+
     background_tasks.add_task(
         _run_tests_bg,
         categories=body.categories,
@@ -232,6 +224,7 @@ async def run_tests(
         suite_id=body.suite_id,
         memory_enabled=body.memory_enabled,
         suite_name="",
+        caller_token=caller_token,
     )
     return {"status": "started",
             "message": f"Test run started (suite={body.suite_id}, categories={body.categories}, ids={len(body.test_ids or [])} tests)"}

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-23T18:02:47",
+  "updated_at": "2026-04-23T18:21:41",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -3621,10 +3621,26 @@
       "filename": "CC_PROMPT_v2.44.9.md",
       "version": "v2.44.9",
       "theme": "fix(tests): pass auth token through test runner — WS URL + HTTP headers",
+      "runner_status": "DONE",
+      "commit_sha": "e86f9ee",
+      "error": "",
+      "started_at": "2026-04-23T18:02:47",
+      "finished_at": "2026-04-23T18:03:43",
+      "duration_s": 55.853473800001666,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260423_180247_CC_PROMPT_v2.44.9.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.45.0.md",
+      "version": "v2.45.0",
+      "theme": "fix(tests): use caller JWT token in test runner — no re-login needed",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-23T18:02:47",
+      "started_at": "2026-04-23T18:21:41",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

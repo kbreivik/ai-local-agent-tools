@@ -41,4 +41,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.44.6.md | v2.44.6 | fix(tests): correct get_test_cases field names (timeout_s, expect_tools, agent_type) | DONE (b6f1ef4) |
 | CC_PROMPT_v2.44.7.md | v2.44.7 | fix(tests): wire suite_id+test_ids through run — apply suite config + fix http client | DONE (e48a3db) |
 | CC_PROMPT_v2.44.8.md | v2.44.8 | feat(ui): AnalysisView — grouped dropdown, search, date quick-selects, table view, history sidebar | DONE (1ecc99a) |
-| CC_PROMPT_v2.44.9.md | v2.44.9 | fix(tests): pass auth token through test runner — WS URL + HTTP headers | RUNNING |
+| CC_PROMPT_v2.44.9.md | v2.44.9 | fix(tests): pass auth token through test runner — WS URL + HTTP headers | DONE (e86f9ee) |
+| CC_PROMPT_v2.45.0.md | v2.45.0 | fix(tests): use caller JWT token in test runner — no re-login needed | RUNNING |
