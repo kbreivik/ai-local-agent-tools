@@ -34,4 +34,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | DONE (d3ea11f) |
 | CC_PROMPT_v2.44.0.md | v2.44.0 | fix(settings): add memoryEnabled + memoryBackend to SETTINGS_KEYS | DONE (e67bf49) |
 | CC_PROMPT_v2.44.1.md | v2.44.1 | feat(tests): DB-backed test run history — test_runs + suites + schedules + compare API | DONE (41578fe) |
-| CC_PROMPT_v2.44.2.md | v2.44.2 | feat(ui): TestsPanel complete overhaul — Library, Suites, Compare, Trend, Schedule | RUNNING |
+| CC_PROMPT_v2.44.2.md | v2.44.2 | feat(ui): TestsPanel complete overhaul — Library, Suites, Compare, Trend, Schedule | DONE (d9589e3) |
+| CC_PROMPT_v2.44.3.md | v2.44.3 | fix(tests): add tests/__init__.py files so API can import TEST_CASES | DONE (d9589e3) |
+| CC_PROMPT_v2.44.4.md | v2.44.4 | fix(docker): narrow .dockerignore — include tests/integration/ in container image | DONE (19052a2) |
+| CC_PROMPT_v2.44.5.md | v2.44.5 | fix(tests): move TestCase+TEST_CASES to api/db/test_definitions.py — always in container | RUNNING |

@@ -55,7 +55,7 @@ async def get_test_running():
 @router.get("/cases")
 async def get_test_cases():
     """List all defined test cases."""
-    from tests.integration.test_agent import TEST_CASES
+    from api.db.test_definitions import TestCase, TEST_CASES
     return {
         "cases": [
             {
@@ -97,6 +97,7 @@ async def _run_tests_bg(
             except Exception:
                 pass
 
+        from api.db.test_definitions import TestCase, TEST_CASES
         from tests.integration.test_agent import run_all_tests, save_results
         results = await run_all_tests(categories=categories)
         save_results(results)

@@ -1,0 +1,219 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.44.4.md (v2.44.4)
+Theme: fix(docker): narrow .dockerignore — include tests/integration/ in container image
+
+Prompt content:
+
+# CC PROMPT — v2.44.4 — fix(docker): include tests/integration/ in container — remove blanket `tests` exclusion from .dockerignore
+
+## What this does
+
+`.dockerignore` line 22 has a blanket `tests` exclusion that prevents the
+entire `tests/` directory from being copied into the container image.
+
+`/api/routers/tests_api.py` imports `from tests.integration.test_agent import TEST_CASES`
+at runtime, which fails with 500 because `/app/tests/` does not exist in the
+container.
+
+The blanket exclusion was added to keep the image lean (CI-only tests
+shouldn't bloat production). The correct fix is to narrow it:
+- Keep excluding the pure pytest unit tests (`tests/test_*.py`, `tests/conftest.py`, etc.)
+- Include `tests/integration/` which is needed at runtime by the API
+
+Also exclude `tests/baseline.txt` and `tests/failures.txt` (large CI artefacts).
+
+Version bump: 2.44.3 → 2.44.4.
+
+---
+
+## Change — `.dockerignore`
+
+Replace the blanket `tests` line:
+
+```
+# Repo-only content
+cc_prompts
+tests
+*.md
+!VERSION
+```
+
+With a narrowed exclusion that keeps `tests/integration/`:
+
+```
+# Repo-only content
+cc_prompts
+tests/test_*.py
+tests/conftest.py
+tests/baseline.txt
+tests/failures.txt
+tests/fix_prompt.txt
+*.md
+!VERSION
+```
+
+This keeps `tests/__init__.py`, `tests/integration/__init__.py`, and
+`tests/integration/test_agent.py` in the image so the API can import
+`TEST_CASES` at runtime, while still excluding the large pytest unit test
+files that are only needed in CI.
+
+---
+
+## Verification
+
+After deploy:
+
+```bash
+# Should return 200 with total > 30
+curl -s http://192.168.199.10:8000/api/tests/cases | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total'), d.get('cases',[])[0].get('id'))"
+```
+
+Tests → Library tab should populate with all test cases.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.44.3` → `2.44.4`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(docker): v2.44.4 narrow .dockerignore — include tests/integration/ in container image"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 14:38:01
+========================================================================
+PROMPT COMPLETE: v2.44.4
+[STATUS] 1m17s
+
+Summary: Narrowed `.dockerignore` to exclude only pytest unit tests (`tests/test_*.py`, `tests/conftest.py`, baseline/failures/fix_prompt txt files) while keeping `tests/__init__.py`, `tests/integration/__init__.py`, and `tests/integration/test_agent.py` in the container image so `/api/tests/cases` can import `TEST_CASES` at runtime. Bumped VERSION 2.44.2 → 2.44.4 (skipped 2.44.3, which was correctly rejected as a no-op). Committed as `19052a2` and pushed to main.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m17s
+========================================================================
