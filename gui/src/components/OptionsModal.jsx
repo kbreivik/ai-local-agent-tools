@@ -879,6 +879,31 @@ function AIServicesTab({ draft, update }) {
             grounding quality from facts alone. MuninnDB container continues
             running; DEATHSTAR simply ignores it.
           </div>
+        {/* v2.43.9 — memory backend selector */}
+        {draft.memoryEnabled !== false && (
+          <div className="mt-3 ml-6">
+            <label className="block text-xs text-gray-400 mb-1">Memory backend</label>
+            <div className="flex gap-4 text-sm">
+              {[['muninndb', 'MuninnDB (default)'], ['postgres', 'PostgreSQL (pg_engrams)']].map(([v, l]) => (
+                <label key={v} className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="memoryBackend"
+                    value={v}
+                    checked={(draft.memoryBackend || 'muninndb') === v}
+                    onChange={() => update('memoryBackend', v)}
+                  />
+                  {l}
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              PostgreSQL backend uses pg_engrams table with tsvector + access-count
+              Hebbian scoring. No external service required. Engrams are queryable
+              via the Analysis tab. Recommended for testing and migrations.
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>

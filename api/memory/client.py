@@ -166,19 +166,27 @@ class NullMuninnClient:
 _client: MuninnClient | None = None
 
 
-def get_client() -> "MuninnClient | NullMuninnClient":
-    """Return the active memory client.
+def get_client():
+    """Return the active memory client based on settings.
 
-    Returns NullMuninnClient when memoryEnabled=false (setting), so all
-    callers get graceful empty results without code changes.
+    memoryEnabled=false  → NullMuninnClient (no-op)
+    memoryBackend=postgres → PgMemoryClient (PG-native)
+    memoryBackend=muninndb (default) → MuninnClient (REST)
     """
     try:
         from api.settings_manager import get_setting
+
         enabled = get_setting("memoryEnabled").get("value", True)
         if enabled is False or str(enabled).lower() in ("false", "0", "no"):
             return NullMuninnClient()
+
+        backend = get_setting("memoryBackend").get("value", "muninndb")
+        if str(backend).lower() == "postgres":
+            from api.memory.pg_client import get_pg_client
+            return get_pg_client()
+
     except Exception:
-        pass  # settings unavailable → default to real client
+        pass
 
     global _client
     if _client is None:

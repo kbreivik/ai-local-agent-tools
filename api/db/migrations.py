@@ -132,6 +132,28 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""",
     ]),
+    (11, "Add pg_engrams table for PG-native memory backend (v2.43.9)", [
+        """
+        CREATE TABLE IF NOT EXISTS pg_engrams (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            concept     TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            tags        TEXT[] DEFAULT '{}',
+            access_count INT DEFAULT 1,
+            created_at   TIMESTAMPTZ DEFAULT NOW(),
+            last_accessed_at TIMESTAMPTZ DEFAULT NOW(),
+            content_tsv TSVECTOR GENERATED ALWAYS AS (
+                to_tsvector('english',
+                    coalesce(content, '') || ' ' || coalesce(concept, ''))
+            ) STORED
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_tsv ON pg_engrams USING GIN(content_tsv)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_concept ON pg_engrams(concept)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_access ON pg_engrams(access_count DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_tags ON pg_engrams USING GIN(tags)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_created ON pg_engrams(created_at DESC)",
+    ]),
 ]
 
 

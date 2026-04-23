@@ -1,0 +1,316 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.43.8.md (v2.43.8)
+Theme: feat(settings): memoryEnabled toggle — NullMuninnClient when disabled
+
+Prompt content:
+
+# CC PROMPT — v2.43.8 — feat(settings): memoryEnabled toggle — disable MuninnDB for testing
+
+## What this does
+
+Adds a `memoryEnabled` boolean setting (default: true). When false:
+- `get_client()` returns a `NullMuninnClient` that silently returns
+  empty results on all calls (same interface, no exceptions)
+- All memory hooks fire-and-forget calls become no-ops
+- Agent loop skips `get_past_outcomes`, `get_first_tool_hint`, doc chunk
+  injection — effectively a clean-room agent run
+- Platform Core card still shows MuninnDB health (the container may still
+  run — the setting controls whether DEATHSTAR uses it)
+
+Useful for: A/B testing agent quality without memory, debugging whether
+MuninnDB content is hurting or helping a specific task type, isolating
+fact-grounding quality from memory-grounding quality.
+
+Version bump: 2.43.7 → 2.43.8.
+
+---
+
+## Change 1 — `api/memory/client.py`
+
+Add a NullMuninnClient after the MuninnClient class:
+
+```python
+class NullMuninnClient:
+    """Drop-in replacement when memoryEnabled=false. All ops are no-ops."""
+
+    async def store(self, concept: str, content: str,
+                    tags: list[str] | None = None) -> str | None:
+        return None
+
+    async def activate(self, context: list[str],
+                       max_results: int = 5) -> list[dict]:
+        return []
+
+    async def search(self, query: str, limit: int = 20) -> list[dict]:
+        return []
+
+    async def recent(self, limit: int = 20) -> list[dict]:
+        return []
+
+    async def delete(self, engram_id: str) -> bool:
+        return False
+
+    async def count(self) -> int | None:
+        return None
+
+    async def health(self) -> bool:
+        return False
+
+    async def close(self) -> None:
+        pass
+```
+
+Update `get_client()` to check the setting:
+
+```python
+def get_client() -> MuninnClient | NullMuninnClient:
+    """Return the active memory client.
+
+    Returns NullMuninnClient when memoryEnabled=false (setting), so all
+    callers get graceful empty results without code changes.
+    """
+    try:
+        from api.settings_manager import get_setting
+        enabled = get_setting("memoryEnabled").get("value", True)
+        if enabled is False or str(enabled).lower() in ("false", "0", "no"):
+            return NullMuninnClient()
+    except Exception:
+        pass  # settings unavailable → default to real client
+
+    global _client
+    if _client is None:
+        _client = MuninnClient()
+    return _client
+```
+
+---
+
+## Change 2 — `api/settings_manager.py`
+
+Add `memoryEnabled` to CATEGORIES under agent behavior:
+
+```python
+"memoryEnabled": "agent",
+```
+
+(alongside `autoEscalate`, `requireConfirmation`, etc.)
+
+---
+
+## Change 3 — `gui/src/components/OptionsModal.jsx`
+
+In `GeneralTab`, locate the block ending with the `renderToolPromptEnabled`
+checkbox (around line 860). After its closing `</div>`, before the
+`</div></div>` that closes the agent behavior section, add:
+
+```jsx
+        {/* v2.43.8 — MuninnDB / memory enable toggle */}
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.memoryEnabled !== false}
+              onChange={e => update('memoryEnabled', e.target.checked)}
+            />
+            <span>Enable MuninnDB memory (engrams, past outcomes, tool hints)</span>
+          </label>
+          <div className="text-xs text-gray-500 ml-6 mt-1">
+            When off: agent runs without memory context — useful for testing
+            grounding quality from facts alone. MuninnDB container continues
+            running; DEATHSTAR simply ignores it.
+          </div>
+        </div>
+```
+
+Also add `memoryEnabled` to the SERVER_KEYS list (wherever renderToolPromptEnabled
+is listed) so the settings page saves it to the backend.
+
+---
+
+## Change 4 — `api/routers/agent.py`
+
+In `_stream_agent`, the three places that call memory:
+
+**a) get_past_outcomes call** — already guarded by try/except, so
+NullMuninnClient returning `[]` is transparent. No change needed.
+
+**b) MuninnDB doc chunk injection** (around the
+`if first_intent in ("research", "investigate"):` block):
+
+Wrap with a quick check so we skip the entire block:
+
+```python
+        # MuninnDB doc chunks (research/investigate — Hebbian activation)
+        # v2.43.8: skip entirely when memoryEnabled=false
+        _mem_enabled = True
+        try:
+            from api.settings_manager import get_setting
+            v = get_setting("memoryEnabled").get("value", True)
+            _mem_enabled = v is not False and str(v).lower() not in ("false", "0", "no")
+        except Exception:
+            pass
+
+        if _mem_enabled and first_intent in ("research", "investigate"):
+            _mem = _get_mem_client()
+            # ... existing doc chunk code unchanged ...
+```
+
+**c) record_outcome / feedback hooks** — NullMuninnClient silently
+absorbs all store() calls. No change needed.
+
+---
+
+## Verification
+
+1. Disable: `PATCH /api/settings {"memoryEnabled": false}`
+2. Run a task — confirm `[memory]` lines are absent from the session output
+3. Check `[context]` line shows 0 engrams activated
+4. Re-enable: `PATCH /api/settings {"memoryEnabled": true}` — memory resumes
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.43.7` → `2.43.8`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(settings): v2.43.8 memoryEnabled toggle — NullMuninnClient when disabled"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 12:04:36
+========================================================================
+Commit pushed. Per runner instructions, I should NOT modify INDEX.md — the bash runner handles that. Stopping here.
+[STATUS] 1m32s
+
+PROMPT COMPLETE: v2.43.8
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m32s
+========================================================================

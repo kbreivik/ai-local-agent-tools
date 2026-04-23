@@ -30,5 +30,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.5.md | v2.43.5 | fix(facts+agents): swarm hostname↔connection_label cross-ref facts + entity name mapping prompt section | DONE (1f37cfc) |
 | CC_PROMPT_v2.43.6.md | v2.43.6 | feat(ui): Collectors monitor view + Session Output sidebar items | DONE (552829e) |
 | CC_PROMPT_v2.43.7.md | v2.43.7 | feat(ui): Facts & Knowledge card on dashboard under Platform Core section | DONE (3c50378) |
-| CC_PROMPT_v2.43.8.md | v2.43.8 | feat(settings): memoryEnabled toggle — NullMuninnClient when disabled | RUNNING |
-| CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | PENDING |
+| CC_PROMPT_v2.43.8.md | v2.43.8 | feat(settings): memoryEnabled toggle — NullMuninnClient when disabled | DONE (0b110aa) |
+| CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | RUNNING |

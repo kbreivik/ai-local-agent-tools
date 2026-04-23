@@ -30,6 +30,7 @@ CATEGORIES = {
     "autoEscalate": "agent", "requireConfirmation": "agent", "autoUpdate": "agent",
     "coordinatorPriorAttemptsEnabled": "agent",
     "memoryEnabled": "agent",
+    "memoryBackend": "agent",
     # Infrastructure
     "dockerHost": "infrastructure", "kafkaBootstrapServers": "infrastructure",
     "elasticsearchUrl": "infrastructure", "kibanaUrl": "infrastructure",
