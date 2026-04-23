@@ -260,6 +260,27 @@ class SwarmCollector(BaseCollector):
                     "entity_id": f"swarm:service:{name}",
                 })
 
+            # v2.43.2 — Resolve overlay network IDs to human-readable names.
+            # Build a map once using the already-open Docker client.
+            net_id_to_name: dict[str, str] = {}
+            try:
+                for net in client.networks.list(filters={"driver": "overlay"}):
+                    nid  = net.attrs.get("Id", "")
+                    name = net.attrs.get("Name", "")
+                    if nid and name:
+                        net_id_to_name[nid]       = name   # full ID
+                        net_id_to_name[nid[:12]]  = name   # short ID used in svc_networks
+            except Exception as _ne:
+                log.debug("[Swarm] network name resolution failed: %s", _ne)
+
+            # Patch svc_data entries with resolved network names
+            for svc in svc_data:
+                raw_nets = svc.get("networks") or []
+                svc["network_names"] = [
+                    net_id_to_name.get(nid, nid)   # fall back to raw ID if unresolved
+                    for nid in raw_nets
+                ]
+
             client.close()
 
             # ── Image digest change detection ─────────────────────────────────

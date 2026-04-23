@@ -1,0 +1,227 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.43.1.md (v2.43.1)
+Theme: fix(agents): observe prompt — no-repeat call rule + overlay network vm_exec guidance
+
+Prompt content:
+
+# CC PROMPT — v2.43.1 — fix(agents): observe prompt — anti-repeat rule + overlay network guidance
+
+## What this does
+
+Two prompt fixes for the observe/status agent, exposed by a live trace where:
+1. `service_placement` was called 8 times for 4 services (steps 2 and 10, identical calls)
+2. Agent tried `docker service ls` (blocked), then `docker service ls --format ...` (blocked),
+   then gave up on overlay networks without trying the already-allowed
+   `docker network ls` or `docker service inspect`
+
+Fix 1: Add an explicit "no repeat calls" rule to the numbered rules list.
+Fix 2: Add a one-line overlay network hint to the DOCKER SWARM section of the prompt.
+
+Version bump: 2.43.0 → 2.43.1.
+
+---
+
+## Change 1 — `api/agents/router.py` — add rule 8 to STATUS_PROMPT rules list
+
+Locate in the observe/status system prompt the block:
+
+```
+7. ZERO-RESULT PIVOT RULE: If the same tool returns 0 results 3 times in a row,
+   STOP using that filter pattern. Either (a) broaden by dropping fields,
+   (b) reuse data from an earlier non-zero call of the same tool, or
+   (c) switch tools / propose_subtask. Never exceed 3 consecutive zero-result
+   calls to the same tool.
+```
+
+Add rule 8 immediately after it:
+
+```
+8. NO REPEAT CALLS RULE: Never call the same tool with the same arguments
+   twice in one run. If you already called service_placement("kafka_broker-1")
+   in step 2, you have that data — do not call it again in step 10.
+   Check your tool history before deciding what to call next.
+```
+
+Apply the same addition to the INVESTIGATE_PROMPT rules list if it exists there too.
+
+---
+
+## Change 2 — `api/agents/router.py` — add overlay network hint to Swarm section
+
+Find the DOCKER SWARM section in STATUS_PROMPT (or RESEARCH_PROMPT if shared).
+It will contain guidance on swarm_status, service_list, swarm_node_status.
+
+After the line(s) about `service_list` or `swarm_status`, add:
+
+```
+- Overlay networks: use vm_exec(command="docker network ls --filter driver=overlay")
+  on a manager node. To see which network each service is attached to:
+  vm_exec(command="docker service inspect --format '{{.Spec.Name}} {{range .Spec.TaskTemplate.Networks}}{{.Target}} {{end}}' <service>")
+  Both commands are in the allowlist. Do NOT attempt 'docker service ls' for this.
+```
+
+CC: find the exact Swarm section by searching for "swarm_status" or "SWARM" in the
+STATUS_PROMPT string, then insert the network guidance in the most logical position.
+If STATUS_PROMPT and RESEARCH_PROMPT share a Swarm section via a shared constant,
+apply the edit once to the shared constant.
+
+---
+
+## Verification
+
+After deploy, run the same task from the trace:
+"List all Swarm services, show replicas running vs desired, flag any that are not
+converged. Show placement for any failing services. List all overlay networks."
+
+Confirm:
+1. service_placement is called at most 4 times (once per service), not 8
+2. Agent uses `docker network ls --filter driver=overlay` for overlay networks
+3. No blocked tool calls in the trace
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.43.0` → `2.43.1`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agents): v2.43.1 observe prompt — no-repeat rule + overlay network guidance"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 06:55:12
+========================================================================
+Commit b0f3fbe pushed successfully.
+[STATUS] 2m43s
+
+PROMPT COMPLETE: v2.43.1
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m43s
+========================================================================

@@ -55,6 +55,7 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
 
     v2.39.2: adds service convergence flag, health, engine version, cluster counts.
     v2.43.0: adds service network names (prod.swarm.service.{name}.networks).
+    v2.43.2: adds service network_names (human-readable, resolved from overlay IDs).
     """
     facts: list[dict] = []
     if not isinstance(snapshot, dict):
@@ -101,6 +102,10 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
         if svc.get("networks"):
             _add(facts, f"{fkey_base}.networks", "swarm_collector",
                  svc["networks"], md)
+        # v2.43.2: human-readable network names (resolved from IDs in collector)
+        if svc.get("network_names"):
+            _add(facts, f"{fkey_base}.network_names", "swarm_collector",
+                 svc["network_names"], md)
 
     # Cluster summary
     if services_total:
