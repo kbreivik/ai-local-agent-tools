@@ -43,4 +43,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.44.8.md | v2.44.8 | feat(ui): AnalysisView — grouped dropdown, search, date quick-selects, table view, history sidebar | DONE (1ecc99a) |
 | CC_PROMPT_v2.44.9.md | v2.44.9 | fix(tests): pass auth token through test runner — WS URL + HTTP headers | DONE (e86f9ee) |
 | CC_PROMPT_v2.45.0.md | v2.45.0 | fix(tests): use caller JWT token in test runner — no re-login needed | DONE (065bbc6) |
-| CC_PROMPT_v2.45.1.md | v2.45.1 | fix(tests): use create_internal_token for test runner — replaces stale localStorage JWT | RUNNING |
+| CC_PROMPT_v2.45.1.md | v2.45.1 | fix(tests): use create_internal_token for test runner — replaces stale localStorage JWT | DONE (87e6a04) |
+| CC_PROMPT_v2.45.2.md | v2.45.2 | feat(ui): TestsPanel auto-refresh — poll running state, live amber indicator, manual refresh | RUNNING |
