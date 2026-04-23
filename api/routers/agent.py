@@ -2241,6 +2241,25 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 _preflight_skills_block
             )
 
+        # v2.42.3 — MuninnDB first-tool hint (step 0)
+        try:
+            from api.memory.feedback import get_first_tool_hint
+            _first_tool_hint = await get_first_tool_hint(task, first_intent)
+            if _first_tool_hint:
+                _hint_block = (
+                    f"HISTORICAL HINT: For tasks similar to this, "
+                    f"successful runs typically started with: {_first_tool_hint}. "
+                    f"Consider this as your first tool call."
+                )
+                injected_sections.append(_hint_block)
+                await manager.send_line(
+                    "memory",
+                    f"[hint] first-tool suggestion: {_first_tool_hint}",
+                    status="ok", session_id=session_id,
+                )
+        except Exception as _hte:
+            log.debug("first_tool_hint failed: %s", _hte)
+
         if injected_sections:
             injection = "\n\n".join(injected_sections) + "\n\n"
             system_prompt = injection + system_prompt

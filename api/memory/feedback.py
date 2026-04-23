@@ -145,6 +145,61 @@ async def get_past_outcomes(task: str, max_results: int = 5) -> list[dict]:
         return []
 
 
+async def get_first_tool_hint(task: str, agent_type: str) -> str | None:
+    """Return the first tool from the most-activated successful sequence for
+    this task, or None if no data exists.
+
+    Uses the existing `tools_for:{task_slug}` engrams written by record_outcome.
+    The most-accessed (highest weight) engram represents the most consistently
+    successful starting approach for similar tasks.
+    """
+    try:
+        client = get_client()
+        task_key = task[:50].strip()
+        task_slug = _slugify(task_key)
+        concept = f"tools_for:{task_slug}"
+
+        # Activate with task terms — the engram is found by concept match
+        task_terms = [w for w in task_key.lower().split() if len(w) > 3][:5]
+        if not task_terms:
+            return None
+
+        results = await client.activate(task_terms + [agent_type], max_results=10)
+        if not results:
+            return None
+
+        # Filter to success engrams for this agent_type
+        success_engrams = [
+            r for r in results
+            if "success" in r.get("tags", [])
+            and agent_type in r.get("tags", [])
+            and r.get("concept", "").startswith("tools_for:")
+        ]
+
+        if not success_engrams:
+            return None
+
+        # Most-activated engram is at index 0 (MuninnDB sorts by activation weight)
+        best = success_engrams[0]
+        content = best.get("content", "")
+
+        # Extract tool sequence: "Successful tool sequence for '...': tool1,tool2,tool3"
+        import re
+        match = re.search(r":\s*([a-z_][a-z0-9_,]+)", content)
+        if not match:
+            return None
+
+        first_tool = match.group(1).split(",")[0].strip()
+        if not first_tool or len(first_tool) < 3:
+            return None
+
+        return first_tool
+
+    except Exception as _e:
+        log.debug("get_first_tool_hint failed: %s", _e)
+        return None
+
+
 def build_outcome_prompt_section(outcomes: list[dict]) -> str:
     """
     Format past outcome engrams into a RELEVANT PAST OUTCOMES prompt section.
