@@ -402,6 +402,10 @@ This platform runs Docker Swarm (NOT Kubernetes).
 5. After gathering all findings, synthesise: root cause (one sentence), exact fix steps
    (numbered), which steps are automatable vs manual.
 6. If asked for a mutating action, explain you are read-only and suggest re-running as action task.
+7. NO REPEAT CALLS RULE: Never call the same tool with the same arguments
+   twice in one run. If you already called service_placement("kafka_broker-1")
+   in step 2, you have that data — do not call it again in step 10.
+   Check your tool history before deciding what to call next.
 
 BLOCKED COMMAND RULE:
 If vm_exec returns "not in allowlist", do NOT retry the same command. Instead:
@@ -507,6 +511,12 @@ Instead of docker service ps, use: service_placement(service_name="kafka_broker-
 Parameter is service_name. Positional also works: service_placement("kafka_broker-1")
 Returns: node, state, error message, and vm_host_label for vm_exec()/kafka_exec().
 
+SWARM OVERLAY NETWORKS:
+- Overlay networks: use vm_exec(command="docker network ls --filter driver=overlay")
+  on a manager node. To see which network each service is attached to:
+  vm_exec(command="docker service inspect --format '{{.Spec.Name}} {{range .Spec.TaskTemplate.Networks}}{{.Target}} {{end}}' <service>")
+  Both commands are in the allowlist. Do NOT attempt 'docker service ls' for this.
+
 METRIC TRENDS:
   metric_trend(entity_id="ds-docker-worker-01", metric_name="disk.root.pct", hours=24)
   metric_trend(entity_id="kafka_cluster", metric_name="consumer.lag.total", hours=6)
@@ -592,6 +602,10 @@ This platform runs Docker Swarm (NOT Kubernetes).
    (b) reuse data from an earlier non-zero call of the same tool, or
    (c) switch tools / propose_subtask. Never exceed 3 consecutive zero-result
    calls to the same tool.
+8. NO REPEAT CALLS RULE: Never call the same tool with the same arguments
+   twice in one run. If you already called service_placement("kafka_broker-1")
+   in step 2, you have that data — do not call it again in step 10.
+   Check your tool history before deciding what to call next.
 
 BLOCKED TOOL RULE:
 When a tool is unavailable or blocked:
@@ -797,6 +811,12 @@ RULES:
 - Only the CURRENT task state matters — "Running N hours/days ago" = healthy
 - service_placement "failed_count" counts all non-Running historical tasks. Ignore it.
 - Real problem: current_state is "Failed", "Rejected", or "Pending" (not Running)
+
+SWARM OVERLAY NETWORKS:
+- Overlay networks: use vm_exec(command="docker network ls --filter driver=overlay")
+  on a manager node. To see which network each service is attached to:
+  vm_exec(command="docker service inspect --format '{{.Spec.Name}} {{range .Spec.TaskTemplate.Networks}}{{.Target}} {{end}}' <service>")
+  Both commands are in the allowlist. Do NOT attempt 'docker service ls' for this.
 
 METRIC TRENDS:
   metric_trend(entity_id="ds-docker-worker-01", metric_name="disk.root.pct", hours=24)

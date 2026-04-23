@@ -1,0 +1,239 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.43.0.md (v2.43.0)
+Theme: fix(facts+allowlist): swarm service networks in facts + docker service ls allowed
+
+Prompt content:
+
+# CC PROMPT — v2.43.0 — fix(facts+allowlist): swarm service networks in facts + docker service ls allowed
+
+## What this does
+
+Two gaps exposed by a live trace (2026-04-23):
+
+1. **Fact gap**: `extract_facts_from_swarm_snapshot()` collects `svc["networks"]`
+   from the collector but never writes it to known_facts. Preflight and external
+   AI cannot answer "which overlay network is each service on?" from facts.
+   Fix: write `prod.swarm.service.{name}.networks` on every collector poll.
+
+2. **Allowlist gap**: `docker service ls` is not in BASE_PATTERNS. Agent
+   tried it twice, got blocked both times, gave up. It's a read-only command
+   lower-risk than `docker service inspect` which is already allowed.
+   Fix: add `docker service ls` pattern.
+
+Version bump: 2.42.3 → 2.43.0.
+
+---
+
+## Change 1 — `api/facts/extractors.py`
+
+In `extract_facts_from_swarm_snapshot()`, locate the block that ends with:
+
+```python
+        # v2.39.2: health field if collector provides it
+        if svc.get("health"):
+            _add(facts, f"{fkey_base}.health", "swarm_collector", svc["health"], md)
+```
+
+Add immediately after (still inside the `for svc in ...` loop):
+
+```python
+        # v2.43.0: overlay network names — collector already captures these,
+        # just wasn't written to facts. Enables preflight/external-AI to answer
+        # "which overlay network is this service on?" without a tool call.
+        if svc.get("networks"):
+            _add(facts, f"{fkey_base}.networks", "swarm_collector",
+                 svc["networks"], md)
+```
+
+Also update the docstring to mention v2.43.0:
+
+```python
+    """Docker Swarm manager snapshot → fact list.
+
+    v2.39.2: adds service convergence flag, health, engine version, cluster counts.
+    v2.43.0: adds service network names (prod.swarm.service.{name}.networks).
+    """
+```
+
+---
+
+## Change 2 — `api/db/vm_exec_allowlist.py`
+
+In `BASE_PATTERNS`, locate:
+
+```python
+    (r'^docker service ps\b',          'Swarm service task list'),
+    (r'^docker service inspect\b',     'Swarm service details'),
+```
+
+Add `docker service ls` immediately before them:
+
+```python
+    (r'^docker service ls\b',          'Swarm service list (read-only)'),
+    (r'^docker service ps\b',          'Swarm service task list'),
+    (r'^docker service inspect\b',     'Swarm service details'),
+```
+
+---
+
+## Verification
+
+After deploy, trigger a swarm collector poll and check:
+
+```bash
+curl -s http://192.168.199.10:8000/api/facts?prefix=prod.swarm.service | \
+  python3 -c "import json,sys; [print(r['fact_key'], r['fact_value']) for r in json.load(sys.stdin).get('facts',[]) if 'network' in r['fact_key']]"
+```
+
+Should now show `prod.swarm.service.kafka_broker-1.networks` etc.
+
+Also verify allowlist accepts the command (observe agent, vm_exec):
+`docker service ls --format "{{.Name}} {{.Replicas}}"` — should execute, not block.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.42.3` → `2.43.0`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(facts+allowlist): v2.43.0 swarm service networks in facts + docker service ls allowed"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 06:54:15
+========================================================================
+Commit 1b6939a pushed successfully.
+[STATUS] 54s
+
+PROMPT COMPLETE: v2.43.0
+
+========================================================================
+EXIT CODE: 0
+DURATION:  54s
+========================================================================
