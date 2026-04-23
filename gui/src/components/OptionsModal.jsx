@@ -863,6 +863,23 @@ function AIServicesTab({ draft, update }) {
             ~15 items instead of enumerating rows in prose.
           </div>
         </div>
+
+        {/* v2.43.8 — MuninnDB / memory enable toggle */}
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.memoryEnabled !== false}
+              onChange={e => update('memoryEnabled', e.target.checked)}
+            />
+            <span>Enable MuninnDB memory (engrams, past outcomes, tool hints)</span>
+          </label>
+          <div className="text-xs text-gray-500 ml-6 mt-1">
+            When off: agent runs without memory context — useful for testing
+            grounding quality from facts alone. MuninnDB container continues
+            running; DEATHSTAR simply ignores it.
+          </div>
+        </div>
       </div>
     </div>
   )

@@ -2212,7 +2212,16 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 log.debug("RAG injection skipped: %s", _rag_e)
 
         # MuninnDB doc chunks (research/investigate — Hebbian activation)
-        if first_intent in ("research", "investigate"):
+        # v2.43.8: skip entirely when memoryEnabled=false
+        _mem_enabled = True
+        try:
+            from api.settings_manager import get_setting
+            v = get_setting("memoryEnabled").get("value", True)
+            _mem_enabled = v is not False and str(v).lower() not in ("false", "0", "no")
+        except Exception:
+            pass
+
+        if _mem_enabled and first_intent in ("research", "investigate"):
             _mem = _get_mem_client()
             doc_context_terms = [w for w in task.lower().split() if len(w) > 3][:6] + ["documentation"]
             doc_activations = await _mem.activate(doc_context_terms, max_results=5)

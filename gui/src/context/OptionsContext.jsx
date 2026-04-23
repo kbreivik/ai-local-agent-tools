@@ -93,6 +93,7 @@ const DEFAULTS = {
   agentToolBudget_execute:     14,
   agentToolBudget_build:       12,
   renderToolPromptEnabled:     false,  // v2.36.8 — dark launch
+  memoryEnabled:               true,   // v2.43.8 — MuninnDB memory toggle
 
   // Coordinator
   coordinatorPriorAttemptsEnabled: true,
@@ -155,6 +156,7 @@ const SERVER_KEYS = new Set([
   'agentToolBudget_observe', 'agentToolBudget_investigate',
   'agentToolBudget_execute', 'agentToolBudget_build',
   'renderToolPromptEnabled',  // v2.36.8
+  'memoryEnabled',            // v2.43.8
 
   // Appearance (v2.37.0)
   'recentTasksCount',

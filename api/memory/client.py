@@ -131,12 +131,55 @@ class MuninnClient:
         return await self.count() is not None
 
 
+class NullMuninnClient:
+    """Drop-in replacement when memoryEnabled=false. All ops are no-ops."""
+
+    async def store(self, concept: str, content: str,
+                    tags: list[str] | None = None) -> str | None:
+        return None
+
+    async def activate(self, context: list[str],
+                       max_results: int = 5) -> list[dict]:
+        return []
+
+    async def search(self, query: str, limit: int = 20) -> list[dict]:
+        return []
+
+    async def recent(self, limit: int = 20) -> list[dict]:
+        return []
+
+    async def delete(self, engram_id: str) -> bool:
+        return False
+
+    async def count(self) -> int | None:
+        return None
+
+    async def health(self) -> bool:
+        return False
+
+    async def close(self) -> None:
+        pass
+
+
 # ── Module-level singleton ─────────────────────────────────────────────────────
 
 _client: MuninnClient | None = None
 
 
-def get_client() -> MuninnClient:
+def get_client() -> "MuninnClient | NullMuninnClient":
+    """Return the active memory client.
+
+    Returns NullMuninnClient when memoryEnabled=false (setting), so all
+    callers get graceful empty results without code changes.
+    """
+    try:
+        from api.settings_manager import get_setting
+        enabled = get_setting("memoryEnabled").get("value", True)
+        if enabled is False or str(enabled).lower() in ("false", "0", "no"):
+            return NullMuninnClient()
+    except Exception:
+        pass  # settings unavailable → default to real client
+
     global _client
     if _client is None:
         _client = MuninnClient()

@@ -1,0 +1,417 @@
+# CC PROMPT — v2.43.9 — feat(memory): pg_engrams table — PG-native memory backend
+
+## What this does
+
+Adds a `pg_engrams` table as a PG-native alternative to MuninnDB. When
+`memoryEnabled=true` and `memoryBackend=postgres`, DEATHSTAR uses PG instead
+of MuninnDB REST for engram storage and retrieval.
+
+When `memoryBackend=muninndb` (default): behaviour unchanged.
+When `memoryBackend=postgres`: all memory.client calls go to PG.
+
+**Why PG can replace MuninnDB here:**
+
+MuninnDB's two capabilities:
+1. `store(concept, content, tags)` — text blob storage. PG does this trivially.
+2. `activate(context_words)` — Hebbian keyword retrieval weighted by access
+   frequency. PG replicates this with:
+   - `content_tsv TSVECTOR` + GIN index for keyword matching
+   - `ts_rank(content_tsv, query) * log(access_count + 1)` as the Hebbian score
+   - `access_count` incremented on each activation hit (simulates strengthening)
+
+**What PG already has that makes MuninnDB partially redundant:**
+- `operations.tools_used JSONB` — exact tool sequences per completed run.
+  `get_past_outcomes` could query operations directly instead of engrams.
+- `agent_attempts` — entity + outcome + tools_used
+- `entity_events` — health change history (replaces status_event_engrams)
+- `doc_chunks` — RAG docs (already used for /api/docs search)
+
+The `pg_engrams` table is the remaining piece for outcome/association engrams
+that aren't already captured in structured PG tables.
+
+Version bump: 2.43.8 → 2.43.9.
+
+---
+
+## Change 1 — DB migration — `api/db/migrations.py`
+
+Add a new migration entry at the end of MIGRATIONS list:
+
+```python
+(
+    N+1,  # next migration number — CC: determine correct number from existing list
+    "Add pg_engrams table for PG-native memory backend (v2.43.9)",
+    [
+        """
+        CREATE TABLE IF NOT EXISTS pg_engrams (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            concept     TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            tags        TEXT[] DEFAULT '{}',
+            access_count INT DEFAULT 1,
+            created_at   TIMESTAMPTZ DEFAULT NOW(),
+            last_accessed_at TIMESTAMPTZ DEFAULT NOW(),
+            content_tsv TSVECTOR GENERATED ALWAYS AS (
+                to_tsvector('english',
+                    coalesce(content, '') || ' ' || coalesce(concept, ''))
+            ) STORED
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_tsv ON pg_engrams USING GIN(content_tsv)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_concept ON pg_engrams(concept)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_access ON pg_engrams(access_count DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_tags ON pg_engrams USING GIN(tags)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_engrams_created ON pg_engrams(created_at DESC)",
+    ]
+),
+```
+
+---
+
+## Change 2 — `api/memory/pg_client.py` (NEW FILE)
+
+```python
+"""
+PG-native memory client — drop-in replacement for MuninnClient.
+
+Uses pg_engrams table with tsvector + access_count Hebbian scoring.
+Activated when memoryBackend='postgres' setting.
+"""
+from __future__ import annotations
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from math import log as _log
+
+log = logging.getLogger(__name__)
+
+
+def _is_pg() -> bool:
+    try:
+        from api.connections import _get_conn
+        conn = _get_conn()
+        if conn:
+            conn.close()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _conn():
+    from api.connections import _get_conn
+    return _get_conn()
+
+
+class PgMemoryClient:
+    """PG-native engram store with tsvector keyword activation."""
+
+    async def store(self, concept: str, content: str,
+                    tags: list[str] | None = None) -> str | None:
+        """Insert or strengthen an engram. If concept already exists,
+        append content variation and increment access_count."""
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            # Check if concept already exists
+            cur.execute(
+                "SELECT id, access_count FROM pg_engrams WHERE concept = %s LIMIT 1",
+                (concept,)
+            )
+            existing = cur.fetchone()
+            if existing:
+                # Strengthen — increment access_count (Hebbian)
+                engram_id = existing[0]
+                cur.execute(
+                    """UPDATE pg_engrams
+                       SET access_count = access_count + 1,
+                           last_accessed_at = NOW(),
+                           content = %s
+                       WHERE id = %s""",
+                    (content, engram_id)
+                )
+                conn.commit()
+                cur.close(); conn.close()
+                return str(engram_id)
+            else:
+                engram_id = str(uuid.uuid4())
+                cur.execute(
+                    """INSERT INTO pg_engrams (id, concept, content, tags)
+                       VALUES (%s, %s, %s, %s)""",
+                    (engram_id, concept, content, tags or [])
+                )
+                conn.commit()
+                cur.close(); conn.close()
+                return engram_id
+        except Exception as e:
+            log.debug("PgMemoryClient.store failed: %s", e)
+            return None
+
+    async def activate(self, context: list[str],
+                       max_results: int = 5) -> list[dict]:
+        """Retrieve engrams by keyword overlap, ranked by Hebbian score.
+
+        Score = ts_rank * log(access_count + 1)
+        — higher access_count means the engram has been useful repeatedly.
+        """
+        if not context:
+            return []
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            query = " | ".join(
+                w.replace("'", "").strip()
+                for w in context
+                if len(w) > 2
+            )
+            if not query:
+                return []
+            cur.execute(
+                """
+                SELECT id, concept, content, tags, access_count, created_at,
+                       ts_rank(content_tsv, to_tsquery('english', %s)) AS rank
+                FROM pg_engrams
+                WHERE content_tsv @@ to_tsquery('english', %s)
+                ORDER BY ts_rank(content_tsv, to_tsquery('english', %s))
+                         * ln(access_count::float + 2) DESC
+                LIMIT %s
+                """,
+                (query, query, query, max_results * 2)
+            )
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+            # Bump access_count for retrieved engrams (Hebbian strengthening)
+            ids = [r["id"] for r in rows]
+            if ids:
+                cur.execute(
+                    "UPDATE pg_engrams SET access_count = access_count + 1, "
+                    "last_accessed_at = NOW() WHERE id = ANY(%s)",
+                    (ids,)
+                )
+                conn.commit()
+
+            cur.close(); conn.close()
+
+            # Shape to match MuninnClient output
+            return [
+                {
+                    "id":      str(r["id"]),
+                    "concept": r["concept"],
+                    "content": r["content"],
+                    "tags":    r["tags"] or [],
+                }
+                for r in rows[:max_results]
+            ]
+        except Exception as e:
+            log.debug("PgMemoryClient.activate failed: %s", e)
+            return []
+
+    async def search(self, query: str, limit: int = 20) -> list[dict]:
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT id, concept, content, tags, access_count
+                   FROM pg_engrams
+                   WHERE content ILIKE %s OR concept ILIKE %s
+                   ORDER BY access_count DESC, created_at DESC
+                   LIMIT %s""",
+                (f"%{query}%", f"%{query}%", limit)
+            )
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close(); conn.close()
+            return [{"id": str(r["id"]), "concept": r["concept"],
+                     "content": r["content"], "tags": r["tags"] or []}
+                    for r in rows]
+        except Exception as e:
+            log.debug("PgMemoryClient.search failed: %s", e)
+            return []
+
+    async def recent(self, limit: int = 20) -> list[dict]:
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, concept, content, tags FROM pg_engrams "
+                "ORDER BY created_at DESC LIMIT %s",
+                (limit,)
+            )
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            cur.close(); conn.close()
+            return [{"id": str(r["id"]), "concept": r["concept"],
+                     "content": r["content"], "tags": r["tags"] or []}
+                    for r in rows]
+        except Exception as e:
+            log.debug("PgMemoryClient.recent failed: %s", e)
+            return []
+
+    async def delete(self, engram_id: str) -> bool:
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM pg_engrams WHERE id = %s", (engram_id,))
+            conn.commit()
+            deleted = cur.rowcount > 0
+            cur.close(); conn.close()
+            return deleted
+        except Exception as e:
+            log.debug("PgMemoryClient.delete failed: %s", e)
+            return False
+
+    async def count(self) -> int | None:
+        try:
+            conn = _conn()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM pg_engrams")
+            n = int(cur.fetchone()[0])
+            cur.close(); conn.close()
+            return n
+        except Exception as e:
+            log.debug("PgMemoryClient.count failed: %s", e)
+            return None
+
+    async def health(self) -> bool:
+        return await self.count() is not None
+
+    async def close(self) -> None:
+        pass  # stateless — PG connections are pooled
+
+
+_pg_client: PgMemoryClient | None = None
+
+
+def get_pg_client() -> PgMemoryClient:
+    global _pg_client
+    if _pg_client is None:
+        _pg_client = PgMemoryClient()
+    return _pg_client
+```
+
+---
+
+## Change 3 — `api/memory/client.py` — route to PG when configured
+
+Update `get_client()` to check `memoryBackend` setting:
+
+```python
+def get_client():
+    """Return the active memory client based on settings.
+
+    memoryEnabled=false  → NullMuninnClient (no-op)
+    memoryBackend=postgres → PgMemoryClient (PG-native)
+    memoryBackend=muninndb (default) → MuninnClient (REST)
+    """
+    try:
+        from api.settings_manager import get_setting
+
+        enabled = get_setting("memoryEnabled").get("value", True)
+        if enabled is False or str(enabled).lower() in ("false", "0", "no"):
+            return NullMuninnClient()
+
+        backend = get_setting("memoryBackend").get("value", "muninndb")
+        if str(backend).lower() == "postgres":
+            from api.memory.pg_client import get_pg_client
+            return get_pg_client()
+
+    except Exception:
+        pass
+
+    global _client
+    if _client is None:
+        _client = MuninnClient()
+    return _client
+```
+
+---
+
+## Change 4 — `api/settings_manager.py`
+
+Add `memoryBackend` to CATEGORIES:
+
+```python
+"memoryBackend": "agent",
+```
+
+---
+
+## Change 5 — `gui/src/components/OptionsModal.jsx`
+
+In `GeneralTab`, after the `memoryEnabled` toggle added in v2.43.8, add:
+
+```jsx
+        {/* v2.43.9 — memory backend selector */}
+        {draft.memoryEnabled !== false && (
+          <div className="mt-3 ml-6">
+            <label className="block text-xs text-gray-400 mb-1">Memory backend</label>
+            <div className="flex gap-4 text-sm">
+              {[['muninndb', 'MuninnDB (default)'], ['postgres', 'PostgreSQL (pg_engrams)']].map(([v, l]) => (
+                <label key={v} className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="memoryBackend"
+                    value={v}
+                    checked={(draft.memoryBackend || 'muninndb') === v}
+                    onChange={() => update('memoryBackend', v)}
+                  />
+                  {l}
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              PostgreSQL backend uses pg_engrams table with tsvector + access-count
+              Hebbian scoring. No external service required. Engrams are queryable
+              via the Analysis tab. Recommended for testing and migrations.
+            </div>
+          </div>
+        )}
+```
+
+Add `memoryBackend` to SERVER_KEYS alongside `memoryEnabled`.
+
+---
+
+## PG advantages for engrams vs MuninnDB
+
+| Capability | MuninnDB | PG pg_engrams |
+|---|---|---|
+| Storage | REST blob store | SQL table — JOINable with operations, tool_calls |
+| Keyword search | Proprietary Hebbian | tsvector + ts_rank (standard, fast) |
+| Hebbian weighting | Access frequency (internal) | access_count column — visible, queryable |
+| Backup | Separate backup needed | Included in DEATHSTAR DB backup |
+| Analysis | No SQL access | Full SQL in Analysis tab |
+| Debug | Opaque | SELECT * FROM pg_engrams ORDER BY access_count DESC |
+| Downtime risk | Container crash = no memory | PG is already a hard dependency |
+
+## Verification
+
+1. Set `memoryBackend=postgres` in Settings → General
+2. Run a task — `[memory]` lines should still appear (PgMemoryClient fires)
+3. In Analysis tab, run: `SELECT concept, access_count FROM pg_engrams ORDER BY access_count DESC LIMIT 20`
+4. Verify tool sequences are being stored
+5. Run the same task again — engrams should have higher access_count
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.43.8` → `2.43.9`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(memory): v2.43.9 pg_engrams table + PgMemoryClient — PG-native memory backend"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
