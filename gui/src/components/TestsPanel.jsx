@@ -63,6 +63,14 @@ function ago(iso) {
   return `${Math.round(s / 86400)}d ago`
 }
 
+function durStr(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null
+  const s = Math.round((new Date(finishedAt) - new Date(startedAt)) / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TAB 1: LIBRARY
 // ══════════════════════════════════════════════════════════════════════════════
@@ -171,14 +179,33 @@ function LibraryTab({ onRunSelected }) {
 function SuitesTab({ onRun }) {
   const [suites, setSuites]   = useState([])
   const [cases, setCases]     = useState([])
-  const [editing, setEditing] = useState(null)  // null | {} | {id,...}
+  const [lastRun, setLastRun] = useState({})   // suite_id → {score, passed, total, dur, ago}
+  const [editing, setEditing] = useState(null)
   const [running, setRunning] = useState({})
   const [msg, setMsg]         = useState({})
 
   const load = useCallback(() => {
     api('/api/tests/suites').then(r => r.json()).then(d => setSuites(d.suites || [])).catch(() => {})
     api('/api/tests/cases').then(r => r.json()).then(d => setCases(d.cases || [])).catch(() => {})
+    // Fetch recent runs and build per-suite last-run map
+    api('/api/tests/runs?limit=200').then(r => r.json()).then(d => {
+      const map = {}
+      for (const run of (d.runs || [])) {
+        if (!run.suite_id || run.status !== 'completed') continue
+        if (!map[run.suite_id]) {
+          map[run.suite_id] = {
+            score:   run.score_pct,
+            passed:  run.passed,
+            total:   run.total,
+            dur:     durStr(run.started_at, run.finished_at),
+            agoStr:  ago(run.started_at),
+          }
+        }
+      }
+      setLastRun(map)
+    }).catch(() => {})
   }, [])
+
   useEffect(() => { load() }, [load])
 
   const save = async (suite) => {
@@ -225,26 +252,63 @@ function SuitesTab({ onRun }) {
       </div>
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {suites.length === 0 && <Mono style={{ color: 'var(--text-3)' }}>No suites yet. Create one to group tests.</Mono>}
-        {suites.map(s => (
-          <div key={s.id} style={{ border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 2, padding: '8px 12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Mono style={{ color: 'var(--text-1)', fontSize: 11, flex: 1 }}>{s.name}</Mono>
-              {msg[s.id] && <Mono style={{ color: 'var(--green)' }}>{msg[s.id]}</Mono>}
-              <Btn onClick={() => setEditing(s)}>edit</Btn>
-              <Btn onClick={() => del(s.id)}>delete</Btn>
-              <Btn onClick={() => runSuite(s)} accent disabled={!!running[s.id]}>
-                {running[s.id] ? '…' : '▶ run'}
-              </Btn>
+        {suites.map(s => {
+          const lr = lastRun[s.id]
+          const scoreCol = lr ? (lr.score >= 90 ? 'var(--green)' : lr.score >= 70 ? 'var(--amber)' : 'var(--red)') : 'var(--text-3)'
+          return (
+            <div key={s.id} style={{ border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 2, padding: '8px 12px' }}>
+              {/* Top row: name + actions */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Mono style={{ color: 'var(--text-1)', fontSize: 11, flex: 1 }}>{s.name}</Mono>
+                {msg[s.id] && <Mono style={{ color: 'var(--green)' }}>{msg[s.id]}</Mono>}
+                <Btn onClick={() => setEditing(s)}>edit</Btn>
+                <Btn onClick={() => del(s.id)}>delete</Btn>
+                <Btn onClick={() => runSuite(s)} accent disabled={!!running[s.id]}>
+                  {running[s.id] ? '…' : '▶ run'}
+                </Btn>
+              </div>
+
+              {/* Info row: config tags + last run stats */}
+              <div style={{ marginTop: 5, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {s.description && <Mono style={{ color: 'var(--text-3)' }}>{s.description}</Mono>}
+                {s.categories?.length > 0 && <Mono style={{ color: 'var(--cyan)' }}>cats: {s.categories.join(', ')}</Mono>}
+                {s.test_ids?.length > 0 && <Mono style={{ color: 'var(--text-2)' }}>{s.test_ids.length} tests</Mono>}
+                {s.config?.memoryEnabled === false && <Mono style={{ color: 'var(--amber)' }}>mem off</Mono>}
+                {s.config?.memoryBackend === 'postgres' && <Mono style={{ color: 'var(--text-3)' }}>pg-mem</Mono>}
+
+                {/* Divider + last run */}
+                {lr ? (
+                  <>
+                    <span style={{ color: 'var(--border)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>·</span>
+                    <Mono style={{ color: 'var(--text-3)' }}>last:</Mono>
+                    {lr.dur && (
+                      <span style={{
+                        fontFamily: 'var(--font-mono)', fontSize: 9,
+                        color: 'var(--text-2)',
+                        background: 'var(--bg-3)',
+                        padding: '1px 6px', borderRadius: 2,
+                        border: '1px solid var(--border)',
+                      }}>⏱ {lr.dur}</span>
+                    )}
+                    <span style={{
+                      fontFamily: 'var(--font-mono)', fontSize: 9,
+                      color: scoreCol,
+                      background: 'var(--bg-3)',
+                      padding: '1px 6px', borderRadius: 2,
+                      border: `1px solid ${scoreCol}44`,
+                    }}>{lr.score?.toFixed(1)}% ({lr.passed}/{lr.total})</span>
+                    <Mono style={{ color: 'var(--text-3)' }}>{lr.agoStr}</Mono>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: 'var(--border)', fontFamily: 'var(--font-mono)', fontSize: 9 }}>·</span>
+                    <Mono style={{ color: 'var(--text-3)' }}>no runs yet</Mono>
+                  </>
+                )}
+              </div>
             </div>
-            <div style={{ marginTop: 4, display: 'flex', gap: 8 }}>
-              {s.description && <Mono style={{ color: 'var(--text-3)' }}>{s.description}</Mono>}
-              {s.categories?.length > 0 && <Mono style={{ color: 'var(--cyan)' }}>cats: {s.categories.join(', ')}</Mono>}
-              {s.test_ids?.length > 0 && <Mono style={{ color: 'var(--text-2)' }}>{s.test_ids.length} tests</Mono>}
-              {s.config?.memoryEnabled === false && <Mono style={{ color: 'var(--amber)' }}>mem off</Mono>}
-              {s.config?.memoryBackend === 'postgres' && <Mono style={{ color: 'var(--purple)' }}>pg-mem</Mono>}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
