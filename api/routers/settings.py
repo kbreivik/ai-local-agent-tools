@@ -159,6 +159,25 @@ SETTINGS_KEYS: dict[str, dict] = {
         "group": "Agent Budgets",
     },
 
+    # --- Memory backend (v2.43.8/v2.43.9) ---
+    "memoryEnabled": {
+        "env": None, "sens": False, "default": True, "type": "bool",
+        "group": "Agent Budgets",
+        "description": (
+            "When false, all MuninnDB/memory calls return empty results (NullMuninnClient). "
+            "Useful for A/B testing agent quality without memory context."
+        ),
+    },
+    "memoryBackend": {
+        "env": None, "sens": False, "default": "muninndb", "type": "str",
+        "group": "Agent Budgets",
+        "description": (
+            "Memory storage backend. 'muninndb' uses MuninnDB REST API. "
+            "'postgres' uses pg_engrams table (tsvector + Hebbian access_count). "
+            "Ignored when memoryEnabled=false."
+        ),
+    },
+
     # --- Appearance (v2.37.0) ---
     # Number of unique recent agent tasks to show in the RECENT section
     # below task templates. Deduplicated by exact task text — only the

@@ -31,4 +31,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.6.md | v2.43.6 | feat(ui): Collectors monitor view + Session Output sidebar items | DONE (552829e) |
 | CC_PROMPT_v2.43.7.md | v2.43.7 | feat(ui): Facts & Knowledge card on dashboard under Platform Core section | DONE (3c50378) |
 | CC_PROMPT_v2.43.8.md | v2.43.8 | feat(settings): memoryEnabled toggle — NullMuninnClient when disabled | DONE (0b110aa) |
-| CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | RUNNING |
+| CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | DONE (d3ea11f) |
+| CC_PROMPT_v2.44.0.md | v2.44.0 | fix(settings): add memoryEnabled + memoryBackend to SETTINGS_KEYS | RUNNING |
