@@ -59,14 +59,18 @@ async def get_test_cases():
     return {
         "cases": [
             {
-                "id":            tc.id,
-                "category":      tc.category,
-                "task":          tc.task,
-                "soft":          tc.soft,
-                "critical":      tc.critical,
-                "timeout":       tc.timeout,
-                "expected_tools": tc.expected_tools,
-                "expected_agent_type": tc.expected_agent_type,
+                "id":                   tc.id,
+                "category":             tc.category,
+                "task":                 tc.task,
+                "soft":                 tc.soft,
+                "critical":             tc.critical,
+                "timeout_s":            tc.timeout_s,
+                "expect_tools":         tc.expect_tools,
+                "forbid_tools":         tc.forbid_tools,
+                "agent_type":           tc.agent_type,
+                "triggers_plan":        tc.triggers_plan,
+                "triggers_clarification": tc.triggers_clarification,
+                "max_steps":            tc.max_steps,
             }
             for tc in TEST_CASES
         ],
