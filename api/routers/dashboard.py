@@ -460,6 +460,25 @@ async def get_dashboard_summary(user: str = Depends(get_current_user)):
     }
 
 
+# ── POST /trigger-poll ────────────────────────────────────────────────────────
+
+@router.post("/trigger-poll")
+async def trigger_poll(
+    body: dict,
+    user: str = Depends(get_current_user),
+):
+    """Trigger an immediate poll for a named collector."""
+    from api.collectors import manager as coll_mgr
+    component = (body or {}).get("component", "")
+    if not component:
+        raise HTTPException(status_code=400, detail="component required")
+    try:
+        await coll_mgr.trigger_poll(component)
+        return {"status": "ok", "component": component}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 # ── GET /containers/agent01 ───────────────────────────────────────────────────
 
 @router.get("/containers/agent01")

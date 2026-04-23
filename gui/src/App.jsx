@@ -40,6 +40,8 @@ import WindowsSection from './components/WindowsSection'
 import RunbooksPanel from './components/RunbooksPanel'
 import DiscoveredView from './components/DiscoveredView'
 import GatesView from './components/GatesView'
+import CollectorsTab from './components/CollectorsTab'
+import SessionOutputTab from './components/SessionOutputTab'
 import { SkeletonGrid } from './components/SkeletonCard'
 import CardFilterBar, { ALL_CARD_KEYS } from './components/CardFilterBar'
 import DashboardLayout from './components/DashboardLayout'
@@ -1651,6 +1653,22 @@ function AppShell() {
             <div className="flex flex-1 overflow-hidden min-h-0">
               <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
                 <MemoryPanel />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'Collectors' && (
+            <div className="flex flex-1 overflow-auto min-h-0">
+              <div className="flex-1 overflow-auto" style={{ background: "var(--bg-0)" }}>
+                <CollectorsTab />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'SessionOutput' && (
+            <div className="flex flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 overflow-hidden" style={{ background: "var(--bg-0)" }}>
+                <SessionOutputTab />
               </div>
             </div>
           )}

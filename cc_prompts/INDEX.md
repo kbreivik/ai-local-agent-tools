@@ -27,4 +27,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.2.md | v2.43.2 | fix(facts): resolve swarm overlay network IDs to human-readable names in collector + extractor | DONE (3e86980) |
 | CC_PROMPT_v2.43.3.md | v2.43.3 | fix(facts): swarm node addr_anomaly flag + preflight keyword resolver for split-brain detection | DONE (880c6bd) |
 | CC_PROMPT_v2.43.4.md | v2.43.4 | fix(facts): write prod.swarm.cluster.overlay_networks from collector net_id_to_name map | DONE (1019023) |
-| CC_PROMPT_v2.43.5.md | v2.43.5 | fix(facts+agents): swarm hostname↔connection_label cross-ref facts + entity name mapping prompt section | RUNNING |
+| CC_PROMPT_v2.43.5.md | v2.43.5 | fix(facts+agents): swarm hostname↔connection_label cross-ref facts + entity name mapping prompt section | DONE (1f37cfc) |
+| CC_PROMPT_v2.43.6.md | v2.43.6 | feat(ui): Collectors monitor view + Session Output sidebar items | RUNNING |
+| CC_PROMPT_v2.43.7.md | v2.43.7 | feat(ui): Facts & Knowledge card on dashboard under Platform Core section | PENDING |

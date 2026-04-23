@@ -18,12 +18,14 @@ const NAV = [
     { key: 'Memory',      icon: '◎' },
     { key: 'Discovered',  icon: '⊕' },
     { key: 'ExternalAICalls', icon: '🤖', label: 'External AI Calls' },
+    { key: 'Collectors', icon: '⟳', label: 'Collectors' },
   ]},
   { section: 'OPERATE', items: [
     { key: 'Commands',  icon: '▶' },
     { key: 'Skills',    icon: '⚙' },
     { key: 'Runbooks',  icon: '◫' },
     { key: 'Output',    icon: '□' },
+    { key: 'SessionOutput', icon: '▤', label: 'Session Output' },
   ]},
   { section: 'TOOLS', items: [
     { key: 'Tests',     icon: '✓' },
