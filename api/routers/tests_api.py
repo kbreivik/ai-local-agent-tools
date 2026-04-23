@@ -140,11 +140,30 @@ async def _run_tests_bg(
         if test_ids:
             cases_to_run = [tc for tc in cases_to_run if tc.id in test_ids]
 
-        async with httpx.AsyncClient(timeout=30.0) as http:
+        # Acquire a JWT token for the test runner
+        _test_token = ""
+        try:
+            import httpx as _hx
+            import os as _os
+            _pw = _os.environ.get("ADMIN_PASSWORD", "superduperadmin")
+            _lr = _hx.post(
+                "http://localhost:8000/api/auth/login",
+                json={"username": "admin", "password": _pw},
+                timeout=5,
+            )
+            if _lr.status_code == 200:
+                _test_token = _lr.json().get("access_token", "")
+        except Exception as _te:
+            import logging
+            logging.getLogger(__name__).warning("test runner: token acquisition failed: %s", _te)
+
+        _auth_headers = {"Authorization": f"Bearer {_test_token}"} if _test_token else {}
+        async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
             results = await run_all_tests(
                 categories=categories or None,
                 http=http,
                 args=None,
+                token=_test_token,
             )
 
         save_results(results)

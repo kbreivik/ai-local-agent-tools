@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-23T17:40:07",
+  "updated_at": "2026-04-23T18:02:47",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -3605,10 +3605,26 @@
       "filename": "CC_PROMPT_v2.44.8.md",
       "version": "v2.44.8",
       "theme": "feat(ui): AnalysisView — grouped dropdown, search, date quick-selects, table view, history sidebar",
+      "runner_status": "DONE",
+      "commit_sha": "1ecc99a",
+      "error": "",
+      "started_at": "2026-04-23T17:40:07",
+      "finished_at": "2026-04-23T17:41:51",
+      "duration_s": 103.41145770001458,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260423_174007_CC_PROMPT_v2.44.8.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.44.9.md",
+      "version": "v2.44.9",
+      "theme": "fix(tests): pass auth token through test runner — WS URL + HTTP headers",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-23T17:40:07",
+      "started_at": "2026-04-23T18:02:47",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

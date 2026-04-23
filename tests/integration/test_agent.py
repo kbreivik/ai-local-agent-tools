@@ -228,7 +228,7 @@ class TestResult:
 _last_session_id: str | None = None   # module-level; lets run_test stop previous run
 
 
-async def run_test(tc: TestCase, http: httpx.AsyncClient) -> TestResult:
+async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> TestResult:
     global _last_session_id
 
     # Stop any previous zombie agent run so LM Studio isn't blocked
@@ -258,7 +258,8 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient) -> TestResult:
             pass
 
     try:
-        async with websockets.connect(WS_URL, open_timeout=10) as ws:
+        ws_url = f"{WS_URL}?token={token}" if token else WS_URL
+        async with websockets.connect(ws_url, open_timeout=10) as ws:
             resp = await http.post(
                 f"{API_BASE}/api/agent/run",
                 json={"task": tc.task, "session_id": session_id},
@@ -594,6 +595,7 @@ async def run_all_tests(
     categories: list[str] | None,
     http: httpx.AsyncClient,
     args=None,
+    token: str = "",
 ) -> list[TestResult]:
     cases = TEST_CASES
     if categories:
@@ -636,7 +638,7 @@ async def run_all_tests(
                 print(f"  [reset] Reset error: {_e}")
             print(f"  → {tc.id}{crit_mark}  {tc.task!r:.60}… ", end="", flush=True)
 
-        result = await run_test(tc, http)
+        result = await run_test(tc, http, token=token)
         results.append(result)
 
         if result.passed:
