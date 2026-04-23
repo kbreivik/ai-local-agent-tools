@@ -21,7 +21,11 @@ gui/.vite
 
 # Repo-only content
 cc_prompts
-tests
+tests/test_*.py
+tests/conftest.py
+tests/baseline.txt
+tests/failures.txt
+tests/fix_prompt.txt
 *.md
 !VERSION
 
