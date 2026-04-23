@@ -826,6 +826,7 @@ function PlatformCoreCards({ onTab }) {
   // Keep fetching status (kafka/es health) + memHealth separately — not in summary
   const [fullStatus, setFullStatus] = useState(null)
   const [agentUpdateStatus, setAgentUpdateStatus] = useState(null)
+  const [factsStats, setFactsStats] = useState(null)
   useEffect(() => {
     const BASE = import.meta.env.VITE_API_BASE ?? ''
     const load = () => {
@@ -834,6 +835,10 @@ function PlatformCoreCards({ onTab }) {
       fetch(`${BASE}/api/dashboard/update-status`, { headers: { ...authHeaders() } })
         .then(r => r.ok ? r.json() : null)
         .then(d => { if (d) setAgentUpdateStatus(d) })
+        .catch(() => {})
+      fetch(`${BASE}/api/facts/summary`, { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setFactsStats(d) })
         .catch(() => {})
     }
     load()
@@ -1035,6 +1040,78 @@ function PlatformCoreCards({ onTab }) {
           <div style={{ fontSize: 9, color: 'var(--text-3)', padding: '4px 0' }}>Loading collectors...</div>
         )}
       </div>
+
+      {/* FACTS */}
+      {factsStats && (() => {
+        const total      = factsStats.total ?? 0
+        const confident  = (factsStats.by_tier?.very_high ?? 0) + (factsStats.by_tier?.high ?? 0)
+        const conflicts  = factsStats.pending_conflicts ?? 0
+        const changed    = (factsStats.recently_changed || []).slice(0, 3)
+        const lastRefresh = factsStats.last_refresh
+        const factsHealth = conflicts > 0 ? 'amber' : total > 0 ? 'green' : 'grey'
+        const factsHealthDot = factsHealth === 'green' ? 'var(--green)' : factsHealth === 'amber' ? 'var(--amber)' : 'var(--text-3)'
+        const ago = (iso) => {
+          if (!iso) return ''
+          const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
+          if (s < 60) return `${s}s ago`
+          if (s < 3600) return `${Math.round(s / 60)}m ago`
+          return `${Math.round(s / 3600)}h ago`
+        }
+        return (
+          <div
+            onClick={() => onTab?.('Facts')}
+            style={{
+              gridColumn: '1 / -1',
+              background: 'var(--bg-2)', border: '1px solid var(--border)',
+              borderLeft: `3px solid ${factsHealthDot}`,
+              borderRadius: 2, padding: '8px 10px', cursor: 'pointer',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-2)'}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 11, color: 'var(--text-1)', letterSpacing: 0.5 }}>
+                FACTS & KNOWLEDGE
+              </div>
+              <span style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                {lastRefresh ? `refreshed ${ago(lastRefresh)}` : ''}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: 'var(--text-1)', lineHeight: 1 }}>
+                  {total.toLocaleString()}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>total facts</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                  {confident.toLocaleString()}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 1 }}>confident ≥0.7</span>
+              </div>
+              {conflicts > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: 'var(--amber)', lineHeight: 1 }}>
+                    {conflicts}
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: 1 }}>conflicts</span>
+                </div>
+              )}
+              {changed.length > 0 && (
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 3 }}>recently changed</div>
+                  {changed.map((c, i) => (
+                    <div key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {typeof c === 'string' ? c : c.fact_key || JSON.stringify(c)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
