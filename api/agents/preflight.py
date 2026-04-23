@@ -130,6 +130,12 @@ KEYWORD_RESOLVERS: dict[str, tuple[str, int | None]] = {
     'alerting':   ('_lookup_alerting_entities', None),
     'deployed':   ('_lookup_recent_deployments', None),
     'scaled':     ('_lookup_recent_scale_events', None),
+    # v2.43.3: addr anomaly — pull manager nodes when split-brain terms appear
+    'advertise':   ('_lookup_addr_anomaly_nodes', None),
+    'split-brain': ('_lookup_addr_anomaly_nodes', None),
+    'split_brain': ('_lookup_addr_anomaly_nodes', None),
+    'raft':        ('_lookup_addr_anomaly_nodes', None),
+    '0.0.0.0':     ('_lookup_addr_anomaly_nodes', None),
 }
 
 
@@ -500,6 +506,47 @@ def _lookup_recent_scale_events(window_min: int = 60) -> list[dict]:
     return _dedupe_entity_hits(rows)
 
 
+def _lookup_addr_anomaly_nodes(window_min: int = 60) -> list[dict]:
+    """Return manager nodes with addr_anomaly=True from known_facts.
+
+    v2.43.3: enables preflight to proactively surface Swarm manager nodes
+    advertising 0.0.0.0 (split-brain risk) when tasks mention advertise,
+    split-brain, raft, etc. window_min is ignored — addr_anomaly facts are
+    not time-scoped.
+    """
+    try:
+        if not _is_pg():
+            return []
+        conn = _pg_conn()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT fact_key FROM known_facts_current "
+            "WHERE fact_key LIKE 'prod.swarm.node.%.addr_anomaly' "
+            "AND fact_value::text = 'true' "
+            "LIMIT 5"
+        )
+        rows = _rows_to_dicts(cur)
+        cur.close(); conn.close()
+        results = []
+        for row in rows:
+            parts = (row.get("fact_key") or "").split(".")
+            if len(parts) >= 5:
+                hostname = parts[3]
+                results.append({
+                    "entity_id": f"swarm:node:{hostname}",
+                    "entity_type": "swarm_node",
+                    "label": hostname,
+                    "source": "keyword_db",
+                    "reason": "addr_anomaly",
+                })
+        return results
+    except Exception as _e:
+        log.debug("_lookup_addr_anomaly_nodes failed: %s", _e)
+        return []
+
+
 KEYWORD_RESOLVER_FUNCS = {
     '_lookup_recent_restart_actions': _lookup_recent_restart_actions,
     '_lookup_recent_reboot_actions':  _lookup_recent_reboot_actions,
@@ -512,6 +559,7 @@ KEYWORD_RESOLVER_FUNCS = {
     '_lookup_alerting_entities':      _lookup_alerting_entities,
     '_lookup_recent_deployments':     _lookup_recent_deployments,
     '_lookup_recent_scale_events':    _lookup_recent_scale_events,
+    '_lookup_addr_anomaly_nodes':     _lookup_addr_anomaly_nodes,
 }
 
 

@@ -56,6 +56,7 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
     v2.39.2: adds service convergence flag, health, engine version, cluster counts.
     v2.43.0: adds service network names (prod.swarm.service.{name}.networks).
     v2.43.2: adds service network_names (human-readable, resolved from overlay IDs).
+    v2.43.3: adds node addr_anomaly flag for manager nodes advertising 0.0.0.0.
     """
     facts: list[dict] = []
     if not isinstance(snapshot, dict):
@@ -129,9 +130,23 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
         if node.get("engine_version"):
             _add(facts, f"{fkey_base}.engine_version", "swarm_collector",
                  node["engine_version"])
-        if node.get("addr") or node.get("ip"):
-            _add(facts, f"{fkey_base}.addr", "swarm_collector",
-                 node.get("addr") or node.get("ip"))
+        _addr = node.get("addr") or node.get("ip") or ""
+        if _addr:
+            _add(facts, f"{fkey_base}.addr", "swarm_collector", _addr)
+            # v2.43.3: flag anomalous advertise-addr for manager nodes.
+            # 0.0.0.0 means Docker is listening on all interfaces but has no
+            # specific advertised address — inter-manager Raft RPC may use
+            # the wrong interface. Flag so preflight surfaces it explicitly.
+            _is_manager = str(node.get("role", "")).lower() == "manager"
+            _is_anomalous = _addr in ("0.0.0.0", "0.0.0.0:2377", "") or \
+                            _addr.startswith("0.0.0.0:")
+            if _is_manager and _is_anomalous:
+                _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector",
+                     True,
+                     {"addr": _addr, "reason": "manager advertising 0.0.0.0 — split-brain risk"})
+            elif _is_manager:
+                # Explicitly record False so preflight knows it was checked
+                _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector", False)
         nodes_total += 1
         if str(node.get("state", "")).lower() == "ready":
             nodes_ready += 1
