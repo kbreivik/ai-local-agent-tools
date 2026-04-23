@@ -1,0 +1,262 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.6.md (v2.45.6)
+Theme: fix(tests): sharpen ambiguous task wording + bump remaining timeouts
+
+Prompt content:
+
+# CC PROMPT — v2.45.6 — fix(tests): sharpen ambiguous task wording + bump remaining timeouts
+
+## What this does
+
+Two types of fix in test_definitions.py:
+
+1. **Task wording** — 5 tests where the agent picks a plausible-but-wrong tool because
+   the task doesn't name the expected tool explicitly. Fix: reword to be declarative
+   and name the exact tool.
+
+2. **Timeout bumps** — 5 tests that are still timing out after the last round of
+   increases. The agent is doing the right thing but hitting the wall.
+
+Version bump: 2.45.5 → 2.45.6.
+
+---
+
+## Change — `api/db/test_definitions.py`
+
+### Task wording fixes
+
+CC: Change ONLY the `task` field on the listed test cases. Do not touch any other field.
+
+#### status-version-01
+Old task:
+```python
+task="what version is the workload service running? call service_current_version",
+```
+New task:
+```python
+task="call service_current_version for workload-stack_workload and report the current running version",
+```
+
+#### research-precheck-01
+Old task:
+```python
+task="check if kafka is healthy and safe before any upgrade",
+```
+New task:
+```python
+task="call pre_kafka_check to verify the kafka cluster is healthy and safe before any upgrade",
+```
+
+#### research-elastic-pattern-01
+Old task:
+```python
+task="show log patterns for the nginx service",
+```
+New task:
+```python
+task="call elastic_log_pattern to show log entry patterns for the nginx service from elasticsearch",
+```
+
+#### research-kafka-logs-01
+Old task:
+```python
+task="show recent kafka broker logs",
+```
+New task:
+```python
+task="call elastic_kafka_logs to retrieve recent kafka broker log entries from elasticsearch",
+```
+
+#### orch-verify-01
+Old task:
+```python
+task="call post_upgrade_verify to verify workload-stack_workload is healthy",
+```
+New task:
+```python
+task="call post_upgrade_verify for workload-stack_workload to confirm it is healthy after the last upgrade",
+```
+
+---
+
+### Timeout bumps
+
+CC: Change ONLY the listed fields. Do not touch any other field on these test cases.
+
+#### status-svc-health-01
+```python
+timeout_s=80  →  timeout_s=180
+```
+
+#### research-elastic-search-01
+```python
+timeout_s=150  →  timeout_s=220
+```
+
+#### clarify-01
+```python
+timeout_s=90  →  timeout_s=150
+```
+
+#### clarify-03
+```python
+timeout_s=90  →  timeout_s=150
+```
+
+#### clarify-04
+```python
+timeout_s=90  →  timeout_s=150
+```
+
+#### orch-verify-01
+```python
+timeout_s=60  →  timeout_s=120
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.5` → `2.45.6`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(tests): v2.45.6 sharpen ambiguous task wording + bump remaining timeouts"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 22:22:17
+========================================================================
+Pushed successfully as `7136353`. The runner handles INDEX.md updates per the instructions at the bottom of the prompt ("Do NOT modify INDEX.md or any queue status files — the runner handles that").
+[STATUS] 1m33s
+
+PROMPT COMPLETE: v2.45.6
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m33s
+========================================================================

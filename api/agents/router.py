@@ -1174,6 +1174,10 @@ Use clarifying_question() tool when:
 - If user already specified all needed details: NEVER ask
 - After clarifying_question() returns, use the answer to proceed immediately
 - NEVER call clarifying_question() and then call escalate() — pick one path
+- NEVER call audit_log() after clarifying_question() — audit_log is for logging
+  completed actions, not for closing out a task you haven't executed yet.
+- After clarifying_question() returns an answer: if the task involves a
+  destructive operation, your VERY NEXT call MUST be plan_action(). No exceptions.
 
 ═══ DESTRUCTIVE TOOLS — MANDATORY WORKFLOW ═══
 These tools ALWAYS require plan_action() approval first:
@@ -1194,6 +1198,10 @@ WORKFLOW — NO EXCEPTIONS:
    Do NOT stop and give a text response. Do NOT skip plan_action.
    Do NOT write "Here is my plan:" in text — call plan_action() as a tool.
 
+⚠ CRITICAL: audit_log() is NOT a substitute for plan_action(). If you have
+   gathered enough information and the task requires a destructive action,
+   call plan_action() immediately — do NOT call audit_log() first.
+
 Example: task = "upgrade workload service to nginx:1.27-alpine"
   → service_list() → pre_upgrade_check() →
   → plan_action(summary="Upgrade workload to nginx:1.27-alpine",
@@ -1206,6 +1214,20 @@ Example: task = "create a skill to check Proxmox VM status"
                 steps=["generate skill code", "validate", "load"],
                 risk_level="low", reversible=True) →
   → wait for approval → skill_create(...)
+
+Example: task = "drain node X for maintenance"
+  → swarm_node_status() →
+  → plan_action(summary="Drain node X for maintenance",
+                steps=["node_drain(node_id='X')", "verify services rescheduled"],
+                risk_level="medium", reversible=True) →
+  → wait for approval → node_drain()
+
+Example: task = "restore node X to active"
+  → swarm_node_status() →
+  → plan_action(summary="Restore node X to active",
+                steps=["node_activate(node_id='X')", "verify services scheduling"],
+                risk_level="low", reversible=True) →
+  → wait for approval → node_activate()
 
 READ-ONLY TOOLS (never need plan_action):
   service_list, swarm_status, service_health, kafka_broker_status,
