@@ -18,7 +18,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.41.3.md | v2.41.3 | refactor(agents): extract step_facts.py — fact extraction, contradiction, zero-pivot, diagnostics | DONE (d19fc46) |
 | CC_PROMPT_v2.41.4.md | v2.41.4 | refactor(agents): step_synth.py + to_result_dict — complete split phase 1 | DONE (0eca936) |
 | CC_PROMPT_v2.41.5.md | v2.41.5 | refactor(agents): extract step_tools.py — full tool dispatch loop | DONE (2def784) |
-| CC_PROMPT_v2.42.0.md | v2.42.0 | test(agents): test_gates.py — pure gate function coverage | PENDING |
+| CC_PROMPT_v2.42.0.md | v2.42.0 | test(agents): test_gates.py — pure gate function coverage | RUNNING |
 | CC_PROMPT_v2.42.1.md | v2.42.1 | test(agents): test_step_state.py — StepState dataclass contract tests | PENDING |
 | CC_PROMPT_v2.42.2.md | v2.42.2 | test(agents): test_step_guard_facts.py — mock-based guard + fact extraction tests | PENDING |
 | CC_PROMPT_v2.42.3.md | v2.42.3 | feat(memory): MuninnDB first-tool hints — step 0 suggestion from historical sequences | PENDING |

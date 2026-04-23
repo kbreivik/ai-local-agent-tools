@@ -1,0 +1,388 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.41.4.md (v2.41.4)
+Theme: refactor(agents): step_synth.py + to_result_dict — complete split phase 1
+
+Prompt content:
+
+# CC PROMPT — v2.41.4 — refactor(agents): final thinning — _maybe_force_empty_synthesis + to_result_dict
+
+## Context
+
+SPEC: `cc_prompts/SPEC_v2.41_AGENT_SPLIT.md`
+Depends on: v2.41.3 (step_facts) must be DONE first.
+
+Two final cleanup items that complete the split:
+
+1. `_maybe_force_empty_synthesis` is an inner async function using `nonlocal`
+   to write `_empty_completion_synth_done`, `last_reasoning`, `_trace_step_index`.
+   With StepState in place, the `nonlocal` dependency is gone — these are now
+   `state.empty_completion_synth_done`, `state.last_reasoning`,
+   `state.trace_step_index`. Convert it to a regular module-level async function
+   in `api/agents/step_synth.py`.
+
+2. Replace the final `return { ... }` dict in `_run_single_agent_step` with
+   `state.to_result_dict()` (StepState method added in v2.41.0).
+
+Pure refactor — zero logic change.
+
+Version bump: 2.41.3 → 2.41.4.
+
+---
+
+## Change 1 — create `api/agents/step_synth.py`
+
+```python
+"""step_synth — forced synthesis on empty / near-empty completion — v2.41.4.
+
+Extracted from api/routers/agent.py _run_single_agent_step.
+
+maybe_force_empty_synthesis() replaces the inner async closure
+_maybe_force_empty_synthesis() that previously used nonlocal to
+write state back. With StepState, state is a mutable object —
+no nonlocal needed.
+"""
+from __future__ import annotations
+import logging
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
+
+
+async def maybe_force_empty_synthesis(
+    state,          # StepState
+    client,
+    messages: list,
+    *,
+    manager,
+    session_id: str,
+    operation_id: str,
+    agent_type: str,
+    tool_budget: int,
+) -> str:
+    """Run forced_synthesis when the loop exits with a missing / near-empty /
+    preamble-only final_answer but substantive tool calls were made.
+
+    Idempotent: sets state.empty_completion_synth_done after first call.
+    Returns the synthesis text (or "" on no-op / failure).
+
+    Mirrors the logic of the former _maybe_force_empty_synthesis() inner closure.
+    """
+    from api.agents.gates import _classify_terminal_final_answer
+    from api.routers.agent import _lm_model, _extract_response_model
+
+    if state.empty_completion_synth_done:
+        return ""
+
+    # Check if DB already has a substantive answer (from render_tool dispatch)
+    _db_final = ""
+    try:
+        from api.db import queries as _q
+        from api.db.base import get_engine as _ge
+        async with _ge().connect() as _c:
+            _op = await _q.get_operation(_c, operation_id)
+            if _op:
+                _db_final = _op.get("final_answer") or ""
+    except Exception:
+        pass
+
+    _answer_to_check = state.last_reasoning or _db_final
+    rescue_reason = _classify_terminal_final_answer(_answer_to_check)
+
+    if rescue_reason is None:
+        return ""  # answer is substantive — no rescue needed
+
+    if state.substantive_tool_calls < 1:
+        return ""  # never gathered data — forced synthesis would hallucinate
+
+    # Skip if render tool already wrote a long answer
+    if len(_db_final) >= 1500:
+        return ""
+
+    state.empty_completion_synth_done = True
+
+    try:
+        from api.agents.forced_synthesis import run_forced_synthesis
+        from api.routers.agent import _tool_budget_for
+        synth_text, harness_msg, raw_resp = run_forced_synthesis(
+            client=client,
+            model=_lm_model(),
+            messages=messages,
+            agent_type=agent_type,
+            reason=rescue_reason,
+            tool_count=len(state.tools_used_names),
+            budget=tool_budget,
+            actual_tool_names=state.tools_used_names,
+            operation_id=operation_id,
+            actual_tool_calls=[
+                {
+                    "name":   tc.get("tool") or tc.get("tool_name") or tc.get("name"),
+                    "status": tc.get("status"),
+                    "result": tc.get("result") or tc.get("content"),
+                }
+                for tc in (state.tool_history or [])
+            ],
+        )
+
+        if synth_text:
+            state.last_reasoning = synth_text
+            try:
+                await manager.send_line("reasoning", synth_text, session_id=session_id)
+            except Exception:
+                pass
+            try:
+                from api.logger import log_llm_step
+                await log_llm_step(
+                    operation_id=operation_id,
+                    step_index=state.trace_step_index,
+                    messages_delta=[{"role": "system", "content": harness_msg}],
+                    response_raw=raw_resp or {"forced_synthesis": {"reason": rescue_reason, "text": synth_text}},
+                    agent_type=agent_type,
+                    is_subagent=state.trace_is_subagent,
+                    parent_op_id=state.trace_parent_op_id,
+                    temperature=0.3,
+                    model=_extract_response_model(raw_resp, fallback=_lm_model()),
+                    provider="lm_studio",
+                )
+                state.trace_step_index += 1
+            except Exception as _te:
+                log.debug("%s trace log failed: %s", rescue_reason, _te)
+            return synth_text
+    except Exception as e:
+        log.warning("forced_synthesis on %s failed op=%s: %s", rescue_reason, operation_id, e)
+    return ""
+```
+
+---
+
+## Change 2 — `api/routers/agent.py` — replace inner closure with import
+
+Add import:
+```python
+from api.agents.step_synth import maybe_force_empty_synthesis
+```
+
+Locate `_maybe_force_empty_synthesis` inner async function definition inside
+`_run_single_agent_step` (the `async def _maybe_force_empty_synthesis():` block
+with the `nonlocal` statement). Delete the entire inner function definition.
+
+At every call site that previously read `await _maybe_force_empty_synthesis()`,
+replace with:
+
+```python
+await maybe_force_empty_synthesis(
+    state, client, messages,
+    manager=manager, session_id=session_id,
+    operation_id=operation_id, agent_type=agent_type,
+    tool_budget=_tool_budget_for(agent_type),
+)
+```
+
+There should be 2–3 call sites (budget_cap path, max_steps exhaustion path,
+natural-completion stop path). CC must find and update all of them.
+
+---
+
+## Change 3 — `api/routers/agent.py` — replace return dict with state.to_result_dict()
+
+Locate the final `return { ... }` dict at the end of `_run_single_agent_step`.
+It should look like:
+
+```python
+    return {
+        "output":                 last_reasoning,
+        "tools_used":             tools_used_names,
+        ...
+        "render_tool_calls":      _render_tool_calls,
+    }
+```
+
+Before it, add:
+```python
+    state.steps_taken = step
+```
+
+Then replace the entire return dict with:
+```python
+    return state.to_result_dict()
+```
+
+---
+
+## Change 4 — verify line count
+
+CC must report the new `wc -l api/routers/agent.py` in the commit message body.
+Target: ≤ 4500 lines (was 5523 before v2.40.3).
+
+After v2.41.4, the remaining bulk in agent.py is:
+- tool dispatch per-tc (plan_action, clarifying_question, propose_subtask,
+  vm_exec, generic MCP call) — ~900 lines — deferred to v2.41.5
+- `_stream_agent` — ~950 lines — context injection stays there
+
+---
+
+## Verification
+
+```bash
+python -c "from api.agents.step_synth import maybe_force_empty_synthesis; print('ok')"
+python -m pytest tests/ -x -q 2>&1 | tail -10
+wc -l api/routers/agent.py
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.41.3` → `2.41.4`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "refactor(agents): v2.41.4 step_synth.py + to_result_dict — complete split phase 1 (wc: NNN lines)"
+git push origin main
+```
+
+(Replace NNN with actual line count.)
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-22 21:48:06
+========================================================================
+PROMPT COMPLETE: v2.41.4
+[STATUS] 3m35s
+
+Summary:
+- Created `api/agents/step_synth.py` with module-level `maybe_force_empty_synthesis()` function
+- Added import in `api/routers/agent.py`
+- Removed the 120-line `_maybe_force_empty_synthesis` inner closure
+- Replaced all 3 call sites with the new function signature
+- Verified `state.to_result_dict()` was already in place at line 2816-2817
+- VERSION bumped 2.41.3 → 2.41.4
+- `wc -l api/routers/agent.py` = **4491** lines (under 4500 target)
+- `python -m py_compile` clean, import check passes
+- Committed (0eca936) and pushed to main
+
+========================================================================
+EXIT CODE: 0
+DURATION:  3m35s
+========================================================================
