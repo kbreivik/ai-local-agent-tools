@@ -154,6 +154,65 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "CREATE INDEX IF NOT EXISTS idx_pg_engrams_tags ON pg_engrams USING GIN(tags)",
         "CREATE INDEX IF NOT EXISTS idx_pg_engrams_created ON pg_engrams(created_at DESC)",
     ]),
+    (12, "Add test run history tables (v2.44.1)", [
+        """CREATE TABLE IF NOT EXISTS test_suites (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT DEFAULT '',
+            test_ids    JSONB DEFAULT '[]',
+            categories  JSONB DEFAULT '[]',
+            config      JSONB DEFAULT '{}',
+            created_at  TIMESTAMPTZ DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS test_runs (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            suite_id    UUID REFERENCES test_suites(id) ON DELETE SET NULL,
+            suite_name  TEXT DEFAULT '',
+            config      JSONB DEFAULT '{}',
+            started_at  TIMESTAMPTZ DEFAULT NOW(),
+            finished_at TIMESTAMPTZ,
+            status      TEXT DEFAULT 'running',
+            total       INT DEFAULT 0,
+            passed      INT DEFAULT 0,
+            failed      INT DEFAULT 0,
+            score_pct   FLOAT DEFAULT 0,
+            weighted_pct FLOAT DEFAULT 0,
+            error       TEXT DEFAULT '',
+            triggered_by TEXT DEFAULT 'manual'
+        )""",
+        """CREATE TABLE IF NOT EXISTS test_run_results (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            run_id      UUID NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+            test_id     TEXT NOT NULL,
+            category    TEXT DEFAULT '',
+            task        TEXT DEFAULT '',
+            passed      BOOLEAN DEFAULT FALSE,
+            soft        BOOLEAN DEFAULT FALSE,
+            critical    BOOLEAN DEFAULT FALSE,
+            failures    JSONB DEFAULT '[]',
+            warnings    JSONB DEFAULT '[]',
+            agent_type  TEXT DEFAULT '',
+            tools_called JSONB DEFAULT '[]',
+            step_count  INT DEFAULT 0,
+            duration_s  FLOAT DEFAULT 0,
+            timed_out   BOOLEAN DEFAULT FALSE,
+            timestamp   TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS test_schedules (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name        TEXT NOT NULL,
+            suite_id    UUID REFERENCES test_suites(id) ON DELETE CASCADE,
+            cron        TEXT NOT NULL,
+            enabled     BOOLEAN DEFAULT TRUE,
+            last_run_at TIMESTAMPTZ,
+            next_run_at TIMESTAMPTZ,
+            created_at  TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_test_runs_started ON test_runs(started_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_test_run_results_run ON test_run_results(run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_test_run_results_test ON test_run_results(test_id)",
+    ]),
 ]
 
 
