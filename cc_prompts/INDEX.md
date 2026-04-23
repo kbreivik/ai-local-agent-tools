@@ -46,4 +46,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.1.md | v2.45.1 | fix(tests): use create_internal_token for test runner — replaces stale localStorage JWT | DONE (87e6a04) |
 | CC_PROMPT_v2.45.2.md | v2.45.2 | feat(ui): TestsPanel auto-refresh — poll running state, live amber indicator, manual refresh | DONE (4bc185f) |
 | CC_PROMPT_v2.45.3.md | v2.45.3 | feat(ui): SuitesTab last-run duration + score badge per suite | DONE (b2fd83d) |
-| CC_PROMPT_v2.45.4.md | v2.45.4 | fix(tests): record accurate run timestamps — stamp before/after run_all_tests | RUNNING |
+| CC_PROMPT_v2.45.4.md | v2.45.4 | fix(tests): record accurate run timestamps — stamp before/after run_all_tests | DONE (4e2ea50) |
+| CC_PROMPT_v2.45.5.md | v2.45.5 | fix(tests): increase timeouts for Qwen3-30B local inference speed | RUNNING |
