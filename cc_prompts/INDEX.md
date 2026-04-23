@@ -33,5 +33,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.8.md | v2.43.8 | feat(settings): memoryEnabled toggle — NullMuninnClient when disabled | DONE (0b110aa) |
 | CC_PROMPT_v2.43.9.md | v2.43.9 | feat(memory): pg_engrams table + PgMemoryClient — PG-native memory backend | DONE (d3ea11f) |
 | CC_PROMPT_v2.44.0.md | v2.44.0 | fix(settings): add memoryEnabled + memoryBackend to SETTINGS_KEYS | DONE (e67bf49) |
-| CC_PROMPT_v2.44.1.md | v2.44.1 | feat(tests): DB-backed test run history — test_runs + suites + schedules + compare API | RUNNING |
-| CC_PROMPT_v2.44.2.md | v2.44.2 | feat(ui): TestsPanel complete overhaul — Library, Suites, Compare, Trend, Schedule | PENDING |
+| CC_PROMPT_v2.44.1.md | v2.44.1 | feat(tests): DB-backed test run history — test_runs + suites + schedules + compare API | DONE (41578fe) |
+| CC_PROMPT_v2.44.2.md | v2.44.2 | feat(ui): TestsPanel complete overhaul — Library, Suites, Compare, Trend, Schedule | RUNNING |

@@ -76,12 +76,27 @@ async def get_test_cases():
 
 class RunTestsRequest(BaseModel):
     categories: Optional[list[str]] = None
+    test_ids: Optional[list[str]] = None      # specific test IDs to run
+    suite_id: Optional[str] = None            # suite to run
+    memory_enabled: Optional[bool] = None     # override memoryEnabled setting for this run
 
 
-async def _run_tests_bg(categories: list[str] | None) -> None:
+async def _run_tests_bg(
+    categories: list[str] | None,
+    test_ids: list[str] | None = None,
+    suite_id: str | None = None,
+    memory_enabled: bool | None = None,
+) -> None:
     global _running
     _running = True
     try:
+        if memory_enabled is not None:
+            try:
+                from api.settings_manager import set_setting
+                set_setting("memoryEnabled", memory_enabled)
+            except Exception:
+                pass
+
         from tests.integration.test_agent import run_all_tests, save_results
         results = await run_all_tests(categories=categories)
         save_results(results)
@@ -99,7 +114,12 @@ async def _run_tests_bg(categories: list[str] | None) -> None:
             categories_str = ",".join(categories) if categories else "all"
             run_id = tr_db_inner.create_run(
                 suite_name=categories_str,
-                config={"categories": categories or []},
+                config={
+                    "categories": categories or [],
+                    "test_ids": test_ids or [],
+                    "suite_id": suite_id,
+                    "memoryEnabled": memory_enabled,
+                },
                 triggered_by="api",
             )
             for r in results_data.get("results", []):
@@ -141,7 +161,13 @@ async def run_tests(req: RunTestsRequest, background_tasks: BackgroundTasks):
         if unknown:
             return {"status": "error", "message": f"Unknown categories: {unknown}"}
 
-    background_tasks.add_task(_run_tests_bg, req.categories)
+    background_tasks.add_task(
+        _run_tests_bg,
+        req.categories,
+        req.test_ids,
+        req.suite_id,
+        req.memory_enabled,
+    )
     return {
         "status":  "started",
         "message": f"Running {'all' if not req.categories else req.categories} tests in background",
