@@ -21,4 +21,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.42.0.md | v2.42.0 | test(agents): test_gates.py — pure gate function coverage | DONE (6383675) |
 | CC_PROMPT_v2.42.1.md | v2.42.1 | test(agents): test_step_state.py — StepState dataclass contract tests | DONE (6c8c741) |
 | CC_PROMPT_v2.42.2.md | v2.42.2 | test(agents): test_step_guard_facts.py — mock-based guard + fact extraction tests | DONE (96dce13) |
-| CC_PROMPT_v2.42.3.md | v2.42.3 | feat(memory): MuninnDB first-tool hints — step 0 suggestion from historical sequences | RUNNING |
+| CC_PROMPT_v2.42.3.md | v2.42.3 | feat(memory): MuninnDB first-tool hints — step 0 suggestion from historical sequences | DONE (5cec4c0) |
+| CC_PROMPT_v2.43.0.md | v2.43.0 | fix(facts+allowlist): swarm service networks in facts + docker service ls allowed | RUNNING |
+| CC_PROMPT_v2.43.1.md | v2.43.1 | fix(agents): observe prompt — no-repeat call rule + overlay network vm_exec guidance | PENDING |

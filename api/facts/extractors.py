@@ -53,8 +53,8 @@ def extract_facts_from_proxmox_vm_snapshot(snapshot: dict, connection_label: str
 def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
     """Docker Swarm manager snapshot → fact list.
 
-    v2.39.2: adds service convergence flag (running==desired → converged),
-    service health string, node engine version, and cluster summary counts.
+    v2.39.2: adds service convergence flag, health, engine version, cluster counts.
+    v2.43.0: adds service network names (prod.swarm.service.{name}.networks).
     """
     facts: list[dict] = []
     if not isinstance(snapshot, dict):
@@ -95,6 +95,12 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
         # v2.39.2: health field if collector provides it
         if svc.get("health"):
             _add(facts, f"{fkey_base}.health", "swarm_collector", svc["health"], md)
+        # v2.43.0: overlay network names — collector already captures these,
+        # just wasn't written to facts. Enables preflight/external-AI to answer
+        # "which overlay network is this service on?" without a tool call.
+        if svc.get("networks"):
+            _add(facts, f"{fkey_base}.networks", "swarm_collector",
+                 svc["networks"], md)
 
     # Cluster summary
     if services_total:

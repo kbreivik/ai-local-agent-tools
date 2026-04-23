@@ -109,6 +109,7 @@ BASE_PATTERNS: list[tuple[str, str]] = [
     (r'^pct status\b',                     'Proxmox: LXC status by VMID'),
     # ── Kernel diagnostics ────────────────────────────────────────────────────
     (r'^dmesg\b',                          'Kernel ring buffer (OOM, hardware errors)'),
+    (r'^docker service ls\b',          'Swarm service list (read-only)'),
     (r'^docker service ps\b',          'Swarm service task list'),
     (r'^docker service inspect\b',     'Swarm service details'),
     (r'^docker node inspect\b',        'Swarm node details'),
