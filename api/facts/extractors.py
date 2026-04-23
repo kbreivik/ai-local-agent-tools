@@ -57,6 +57,7 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
     v2.43.0: adds service network names (prod.swarm.service.{name}.networks).
     v2.43.2: adds service network_names (human-readable, resolved from overlay IDs).
     v2.43.3: adds node addr_anomaly flag for manager nodes advertising 0.0.0.0.
+    v2.43.4: adds cluster-level overlay_networks list and overlay_network_count.
     """
     facts: list[dict] = []
     if not isinstance(snapshot, dict):
@@ -154,6 +155,14 @@ def extract_facts_from_swarm_snapshot(snapshot: dict) -> list[dict]:
     if nodes_total:
         _add(facts, "prod.swarm.cluster.nodes_total", "swarm_collector", nodes_total)
         _add(facts, "prod.swarm.cluster.nodes_ready", "swarm_collector", nodes_ready)
+
+    # v2.43.4: cluster-level overlay network list
+    overlay_nets = snapshot.get("overlay_networks") or []
+    if overlay_nets:
+        _add(facts, "prod.swarm.cluster.overlay_networks", "swarm_collector",
+             overlay_nets)
+        _add(facts, "prod.swarm.cluster.overlay_network_count", "swarm_collector",
+             len(overlay_nets))
 
     return facts
 

@@ -25,4 +25,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.43.0.md | v2.43.0 | fix(facts+allowlist): swarm service networks in facts + docker service ls allowed | DONE (1b6939a) |
 | CC_PROMPT_v2.43.1.md | v2.43.1 | fix(agents): observe prompt — no-repeat call rule + overlay network vm_exec guidance | DONE (b0f3fbe) |
 | CC_PROMPT_v2.43.2.md | v2.43.2 | fix(facts): resolve swarm overlay network IDs to human-readable names in collector + extractor | DONE (3e86980) |
-| CC_PROMPT_v2.43.3.md | v2.43.3 | fix(facts): swarm node addr_anomaly flag + preflight keyword resolver for split-brain detection | RUNNING |
+| CC_PROMPT_v2.43.3.md | v2.43.3 | fix(facts): swarm node addr_anomaly flag + preflight keyword resolver for split-brain detection | DONE (880c6bd) |
+| CC_PROMPT_v2.43.4.md | v2.43.4 | fix(facts): write prod.swarm.cluster.overlay_networks from collector net_id_to_name map | RUNNING |

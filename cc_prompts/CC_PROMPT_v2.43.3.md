@@ -1,119 +1,124 @@
-# CC PROMPT — v2.43.3 — fix(facts): swarm node addr_anomaly flag + manager-02 0.0.0.0 detection
+# CC PROMPT — v2.43.3 — fix(facts): swarm node manager_addr fact + addr_anomaly keyed to ManagerStatus.Addr
 
 ## What this does
 
-`prod.swarm.node.manager-02.addr = "0.0.0.0"` has been confirmed in facts
-since 2026-04-22 (verify_count=1758, change_detected=true). This means Docker
-is reporting manager-02's advertise-addr as unspecified. In a 3-manager Raft
-cluster this is a split-brain risk if a leader election occurs — the advertised
-address is used for inter-manager RPC.
+Fact-check (2026-04-23) found that `prod.swarm.node.manager-02.addr = 0.0.0.0`
+is `Status.Addr` — the node's data-plane address stored at join time. This is
+a cosmetic artifact. The actual Raft address is `ManagerStatus.Addr`, which is
+correctly `192.168.199.22:2377`. Reachability=reachable. NOT a split-brain risk.
 
-The fact exists but nothing flags it as anomalous. Preflight sees `addr=0.0.0.0`
-and injects it as-is — the agent has to infer that this is a problem. Fix: add
-an explicit `addr_anomaly` boolean fact that preflight and external AI can use
-directly, and write it whenever addr is `0.0.0.0` or empty for a manager node.
+The swarm collector currently captures only `st.get("Addr")` (Status.Addr).
+`ManagerStatus.Addr` (`mgr.get("Addr")`) is not collected at all. The correct
+anomaly to flag is `ManagerStatus.Addr = 0.0.0.0` — that would indicate actual
+Raft participation failure.
 
-Two-part change:
-1. `api/facts/extractors.py` — write `prod.swarm.node.{hostname}.addr_anomaly`
-   when addr is suspicious
-2. `api/agents/preflight.py` — add `0.0.0.0` and empty addr as a Tier 2
-   keyword-DB match pattern so preflight proactively resolves manager nodes
-   when tasks mention "split-brain", "advertise", "manager address", etc.
+Three-part change:
+1. Collector: also capture `manager_addr` from `mgr.get("Addr")`
+2. Extractor: write `prod.swarm.node.{hostname}.manager_addr` + flag
+   `addr_anomaly = True` only when manager_addr is 0.0.0.0/empty
+3. Preflight: keyword resolver for split-brain/Raft terms (unchanged intent,
+   now correctly keyed to manager_addr fact)
 
 Version bump: 2.43.2 → 2.43.3.
 
 ---
 
-## Change 1 — `api/facts/extractors.py`
+## Change 1 — `api/collectors/swarm.py`
 
-In `extract_facts_from_swarm_snapshot()`, locate the node addr block:
+Locate the node dict assembly block:
 
 ```python
-        if node.get(\"addr\") or node.get(\"ip\"):
-            _add(facts, f\"{fkey_base}.addr\", \"swarm_collector\",
-                 node.get(\"addr\") or node.get(\"ip\"))
+                node_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "hostname": spec.get("Name", desc.get("Hostname", "unknown")),
+                    "role": role,
+                    "state": state,
+                    "availability": avail,
+                    "leader": mgr.get("Leader", False),
+                    "addr": st.get("Addr", ""),
+                    "engine_version": engine.get("EngineVersion", ""),
+                    "os": f"{platform.get('OS','')}/{platform.get('Architecture','')}",
+                })
+```
+
+Add `manager_addr` to capture ManagerStatus.Addr:
+
+```python
+                node_data.append({
+                    "id": attrs.get("ID", "")[:12],
+                    "hostname": spec.get("Name", desc.get("Hostname", "unknown")),
+                    "role": role,
+                    "state": state,
+                    "availability": avail,
+                    "leader": mgr.get("Leader", False),
+                    "addr": st.get("Addr", ""),
+                    "manager_addr": mgr.get("Addr", ""),   # v2.43.3: Raft address
+                    "engine_version": engine.get("EngineVersion", ""),
+                    "os": f"{platform.get('OS','')}/{platform.get('Architecture','')}",
+                })
+```
+
+---
+
+## Change 2 — `api/facts/extractors.py`
+
+In `extract_facts_from_swarm_snapshot()`, locate the addr block added in v2.43.3's
+predecessor (if landed) or the v2.39.2 addr block:
+
+```python
+        if node.get("addr") or node.get("ip"):
+            _add(facts, f"{fkey_base}.addr", "swarm_collector",
+                 node.get("addr") or node.get("ip"))
 ```
 
 Replace with:
 
 ```python
-        _addr = node.get("addr") or node.get("ip") or ""
-        if _addr:
-            _add(facts, f"{fkey_base}.addr", "swarm_collector", _addr)
-            # v2.43.3: flag anomalous advertise-addr for manager nodes.
-            # 0.0.0.0 means Docker is listening on all interfaces but has no
-            # specific advertised address — inter-manager Raft RPC may use
-            # the wrong interface. Flag so preflight surfaces it explicitly.
-            _is_manager = str(node.get("role", "")).lower() == "manager"
-            _is_anomalous = _addr in ("0.0.0.0", "0.0.0.0:2377", "") or \
-                            _addr.startswith("0.0.0.0:")
-            if _is_manager and _is_anomalous:
-                _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector",
-                     True,
-                     {"addr": _addr, "reason": "manager advertising 0.0.0.0 — split-brain risk"})
-            elif _is_manager:
-                # Explicitly record False so preflight knows it was checked
-                _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector", False)
+        _status_addr = node.get("addr") or node.get("ip") or ""
+        if _status_addr:
+            _add(facts, f"{fkey_base}.addr", "swarm_collector", _status_addr)
+
+        # v2.43.3: Raft address (ManagerStatus.Addr) — distinct from Status.Addr.
+        # Status.Addr = data-plane address stored at join time (can be 0.0.0.0, cosmetic).
+        # ManagerStatus.Addr = Raft consensus address (0.0.0.0 here = actual Raft risk).
+        _mgr_addr = node.get("manager_addr", "")
+        _is_manager = str(node.get("role", "")).lower() == "manager"
+        if _is_manager and _mgr_addr:
+            _add(facts, f"{fkey_base}.manager_addr", "swarm_collector", _mgr_addr)
+            _mgr_anomalous = _mgr_addr.startswith("0.0.0.0") or _mgr_addr == ""
+            _add(facts, f"{fkey_base}.addr_anomaly", "swarm_collector",
+                 _mgr_anomalous,
+                 {"checked": "ManagerStatus.Addr", "value": _mgr_addr})
 ```
 
 Also update the docstring:
 
 ```
-    v2.43.3: adds node addr_anomaly flag for manager nodes advertising 0.0.0.0.
+    v2.43.3: adds node manager_addr (ManagerStatus.Addr / Raft address) and
+             addr_anomaly flag (True only if ManagerStatus.Addr is 0.0.0.0).
 ```
 
 ---
 
-## Change 2 — `api/agents/preflight.py` — register addr_anomaly in keyword corpus
+## Change 3 — `api/agents/preflight.py` — keyword resolver
 
-Locate the `load_keyword_corpus()` function or the keywords dict it returns.
-The corpus maps trigger words to entity resolvers.
+Same resolver as originally planned, but the DB query now looks for
+`addr_anomaly = true` which will only fire if ManagerStatus.Addr is bad:
 
-Add an entry so that tasks mentioning advertise-addr, split-brain, or Raft
-issues pull in the anomalous manager node:
+Locate `load_keyword_corpus()` and add:
 
 ```python
-# v2.43.3: addr anomaly — pull manager nodes when split-brain terms appear
-"advertise": _lookup_addr_anomaly_nodes,
 "split-brain": _lookup_addr_anomaly_nodes,
 "split_brain": _lookup_addr_anomaly_nodes,
 "raft": _lookup_addr_anomaly_nodes,
-"0.0.0.0": _lookup_addr_anomaly_nodes,
+"advertise": _lookup_addr_anomaly_nodes,
 ```
 
 Add the resolver function before `load_keyword_corpus()`:
 
 ```python
 def _lookup_addr_anomaly_nodes() -> list[dict]:
-    """Return manager nodes with addr_anomaly=True from known_facts."""
-    try:
-        from api.db.known_facts import search_facts_by_key_pattern
-        rows = search_facts_by_key_pattern("prod.swarm.node.%.addr_anomaly",
-                                           min_confidence=0.5)
-        results = []
-        for row in rows:
-            if row.get("fact_value") is True or row.get("fact_value") == "true":
-                # Extract hostname from fact_key: prod.swarm.node.{hostname}.addr_anomaly
-                parts = row["fact_key"].split(".")
-                if len(parts) >= 5:
-                    hostname = parts[3]
-                    results.append({
-                        "entity_id": f"swarm:node:{hostname}",
-                        "label": hostname,
-                        "source": "keyword_db",
-                        "reason": "addr_anomaly",
-                    })
-        return results
-    except Exception as _e:
-        log.debug("_lookup_addr_anomaly_nodes failed: %s", _e)
-        return []
-```
-
-If `search_facts_by_key_pattern` does not exist in `api/db/known_facts`, use
-a direct query instead:
-
-```python
-def _lookup_addr_anomaly_nodes() -> list[dict]:
+    """Return manager nodes with addr_anomaly=True (ManagerStatus.Addr is 0.0.0.0)."""
     try:
         if not _is_pg():
             return []
@@ -146,33 +151,26 @@ def _lookup_addr_anomaly_nodes() -> list[dict]:
 
 ---
 
-## Verification
+## Expected outcome after deploy
 
-After deploy + collector poll, verify the new fact exists:
+After next swarm collector poll:
+- `prod.swarm.node.manager-02.manager_addr = "192.168.199.22:2377"` (correct)
+- `prod.swarm.node.manager-02.addr_anomaly = False` (ManagerStatus.Addr is fine)
+- `prod.swarm.node.manager-01.manager_addr = "192.168.199.21:2377"`
+- `prod.swarm.node.manager-01.addr_anomaly = False`
 
-```bash
-curl -s 'http://192.168.199.10:8000/api/facts?search=addr_anomaly' | \
-  python3 -c "import json,sys; [print(r['fact_key'], r['fact_value'], r.get('metadata',{})) for r in json.load(sys.stdin).get('facts',[])]"
-```
-
-Expected:
-```
-prod.swarm.node.manager-02.addr_anomaly True {"addr": "0.0.0.0", "reason": "manager advertising 0.0.0.0 — split-brain risk"}
-prod.swarm.node.manager-01.addr_anomaly False
-prod.swarm.node.manager-03.addr_anomaly False
-```
-
-Run a task: "Is there any split-brain risk in the Swarm cluster?" — preflight
-should now resolve manager-02 and inject its addr_anomaly fact directly.
+The `addr=0.0.0.0` fact for manager-02 (Status.Addr) will remain — it is accurate,
+just cosmetically odd. No fix needed on the infrastructure side.
 
 ---
 
-## Note on remediation
+## Note on the 2375 exposure
 
-The fix for manager-02 itself is outside the DEATHSTAR codebase — set
-`--advertise-addr 192.168.199.22` in `/etc/docker/daemon.json` on ds-docker-manager-02
-and restart Docker. The node is currently healthy and operational; this is a
-preventive fix for election robustness. Do this during a maintenance window.
+All three managers run `-H tcp://0.0.0.0:2375` (no TLS, no auth). This is how
+DEATHSTAR's swarm collector connects. Acceptable on an isolated LAN, but worth
+documenting: anyone on the 192.168.199.x network can reach the Docker API on
+each manager. Consider restricting to the DEATHSTAR host IP if the network is
+not fully trusted.
 
 ---
 
@@ -186,7 +184,7 @@ Update `VERSION`: `2.43.2` → `2.43.3`
 
 ```
 git add -A
-git commit -m "fix(facts): v2.43.3 swarm node addr_anomaly flag + preflight keyword resolver"
+git commit -m "fix(facts): v2.43.3 swarm node manager_addr fact + addr_anomaly keyed to ManagerStatus.Addr"
 git push origin main
 ```
 

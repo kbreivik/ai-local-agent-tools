@@ -281,6 +281,9 @@ class SwarmCollector(BaseCollector):
                     for nid in raw_nets
                 ]
 
+            # v2.43.4: stash full overlay network list for cluster-level fact
+            overlay_networks_list = sorted(set(net_id_to_name.values()))
+
             client.close()
 
             # ── Image digest change detection ─────────────────────────────────
@@ -434,6 +437,7 @@ class SwarmCollector(BaseCollector):
                 "message": message,
                 "nodes": node_data,
                 "services": svc_data,
+                "overlay_networks": overlay_networks_list,   # v2.43.4
                 "node_count": len(node_data),
                 "service_count": len(svc_data),
                 "manager_count": manager_count,
