@@ -49,4 +49,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.4.md | v2.45.4 | fix(tests): record accurate run timestamps — stamp before/after run_all_tests | DONE (4e2ea50) |
 | CC_PROMPT_v2.45.5.md | v2.45.5 | fix(tests): increase timeouts for Qwen3-30B local inference speed | DONE (7228235) |
 | CC_PROMPT_v2.45.6.md | v2.45.6 | fix(tests): sharpen ambiguous task wording + bump remaining timeouts | DONE (7136353) |
-| CC_PROMPT_v2.45.7.md | v2.45.7 | fix(agent): ACTION_PROMPT — block audit_log escape path, add drain/activate examples | RUNNING |
+| CC_PROMPT_v2.45.7.md | v2.45.7 | fix(agent): ACTION_PROMPT — block audit_log escape path, add drain/activate examples | DONE (96a2a87) |
+| CC_PROMPT_v2.45.8.md | v2.45.8 | fix(tests): elastic-pattern task reword + clarify-02 timeout 90→180s | RUNNING |
+| CC_PROMPT_v2.45.9.md | v2.45.9 | fix(agent): ACTION_PROMPT — concrete don't-ask examples + audit_log constraint | PENDING |

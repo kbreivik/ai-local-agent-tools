@@ -1,0 +1,219 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.7.md (v2.45.7)
+Theme: fix(agent): ACTION_PROMPT — block audit_log escape path, add drain/activate examples
+
+Prompt content:
+
+# CC PROMPT — v2.45.7 — fix(agent): ACTION_PROMPT — block audit_log escape, add drain/activate example
+
+## What this does
+
+All 4 action tests fail with the same pattern:
+  research tools → clarifying_question → audit_log → done (no plan_action)
+
+The agent uses `audit_log` as a "finish and log what I did" tool after clarifying,
+never committing to `plan_action`. The ACTION_PROMPT has strong guidance on
+calling plan_action but doesn't explicitly block the `clarifying_question →
+audit_log → done` escape route.
+
+Two additions to `ACTION_PROMPT` in `api/agents/router.py`:
+
+1. Add rule under CLARIFICATION RULES: after getting an answer, the next call
+   MUST be plan_action (not audit_log, not escalate, not another clarifying_question).
+
+2. Add drain/activate examples to the WORKFLOW section so the model has a clear
+   template for node operations.
+
+Version bump: 2.45.6 → 2.45.7.
+
+---
+
+## Change — `api/agents/router.py` — ACTION_PROMPT
+
+Find the CLARIFICATION RULES section (ends with "NEVER call clarifying_question()
+and then call escalate() — pick one path"). Add after that line:
+
+```
+- NEVER call audit_log() after clarifying_question() — audit_log is for logging
+  completed actions, not for closing out a task you haven't executed yet.
+- After clarifying_question() returns an answer: if the task involves a
+  destructive operation, your VERY NEXT call MUST be plan_action(). No exceptions.
+```
+
+Find the DESTRUCTIVE TOOLS — MANDATORY WORKFLOW section, specifically the two
+`Example:` blocks at the end. Add two more examples after them:
+
+```
+Example: task = "drain node X for maintenance"
+  → swarm_node_status() →
+  → plan_action(summary="Drain node X for maintenance",
+                steps=["node_drain(node_id='X')", "verify services rescheduled"],
+                risk_level="medium", reversible=True) →
+  → wait for approval → node_drain()
+
+Example: task = "restore node X to active"
+  → swarm_node_status() →
+  → plan_action(summary="Restore node X to active",
+                steps=["node_activate(node_id='X')", "verify services scheduling"],
+                risk_level="low", reversible=True) →
+  → wait for approval → node_activate()
+```
+
+Also add after the ⚠ CRITICAL line:
+```
+⚠ CRITICAL: audit_log() is NOT a substitute for plan_action(). If you have
+   gathered enough information and the task requires a destructive action,
+   call plan_action() immediately — do NOT call audit_log() first.
+```
+
+CC: Make surgical edits to the ACTION_PROMPT string only. Do not modify any
+other prompt or any other code. The ACTION_PROMPT is at line ~1116 in
+api/agents/router.py.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.6` → `2.45.7`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agent): v2.45.7 ACTION_PROMPT — block audit_log escape path, add drain/activate examples"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-23 22:23:53
+========================================================================
+Commit `96a2a87` pushed successfully.
+[STATUS] 1m00s
+
+PROMPT COMPLETE: v2.45.7
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m01s
+========================================================================
