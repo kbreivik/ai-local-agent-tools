@@ -55,6 +55,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.10.md | v2.45.10 | fix(tests): pass pre-filtered cases to run_all_tests — suite test_ids was dead code | DONE (0ffb51a) |
 | CC_PROMPT_v2.45.11.md | v2.45.11 | fix(tests): task wording + timeouts for 8 remaining failures | DONE (8b898ab) |
 | CC_PROMPT_v2.45.12.md | v2.45.12 | fix(tests): suppress non-critical collector alerts during test runs | DONE (dedf572) |
-| CC_PROMPT_v2.45.13.md | v2.45.13 | fix(agent): clarifying_question result injects plan_action directive | RUNNING |
-| CC_PROMPT_v2.45.14.md | v2.45.14 | fix(agent): add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + verify to RESEARCH_KEYWORDS | PENDING |
+| CC_PROMPT_v2.45.13.md | v2.45.13 | fix(agent): clarifying_question result injects plan_action directive | DONE (162cbf0) |
+| CC_PROMPT_v2.45.14.md | v2.45.14 | fix(agent): add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + verify to RESEARCH_KEYWORDS | RUNNING |
 | CC_PROMPT_v2.45.15.md | v2.45.15 | fix(tests): clarification_answer + escalate rework + precheck routing + Results UI polish | PENDING |

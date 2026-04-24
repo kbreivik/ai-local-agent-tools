@@ -36,6 +36,7 @@ RESEARCH_KEYWORDS = frozenset({
     # Bigrams that signal research even when action words are present
     "root cause", "fix steps", "cause and fix", "what's causing",
     "why is it", "why are", "find out why",
+    "verify", "pre-flight",   # v2.45.14: pre-flight check tasks should route research
 })
 
 BUILD_KEYWORDS = frozenset({
@@ -149,7 +150,9 @@ OBSERVE_AGENT_TOOLS = frozenset({
 # Investigate agent — read-only + elastic search + correlation + ingestion
 INVESTIGATE_AGENT_TOOLS = frozenset({
     "swarm_status", "service_list", "service_health", "service_current_version",
-    "service_version_history", "kafka_broker_status", "kafka_topic_health",
+    "service_version_history",
+    "pre_kafka_check",   # v2.45.14: pre-flight check — valid for research agents
+    "kafka_broker_status", "kafka_topic_health",
     "kafka_topic_inspect",
     "kafka_consumer_lag", "elastic_cluster_health", "elastic_error_logs",
     "elastic_search_logs", "elastic_log_pattern", "elastic_index_stats",
