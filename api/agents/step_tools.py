@@ -466,11 +466,17 @@ async def dispatch_tool_calls(
                 )
                 from api.clarification import wait_for_clarification
                 answer = await wait_for_clarification(session_id)
+                _is_cancel = answer.lower() in ("cancel", "timeout — proceed with best guess", "")
+                _directive = (
+                    "" if _is_cancel
+                    else " Your NEXT tool call MUST be plan_action(). Do NOT call audit_log."
+                )
                 result = {
                     "status":  "ok",
                     "answer":  answer,
-                    "message": f"User answered: {answer}",
+                    "message": f"User answered: {answer}.{_directive}",
                     "data":    {"question": question, "answer": answer},
+                    "next_required_tool": None if _is_cancel else "plan_action",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             elif fn_name == "propose_subtask":
