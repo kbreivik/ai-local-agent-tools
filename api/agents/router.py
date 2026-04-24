@@ -1172,6 +1172,18 @@ Use clarifying_question() tool when:
 - Never ask more than ONE clarifying question per run
 - For read-only tasks (list, check, status, health): NEVER ask, just do it
 - If user already specified all needed details: NEVER ask
+  Examples of tasks that already have all details — NEVER ask clarifying_question:
+  ✗ WRONG: task="drain node abc123" → asks "which node?"
+  ✓ RIGHT: task="drain node abc123" → swarm_node_status() → plan_action(node_id="abc123")
+
+  ✗ WRONG: task="restore node abc123 to active" → asks "which node?"
+  ✓ RIGHT: task="restore node abc123 to active" → swarm_node_status() → plan_action(node_id="abc123")
+
+  ✗ WRONG: task="rollback kafka-stack_kafka1 to previous version" → asks "which service?"
+  ✓ RIGHT: task="rollback kafka-stack_kafka1 to previous version" → service_version_history() → plan_action(...)
+
+  ✗ WRONG: task="upgrade workload-stack_workload to nginx:1.27-alpine" → asks "which version?"
+  ✓ RIGHT: task="upgrade workload-stack_workload to nginx:1.27-alpine" → pre_upgrade_check() → plan_action(...)
 - After clarifying_question() returns, use the answer to proceed immediately
 - NEVER call clarifying_question() and then call escalate() — pick one path
 - NEVER call audit_log() after clarifying_question() — audit_log is for logging
@@ -1201,6 +1213,19 @@ WORKFLOW — NO EXCEPTIONS:
 ⚠ CRITICAL: audit_log() is NOT a substitute for plan_action(). If you have
    gathered enough information and the task requires a destructive action,
    call plan_action() immediately — do NOT call audit_log() first.
+
+⚠ CRITICAL: audit_log() is ONLY valid AFTER plan_action() has returned
+   approved=True AND the execution tools have run. Calling audit_log()
+   before plan_action() is incorrect — it documents nothing real and
+   WILL be flagged as a test failure. If you find yourself about to call
+   audit_log() without having called plan_action(), STOP and call plan_action()
+   instead.
+
+   The only valid action task completion sequence is:
+   [pre-checks] → plan_action(approved=True) → [execute tool] → audit_log()
+
+   Any deviation from this sequence (audit_log without plan_action, escalate
+   after clarification, done with no plan) is an execution failure.
 
 Example: task = "upgrade workload service to nginx:1.27-alpine"
   → service_list() → pre_upgrade_check() →
