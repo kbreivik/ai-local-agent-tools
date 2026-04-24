@@ -1,0 +1,200 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.14.md (v2.45.14)
+Theme: fix(agent): add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + verify to RESEARCH_KEYWORDS
+
+Prompt content:
+
+# CC PROMPT — v2.45.14 — fix(agent): add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + fix routing
+
+## Root cause
+
+`pre_kafka_check` lives only in `EXECUTE_KAFKA_TOOLS` (the action/execute agent's
+Kafka tool set). It is NOT in `INVESTIGATE_AGENT_TOOLS` or `OBSERVE_AGENT_TOOLS`.
+
+Tasks that say "use the pre_kafka_check tool" get routed to the STATUS agent
+(because "kafka" is a STATUS_KEYWORD). The status agent doesn't have
+`pre_kafka_check` so falls back to `kafka_broker_status` + `kafka_consumer_lag`.
+
+Two fixes:
+1. Add `pre_kafka_check` to `INVESTIGATE_AGENT_TOOLS` — it's a read-only
+   pre-flight check, perfectly valid for research agents.
+2. Add "verify" and "pre-flight" to RESEARCH_KEYWORDS so tasks containing those
+   words route to research, not status.
+
+Version bump: 2.45.13 → 2.45.14.
+
+---
+
+## Change 1 — `api/agents/router.py` — INVESTIGATE_AGENT_TOOLS
+
+Find `INVESTIGATE_AGENT_TOOLS = frozenset({` and locate the kafka tools section
+within it. Add `pre_kafka_check` alongside the other kafka tools.
+
+If the current INVESTIGATE_AGENT_TOOLS has `kafka_broker_status` in it, add
+`pre_kafka_check` right before or after it:
+
+```python
+    "pre_kafka_check",   # v2.45.14: pre-flight check — valid for research agents
+    "kafka_broker_status", ...
+```
+
+If `kafka_broker_status` is not in INVESTIGATE_AGENT_TOOLS, add `pre_kafka_check`
+to the kafka block alongside whatever kafka tools are present.
+
+---
+
+## Change 2 — `api/agents/router.py` — RESEARCH_KEYWORDS
+
+Find `RESEARCH_KEYWORDS = frozenset({`. Add two entries:
+
+```python
+    "verify", "pre-flight",   # v2.45.14: pre-flight check tasks should route research
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.13` → `2.45.14`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agent): v2.45.14 add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + verify to RESEARCH_KEYWORDS"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-24 18:28:26
+========================================================================
+Changes implemented and pushed. Committed as `2c89f56`.
+[STATUS] 41s
+
+PROMPT COMPLETE: v2.45.14
+
+========================================================================
+EXIT CODE: 0
+DURATION:  41s
+========================================================================

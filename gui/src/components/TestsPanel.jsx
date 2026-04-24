@@ -395,11 +395,14 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
   const [expanded, setExpanded] = useState(null)
   const [detail, setDetail]     = useState(null)
   const [loading, setLoading]   = useState(true)
+  const [suiteFilter, setSuiteFilter] = useState('')
+  const [suites, setSuites]           = useState([])
 
   const load = useCallback(() => {
     api('/api/tests/runs').then(r => r.json())
       .then(d => { setRuns(d.runs || []); setLoading(false) })
       .catch(() => setLoading(false))
+    api('/api/tests/suites').then(r => r.json()).then(d => setSuites(d.suites || [])).catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [load, refresh])
@@ -411,6 +414,10 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
     setDetail(d)
   }
 
+  const visibleRuns = suiteFilter
+    ? runs.filter(r => r.suite_id === suiteFilter || r.suite_name === suiteFilter)
+    : runs
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, height: '100%' }}>
       {/* Header row */}
@@ -418,7 +425,14 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
         {isRunning && (
           <Mono c="amber">⟳ run in progress — auto-refreshing every 5s</Mono>
         )}
-        <div style={{ marginLeft: 'auto' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <select value={suiteFilter} onChange={e => setSuiteFilter(e.target.value)}
+            style={{ fontFamily:'var(--font-mono)', fontSize:9, padding:'3px 7px',
+              background:'var(--bg-1)', border:'1px solid var(--border)',
+              color:'var(--text-2)', borderRadius:2 }}>
+            <option value="">all suites</option>
+            {suites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
           <Btn small onClick={() => { load(); onRefresh?.() }}>⟳ refresh</Btn>
         </div>
       </div>
@@ -426,8 +440,8 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
       {/* Run list */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {loading && <Mono style={{ color: 'var(--text-3)' }}>Loading runs…</Mono>}
-        {!loading && runs.length === 0 && <Mono style={{ color: 'var(--text-3)' }}>No runs yet. Trigger a run from Library or Suites tab.</Mono>}
-        {runs.map(run => (
+        {!loading && visibleRuns.length === 0 && <Mono style={{ color: 'var(--text-3)' }}>No runs yet. Trigger a run from Library or Suites tab.</Mono>}
+        {visibleRuns.map(run => (
           <div key={run.id} style={{ border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 2, overflow: 'hidden' }}>
             <div onClick={() => expand(run)} style={{ display: 'flex', gap: 10, padding: '7px 12px', cursor: 'pointer', alignItems: 'center' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
@@ -450,7 +464,7 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
                     <Mono style={{ color: 'var(--text-3)', width: 160, flexShrink: 0 }}>{r.test_id}</Mono>
                     <span style={catStyle(r.category)}>{r.category}</span>
                     <Mono style={{ color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.task}</Mono>
-                    <Mono style={{ color: 'var(--text-3)' }}>{r.step_count}s</Mono>
+                    <Mono style={{ color: 'var(--text-3)' }}>{r.step_count} steps</Mono>
                     <Mono style={{ color: 'var(--text-3)' }}>{r.duration_s?.toFixed(1)}s</Mono>
                     {r.failures?.length > 0 && <Mono style={{ color: 'var(--red)' }}>{r.failures[0]?.slice(0,40)}</Mono>}
                   </div>
