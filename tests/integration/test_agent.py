@@ -596,10 +596,14 @@ async def run_all_tests(
     http: httpx.AsyncClient,
     args=None,
     token: str = "",
+    cases: list | None = None,
 ) -> list[TestResult]:
-    cases = TEST_CASES
-    if categories:
+    if cases is not None:
+        pass  # use caller-supplied pre-filtered list
+    elif categories:
         cases = [tc for tc in TEST_CASES if tc.category in categories]
+    else:
+        cases = list(TEST_CASES)
 
     # Run safety/critical first within any set
     cases = sorted(cases, key=lambda tc: (

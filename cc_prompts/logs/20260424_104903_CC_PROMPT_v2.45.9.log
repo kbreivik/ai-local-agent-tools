@@ -1,0 +1,233 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.9.md (v2.45.9)
+Theme: fix(agent): ACTION_PROMPT — concrete don't-ask examples + audit_log constraint
+
+Prompt content:
+
+# CC PROMPT — v2.45.9 — fix(agent): ACTION_PROMPT — structural fix for plan_action escape + don't-ask-if-specified examples
+
+## Root cause
+
+All 4 action soft-fails share the same pattern despite v2.45.7 adding rules:
+  research → clarifying_question → audit_log → done (no plan_action)
+
+Two distinct sub-problems:
+
+**A. Agent asks clarifying_question when task already has all details.**
+  - drain-01: "drain node 0sj1zr8f1pcm" — node ID is IN the task
+  - activate-01: "restore node 0sj1zr8f1pcm" — node ID is IN the task
+  - rollback-01: "rollback kafka-stack_kafka1 to previous version" — service is IN the task
+  - upgrade-01: "upgrade workload-stack_workload to nginx:1.27-alpine" — all details specified
+  Abstract rule "If user already specified all needed details: NEVER ask" is ignored.
+  Needs concrete examples of when NOT to ask.
+
+**B. After clarifying_question(), agent calls audit_log instead of plan_action.**
+  The v2.45.7 rules say "NEVER call audit_log after clarifying_question" but
+  the model treats audit_log as a safe "document findings and exit" tool.
+  The rule needs a concrete consequence: audit_log before plan_action is invalid.
+
+Fix: two additions to ACTION_PROMPT in api/agents/router.py.
+
+Version bump: 2.45.8 → 2.45.9.
+
+---
+
+## Change — `api/agents/router.py` — ACTION_PROMPT only
+
+### Addition 1: Concrete "do NOT ask" examples in CLARIFICATION RULES
+
+Find the CLARIFICATION RULES section. After the line:
+```
+- If user already specified all needed details: NEVER ask
+```
+
+Add:
+```
+  Examples of tasks that already have all details — NEVER ask clarifying_question:
+  ✗ WRONG: task="drain node abc123" → asks "which node?"
+  ✓ RIGHT: task="drain node abc123" → swarm_node_status() → plan_action(node_id="abc123")
+
+  ✗ WRONG: task="restore node abc123 to active" → asks "which node?"
+  ✓ RIGHT: task="restore node abc123 to active" → swarm_node_status() → plan_action(node_id="abc123")
+
+  ✗ WRONG: task="rollback kafka-stack_kafka1 to previous version" → asks "which service?"
+  ✓ RIGHT: task="rollback kafka-stack_kafka1 to previous version" → service_version_history() → plan_action(...)
+
+  ✗ WRONG: task="upgrade workload-stack_workload to nginx:1.27-alpine" → asks "which version?"
+  ✓ RIGHT: task="upgrade workload-stack_workload to nginx:1.27-alpine" → pre_upgrade_check() → plan_action(...)
+```
+
+### Addition 2: Concrete audit_log constraint after the ⚠ CRITICAL block
+
+Find the existing ⚠ CRITICAL block (the one added in v2.45.7):
+```
+⚠ CRITICAL: audit_log() is NOT a substitute for plan_action(). If you have
+   gathered enough information and the task requires a destructive action,
+   call plan_action() immediately — do NOT call audit_log() first.
+```
+
+Replace it with:
+```
+⚠ CRITICAL: audit_log() is NOT a substitute for plan_action(). If you have
+   gathered enough information and the task requires a destructive action,
+   call plan_action() immediately — do NOT call audit_log() first.
+
+⚠ CRITICAL: audit_log() is ONLY valid AFTER plan_action() has returned
+   approved=True AND the execution tools have run. Calling audit_log()
+   before plan_action() is incorrect — it documents nothing real and
+   WILL be flagged as a test failure. If you find yourself about to call
+   audit_log() without having called plan_action(), STOP and call plan_action()
+   instead.
+
+   The only valid action task completion sequence is:
+   [pre-checks] → plan_action(approved=True) → [execute tool] → audit_log()
+   
+   Any deviation from this sequence (audit_log without plan_action, escalate
+   after clarification, done with no plan) is an execution failure.
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.8` → `2.45.9`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agent): v2.45.9 ACTION_PROMPT — concrete don't-ask examples + audit_log constraint"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-24 10:49:03
+========================================================================
+PROMPT COMPLETE: v2.45.9
+[STATUS] 1m04s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m04s
+========================================================================

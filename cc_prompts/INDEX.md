@@ -51,4 +51,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.6.md | v2.45.6 | fix(tests): sharpen ambiguous task wording + bump remaining timeouts | DONE (7136353) |
 | CC_PROMPT_v2.45.7.md | v2.45.7 | fix(agent): ACTION_PROMPT — block audit_log escape path, add drain/activate examples | DONE (96a2a87) |
 | CC_PROMPT_v2.45.8.md | v2.45.8 | fix(tests): elastic-pattern task reword + clarify-02 timeout 90→180s | DONE (2381d42) |
-| CC_PROMPT_v2.45.9.md | v2.45.9 | fix(agent): ACTION_PROMPT — concrete don't-ask examples + audit_log constraint | RUNNING |
+| CC_PROMPT_v2.45.9.md | v2.45.9 | fix(agent): ACTION_PROMPT — concrete don't-ask examples + audit_log constraint | DONE (712f5fc) |
+| CC_PROMPT_v2.45.10.md | v2.45.10 | fix(tests): pass pre-filtered cases to run_all_tests — suite test_ids was dead code | RUNNING |
+| CC_PROMPT_v2.45.11.md | v2.45.11 | fix(tests): task wording + timeouts for 8 remaining failures | PENDING |

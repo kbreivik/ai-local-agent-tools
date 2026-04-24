@@ -156,6 +156,7 @@ async def _run_tests_bg(
                 http=http,
                 args=None,
                 token=_fresh_token,
+                cases=cases_to_run if (test_ids or (categories and len(categories) < 6)) else None,
             )
 
         save_results(results)
