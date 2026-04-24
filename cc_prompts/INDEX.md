@@ -57,4 +57,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.12.md | v2.45.12 | fix(tests): suppress non-critical collector alerts during test runs | DONE (dedf572) |
 | CC_PROMPT_v2.45.13.md | v2.45.13 | fix(agent): clarifying_question result injects plan_action directive | DONE (162cbf0) |
 | CC_PROMPT_v2.45.14.md | v2.45.14 | fix(agent): add pre_kafka_check to INVESTIGATE_AGENT_TOOLS + verify to RESEARCH_KEYWORDS | DONE (2c89f56) |
-| CC_PROMPT_v2.45.15.md | v2.45.15 | fix(tests): clarification_answer + escalate rework + precheck routing + Results UI polish | RUNNING |
+| CC_PROMPT_v2.45.15.md | v2.45.15 | fix(tests): clarification_answer + escalate rework + precheck routing + Results UI polish | DONE (78c798e) |
+| CC_PROMPT_v2.45.16.md | v2.45.16 | refactor(agent): split dispatch_tool_calls into category handlers | PENDING |
+| CC_PROMPT_v2.45.17.md | v2.45.17 | refactor(agent): extract _stream_agent setup into api/agents/pipeline.py | PENDING |
