@@ -1,0 +1,241 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.10.md (v2.45.10)
+Theme: fix(tests): pass pre-filtered cases to run_all_tests — suite test_ids was dead code
+
+Prompt content:
+
+# CC PROMPT — v2.45.10 — fix(tests): pass pre-filtered cases to run_all_tests — suite test_ids dead code
+
+## Root cause
+
+`_run_tests_bg` builds `cases_to_run` (filtered by both `categories` and `test_ids`)
+but then calls `run_all_tests(categories=categories or None, ...)` — which does its
+OWN filtering from `TEST_CASES` using only `categories`. The pre-filtered list is
+discarded. `test_ids` filtering is dead code.
+
+Result: smoke-mem-on-fast (7 tests) and safety-mem-on-critical (7 tests) both run
+all 38 tests. Score and pass counts are meaningless for suite-based runs.
+
+Fix: add `cases: list | None = None` param to `run_all_tests`. When provided,
+use it instead of re-building from TEST_CASES. Pass `cases_to_run` from
+`_run_tests_bg`.
+
+Two-file change.
+
+Version bump: 2.45.9 → 2.45.10.
+
+---
+
+## Change 1 — `tests/integration/test_agent.py`
+
+Find:
+```python
+async def run_all_tests(
+    categories: list[str] | None,
+    http: httpx.AsyncClient,
+    args=None,
+    token: str = "",
+) -> list[TestResult]:
+    cases = TEST_CASES
+    if categories:
+        cases = [tc for tc in TEST_CASES if tc.category in categories]
+```
+
+Replace with:
+```python
+async def run_all_tests(
+    categories: list[str] | None,
+    http: httpx.AsyncClient,
+    args=None,
+    token: str = "",
+    cases: list | None = None,
+) -> list[TestResult]:
+    if cases is not None:
+        pass  # use caller-supplied pre-filtered list
+    elif categories:
+        cases = [tc for tc in TEST_CASES if tc.category in categories]
+    else:
+        cases = list(TEST_CASES)
+```
+
+---
+
+## Change 2 — `api/routers/tests_api.py`
+
+Find the `run_all_tests` call in `_run_tests_bg`:
+```python
+        async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
+            results = await run_all_tests(
+                categories=categories or None,
+                http=http,
+                args=None,
+                token=_fresh_token,
+            )
+```
+
+Replace with:
+```python
+        async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
+            results = await run_all_tests(
+                categories=categories or None,
+                http=http,
+                args=None,
+                token=_fresh_token,
+                cases=cases_to_run if (test_ids or (categories and len(categories) < 6)) else None,
+            )
+```
+
+This passes the pre-filtered list when:
+- test_ids are specified (suite by explicit IDs), or
+- categories are a subset (not all 6 categories)
+
+When categories is all 6 or None, passes None so run_all_tests uses its default
+full-set logic (same behaviour as before for full baseline runs).
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.9` → `2.45.10`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(tests): v2.45.10 pass pre-filtered cases to run_all_tests — suite test_ids was dead code"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-24 14:25:04
+========================================================================
+Push succeeded. Per instructions, the runner handles INDEX.md — I should not modify it.
+[STATUS] 58s
+
+PROMPT COMPLETE: v2.45.10
+
+========================================================================
+EXIT CODE: 0
+DURATION:  59s
+========================================================================
