@@ -89,6 +89,22 @@ async def check_transition(component: str, current_health: str, **extra) -> None
     if curr_sev == prev_sev:
         return  # No change
 
+    # Suppress non-critical collector noise while a test run is active.
+    # (SSH load from test agents causes transient vm_hosts/network_ssh transitions
+    # that are artefacts of the test, not real production incidents.)
+    # Critical alerts (sev >= 3: error/critical) always fire.
+    if curr_sev < 3:
+        try:
+            from api.routers.tests_api import test_run_active as _tra
+            if _tra:
+                log.debug(
+                    "ALERT suppressed during test run: %s %s → %s",
+                    component, prev, current_health,
+                )
+                return
+        except ImportError:
+            pass
+
     now = datetime.now(timezone.utc)
     alert_id = f"{component}_{now.timestamp():.0f}"
 

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-24T14:26:06",
+  "updated_at": "2026-04-24T16:32:46",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -3813,10 +3813,26 @@
       "filename": "CC_PROMPT_v2.45.11.md",
       "version": "v2.45.11",
       "theme": "fix(tests): task wording + timeouts for 8 remaining failures",
+      "runner_status": "DONE",
+      "commit_sha": "8b898ab",
+      "error": "",
+      "started_at": "2026-04-24T14:26:06",
+      "finished_at": "2026-04-24T14:27:22",
+      "duration_s": 76.12281499995152,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260424_142606_CC_PROMPT_v2.45.11.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.45.12.md",
+      "version": "v2.45.12",
+      "theme": "fix(tests): suppress non-critical collector alerts during test runs",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-24T14:26:06",
+      "started_at": "2026-04-24T16:32:46",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

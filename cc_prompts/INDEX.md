@@ -53,4 +53,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.8.md | v2.45.8 | fix(tests): elastic-pattern task reword + clarify-02 timeout 90→180s | DONE (2381d42) |
 | CC_PROMPT_v2.45.9.md | v2.45.9 | fix(agent): ACTION_PROMPT — concrete don't-ask examples + audit_log constraint | DONE (712f5fc) |
 | CC_PROMPT_v2.45.10.md | v2.45.10 | fix(tests): pass pre-filtered cases to run_all_tests — suite test_ids was dead code | DONE (0ffb51a) |
-| CC_PROMPT_v2.45.11.md | v2.45.11 | fix(tests): task wording + timeouts for 8 remaining failures | RUNNING |
+| CC_PROMPT_v2.45.11.md | v2.45.11 | fix(tests): task wording + timeouts for 8 remaining failures | DONE (8b898ab) |
+| CC_PROMPT_v2.45.12.md | v2.45.12 | fix(tests): suppress non-critical collector alerts during test runs | RUNNING |

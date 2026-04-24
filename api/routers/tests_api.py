@@ -34,6 +34,10 @@ RESULTS_PATH = Path(__file__).parent.parent.parent / "data" / "test_results.json
 # Module-level flag to prevent concurrent runs
 _running = False
 
+# Exported flag — checked by api/alerts.py to suppress collector noise
+# during test runs (SSH load from agents causes false vm_hosts/network_ssh alerts)
+test_run_active = False
+
 
 @router.get("/results")
 async def get_test_results():
@@ -94,8 +98,9 @@ async def _run_tests_bg(
     suite_name: str = "",
     caller_token: str = "",
 ) -> None:
-    global _running
+    global _running, test_run_active
     _running = True
+    test_run_active = True
     try:
         # ── 1. Load suite config if suite_id provided ─────────────────────
         if suite_id:
@@ -209,6 +214,7 @@ async def _run_tests_bg(
         }, indent=2))
     finally:
         _running = False
+        test_run_active = False
 
 
 @router.post("/run")
