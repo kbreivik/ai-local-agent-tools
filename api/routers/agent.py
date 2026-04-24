@@ -1914,6 +1914,16 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         build_step_plan, format_step_header, verdict_from_text,
         extract_structured_verdict, run_coordinator, should_use_coordinator,
     )
+    from api.agents.pipeline import (
+        build_system_prompt,
+        run_preflight,
+        broadcast_preflight,
+        inject_tool_signatures,
+        inject_capability_hint,
+        inject_memory_history,
+        inject_prior_attempts,
+        inject_facts_block,
+    )
     _t0 = time.monotonic()
 
     base_url = _lm_base()
@@ -1924,80 +1934,22 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
     if first_intent == "ambiguous":
         first_intent = "action"
 
-    system_prompt = get_prompt(first_intent)
-
-    # v2.35.4 — runbook-based TRIAGE injection. Classifier selects a matching
-    # runbook by keyword; the helper honours the `runbookInjectionMode` setting
-    # (off | augment | replace | replace+shrink) and is a no-op when 'off' or
-    # no runbook matches.
-    try:
-        from api.agents.router import maybe_inject_runbook as _mir
-        system_prompt = _mir(system_prompt, task, first_intent)
-    except Exception as _rb_e:
-        log.debug("runbook injection skipped: %s", _rb_e)
+    # Base prompt + runbook injection (v2.35.4)
+    system_prompt = build_system_prompt(task, first_intent)
 
     # v2.35.1 — preflight resolution (regex → keyword_db → optional LLM fallback).
-    # Resolves entity references against infra_inventory + known_facts and builds
-    # a PREFLIGHT FACTS section to inject into the system prompt. Never raises.
-    _preflight_result = None
-    _preflight_facts_block = ""
-    try:
-        from api.agents.preflight import (
-            preflight_resolve, format_preflight_facts_section,
-        )
-        _preflight_result = preflight_resolve(task, first_intent)
-        _preflight_facts_block = format_preflight_facts_section(_preflight_result)
-        # v2.39.3 — skill preflight: match skills relevant to the task. Must run
-        # before the preflight WS broadcast so skills_matched can be included.
-        _preflight_skills_block = ""
-        try:
-            from api.agents.preflight import preflight_skills as _pskills
-            _preflight_skills_block = _pskills(task, first_intent)
-        except Exception as _pse:
-            log.debug("preflight_skills failed: %s", _pse)
-        # Emit a preflight event on the websocket so the Preflight Panel can render.
-        try:
-            await manager.broadcast({
-                "type": "preflight",
-                "session_id": session_id,
-                "operation_id": operation_id,
-                "preflight": _preflight_result.as_dict(),
-                "skills_matched": len([
-                    ln for ln in _preflight_skills_block.splitlines()
-                    if ln.startswith("- ")
-                ]) if _preflight_skills_block else 0,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-        except Exception:
-            pass
-        # Mark the operation as awaiting_clarification when ambiguous so the UI
-        # can pause. The LLM still sees the candidates via the prompt block
-        # below; if the operator picks one via the clarify endpoint, a
-        # `preflight_clarify` WS event is echoed back.
-        if _preflight_result.clarifying_needed:
-            try:
-                from api.db.base import get_engine as _pge
-                from sqlalchemy import text as _pt
-                async with _pge().begin() as _pconn:
-                    await _pconn.execute(
-                        _pt("UPDATE operations SET status='awaiting_clarification' "
-                            "WHERE id=:oid AND status='running'"),
-                        {"oid": operation_id},
-                    )
-            except Exception as _pop_e:
-                log.debug("preflight op status update failed: %s", _pop_e)
-    except Exception as _pre_e:
-        log.debug("preflight resolve skipped: %s", _pre_e)
-        _preflight_skills_block = ""
+    _preflight_result, _preflight_facts_block, _preflight_skills_block = (
+        await run_preflight(task, first_intent, operation_id)
+    )
+    await broadcast_preflight(
+        manager, session_id, operation_id,
+        _preflight_result, _preflight_skills_block,
+    )
 
     # v2.34.9: inject MCP tool signatures so the agent calls tools with exact kwargs
-    try:
-        from api.agents.router import allowlist_for as _aw, format_tool_signatures_section as _fsig
-        _sig_block = _fsig(_aw(first_intent, detect_domain(task)))
-        if _sig_block:
-            system_prompt = system_prompt + "\n\n" + _sig_block + "\n"
-    except Exception as _sig_e:
-        log.debug("tool signatures injection skipped: %s", _sig_e)
+    system_prompt = inject_tool_signatures(
+        system_prompt, first_intent, detect_domain(task),
+    )
 
     # Inject parent investigation context for sub-agent tasks
     if parent_context:
@@ -2023,270 +1975,32 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         except Exception as _ple:
             log.debug("parent_session_id update failed: %s", _ple)
 
-    # ── Domain-specific capability injection (e.g. available VM hosts) ────────
-    try:
-        domain = detect_domain(task)
-        if domain == "vm_host":
-            from api.connections import get_all_connections_for_platform
-            vms = get_all_connections_for_platform("vm_host")
-            if vms:
-                inv = {}
-                try:
-                    from api.db.infra_inventory import list_inventory
-                    inv = {e["connection_id"]: e for e in list_inventory("vm_host")}
-                except Exception:
-                    pass
-                lines = []
-                for c in vms[:8]:
-                    cid = str(c.get("id", ""))
-                    label = c.get("label", c.get("host", "?"))
-                    ip = c.get("host", "")
-                    entry = inv.get(cid)
-                    hostname = entry.get("hostname", "") if entry else ""
-                    display = f"{label} (hostname: {hostname})" if hostname and hostname != label else f"{label} ({ip})"
-                    lines.append(f"  - {display}")
-                cap_hint = (
-                    "AVAILABLE VM HOSTS (AUTHORITATIVE — use ONLY these names as `host=` for vm_exec):\n"
-                    + "\n".join(lines)
-                    + "\n\nThese are the only SSH-reachable host labels in this system. Do NOT "
-                    + "use hostnames from PREFLIGHT FACTS, tool results, memory, or runbooks as "
-                    + "vm_exec targets — they may refer to Proxmox VM names, Swarm service names, "
-                    + "UniFi MACs, or other non-SSH entities. If you need a name that isn't in "
-                    + "the list above, call list_connections(platform='vm_host') or "
-                    + "infra_lookup(query='<partial>') FIRST; do not guess.\n\n"
-                    + "USE THE COMPLETE LABEL STRING. Do NOT abbreviate — "
-                    + "'manager-01' and 'agent-01' are NOT valid; use "
-                    + "'ds-docker-manager-01' and 'hp1-ai-agent-lab' exactly. "
-                    + "vm_exec will do unique-suffix matching as a fallback but emits a "
-                    + "warning and will reject ambiguous abbreviations.\n\n"
-                    + "vm_exec commands: df -h, free -m, journalctl -n 50, "
-                    + "find / -size +100M -type f, docker system df, "
-                    + "docker volume ls | head -20, apt list --upgradable\n\n"
-                )
-                from api.security.prompt_sanitiser import sanitise
-                cap_hint, _ = sanitise(cap_hint, max_chars=2000, source_hint="vm_host_capabilities")
-                system_prompt = cap_hint + system_prompt
-    except Exception:
-        pass
+    # Domain-specific capability hint (e.g. available VM hosts for vm_exec)
+    system_prompt = inject_capability_hint(system_prompt, task, first_intent)
 
-    # ── Entity history context injection ──────────────────────────────────────
-    # If task mentions a known entity, inject recent changes/events as context
-    try:
-        from api.db.entity_history import get_recent_changes_summary, get_events
-        from api.db.infra_inventory import resolve_host
+    # Recent entity activity (changes + events) for known hosts in the task
+    system_prompt = inject_memory_history(system_prompt, task, first_intent)
 
-        _entity_hints = []
-        task_words = task.split()
-        for word in task_words:
-            if len(word) < 4:
-                continue
-            entry = resolve_host(word)
-            if entry:
-                entity_id = entry.get("label", word)
-                summary = get_recent_changes_summary(entity_id, hours=48)
-                if summary:
-                    _entity_hints.append(f"  {entity_id}: {summary}")
-                recent_events = get_events(entity_id, hours=48, severity="warning", limit=3)
-                critical_events = get_events(entity_id, hours=48, severity="critical", limit=3)
-                all_events = critical_events + recent_events
-                if all_events:
-                    ev_str = "; ".join(e["description"][:80] for e in all_events[:3])
-                    _entity_hints.append(f"  {entity_id} events: {ev_str}")
-                break   # one entity per task is enough
+    # v2.32.3 / v2.34.1 — prior-attempt injection (investigate/execute only)
+    system_prompt = inject_prior_attempts(system_prompt, task, first_intent)
 
-        if _entity_hints:
-            history_hint = "RECENT ENTITY ACTIVITY (last 48h):\n" + "\n".join(_entity_hints) + "\n\n"
-            from api.security.prompt_sanitiser import sanitise
-            history_hint, _ = sanitise(history_hint, max_chars=2000, source_hint="entity_history")
-            system_prompt = history_hint + system_prompt
-    except Exception:
-        pass
-
-    # ── Attempt history context injection (v2.32.3 / v2.34.1) ─────────────────
-    # Cross-task learning: when this task scopes a known entity, inject prior
-    # agent_attempts so the agent can avoid repeating failed tool chains.
-    # v2.34.1: richer formatting + skip when routine-success pattern detected;
-    # only runs for investigate/execute; opt-out via coordinatorPriorAttemptsEnabled.
-    try:
-        from api.db.infra_inventory import resolve_host
-        from api.agents.router import detect_domain
-        from api.agents.orchestrator import (
-            fetch_prior_attempts,
-            format_attempts_for_prompt,
+    # Past outcomes + RAG + MuninnDB chunks + preflight facts (v2.35.1 / v2.42.3)
+    system_prompt, boost_tools, _context_parts, _first_tool_hint = await inject_facts_block(
+        system_prompt, task, first_intent,
+        _preflight_facts_block, _preflight_skills_block,
+    )
+    if _first_tool_hint:
+        await manager.send_line(
+            "memory",
+            f"[hint] first-tool suggestion: {_first_tool_hint}",
+            status="ok", session_id=session_id,
         )
-
-        if first_intent in ("investigate", "execute"):
-            _attempt_entity = None
-            for word in task.split():
-                if len(word) < 4:
-                    continue
-                entry = resolve_host(word)
-                if entry:
-                    _attempt_entity = entry.get("label", word)
-                    break
-
-            if not _attempt_entity:
-                domain = detect_domain(task)
-                if domain == "kafka":
-                    _attempt_entity = "kafka_cluster"
-                elif domain == "swarm":
-                    _attempt_entity = "swarm_cluster"
-
-            if _attempt_entity:
-                attempts = fetch_prior_attempts(
-                    scope_entity=_attempt_entity,
-                    agent_type=first_intent,
-                )
-                prior_section = format_attempts_for_prompt(attempts, first_intent)
-                if prior_section:
-                    from api.security.prompt_sanitiser import sanitise
-                    prior_section, _ = sanitise(
-                        prior_section + "\n",
-                        max_chars=2000,
-                        source_hint="attempt_history",
-                    )
-                    system_prompt = prior_section + system_prompt
-    except Exception:
-        pass
-
-    # ── Inject past outcomes + pgvector docs + MuninnDB chunks into prompt ───
-    boost_tools: list[str] = []  # populated from successful past outcomes below
-    try:
-        from api.memory.feedback import get_past_outcomes, build_outcome_prompt_section
-        from api.memory.client import get_client as _get_mem_client
-
-        injected_sections: list = []
-        doc_chunks: list = []
-        rag_doc_count = 0
-
-        # Past outcomes (all agent types — OPERATIONAL MEMORY)
-        past_outcomes = await get_past_outcomes(task, max_results=4)
-        outcome_section = build_outcome_prompt_section(past_outcomes)
-        if outcome_section:
-            injected_sections.append(outcome_section)
-
-        # Extract tool boost list from successful past outcomes
-        _boost_tools: list[str] = []
-        for o in past_outcomes:
-            content = o.get("content", "")
-            _bt_m = re.search(r"Tools:\s*(.+)", content)
-            if _bt_m and "completed" in content.lower():
-                names = [n.strip() for n in _bt_m.group(1).split(",") if n.strip()]
-                _boost_tools.extend(names[:4])
-        # Deduplicate preserving order, cap at 8
-        seen = set()
-        boost_tools: list[str] = []
-        for n in _boost_tools:
-            if n not in seen:
-                seen.add(n); boost_tools.append(n)
-            if len(boost_tools) >= 8:
-                break
-
-        # pgvector documentation (tiered by agent type — DOCUMENTATION)
-        _RAG_BUDGETS = {
-            "research": (3000, None),           # full budget, all doc_types
-            "investigate": (3000, None),
-            "execute": (1500, ["api_reference", "cli_reference"]),
-            "action": (1500, ["api_reference", "cli_reference"]),
-        }
-        rag_cfg = _RAG_BUDGETS.get(first_intent)
-        if rag_cfg:
-            try:
-                from api.rag.doc_search import search_docs, format_doc_results
-                rag_budget, rag_type_filter = rag_cfg
-                rag_results = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: search_docs(
-                        query=task,
-                        doc_type_filter=rag_type_filter,
-                        token_budget=rag_budget,
-                    )
-                )
-                # Filter low-confidence results (RRF score < 0.02 means poor match)
-                rag_results = [r for r in rag_results if r.get("rrf_score", 0) >= 0.02]
-                if rag_results:
-                    rag_section = format_doc_results(rag_results)
-                    if rag_section:
-                        injected_sections.insert(0, rag_section)
-                        rag_doc_count = len(rag_results)
-            except Exception as _rag_e:
-                log.debug("RAG injection skipped: %s", _rag_e)
-
-        # MuninnDB doc chunks (research/investigate — Hebbian activation)
-        # v2.43.8: skip entirely when memoryEnabled=false
-        _mem_enabled = True
-        try:
-            from api.settings_manager import get_setting
-            v = get_setting("memoryEnabled").get("value", True)
-            _mem_enabled = v is not False and str(v).lower() not in ("false", "0", "no")
-        except Exception:
-            pass
-
-        if _mem_enabled and first_intent in ("research", "investigate"):
-            _mem = _get_mem_client()
-            doc_context_terms = [w for w in task.lower().split() if len(w) > 3][:6] + ["documentation"]
-            doc_activations = await _mem.activate(doc_context_terms, max_results=5)
-            doc_chunks = [
-                a for a in doc_activations
-                if "documentation" in a.get("tags", []) or
-                   a.get("concept", "").startswith("docs:")
-            ]
-            if doc_chunks:
-                doc_lines = ["OPERATIONAL MEMORY:"]
-                for dc in doc_chunks:
-                    content = dc.get("content", "")
-                    body = re.sub(r'^\[source:[^\]]+\]\n\n', '', content).strip()
-                    src_m = re.search(r'source:\s*([^|]+)', content)
-                    src = src_m.group(1).strip() if src_m else "docs"
-                    doc_lines.append(f"[{src}]\n{body[:500]}")
-                injected_sections.append("\n\n".join(doc_lines))
-
-        # v2.35.1 — prepend PREFLIGHT FACTS above RELEVANT PAST OUTCOMES.
-        if _preflight_facts_block:
-            injected_sections.insert(0, _preflight_facts_block)
-        if _preflight_skills_block:
-            # Insert after facts (index 1) so facts stay at top
-            injected_sections.insert(
-                1 if _preflight_facts_block else 0,
-                _preflight_skills_block
-            )
-
-        # v2.42.3 — MuninnDB first-tool hint (step 0)
-        try:
-            from api.memory.feedback import get_first_tool_hint
-            _first_tool_hint = await get_first_tool_hint(task, first_intent)
-            if _first_tool_hint:
-                _hint_block = (
-                    f"HISTORICAL HINT: For tasks similar to this, "
-                    f"successful runs typically started with: {_first_tool_hint}. "
-                    f"Consider this as your first tool call."
-                )
-                injected_sections.append(_hint_block)
-                await manager.send_line(
-                    "memory",
-                    f"[hint] first-tool suggestion: {_first_tool_hint}",
-                    status="ok", session_id=session_id,
-                )
-        except Exception as _hte:
-            log.debug("first_tool_hint failed: %s", _hte)
-
-        if injected_sections:
-            injection = "\n\n".join(injected_sections) + "\n\n"
-            system_prompt = injection + system_prompt
-            total_injected = rag_doc_count + len(past_outcomes) + len(doc_chunks)
-            parts = []
-            if rag_doc_count:
-                parts.append(f"{rag_doc_count} doc(s)")
-            if past_outcomes:
-                parts.append(f"{len(past_outcomes)} outcome(s)")
-            if doc_chunks:
-                parts.append(f"{len(doc_chunks)} memory chunk(s)")
-            await manager.send_line(
-                "memory",
-                f"[context] {' + '.join(parts)} injected into prompt",
-                status="ok", session_id=session_id,
-            )
-    except Exception:
-        pass
+    if _context_parts:
+        await manager.send_line(
+            "memory",
+            f"[context] {' + '.join(_context_parts)} injected into prompt",
+            status="ok", session_id=session_id,
+        )
 
     client = OpenAI(base_url=base_url, api_key=api_key)
 
