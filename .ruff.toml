@@ -1,0 +1,49 @@
+# DEATHSTAR sensor stack — ruff config
+# Calibrated against current codebase (v2.45.32) so initial run produces ≤5 violations.
+# Rules and thresholds are documented in CLAUDE.md → Sensor Protocol.
+
+line-length = 250
+target-version = "py313"
+
+extend-exclude = [
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "dist",
+    "build",
+    "gui/dist",
+    "gui/node_modules",
+    ".pytest_cache",
+    ".code-index",
+    "scripts/__pycache__",
+    "data",
+    "logs",
+    "checkpoints",
+]
+
+[lint]
+# E501 — line length (calibrated 250)
+# F     — pyflakes: undefined names, redefinitions, syntax errors (with noisy rules ignored)
+# C901  — mccabe complexity (calibrated max 80; default 10)
+# PLR0913 — too-many-arguments (calibrated max 20; default 5)
+select = ["E501", "F", "C901", "PLR0913"]
+
+# Existing-codebase noise: import ordering, unused imports, f-strings, redefined.
+# Goal of the sensor is to flag NEW outliers — not punish migration legacy.
+ignore = [
+    "F401",  # unused-import (98 hits — too noisy, autofix available)
+    "F541",  # f-string-missing-placeholders (11 hits)
+    "F811",  # redefined-while-unused (2 hits — tied to dynamic dispatch)
+    "F841",  # unused-variable (13 hits — frequent in DB driver scaffolding)
+]
+
+[lint.mccabe]
+# Codebase max complexity ~95 (api/main.py:lifespan).
+# Threshold 80 catches that one outlier; new code above 80 should be split.
+max-complexity = 80
+
+[lint.pylint]
+# Codebase max function args ~17 (router constructors).
+# Threshold 20 leaves headroom but catches further bloat — consolidate via dataclass.
+max-args = 20

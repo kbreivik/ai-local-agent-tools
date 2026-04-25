@@ -378,10 +378,84 @@ curl -s http://192.168.199.10:8000/api/health
 docker logs hp1_agent --tail 50
 ```
 
+---
+
+## Sensor Protocol
+
+Three-layer linting stack for CI + local + agent workflows. Source files:
+`scripts/check_sensors.py`, `Makefile`, `.ruff.toml`, `.eslintrc.sensors.json`,
+`.gitleaks.toml`, `.github/workflows/sensors.yml`.
+
+### Tools
+
+| Sensor | What it catches | Config |
+|---|---|---|
+| ruff | Python complexity (C901), too-many-args (PLR0913), long lines (E501), pyflakes errors (F) | `.ruff.toml` |
+| bandit | Hardcoded secrets, unsafe subprocess, SQL injection, weak crypto | inline (`-r api mcp_server scripts`) |
+| gitleaks | JWT tokens, Fernet keys, API tokens — repo-wide scan | `.gitleaks.toml` |
+| eslint | JS/JSX complexity, max-lines, max-params, no-unused-vars | `.eslintrc.sensors.json` (loaded via generated flat-config wrapper) |
+| mypy | Static type errors in `api/`, `mcp_server/`, `scripts/` | inline (`--ignore-missing-imports`) |
+
+### Calibrated thresholds (v2.45.32)
+
+| Threshold | Setting | Codebase peak | Note |
+|---|---|---|---|
+| ruff `max-complexity` | 80 | 95 (`api/main.py:lifespan`) | catches outliers; tighten as refactors land |
+| ruff `max-args` | 20 | ~17 | headroom; consolidate via dataclass |
+| ruff `line-length` | 250 | — | soft style threshold; CI blocker only above 250 |
+| eslint `complexity` | 100 | 97 (`VMHostsSection:VMCard`) | "sleeping" sensor — set just above peak |
+| eslint `max-lines` | 4000 | 3553 (`OptionsModal.jsx`) | tighten as files are split |
+| eslint `max-params` | 15 | ~10 | headroom |
+| eslint `no-unused-vars` | warn | 17 hits | warn-only until cleanup; tighten to error |
+
+Initial run with this config produces 5 violations across the existing codebase.
+The intent: **catch new outliers**, then progressively tighten as code improves.
+
+### Targets
+
+| Command | Purpose |
+|---|---|
+| `make check` | Full human-readable run, every tool's native output. |
+| `make check-agent` | Agent-optimized: failures only, one per line, with HINTs. Delegates to `scripts/check_sensors.py`. |
+| `python scripts/check_sensors.py --only ruff` | Run a single sensor (`--list` to see options). |
+| `make sensors-install` | Install Python sensors (ruff, bandit, mypy) via pip. gitleaks/eslint installed separately. |
+
+### Output format (agent mode)
+
+```
+[TOOL] file:line - rule message
+  HINT: ...
+```
+
+`HINT` is calibrated per-rule and points to existing code patterns:
+- C901 → `api/agents/step_*.py` pipeline split pattern
+- PLR0913 → dataclass consolidation (e.g. `StepState`)
+- bandit B105/B106 → `api/connections.py` Fernet-encrypted credentials
+- gitleaks fernet/jwt → `/opt/hp1-agent/docker/.env` (Ansible-managed)
+- eslint complexity → component/hook extraction (see `DashboardLayout.jsx`)
+
+Exit codes: `0` clean, `1` failures present (or runtime tool error), `2` bad CLI args.
+
+### CI
+
+`.github/workflows/sensors.yml` triggers on PR + push to `main`. Runs `make check`,
+posts a failure summary as a PR comment (updates the previous comment instead of
+spamming), and fails the workflow on any sensor error. The full report is also
+uploaded as the `sensor-report` workflow artifact.
+
+### Adding a new HINT
+
+Edit the per-tool dict at the top of `scripts/check_sensors.py`
+(`RUFF_HINTS`, `BANDIT_HINTS`, `GITLEAKS_HINTS`, `ESLINT_HINTS`, `MYPY_HINTS`).
+Keep hints short, point to a file, and reference an existing pattern.
+
+---
+
 ## Pre-Commit Checklist
 1. No hardcoded IPs/passwords/secrets in Python?
 2. `python -m py_compile <changed files>` — valid syntax?
-3. New platform types added to `INFRA_SECTION_KEYS` in CardFilterBar.jsx?
-4. No hardcoded `localhost` URLs in GUI?
-5. Conventional commit message (`feat|fix|refactor|docs(scope): message`)?
-6. VERSION file bumped?
+3. `make check-agent` clean? (or no new failures vs. baseline)
+4. New platform types added to `INFRA_SECTION_KEYS` in CardFilterBar.jsx?
+5. No hardcoded `localhost` URLs in GUI?
+6. Conventional commit message (`feat|fix|refactor|docs(scope): message`)?
+7. VERSION file bumped?

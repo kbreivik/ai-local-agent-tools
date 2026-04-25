@@ -1,0 +1,27 @@
+{
+  "_comment": "DEATHSTAR sensor stack — ESLint config. Calibrated against gui/src so initial run produces 0 errors. Loaded by scripts/check_sensors.py via a generated flat-config wrapper.",
+  "_thresholds": {
+    "complexity": "error at 100 — codebase peak ~97 (VMHostsSection:VMCard, ServiceCards). Set just above peak so the sensor sleeps until refactors land, then tighten progressively to 60→30→10.",
+    "max-lines": "error at 4000 — OptionsModal.jsx is currently 3553. Tighten as files are split.",
+    "max-params": "error at 15 — codebase peak ~10. Headroom for one more arg before flagging.",
+    "no-unused-vars": "warn — 17 existing tech-debt cases; tighten to error after cleanup"
+  },
+  "rules": {
+    "complexity": ["error", 100],
+    "max-lines": ["error", { "max": 4000, "skipBlankLines": true, "skipComments": true }],
+    "max-params": ["error", 15],
+    "no-unused-vars": ["warn", {
+      "args": "none",
+      "varsIgnorePattern": "^_|^[A-Z]",
+      "destructuredArrayIgnorePattern": "^.*$",
+      "ignoreRestSiblings": true,
+      "caughtErrors": "none"
+    }]
+  },
+  "ignores": [
+    "node_modules/**",
+    "dist/**",
+    "**/__tests__/**",
+    "**/*.test.{js,jsx}"
+  ]
+}

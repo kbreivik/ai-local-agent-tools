@@ -1,0 +1,70 @@
+# DEATHSTAR sensor stack — gitleaks config
+# Scans for: JWT tokens, Fernet keys, generic API tokens.
+# Excludes test fixtures, .example files, and lockfiles.
+
+title = "DEATHSTAR gitleaks rules"
+
+[extend]
+# Inherit gitleaks built-in rules (AWS, GCP, GitHub, Slack, etc.)
+useDefault = true
+
+# ── Custom rules tailored to this codebase ──────────────────────────────────
+
+[[rules]]
+id = "deathstar-jwt-token"
+description = "JWT token (header.payload.signature, base64url segments)"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'''
+tags = ["jwt", "auth"]
+
+[[rules]]
+id = "deathstar-fernet-key"
+description = "Fernet symmetric encryption key (44-char urlsafe base64 ending '=')"
+regex = '''(?i)(SETTINGS_ENCRYPTION_KEY|FERNET_KEY)\s*[:=]\s*['"]?[A-Za-z0-9_-]{43}=['"]?'''
+tags = ["secret", "fernet", "encryption"]
+
+[[rules]]
+id = "deathstar-api-token-assignment"
+description = "Generic API/auth token literal assignment"
+regex = '''(?i)(api[_-]?token|auth[_-]?token|access[_-]?token|bearer[_-]?token)\s*[:=]\s*['"][A-Za-z0-9_\-\.=]{24,}['"]'''
+tags = ["secret", "api-token"]
+# Don't trip on env-var references like API_TOKEN=$SOMETHING
+[[rules.allowlists]]
+regexes = ['''\$\{?[A-Z_][A-Z0-9_]+\}?''', '''os\.environ''', '''getenv''']
+
+[[rules]]
+id = "deathstar-admin-password-literal"
+description = "Hardcoded admin password literal (only flag obvious leaks)"
+regex = '''(?i)ADMIN_PASSWORD\s*=\s*['"][A-Za-z0-9_!@#$%^&*()-]{8,}['"]'''
+tags = ["secret", "password"]
+
+# ── Global allowlist: paths and patterns to skip ─────────────────────────────
+
+[[allowlists]]
+description = "Test fixtures, examples, lockfiles, build artifacts"
+paths = [
+    '''(?i)tests?/.*''',
+    '''(?i).*/__tests__/.*''',
+    '''.*\.example$''',
+    '''.*\.example\..*''',
+    '''.env\.defaults$''',
+    '''package-lock\.json$''',
+    '''pnpm-lock\.yaml$''',
+    '''yarn\.lock$''',
+    '''gui/node_modules/.*''',
+    '''node_modules/.*''',
+    '''dist/.*''',
+    '''build/.*''',
+    '''.*\.min\.js$''',
+    '''.*\.svg$''',
+    '''cc_prompts/logs/.*''',
+    '''data/.*''',
+    '''.code-index/.*''',
+    '''.pytest_cache/.*''',
+]
+
+[[allowlists]]
+description = "Fixture/placeholder/dummy values used in CC prompts and docs"
+regexes = [
+    '''(?i)(your[_-]?key[_-]?here|placeholder|example|dummy|fake|test[_-]?token|\bxxx+\b)''',
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]+\.signature''',
+]
