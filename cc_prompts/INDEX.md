@@ -75,3 +75,4 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.30.md | v2.45.30 | fix(facts): vm_hosts services dict iteration + extraction visibility logging | DONE (2544789) |
 | CC_PROMPT_v2.45.31.md | v2.45.31 | fix(orch): skip auto-prepended observe step when task names plan_action explicitly | DONE (1f99748) |
 | CC_PROMPT_v2.45.32.md | v2.45.32 | fix(tests): deterministic clarification/plan handling + per-test trace + memory restore | DONE (ec59672) |
+| CC_PROMPT_v2.45.33.md | v2.45.33 | fix(sensors): clear all 5 violations from f346017 — F821 (correlator + agent), E501, C901 | DONE (62d4435) |
