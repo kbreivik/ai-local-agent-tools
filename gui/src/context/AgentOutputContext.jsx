@@ -140,6 +140,7 @@ export function AgentOutputProvider({ children }) {
   const [hallucinationBlocks,  setHallucinationBlocks]  = useState([])
   const [agentDiag,            setAgentDiag]            = useState(null)
   const [subAgents,            setSubAgents]            = useState([])
+  const [preflight,            setPreflight]            = useState(null)  // v2.45.22
   const agentTypeRef    = useRef(null)
   const sessionIdRef    = useRef(null)
   const feedStartRef    = useRef(null)  // timestamp when current run started
@@ -176,6 +177,7 @@ export function AgentOutputProvider({ children }) {
         setHallucinationBlocks([])        // ← clear halluc-guard banner on new run (v2.34.8)
         setAgentDiag(null)                // ← clear diagnostics overlay on new run
         setSubAgents([])                  // ← clear sub-agent list on new run (v2.34.0)
+        setPreflight(null)                // ← clear preflight on new run (v2.45.22)
         // Add to raw log stream
         setOutputLines(prev => [...prev.slice(-500), msg])
         // Reset inline feed
@@ -263,6 +265,26 @@ export function AgentOutputProvider({ children }) {
                 completed_at:    msg.timestamp       || '' }
             : s
         ))
+        return
+      }
+
+      // ── preflight_needed (v2.45.22) ───────────────────────────────────────
+      // Backend has classified the task and detected ambiguity in entity
+      // resolution. Render the PreflightPanel so the operator can pick one.
+      if (t === 'preflight_needed') {
+        setPreflight({
+          ambiguous:        msg.ambiguous !== false,
+          candidates:       msg.candidates       || [],
+          preflight_facts:  msg.preflight_facts  || [],
+          agent_type:       msg.agent_type       || '',
+          tier_used:        msg.tier_used        || '',
+          session_id:       msg.session_id       || '',
+        })
+        return
+      }
+      // Clear preflight on terminal events
+      if (t === 'preflight_resolved' || t === 'preflight_cancelled' || t === 'preflight_clarify') {
+        setPreflight(null)
         return
       }
 
@@ -392,6 +414,7 @@ export function AgentOutputProvider({ children }) {
     setAgentType(null)
     setCurrentSessionId(null)
     setZeroPivot(null)
+    setPreflight(null)
   }, [])
 
   const stopAgent = useCallback(async () => {
@@ -427,6 +450,8 @@ export function AgentOutputProvider({ children }) {
       hallucinationBlocks,
       agentDiag,
       subAgents,
+      preflight,
+      setPreflight,
     }}>
       {children}
     </AgentOutputContext.Provider>

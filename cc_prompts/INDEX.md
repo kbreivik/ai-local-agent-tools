@@ -63,8 +63,8 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.18.md | v2.45.18 | fix(agent): clarify→plan_action — append system message to LLM messages list | DONE (87b5ac6) |
 | CC_PROMPT_v2.45.19.md | v2.45.19 | feat(tests): schedule executor — read test_schedules and fire runs at cron times | DONE (4ea5795) |
 | CC_PROMPT_v2.45.20.md | v2.45.20 | fix(tests): timeout headroom for 4 borderline failures | DONE (8c40c9c) |
-| CC_PROMPT_v2.45.21.md | v2.45.21 | fix(security): /metrics auth + CORS_ALLOW_ALL startup warning | RUNNING |
-| CC_PROMPT_v2.45.22.md | v2.45.22 | feat(ui): wire PreflightPanel — preflight_needed WS handler + Commands import | PENDING |
+| CC_PROMPT_v2.45.21.md | v2.45.21 | fix(security): /metrics auth + CORS_ALLOW_ALL startup warning | DONE (558cc4a) |
+| CC_PROMPT_v2.45.22.md | v2.45.22 | feat(ui): wire PreflightPanel — preflight_needed WS handler + Commands import | RUNNING |
 | CC_PROMPT_v2.45.23.md | v2.45.23 | feat(facts): elastic + network_ssh write to known_facts_current | PENDING |
 | CC_PROMPT_v2.45.24.md | v2.45.24 | feat(ui): Facts & Knowledge settings tab | PENDING |
 | CC_PROMPT_v2.45.25.md | v2.45.25 | feat(facts): agent_observation write path — drain state.run_facts to known_facts_current | PENDING |

@@ -1,0 +1,270 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.21.md (v2.45.21)
+Theme: fix(security): /metrics auth + CORS_ALLOW_ALL startup warning
+
+Prompt content:
+
+# CC PROMPT — v2.45.21 — fix(security): /metrics auth + CORS_ALLOW_ALL startup warning
+
+## What this does
+Two small security gaps from the v2.45.17 audit, bundled because each is
+trivial:
+
+1. `/metrics` endpoint is currently unauthenticated. Exposes operational
+   intelligence (escalation rates, hallucination guard hits, tool patterns,
+   broker counts). Add `Depends(get_current_user)` so only authenticated
+   users can read it.
+
+2. `CORS_ALLOW_ALL=true` opens CORS to `*` with no startup warning, unlike
+   the admin-password default check. Add a parallel critical-level log line.
+
+Version bump: 2.45.20 → 2.45.21
+
+---
+
+## Change 1 — `api/main.py` — protect /metrics endpoint
+
+Find this block:
+
+```python
+@app.get("/metrics")
+async def metrics():
+    body, ctype = render_metrics()
+    return Response(content=body, media_type=ctype)
+```
+
+Replace with:
+
+```python
+@app.get("/metrics")
+async def metrics(_: str = Depends(get_current_user)):
+    """Prometheus metrics endpoint (auth-required since v2.45.21).
+
+    Operator scrapers must include the JWT bearer token or auth cookie.
+    Returns 401 for unauthenticated requests. This protects operational
+    intelligence (escalation frequency, hallucination guard hits, tool
+    failure patterns) from anonymous LAN scraping.
+    """
+    body, ctype = render_metrics()
+    return Response(content=body, media_type=ctype)
+```
+
+CC: confirm `from api.auth import get_current_user, check_secrets` is already
+imported at the top of main.py — it is (line ~19). Confirm `Depends` is in the
+fastapi imports — it is. No new imports needed.
+
+---
+
+## Change 2 — `api/main.py` — CORS_ALLOW_ALL critical-log warning
+
+Find this block in the `lifespan` function (the existing critical-secrets
+check). Look for `check_secrets()` and the surrounding context:
+
+```python
+    # Crypto boot-safety: refuse to start if env key is missing but encrypted data exists
+    from api.crypto import check_encryption_key_safe
+    check_encryption_key_safe()
+    check_secrets()
+    await _start_logger()
+```
+
+Right AFTER the `check_secrets()` line, insert:
+
+```python
+    # v2.45.21 — Loud CORS warning. Mirrors the ADMIN_PASSWORD default check.
+    if CORS_ORIGINS_ALL:
+        import logging as _logging_cors
+        _logging_cors.getLogger(__name__).critical(
+            "SECURITY: CORS_ALLOW_ALL=true — every origin is accepted. "
+            "Set CORS_ALLOW_ALL=false and use CORS_ORIGINS for specific hosts."
+        )
+```
+
+---
+
+## Change 3 — Document the auth requirement for Prometheus scrapers
+
+Find the `.env.example` file at the repo root.
+
+Look for the `CORS_ALLOW_ALL` line. Right above it, ensure there is or insert
+a comment block explaining the metrics auth (find an existing free spot near
+the auth section if one exists, else add at the end before
+`CORS_ALLOW_ALL=`):
+
+```
+# /metrics is auth-required (v2.45.21). Prometheus scrapers must send the
+# JWT bearer token or hp1_auth cookie. Generate a long-lived API token via
+# the Users page or POST /api/auth/tokens.
+```
+
+CC: if `.env.example` does not contain `CORS_ALLOW_ALL` at all, skip this
+change — the comment is informational only.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/main.py
+grep -n "Depends(get_current_user)" api/main.py | grep metrics
+grep -n "CORS_ALLOW_ALL=true" api/main.py
+```
+
+Expected:
+- `metrics(_: str = Depends(get_current_user))` line present
+- `critical(.*CORS_ALLOW_ALL=true` line present
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.20` → `2.45.21`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(security): v2.45.21 protect /metrics with auth + warn on CORS_ALLOW_ALL"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy:
+- Anonymous `curl http://192.168.199.10:8000/metrics` should return 401.
+- Authenticated `curl -b "hp1_auth=$TOKEN" http://192.168.199.10:8000/metrics`
+  should still return the metrics body.
+- If `CORS_ALLOW_ALL=true` in .env, container logs should show the CRITICAL
+  line at startup.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-25 11:37:25
+========================================================================
+Push verified at `558cc4a`. Per the runner instructions, I do NOT modify INDEX.md — the runner handles that.
+[STATUS] 56s
+
+PROMPT COMPLETE: v2.45.21
+
+========================================================================
+EXIT CODE: 0
+DURATION:  56s
+========================================================================

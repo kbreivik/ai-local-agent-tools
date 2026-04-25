@@ -6,6 +6,7 @@ import ClarificationWidget from './ClarificationWidget'
 import SubtaskOfferCard from './SubtaskOfferCard'
 import AgentDiagnostics from './AgentDiagnostics'
 import SubAgentPanel from './SubAgentPanel'
+import PreflightPanel from './PreflightPanel'
 
 const TYPE_STYLE = {
   step:      { line: 'text-slate-400',  icon: '──' },
@@ -56,7 +57,7 @@ const AGENT_BADGE = {
 }
 
 export default function OutputPanel({ onTab }) {
-  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, hallucinationBlocks, agentDiag, subAgents } = useAgentOutput()
+  const { outputLines, runState, wsState, clearOutput, pendingChoices, clearChoices, agentType, lastAgentType, stopAgent, pendingProposals, zeroPivot, contradictions, hallucinationBlocks, agentDiag, subAgents, preflight, setPreflight, currentSessionId } = useAgentOutput()
   const { setTask } = useTask()
   const bottomRef = useRef(null)
 
@@ -117,6 +118,50 @@ export default function OutputPanel({ onTab }) {
 
       {/* Output stream */}
       <div className="flex-1 overflow-y-auto px-3 py-2 bg-slate-950">
+        {preflight && (
+          <PreflightPanel
+            preflight={preflight}
+            sessionId={preflight.session_id || currentSessionId}
+            mode="always_visible"
+            timeoutSec={300}
+            onPick={async (entityId) => {
+              const sid = preflight.session_id || currentSessionId
+              try {
+                await fetch('/api/agent/preflight/clarify', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ session_id: sid, selected_entity_id: entityId }),
+                })
+              } catch (e) { console.error('preflight resolve failed', e) }
+              setPreflight(null)
+            }}
+            onRefine={async (refinedTask) => {
+              const sid = preflight.session_id || currentSessionId
+              try {
+                await fetch('/api/agent/preflight/clarify', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ session_id: sid, refined_task: refinedTask }),
+                })
+              } catch (e) { console.error('preflight refine failed', e) }
+              setPreflight(null)
+            }}
+            onCancel={async () => {
+              const sid = preflight.session_id || currentSessionId
+              try {
+                await fetch('/api/agent/preflight/cancel', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ session_id: sid }),
+                })
+              } catch (e) { console.error('preflight cancel failed', e) }
+              setPreflight(null)
+            }}
+          />
+        )}
         <AgentDiagnostics diag={agentDiag} />
         {zeroPivot && (
           <div className="mono" style={{
