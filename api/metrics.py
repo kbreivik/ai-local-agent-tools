@@ -72,6 +72,13 @@ BUDGET_NUDGE_COUNTER = Counter(
     ["outcome"],
 )
 
+# --- force-plan_action nudges (v2.47.3) ---
+HARNESS_PLAN_NUDGES_COUNTER = Counter(
+    "deathstar_harness_plan_nudges_total",
+    "Force-plan_action nudges fired (v2.47.3) — agent diverged from action protocol",
+    labelnames=["agent_type"],
+)
+
 # --- hallucination guard (v2.34.8) ---
 HALLUCINATION_GUARD_COUNTER = Counter(
     "deathstar_agent_hallucination_guards_total",

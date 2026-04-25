@@ -1034,6 +1034,44 @@ async def dispatch_tool_calls(
             )
         messages.append({"role": "user", "content": _nudge})
 
+    # v2.47.3 — force-plan nudge for action/execute runs that aren't
+    # converging toward plan_action(). After 2 tool calls without
+    # plan_action, the agent has lost the script. Inject a hard directive
+    # so the next LLM turn calls plan_action(). Fires once per run.
+    if (
+        agent_type in ("action", "execute")
+        and not state.plan_force_nudge_fired
+        and not state.plan_action_called
+        and len(state.tools_used_names) >= 2
+        and "plan_action" not in state.tools_used_names
+    ):
+        state.plan_force_nudge_fired = True
+        messages.append({
+            "role": "system",
+            "content": (
+                "[harness] You are an EXECUTE-type agent and have made "
+                f"{len(state.tools_used_names)} tool calls without calling "
+                "plan_action(). Per the EXECUTE rules, your NEXT tool call "
+                "MUST be plan_action(summary=..., steps=[...], risk_level=..., "
+                "reversible=...) before any destructive operation. "
+                "Even read-only follow-up checks must wait until plan_action() "
+                "has fired and been approved. "
+                "Do NOT call audit_log. Do NOT call escalate. "
+                "Call plan_action() now."
+            ),
+        })
+        await manager.send_line(
+            "step",
+            f"[harness] force-plan nudge fired ({len(state.tools_used_names)} "
+            f"tools used, plan_action still pending)",
+            status="warning", session_id=session_id,
+        )
+        try:
+            from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+            HARNESS_PLAN_NUDGES_COUNTER.labels(agent_type=agent_type).inc()
+        except Exception:
+            pass
+
     halt = False
     for tc in _proposed_tcs:
         fn_name = tc.function.name

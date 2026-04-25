@@ -1,0 +1,318 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.47.3.md (v2.47.3)
+Theme: fix(agent): force plan_action on action-typed runs after 2 tool calls without plan
+
+Prompt content:
+
+# CC PROMPT — v2.47.3 — fix(agent): force plan_action on action-typed runs after N tool calls without plan
+
+## What this does
+Closes the 4 action-test regressions visible in both mem-on and mem-off
+A/B baselines (action-activate-01, action-drain-01, action-rollback-01,
+action-upgrade-01 — all failing "Expected plan_pending, none triggered").
+
+Root cause: v2.45.31 made the orchestrator skip the auto-prepended observe
+step when the task explicitly named `plan_action`. That fix was correct
+but incomplete — once the pre-check is skipped, nothing else FORCES
+`plan_action()` to fire. The agent now happily runs `audit_log` or
+`service_health` then exits without ever calling `plan_action()`, and the
+test rightly fails.
+
+Fix: in `_run_single_agent_step`, when `agent_type` is action/execute and
+the agent has made N tool calls without calling `plan_action`, harness-
+inject a system message: "You MUST call plan_action() now before any
+further tool calls." Same pattern as v2.45.18's clarify→plan injection.
+
+Threshold: 2 tool calls. Action runs that get 3+ tool calls deep without
+proposing a plan have lost the script. Earlier than 2 risks firing on
+runs that legitimately need a status check first.
+
+Version bump: 2.47.2 → 2.47.3
+
+---
+
+## Context
+
+Action tasks already get steered toward `plan_action` via:
+- The `execute` agent prompt
+- v2.45.18 clarify→plan_action injection (only fires after a clarification)
+- v2.45.31 orchestrator skip when task names `plan_action` explicitly
+
+But there's no harness-level enforcement. If the agent ignores the prompt
+guidance, nothing recovers the run. That's the gap.
+
+The fix lives in `api/agents/step_tools.py` because that's where every
+tool call passes through and where the existing harness nudges live
+(budget nudge, sub-agent distrust, propose_dedup).
+
+---
+
+## Change 1 — `api/agents/step_state.py` — add idempotency flag
+
+CC: open `api/agents/step_state.py`. Find the `StepState` dataclass and
+add a new flag near the other fired-once flags
+(`zero_pivot_fired`, `budget_nudge_fired`, etc.):
+
+```python
+    plan_force_nudge_fired: bool = False  # v2.47.3 — force-plan_action nudge
+```
+
+If the dataclass uses `field(default=False)` style or different naming,
+match the existing pattern.
+
+---
+
+## Change 2 — `api/agents/step_tools.py` — inject plan_action force directive
+
+CC: open `api/agents/step_tools.py`. Find `dispatch_tool_calls` (the main
+entry that's called from `_run_single_agent_step` per loop iteration).
+Look for the existing budget-nudge / sub-agent distrust injection blocks
+near the top of the function, AFTER `state` and `messages` are bound and
+BEFORE the per-tool-call loop iterates.
+
+Add a new harness check:
+
+```python
+    # v2.47.3 — force-plan nudge for action/execute runs that aren't
+    # converging toward plan_action(). After 2 tool calls without
+    # plan_action, the agent has lost the script. Inject a hard directive
+    # so the next LLM turn calls plan_action(). Fires once per run.
+    if (
+        agent_type in ("action", "execute")
+        and not state.plan_force_nudge_fired
+        and not state.plan_action_called
+        and len(state.tools_used_names) >= 2
+        and "plan_action" not in state.tools_used_names
+    ):
+        state.plan_force_nudge_fired = True
+        messages.append({
+            "role": "system",
+            "content": (
+                "[harness] You are an EXECUTE-type agent and have made "
+                f"{len(state.tools_used_names)} tool calls without calling "
+                "plan_action(). Per the EXECUTE rules, your NEXT tool call "
+                "MUST be plan_action(summary=..., steps=[...], risk_level=..., "
+                "reversible=...) before any destructive operation. "
+                "Even read-only follow-up checks must wait until plan_action() "
+                "has fired and been approved. "
+                "Do NOT call audit_log. Do NOT call escalate. "
+                "Call plan_action() now."
+            ),
+        })
+        await manager.send_line(
+            "step",
+            f"[harness] force-plan nudge fired ({len(state.tools_used_names)} "
+            f"tools used, plan_action still pending)",
+            status="warning", session_id=session_id,
+        )
+        try:
+            from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+            HARNESS_PLAN_NUDGES_COUNTER.labels(agent_type=agent_type).inc()
+        except Exception:
+            pass
+```
+
+CC: place this block right after the existing budget-nudge / sub-agent
+distrust check, before the per-tool-call dispatch loop. The variables
+`agent_type`, `state`, `messages`, `manager`, `session_id` must all be in
+scope at the chosen point.
+
+If `dispatch_tool_calls` doesn't take `agent_type` as a parameter, look
+at its caller (`_run_single_agent_step` in `api/routers/agent.py`) and
+either thread `agent_type` through, or read it off `state.agent_type`
+which is already populated in `StepState`.
+
+---
+
+## Change 3 — `api/metrics.py` — register the new counter
+
+CC: open `api/metrics.py`. Find where harness counters are defined
+(search for `Counter(` and existing `HARNESS_*` if any). Add:
+
+```python
+HARNESS_PLAN_NUDGES_COUNTER = Counter(
+    "deathstar_harness_plan_nudges_total",
+    "Force-plan_action nudges fired (v2.47.3) — agent diverged from action protocol",
+    labelnames=["agent_type"],
+)
+```
+
+If the file uses `prometheus_client.Counter` directly or a registry-register
+pattern, match the existing style.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/agents/step_state.py api/agents/step_tools.py api/metrics.py
+grep -n "plan_force_nudge_fired\|force-plan nudge" api/agents/step_state.py api/agents/step_tools.py
+```
+
+Expected: nudge logic present, no syntax errors.
+
+After deploy, re-run the 4 regressed action tests via the Tests panel:
+
+```bash
+# From any auth'd session on agent-01:
+TOKEN=<paste hp1_auth cookie>
+for tid in action-activate-01 action-drain-01 action-rollback-01 action-upgrade-01; do
+    curl -s -b "hp1_auth=$TOKEN" -X POST http://localhost:8000/api/tests/run \
+        -H 'Content-Type: application/json' \
+        -d "{\"test_ids\": [\"$tid\"]}"
+    sleep 90
+done
+```
+
+Expected: all 4 pass. The DB row should now show `plan_steps_count > 0`
+and `plan_summary` populated, since the captured-fields path lands when
+`plan_pending` actually fires.
+
+If a test still fails with "Expected plan_pending, none triggered",
+inspect container logs for `[harness] force-plan nudge fired` — if absent,
+the threshold (2 tool calls) is wrong for that test. If present but no
+plan_action follow-up, the model is ignoring the system message and a
+stronger gate is needed (block all non-plan_action tool calls until
+plan_action fires).
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.2` → `2.47.3`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(agent): v2.47.3 force plan_action on action-typed runs after 2 tool calls without plan"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After this lands plus v2.47.2 (memory poisoning fix), the next mem-on
+baseline should be back at or near the v2.45.17 95.5% mark.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-25 22:14:42
+========================================================================
