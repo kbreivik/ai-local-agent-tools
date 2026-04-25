@@ -188,6 +188,31 @@ class NetworkSSHCollector(BaseCollector):
                     "error": str(e)[:120],
                 })
 
+            # v2.45.23 — emit known_facts for this host
+            try:
+                from api.db.known_facts import batch_upsert_facts
+                last_dev = devices[-1]
+                reachable = last_dev.get("dot") == "green"
+                host_health = "healthy" if reachable else "error"
+                host_label = (label or host or "?").lower().replace(".", "_").replace(" ", "_")
+                facts = [
+                    {
+                        "fact_key": f"prod.network_ssh.host.{host_label}.reachable",
+                        "source":   "network_ssh_collector",
+                        "value":    bool(reachable),
+                        "metadata": {"host": host, "platform": c.get("platform")},
+                    },
+                    {
+                        "fact_key": f"prod.network_ssh.host.{host_label}.health",
+                        "source":   "network_ssh_collector",
+                        "value":    host_health,
+                        "metadata": {"host": host, "platform": c.get("platform")},
+                    },
+                ]
+                batch_upsert_facts(facts, actor="network_ssh_collector")
+            except Exception as _fe:
+                log.debug("network_ssh fact write failed: %s", _fe)
+
         total = len(devices)
         ok = total - errors
         if errors == 0:

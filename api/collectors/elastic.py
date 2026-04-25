@@ -93,6 +93,54 @@ class ElasticCollector(BaseCollector):
             except Exception:
                 pass
 
+            # v2.45.23 — write to known_facts_current so agent FACTS injection
+            # can surface ES cluster state alongside proxmox/swarm/pbs facts.
+            try:
+                from api.db.known_facts import batch_upsert_facts
+                cluster_name = health_data.get("cluster_name") or "elasticsearch"
+                facts = [
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.status",
+                        "source":   "elastic_collector",
+                        "value":    cluster_status,
+                        "metadata": {"poll_url": self.url},
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.health",
+                        "source":   "elastic_collector",
+                        "value":    health,
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.nodes_total",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("number_of_nodes", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.nodes_data",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("number_of_data_nodes", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.shards_active",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("active_shards", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.shards_unassigned",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("unassigned_shards", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.filebeat_status",
+                        "source":   "elastic_collector",
+                        "value":    filebeat_status,
+                        "metadata": {"index_pattern": self.filebeat_pattern},
+                    },
+                ]
+                batch_upsert_facts(facts, actor="elastic_collector")
+            except Exception as _fe:
+                log.debug("elastic fact write failed: %s", _fe)
+
             return {
                 "health": health,
                 "message": (
