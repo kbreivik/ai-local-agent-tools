@@ -459,14 +459,40 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
             {expanded === run.id && detail && (
               <div style={{ borderTop: '1px solid var(--border)', padding: '8px 12px' }}>
                 {(detail.results || []).map(r => (
-                  <div key={r.test_id} style={{ display: 'flex', gap: 8, padding: '2px 0', borderBottom: '1px solid var(--bg-3)', alignItems: 'center' }}>
-                    <span style={{ color: passColor(r.passed), fontSize: 9, width: 12, flexShrink: 0 }}>{r.passed ? '✓' : r.soft ? '⚠' : '✗'}</span>
-                    <Mono style={{ color: 'var(--text-3)', width: 160, flexShrink: 0 }}>{r.test_id}</Mono>
-                    <span style={catStyle(r.category)}>{r.category}</span>
-                    <Mono style={{ color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.task}</Mono>
-                    <Mono style={{ color: 'var(--text-3)' }}>{r.step_count} steps</Mono>
-                    <Mono style={{ color: 'var(--text-3)' }}>{r.duration_s?.toFixed(1)}s</Mono>
-                    {r.failures?.length > 0 && <Mono style={{ color: 'var(--red)' }}>{r.failures[0]?.slice(0,40)}</Mono>}
+                  <div key={r.test_id} style={{ borderBottom: '1px solid var(--bg-3)', padding: '2px 0' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ color: passColor(r.passed), fontSize: 9, width: 12, flexShrink: 0 }}>{r.passed ? '✓' : r.soft ? '⚠' : '✗'}</span>
+                      <Mono style={{ color: 'var(--text-3)', width: 160, flexShrink: 0 }}>{r.test_id}</Mono>
+                      <span style={catStyle(r.category)}>{r.category}</span>
+                      <Mono style={{ color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.task}</Mono>
+                      <Mono style={{ color: 'var(--text-3)' }}>{r.step_count} steps</Mono>
+                      <Mono style={{ color: 'var(--text-3)' }}>{r.duration_s?.toFixed(1)}s</Mono>
+                      {r.failures?.length > 0 && <Mono style={{ color: 'var(--red)' }}>{r.failures[0]?.slice(0,40)}</Mono>}
+                    </div>
+                    {r.clarification_question && (
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, marginLeft: 20 }}>
+                        <span style={{ color: 'var(--cyan)' }}>Q:</span> {r.clarification_question}
+                        {r.clarification_answer_used && (
+                          <span> — <span style={{ color: 'var(--accent)' }}>A:</span> {r.clarification_answer_used}</span>
+                        )}
+                      </div>
+                    )}
+                    {r.plan_summary && (
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, marginLeft: 20 }}>
+                        <span style={{ color: 'var(--amber)' }}>Plan:</span> {r.plan_summary}
+                        {r.plan_steps_count > 0 && (
+                          <span> ({r.plan_steps_count} steps, {r.plan_approved ? 'approved' : 'cancelled'})</span>
+                        )}
+                      </div>
+                    )}
+                    {r.operation_id && (
+                      <div style={{ fontSize: 8, color: 'var(--text-3)', marginTop: 1, marginLeft: 20 }}>
+                        op: <a
+                          href={`/api/logs/operations/${r.operation_id}`}
+                          style={{ color: 'var(--cyan)', textDecoration: 'none' }}
+                        >{r.operation_id.slice(0, 8)}</a>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

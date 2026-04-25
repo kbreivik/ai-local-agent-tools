@@ -151,13 +151,24 @@ def insert_result(run_id: str, r: dict) -> None:
         cur.execute("""
             INSERT INTO test_run_results
                 (run_id, test_id, category, task, passed, soft, critical,
-                 failures, warnings, agent_type, tools_called, step_count, duration_s, timed_out)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 failures, warnings, agent_type, tools_called, step_count,
+                 duration_s, timed_out,
+                 clarification_question, clarification_answer_used,
+                 plan_summary, plan_steps_count, plan_approved, operation_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,%s)
         """, (run_id, r['id'], r.get('category', ''), r.get('task', ''),
               r.get('passed', False), r.get('soft', False), r.get('critical', False),
               json.dumps(r.get('failures', [])), json.dumps(r.get('warnings', [])),
               r.get('agent_type', ''), json.dumps(r.get('tools_called', [])),
-              r.get('step_count', 0), r.get('duration_s', 0), r.get('timed_out', False)))
+              r.get('step_count', 0), r.get('duration_s', 0),
+              r.get('timed_out', False),
+              r.get('clarification_question', ''),
+              r.get('clarification_answer_used', ''),
+              r.get('plan_summary', ''),
+              r.get('plan_steps_count', 0),
+              r.get('plan_approved', False),
+              r.get('operation_id', '')))
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         log.debug("insert_result: %s", e)
@@ -211,7 +222,9 @@ def get_run(run_id: str) -> dict:
 
         cur.execute("""
             SELECT id,test_id,category,task,passed,soft,critical,failures,warnings,
-                   agent_type,tools_called,step_count,duration_s,timed_out,timestamp
+                   agent_type,tools_called,step_count,duration_s,timed_out,timestamp,
+                   clarification_question,clarification_answer_used,
+                   plan_summary,plan_steps_count,plan_approved,operation_id
             FROM test_run_results WHERE run_id=%s ORDER BY timestamp ASC
         """, (run_id,))
         rcols = [d[0] for d in cur.description]

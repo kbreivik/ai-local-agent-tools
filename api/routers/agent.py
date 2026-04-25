@@ -2094,10 +2094,11 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
 
     # Broadcast agent start (using first step's intent for badge)
     await manager.broadcast({
-        "type":       "agent_start",
-        "agent_type": first_intent,
-        "session_id": session_id,
-        "timestamp":  datetime.now(timezone.utc).isoformat(),
+        "type":         "agent_start",
+        "agent_type":   first_intent,
+        "session_id":   session_id,
+        "operation_id": operation_id,
+        "timestamp":    datetime.now(timezone.utc).isoformat(),
     })
 
     await manager.send_line("step", f"Agent started — task: {task}", status="ok", session_id=session_id)

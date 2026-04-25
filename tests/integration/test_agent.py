@@ -220,6 +220,13 @@ class TestResult:
     soft: bool
     critical: bool
     timed_out: bool
+    # v2.45.32 — capture full clarification/plan content for audit trail
+    clarification_question: str = ""
+    clarification_answer_used: str = ""
+    plan_summary: str = ""
+    plan_steps_count: int = 0
+    plan_approved: bool = False
+    operation_id: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -249,11 +256,46 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
     t0 = time.monotonic()
     timed_out = False
 
+    # v2.45.32 — captured fields for audit trail (clarification Q/A, plan
+    # summary, operation_id). Defined here so the post-try _evaluate call
+    # can read them even if the WS loop fails partway.
+    captured: dict = {
+        "clarification_question": "",
+        "clarification_answer_used": "",
+        "plan_summary": "",
+        "plan_steps_count": 0,
+        "plan_approved": False,
+        "operation_id": "",
+    }
+
     # Setup hook
     if tc.setup:
         try:
             subprocess.run(tc.setup, shell=True, timeout=15, check=False)
             await asyncio.sleep(1)
+        except Exception:
+            pass
+
+    # v2.45.32 — pre-arm the clarification/plan answers via the API so they
+    # are deposited at the server BEFORE the agent loop reaches the
+    # clarifying_question() / plan_action() call. Eliminates the WS-race that
+    # would otherwise route the modal to whichever browser is connected.
+    if tc.triggers_clarification or tc.clarification_answer not in ("", "cancel"):
+        try:
+            await http.post(
+                f"{API_BASE}/api/agent/clarify",
+                json={"session_id": session_id, "answer": tc.clarification_answer},
+                timeout=5,
+            )
+        except Exception:
+            pass  # Best-effort — agent will still emit and re-prompt
+    if tc.triggers_plan:
+        try:
+            await http.post(
+                f"{API_BASE}/api/agent/confirm",
+                json={"session_id": session_id, "approved": tc.auto_confirm},
+                timeout=5,
+            )
         except Exception:
             pass
 
@@ -292,39 +334,85 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
                     if not msg or msg.get("type") == "pong":
                         continue
 
+                    # v2.45.32 — capture operation_id from the first agent_start
+                    # broadcast so the result row links back to the trace.
+                    if msg.get("type") == "agent_start" and not captured.get("operation_id"):
+                        # operation_id may be on the agent_start broadcast itself
+                        # or fetched via /api/agent/operations/{session_id}
+                        # Prefer the broadcast field; fall back later if absent.
+                        if msg.get("operation_id"):
+                            captured["operation_id"] = msg.get("operation_id", "")
+
                     messages.append(msg)
                     sid  = msg.get("session_id", "")
                     mtyp = msg.get("type", "")
 
-                    # Auto-handle plan for our session
+                    # v2.45.32 — re-send the response in case the prearm got
+                    # delivered before /run dispatched the operation_id. Server
+                    # idempotently accepts duplicates (last writer wins on the future).
                     if mtyp == "plan_pending" and sid == session_id:
                         try:
-                            await http.post(
-                                f"{API_BASE}/api/agent/confirm",
-                                json={"session_id": session_id,
-                                      "approved": tc.auto_confirm},
-                                timeout=5,
-                            )
+                            r_plan = msg.get("plan", {}) or {}
+                            captured["plan_summary"] = (r_plan.get("summary") or "")[:300]
+                            captured["plan_steps_count"] = len(r_plan.get("steps", []) or [])
+                            captured["plan_approved"] = bool(tc.auto_confirm)
                         except Exception:
                             pass
+                        # Up to 3 retries — server has a 300s timeout, but we want
+                        # to surface real failures fast.
+                        for _attempt in range(3):
+                            try:
+                                _r = await http.post(
+                                    f"{API_BASE}/api/agent/confirm",
+                                    json={"session_id": session_id,
+                                          "approved": tc.auto_confirm},
+                                    timeout=5,
+                                )
+                                if _r.status_code == 200:
+                                    break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
 
-                    # Auto-answer clarification for our session
                     if mtyp == "clarification_needed" and sid == session_id:
-                        try:
-                            await http.post(
-                                f"{API_BASE}/api/agent/clarify",
-                                json={"session_id": session_id,
-                                      "answer": tc.clarification_answer},
-                                timeout=5,
-                            )
-                        except Exception:
-                            pass
+                        captured["clarification_question"] = (
+                            msg.get("question") or "")[:500]
+                        captured["clarification_answer_used"] = tc.clarification_answer
+                        for _attempt in range(3):
+                            try:
+                                _r = await http.post(
+                                    f"{API_BASE}/api/agent/clarify",
+                                    json={"session_id": session_id,
+                                          "answer": tc.clarification_answer},
+                                    timeout=5,
+                                )
+                                if _r.status_code == 200:
+                                    break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
 
                     # Terminal messages for our session
                     if mtyp in ("done", "error") and sid == session_id:
                         break
 
             await asyncio.wait_for(_collect(), timeout=tc.timeout_s)
+
+            # v2.45.32 — fall back to fetching operation_id by session
+            # NOTE: /api/operations/by-session/{sid} endpoint does not currently
+            # exist on the server — operation_id is captured from the
+            # agent_start broadcast (see Change 7). Leaving as TODO for future:
+            # if not captured.get("operation_id"):
+            #     try:
+            #         _opr = await http.get(
+            #             f"{API_BASE}/api/operations/by-session/{session_id}",
+            #             timeout=5,
+            #         )
+            #         if _opr.status_code == 200:
+            #             _opd = _opr.json()
+            #             captured["operation_id"] = _opd.get("id", "") or _opd.get("operation_id", "")
+            #     except Exception:
+            #         pass
 
             if stop_task and not stop_task.done():
                 stop_task.cancel()
@@ -358,13 +446,14 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
         if not m.get("session_id") or m.get("session_id") == session_id
     ]
 
-    return _evaluate(tc, our_msgs, duration, timed_out)
+    return _evaluate(tc, our_msgs, duration, timed_out, captured=captured)
 
 
 # ── Evaluator ─────────────────────────────────────────────────────────────────
 
 def _evaluate(tc: TestCase, messages: list[dict], duration: float,
-              timed_out: bool) -> TestResult:
+              timed_out: bool, *, captured: dict | None = None) -> TestResult:
+    captured = captured or {}
     failures: list[str] = []
     warnings: list[str] = []
 
@@ -580,6 +669,12 @@ def _evaluate(tc: TestCase, messages: list[dict], duration: float,
         duration_s=round(duration, 1),
         soft=tc.soft,
         critical=tc.critical,
+        clarification_question=captured.get("clarification_question", ""),
+        clarification_answer_used=captured.get("clarification_answer_used", ""),
+        plan_summary=captured.get("plan_summary", ""),
+        plan_steps_count=captured.get("plan_steps_count", 0),
+        plan_approved=captured.get("plan_approved", False),
+        operation_id=captured.get("operation_id", ""),
         timed_out=timed_out,
     )
 
@@ -775,6 +870,12 @@ def save_results(results: list[TestResult]) -> None:
                 "choices":          r.choices,
                 "step_count":       r.step_count,
                 "duration_s":       r.duration_s,
+                "clarification_question":    r.clarification_question,
+                "clarification_answer_used": r.clarification_answer_used,
+                "plan_summary":              r.plan_summary,
+                "plan_steps_count":          r.plan_steps_count,
+                "plan_approved":             r.plan_approved,
+                "operation_id":              r.operation_id,
                 "timed_out":        r.timed_out,
                 "timestamp":        r.timestamp,
             }

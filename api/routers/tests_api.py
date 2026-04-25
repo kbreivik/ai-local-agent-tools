@@ -101,6 +101,17 @@ async def _run_tests_bg(
     global _running, test_run_active
     _running = True
     test_run_active = True
+
+    # v2.45.32 — capture pre-run settings so we can restore them after.
+    _restore_memory_enabled = None
+    _restore_memory_backend = None
+    try:
+        from api.settings_manager import get_setting as _gs
+        _restore_memory_enabled = (_gs("memoryEnabled") or {}).get("value")
+        _restore_memory_backend = (_gs("memoryBackend") or {}).get("value")
+    except Exception:
+        pass
+
     try:
         # ── 1. Load suite config if suite_id provided ─────────────────────
         if suite_id:
@@ -153,7 +164,7 @@ async def _run_tests_bg(
         # (localStorage token from before v2.30.1 httpOnly cookie switch).
         # The WS connection uses ?token= (no cookie), so must be a valid JWT.
         from api.auth import create_internal_token
-        _fresh_token = create_internal_token(expires_minutes=90)
+        _fresh_token = create_internal_token(expires_minutes=180)
         _auth_headers = {"Authorization": f"Bearer {_fresh_token}"} if _fresh_token else {}
         async with httpx.AsyncClient(timeout=30.0, headers=_auth_headers) as http:
             results = await run_all_tests(
@@ -213,6 +224,19 @@ async def _run_tests_bg(
             "total": 0, "passed": 0, "failed": 0, "score_pct": 0, "results": [],
         }, indent=2))
     finally:
+        # v2.45.32 — restore the pre-run setting state so a manual user run
+        # immediately after a memory-off baseline is not silently degraded.
+        try:
+            from api.settings_manager import set_setting as _ss
+            if _restore_memory_enabled is not None and memory_enabled is not None:
+                _ss("memoryEnabled", _restore_memory_enabled)
+            if _restore_memory_backend is not None and memory_backend is not None:
+                _ss("memoryBackend", _restore_memory_backend)
+        except Exception as _re:
+            import logging as _rl
+            _rl.getLogger(__name__).warning(
+                "v2.45.32 settings restore failed: %s", _re,
+            )
         _running = False
         test_run_active = False
 

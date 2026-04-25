@@ -213,6 +213,14 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "CREATE INDEX IF NOT EXISTS idx_test_run_results_run ON test_run_results(run_id)",
         "CREATE INDEX IF NOT EXISTS idx_test_run_results_test ON test_run_results(test_id)",
     ]),
+    (13, "v2.45.32 — audit columns on test_run_results", [
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS clarification_question TEXT DEFAULT ''",
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS clarification_answer_used TEXT DEFAULT ''",
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS plan_summary TEXT DEFAULT ''",
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS plan_steps_count INTEGER DEFAULT 0",
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS plan_approved BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS operation_id TEXT DEFAULT ''",
+    ]),
 ]
 
 
