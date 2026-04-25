@@ -425,7 +425,23 @@ docker logs hp1_agent --tail 50
 
 Three-layer linting stack for CI + local + agent workflows. Source files:
 `scripts/check_sensors.py`, `Makefile`, `.ruff.toml`, `.eslintrc.sensors.json`,
-`.gitleaks.toml`, `.github/workflows/sensors.yml`.
+`.gitleaks.toml`, `.bandit`, `.github/workflows/sensors.yml`.
+
+### Agent workflow (mandatory)
+
+After any significant code change, run:
+
+```
+make check-agent
+```
+
+If output contains failures, self-correct before proceeding.
+Do not ask for confirmation — fix and re-run until clean.
+
+**Priority order:** BANDIT > RUFF > ESLINT > MYPY
+
+If a complexity violation requires splitting a file, keep related logic
+in the same module — do not create new files unnecessarily.
 
 ### Tools
 
