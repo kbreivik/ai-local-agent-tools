@@ -2309,6 +2309,14 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         except Exception as _oe:
             log.debug("record_outcome error: %s", _oe)
 
+        # Use the full step output for final_answer, not the 300-char verdict
+        # summary. v2.45.33 — moved ABOVE record_attempt so the F821 NameError
+        # in record_attempt's `if isinstance(last_reasoning, str): _summary =
+        # last_reasoning[:500]` line stops being silently swallowed.
+        last_reasoning = ""
+        if prior_verdict:
+            last_reasoning = prior_verdict.get("full_output") or prior_verdict.get("summary", "")
+
         # v2.32.3: Record attempt history for the detected entity
         try:
             from api.db.agent_attempts import record_attempt
@@ -2354,12 +2362,6 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
                 )
         except Exception as _ae:
             log.debug("record_attempt failed: %s", _ae)
-
-        # Use the full step output for final_answer, not the 300-char verdict summary
-        last_reasoning = ""
-        if prior_verdict:
-            # Try to get the full output from the last step result first
-            last_reasoning = prior_verdict.get("full_output") or prior_verdict.get("summary", "")
 
         # Detect truncated reasoning: ends without sentence-ending punctuation
         # and is shorter than a full summary would be

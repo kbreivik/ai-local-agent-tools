@@ -200,7 +200,13 @@ BASE_RUNBOOKS = [
              "description": "(If config hasn't identified it) check bootstrap env vars",
              "command": "container_env(host='<host>', container_id='<id>', grep_pattern='BOOTSTRAP')"},
             {"order": 6, "tool": None,
-             "description": "Manual: if probe fails from client netns but succeeds from host → hairpin-NAT/overlay routing issue. Workaround: move one container to a different node (docker service update --constraint-add). Proper fix: attach client to the same overlay as server; use internal listener addresses.",
+             "description": (
+                 "Manual: if probe fails from client netns but succeeds from host "
+                 "→ hairpin-NAT/overlay routing issue. Workaround: move one "
+                 "container to a different node (docker service update "
+                 "--constraint-add). Proper fix: attach client to the same overlay "
+                 "as server; use internal listener addresses."
+             ),
              "command": None},
         ],
     },

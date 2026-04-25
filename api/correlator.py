@@ -107,8 +107,8 @@ async def _fetch_tool_calls(operation_id: str) -> list[dict]:
         return []
 
 
-def _query_logs(since: str, until: str, size: int = 500) -> list[dict]:
-    """Query Elasticsearch for logs in time window."""
+def _query_logs(since: str, until: str, size: int = 500) -> tuple[list[dict], int]:
+    """Query Elasticsearch for logs in time window. Returns (hits, total_count)."""
     body = {
         "query": {"bool": {"must": [
             {"range": {"@timestamp": {"gte": since, "lte": until}}}
@@ -119,8 +119,10 @@ def _query_logs(since: str, until: str, size: int = 500) -> list[dict]:
                     "container.name", "hp1_node_role",
                     "docker.container.labels.com.docker.swarm.service.name"],
     }
-    resp = _es_post(f"/{_index()}/_search", body)
-    return _extract_hits(resp), resp.get("hits", {}).get("total", {}).get("value", 0)
+    resp = _es_post(f"/{_INDEX()}/_search", body)
+    hits = _extract_hits(resp)
+    total = resp.get("hits", {}).get("total", {}).get("value", 0)
+    return hits, total
 
 
 def _correlate_to_tool_calls(tool_calls: list[dict], all_logs: list[dict]) -> list[ToolCallLog]:

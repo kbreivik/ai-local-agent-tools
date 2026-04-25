@@ -75,6 +75,138 @@ def _load_build_info() -> dict | None:
 
 _BUILD_INFO = _load_build_info()
 
+
+async def _init_db_tables(_log) -> None:
+    """v2.45.33 — extracted from lifespan to reduce cyclomatic complexity.
+    Each table init is best-effort: a failure logs at debug level and the
+    next init proceeds. Order matters for some pairs (e.g. connections
+    before credential_profiles); preserve the order from the original
+    inline sequence."""
+    # entity_maintenance
+    try:
+        init_maintenance()
+    except Exception as e:
+        _log.debug("entity_maintenance init skipped: %s", e)
+    # infra_inventory
+    try:
+        from api.db.infra_inventory import init_inventory
+        init_inventory()
+    except Exception as e:
+        _log.debug("Infra inventory init skipped: %s", e)
+    # ssh_log
+    try:
+        from api.db.ssh_log import init_ssh_log
+        init_ssh_log()
+    except Exception as e:
+        _log.debug("SSH log init skipped: %s", e)
+    # ssh_capabilities
+    try:
+        from api.db.ssh_capabilities import init_capabilities
+        init_capabilities()
+    except Exception as e:
+        _log.debug("SSH capabilities init skipped: %s", e)
+    # result_store
+    try:
+        from api.db.result_store import init_result_store
+        init_result_store()
+    except Exception as e:
+        _log.debug("Result store init skipped: %s", e)
+    # entity_history
+    try:
+        from api.db.entity_history import init_entity_history
+        init_entity_history()
+    except Exception as e:
+        _log.debug("Entity history init skipped: %s", e)
+    # known_facts
+    try:
+        from api.db.known_facts import init_known_facts
+        init_known_facts()
+    except Exception as e:
+        _log.debug("known_facts init skipped: %s", e)
+    # drift_events view
+    try:
+        from api.db.drift_events import init_drift_view
+        init_drift_view()
+    except Exception as e:
+        _log.debug("Drift view init skipped: %s", e)
+    # notifications
+    try:
+        from api.db.notifications import init_notifications
+        init_notifications()
+    except Exception as e:
+        _log.debug("Notifications init skipped: %s", e)
+    # credential_profiles
+    try:
+        from api.db.credential_profiles import init_credential_profiles
+        init_credential_profiles()
+    except Exception as e:
+        _log.debug("Credential profiles init skipped: %s", e)
+    # escalations
+    try:
+        init_escalations()
+    except Exception as e:
+        _log.debug("Escalations table init skipped: %s", e)
+    # agent_actions
+    try:
+        from api.db.agent_actions import init_agent_actions
+        init_agent_actions()
+    except Exception as e:
+        _log.debug("agent_actions init skipped: %s", e)
+    # agent_attempts
+    try:
+        from api.db.agent_attempts import init_agent_attempts
+        init_agent_attempts()
+    except Exception as e:
+        _log.debug("agent_attempts init skipped: %s", e)
+    # agent_blackouts
+    try:
+        from api.db.agent_blackouts import init_agent_blackouts
+        init_agent_blackouts()
+    except Exception as e:
+        _log.debug("agent_blackouts init skipped: %s", e)
+    # vm_action_log
+    try:
+        from api.db.vm_action_log import init_vm_action_log
+        init_vm_action_log()
+    except Exception as e:
+        _log.debug("VM action log init skipped: %s", e)
+    # vm_exec_allowlist
+    try:
+        from api.db.vm_exec_allowlist import init_allowlist
+        init_allowlist()
+    except Exception as e:
+        _log.debug("vm_exec_allowlist init skipped: %s", e)
+    # subtask_proposals
+    try:
+        from api.db.subtask_proposals import init_subtask_proposals
+        init_subtask_proposals()
+    except Exception as e:
+        _log.debug("subtask_proposals init skipped: %s", e)
+    # subagent_runs
+    try:
+        from api.db.subagent_runs import init_subagent_runs
+        init_subagent_runs()
+    except Exception as e:
+        _log.debug("subagent_runs init skipped: %s", e)
+    # runbooks
+    try:
+        from api.db.runbooks import init_runbooks
+        init_runbooks()
+    except Exception as e:
+        _log.debug("runbooks init skipped: %s", e)
+    # card_templates
+    try:
+        from api.db.card_templates import init_card_templates
+        init_card_templates()
+    except Exception as e:
+        _log.debug("card_templates init skipped: %s", e)
+    # display_aliases
+    try:
+        from api.db.display_aliases import init_display_aliases
+        init_display_aliases()
+    except Exception as e:
+        _log.debug("display_aliases init skipped: %s", e)
+
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", str(DEFAULT_API_PORT)))
 
@@ -182,119 +314,8 @@ async def lifespan(app: FastAPI):
         init_connections()
     except Exception as e:
         _log.debug("Connections table init skipped: %s", e)
-    # Initialize entity maintenance table
-    try:
-        init_maintenance()
-    except Exception as e:
-        _log.debug("entity_maintenance init skipped: %s", e)
-    # Initialize infra inventory table
-    try:
-        from api.db.infra_inventory import init_inventory
-        init_inventory()
-    except Exception as e:
-        _log.debug("Infra inventory init skipped: %s", e)
-    # Initialize SSH connection log table
-    try:
-        from api.db.ssh_log import init_ssh_log
-        init_ssh_log()
-    except Exception as e:
-        _log.debug("SSH log init skipped: %s", e)
-    try:
-        from api.db.ssh_capabilities import init_capabilities
-        init_capabilities()
-    except Exception as e:
-        _log.debug("SSH capabilities init skipped: %s", e)
-    try:
-        from api.db.result_store import init_result_store
-        init_result_store()
-    except Exception as e:
-        _log.debug("Result store init skipped: %s", e)
-    try:
-        from api.db.entity_history import init_entity_history
-        init_entity_history()
-    except Exception as e:
-        _log.debug("Entity history init skipped: %s", e)
-    try:
-        from api.db.known_facts import init_known_facts
-        init_known_facts()
-    except Exception as e:
-        _log.debug("known_facts init skipped: %s", e)
-    try:
-        from api.db.drift_events import init_drift_view
-        init_drift_view()
-    except Exception as e:
-        _log.debug("Drift view init skipped: %s", e)
-    try:
-        from api.db.notifications import init_notifications
-        init_notifications()
-    except Exception as e:
-        _log.debug("Notifications init skipped: %s", e)
-    try:
-        from api.db.credential_profiles import init_credential_profiles
-        init_credential_profiles()
-    except Exception as e:
-        _log.debug("Credential profiles init skipped: %s", e)
-    # Initialize agent_escalations table
-    try:
-        init_escalations()
-    except Exception as e:
-        _log.debug("Escalations table init skipped: %s", e)
-    # Initialize agent_actions audit table
-    try:
-        from api.db.agent_actions import init_agent_actions
-        init_agent_actions()
-    except Exception as e:
-        _log.debug("agent_actions init skipped: %s", e)
-    # Initialize agent_attempts history table (v2.32.3)
-    try:
-        from api.db.agent_attempts import init_agent_attempts
-        init_agent_attempts()
-    except Exception as e:
-        _log.debug("agent_attempts init skipped: %s", e)
-    try:
-        from api.db.agent_blackouts import init_agent_blackouts
-        init_agent_blackouts()
-    except Exception as e:
-        _log.debug("agent_blackouts init skipped: %s", e)
-    # Initialize VM action audit log table
-    try:
-        from api.db.vm_action_log import init_vm_action_log
-        init_vm_action_log()
-    except Exception as e:
-        _log.debug("VM action log init skipped: %s", e)
-    # Initialize vm_exec allowlist table
-    try:
-        from api.db.vm_exec_allowlist import init_allowlist
-        init_allowlist()
-    except Exception as e:
-        _log.debug("vm_exec_allowlist init skipped: %s", e)
-    try:
-        from api.db.subtask_proposals import init_subtask_proposals
-        init_subtask_proposals()
-    except Exception as e:
-        _log.debug("subtask_proposals init skipped: %s", e)
-    try:
-        from api.db.subagent_runs import init_subagent_runs
-        init_subagent_runs()
-    except Exception as e:
-        _log.debug("subagent_runs init skipped: %s", e)
-    try:
-        from api.db.runbooks import init_runbooks
-        init_runbooks()
-    except Exception as e:
-        _log.debug("runbooks init skipped: %s", e)
-    # Initialize card_templates table
-    try:
-        from api.db.card_templates import init_card_templates
-        init_card_templates()
-    except Exception as e:
-        _log.debug("card_templates init skipped: %s", e)
-    # Initialize display_aliases table
-    try:
-        from api.db.display_aliases import init_display_aliases
-        init_display_aliases()
-    except Exception as e:
-        _log.debug("display_aliases init skipped: %s", e)
+    # v2.45.33 — DB table init blocks (extracted to _init_db_tables)
+    await _init_db_tables(_log)
     # Migrate operations table: add parent_session_id if not present
     try:
         from api.db.base import get_engine as _ge
