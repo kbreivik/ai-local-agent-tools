@@ -1,0 +1,314 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.23.md (v2.45.23)
+Theme: feat(facts): elastic + network_ssh write to known_facts_current
+
+Prompt content:
+
+# CC PROMPT — v2.45.23 — feat(facts): elastic + network_ssh write to known_facts_current
+
+## What this does
+Closes 2 of the 5 fact-coverage gaps from the v2.45.17 audit. Currently:
+- ElasticCollector writes `status_snapshots` only — never to `known_facts_current`.
+- network_ssh collector writes `status_snapshots` only — never to `known_facts_current`.
+
+This means agent FACTS blocks never include ES cluster health, node count,
+or SSH host network state. Add `batch_upsert_facts()` calls in both collectors
+following the same pattern proxmox/swarm/pbs/docker_agent already use.
+
+Version bump: 2.45.22 → 2.45.23
+
+---
+
+## Context
+
+`api/db/known_facts.py` exposes:
+
+```python
+def upsert_fact(fact_key, source, value, metadata=None, actor='collector') -> dict
+def batch_upsert_facts(facts: list[dict], actor='collector') -> dict
+```
+
+Each fact dict needs: `fact_key`, `source`, `value`, `metadata` (optional).
+
+Naming convention: `prod.<platform>.<entity>.<attribute>` (per v2.35 spec).
+
+---
+
+## Change 1 — `api/collectors/elastic.py` — write cluster facts after poll
+
+Find the `return { ... }` block at the end of the successful-poll path (the
+one that reports `cluster_health`, `nodes`, `shards`, `filebeat`).
+
+Right BEFORE the `return { ... }`, insert the fact-write block:
+
+```python
+            # v2.45.23 — write to known_facts_current so agent FACTS injection
+            # can surface ES cluster state alongside proxmox/swarm/pbs facts.
+            try:
+                from api.db.known_facts import batch_upsert_facts
+                cluster_name = health_data.get("cluster_name") or "elasticsearch"
+                facts = [
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.status",
+                        "source":   "elastic_collector",
+                        "value":    cluster_status,
+                        "metadata": {"poll_url": self.url},
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.health",
+                        "source":   "elastic_collector",
+                        "value":    health,
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.nodes_total",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("number_of_nodes", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.nodes_data",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("number_of_data_nodes", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.shards_active",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("active_shards", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.shards_unassigned",
+                        "source":   "elastic_collector",
+                        "value":    int(health_data.get("unassigned_shards", 0)),
+                    },
+                    {
+                        "fact_key": f"prod.elastic.cluster.{cluster_name}.filebeat_status",
+                        "source":   "elastic_collector",
+                        "value":    filebeat_status,
+                        "metadata": {"index_pattern": self.filebeat_pattern},
+                    },
+                ]
+                batch_upsert_facts(facts, actor="elastic_collector")
+            except Exception as _fe:
+                log.debug("elastic fact write failed: %s", _fe)
+```
+
+CC: ensure this lives inside the `try:` block for the successful-poll path,
+not in the outer `except Exception` block. The `cluster_status`, `health`,
+`filebeat_status`, and `health_data` variables must already be in scope.
+
+---
+
+## Change 2 — `api/collectors/network_ssh.py` — write per-host facts
+
+CC: open `api/collectors/network_ssh.py` and find the main `poll()` method.
+Locate where it iterates over hosts/connections and produces per-host status
+data (e.g. interface counts, link state, uptime — whatever it already
+collects). Look for `health=`, `status=`, or per-host result dicts that get
+returned.
+
+For each host the collector successfully probed, after that host's data is
+populated and BEFORE the next host iteration / final return, add:
+
+```python
+                # v2.45.23 — emit known_facts for this host
+                try:
+                    from api.db.known_facts import batch_upsert_facts
+                    host_label = (host.get("label") or host.get("host") or "?").lower().replace(".", "_")
+                    facts = [
+                        {
+                            "fact_key": f"prod.network_ssh.host.{host_label}.reachable",
+                            "source":   "network_ssh_collector",
+                            "value":    bool(reachable),  # adapt: var name may differ
+                        },
+                        {
+                            "fact_key": f"prod.network_ssh.host.{host_label}.health",
+                            "source":   "network_ssh_collector",
+                            "value":    host_health,     # adapt: 'healthy'/'degraded'/'critical'/'error'
+                        },
+                    ]
+                    # If the collector exposes interface count, link state, or
+                    # uptime on this host, add corresponding fact entries:
+                    # facts.append({"fact_key": f"prod.network_ssh.host.{host_label}.interfaces", ...})
+                    batch_upsert_facts(facts, actor="network_ssh_collector")
+                except Exception as _fe:
+                    import logging as _ne_log
+                    _ne_log.getLogger(__name__).debug("network_ssh fact write failed: %s", _fe)
+```
+
+CC critical:
+- Read the existing `network_ssh.py` poll implementation BEFORE adapting this
+  block. Variable names (`reachable`, `host_health`, `host`) MUST be replaced
+  with whatever names the existing code uses for the per-host result.
+- If the collector aggregates all-host data into a single result dict at the
+  end (rather than per-host facts), put the fact-write call inside the
+  per-host loop (or right after, iterating the populated results dict).
+- Use only fields the collector actually produces — do NOT invent fact keys
+  for data the collector does not have. If only `reachable` and `health` are
+  available, write only those two per host.
+- If the file is structured very differently and there is no clear per-host
+  loop, STOP and report what you found instead of guessing.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/collectors/elastic.py api/collectors/network_ssh.py
+
+# After deploy:
+# curl -s -b "hp1_auth=$T" http://localhost:8000/api/facts/list?pattern=prod.elastic.* | jq '.facts | length'
+# curl -s -b "hp1_auth=$T" http://localhost:8000/api/facts/list?pattern=prod.network_ssh.* | jq '.facts | length'
+# Both should return >0 within 60s.
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.22` → `2.45.23`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(facts): v2.45.23 elastic + network_ssh collectors write to known_facts_current"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After the next collector tick (~60s for elastic, ~poll-interval for ssh),
+the agent FACTS block on relevant tasks should include `prod.elastic.*` and
+`prod.network_ssh.*` rows. Verify via the dashboard Facts card or
+`/api/facts/list?pattern=prod.elastic.*`.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-25 11:40:26
+========================================================================
+Push verified. Per the runner instructions ("Do NOT modify INDEX.md or any queue status files — the runner handles that"), I skip the INDEX.md update step.
+[STATUS] 1m24s
+
+PROMPT COMPLETE: v2.45.23
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m24s
+========================================================================

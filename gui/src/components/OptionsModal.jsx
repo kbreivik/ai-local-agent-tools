@@ -13,7 +13,7 @@ import CollapsibleSection from './CollapsibleSection'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
-export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Allowlist', 'Permissions', 'Facts Permissions', 'Access', 'Naming', 'Appearance', 'Notifications', 'Layouts']
+export const TABS = ['General', 'Infrastructure', 'AI Services', 'Connections', 'Allowlist', 'Permissions', 'Facts Permissions', 'Facts & Knowledge', 'Access', 'Naming', 'Appearance', 'Notifications', 'Layouts']
 
 // ── Shared form helpers ────────────────────────────────────────────────────────
 
@@ -3539,6 +3539,7 @@ export default function OptionsModal({ userRole = 'stormtrooper' }) {
                 {tab === 'Connections'    && <ConnectionsTab userRole={userRole} />}
                 {tab === 'Allowlist'      && <AllowlistTab />}
                 {tab === 'Permissions'    && <PermissionsTab />}
+                {tab === 'Facts & Knowledge' && <FactsKnowledgeTab draft={draft} update={update} />}
                 {tab === 'Access'        && <AccessTab />}
                 {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
                 {tab === 'Appearance'     && <DisplayTab        draft={draft} update={update} />}
@@ -3633,6 +3634,220 @@ export function NotificationsTab({ draft, update }) {
       <p className="mt-6 text-xs opacity-40">
         Payload schema: platform, severity, component, message, timestamp, connection_label, connection_id
       </p>
+    </div>
+  )
+}
+
+export function FactsKnowledgeTab({ draft, update }) {
+  const sourceWeights = [
+    ['manual',                   1.0],
+    ['proxmox_collector',        0.9],
+    ['swarm_collector',          0.9],
+    ['docker_agent_collector',   0.85],
+    ['pbs_collector',            0.85],
+    ['fortiswitch_collector',    0.85],
+    ['kafka_collector',          0.8],
+    ['agent_observation',        0.5],
+    ['rag_extraction',           0.4],
+  ]
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mb-3">Injection</h3>
+
+      <Field
+        label="Injection threshold"
+        hint="Confidence floor for facts shown to the agent (0.0–1.0). Default 0.7."
+      >
+        <TextInput
+          type="number"
+          value={draft.factInjectionThreshold ?? 0.7}
+          onChange={v => update('factInjectionThreshold', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field
+        label="Max rows injected"
+        hint="Hard cap on facts injected into the system prompt. Default 40."
+      >
+        <TextInput
+          type="number"
+          value={draft.factInjectionMaxRows ?? 40}
+          onChange={v => update('factInjectionMaxRows', parseInt(v) || 0)}
+        />
+      </Field>
+
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mt-6 mb-3">Half-life decay (hours)</h3>
+
+      <Field
+        label="Collector facts"
+        hint="How fast collector facts age out. Default 168h (7 days)."
+      >
+        <TextInput
+          type="number"
+          value={draft.factHalfLifeHours_collector ?? 168}
+          onChange={v => update('factHalfLifeHours_collector', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Agent observation" hint="Default 24h.">
+        <TextInput
+          type="number"
+          value={draft.factHalfLifeHours_agent ?? 24}
+          onChange={v => update('factHalfLifeHours_agent', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Volatile (probes)" hint="Short-lived probes (TCP reachability). Default 2h.">
+        <TextInput
+          type="number"
+          value={draft.factHalfLifeHours_agent_volatile ?? 2}
+          onChange={v => update('factHalfLifeHours_agent_volatile', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Manual phase 1 (≤30d)" hint="Default 720h (30d).">
+        <TextInput
+          type="number"
+          value={draft.factHalfLifeHours_manual_phase1 ?? 720}
+          onChange={v => update('factHalfLifeHours_manual_phase1', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Manual phase 2 (>30d)" hint="Default 1440h (60d).">
+        <TextInput
+          type="number"
+          value={draft.factHalfLifeHours_manual_phase2 ?? 1440}
+          onChange={v => update('factHalfLifeHours_manual_phase2', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Verify-count cap" hint="Cap on verify_count for confidence boost. Default 10.">
+        <TextInput
+          type="number"
+          value={draft.factVerifyCountCap ?? 10}
+          onChange={v => update('factVerifyCountCap', parseInt(v) || 0)}
+        />
+      </Field>
+
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mt-6 mb-3">Source weights</h3>
+
+      {sourceWeights.map(([src, dflt]) => {
+        const key = `factSourceWeight_${src}`
+        return (
+          <Field key={src} label={src} hint={`Default ${dflt}.`}>
+            <TextInput
+              type="number"
+              value={draft[key] ?? dflt}
+              onChange={v => update(key, parseFloat(v) || 0)}
+            />
+          </Field>
+        )
+      })}
+
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mt-6 mb-3">Fact-age rejection</h3>
+
+      <Field label="Mode" hint="off | soft | medium | hard">
+        <select
+          value={draft.factAgeRejectionMode ?? 'medium'}
+          onChange={e => update('factAgeRejectionMode', e.target.value)}
+          className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs"
+        >
+          <option value="off">off</option>
+          <option value="soft">soft</option>
+          <option value="medium">medium</option>
+          <option value="hard">hard</option>
+        </select>
+      </Field>
+
+      <Field label="Max age (minutes)" hint="Default 5.">
+        <TextInput
+          type="number"
+          value={draft.factAgeRejectionMaxAgeMin ?? 5}
+          onChange={v => update('factAgeRejectionMaxAgeMin', parseInt(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Min confidence" hint="Default 0.85.">
+        <TextInput
+          type="number"
+          value={draft.factAgeRejectionMinConfidence ?? 0.85}
+          onChange={v => update('factAgeRejectionMinConfidence', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mt-6 mb-3">Runbook injection</h3>
+
+      <Field label="Mode" hint="off | replace | augment | replace+shrink">
+        <select
+          value={draft.runbookInjectionMode ?? 'augment'}
+          onChange={e => update('runbookInjectionMode', e.target.value)}
+          className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs"
+        >
+          <option value="off">off</option>
+          <option value="replace">replace</option>
+          <option value="augment">augment</option>
+          <option value="replace+shrink">replace+shrink</option>
+        </select>
+      </Field>
+
+      <Field label="Classifier mode" hint="keyword | semantic | llm">
+        <select
+          value={draft.runbookClassifierMode ?? 'keyword'}
+          onChange={e => update('runbookClassifierMode', e.target.value)}
+          className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs"
+        >
+          <option value="keyword">keyword</option>
+          <option value="semantic">semantic</option>
+          <option value="llm">llm</option>
+        </select>
+      </Field>
+
+      <Field label="Semantic threshold" hint="Cosine similarity threshold for semantic matching (0.0–1.0). Default 0.55.">
+        <TextInput
+          type="number"
+          value={draft.runbookSemanticThreshold ?? 0.55}
+          onChange={v => update('runbookSemanticThreshold', parseFloat(v) || 0)}
+        />
+      </Field>
+
+      <h3 className="text-sm font-semibold text-[color:var(--text-1)] mt-6 mb-3">Preflight</h3>
+
+      <Field label="Panel mode" hint="off | on_ambiguity | always_visible">
+        <select
+          value={draft.preflightPanelMode ?? 'always_visible'}
+          onChange={e => update('preflightPanelMode', e.target.value)}
+          className="w-full bg-[color:var(--bg-2)] border border-[color:var(--border)] rounded px-3 py-1.5 text-xs"
+        >
+          <option value="off">off</option>
+          <option value="on_ambiguity">on_ambiguity</option>
+          <option value="always_visible">always_visible</option>
+        </select>
+      </Field>
+
+      <Field label="LLM fallback enabled">
+        <Toggle
+          value={!!draft.preflightLLMFallbackEnabled}
+          onChange={v => update('preflightLLMFallbackEnabled', v)}
+          label="Use LLM tier when regex + keyword tiers fail"
+        />
+      </Field>
+
+      <Field label="LLM fallback max tokens" hint="Default 200.">
+        <TextInput
+          type="number"
+          value={draft.preflightLLMFallbackMaxTokens ?? 200}
+          onChange={v => update('preflightLLMFallbackMaxTokens', parseInt(v) || 0)}
+        />
+      </Field>
+
+      <Field label="Disambiguation timeout (seconds)" hint="Default 300.">
+        <TextInput
+          type="number"
+          value={draft.preflightDisambiguationTimeout ?? 300}
+          onChange={v => update('preflightDisambiguationTimeout', parseInt(v) || 0)}
+        />
+      </Field>
     </div>
   )
 }

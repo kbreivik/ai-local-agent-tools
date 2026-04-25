@@ -9,7 +9,7 @@ import { authHeaders } from '../api'
 import {
   GeneralTab, InfrastructureTab, AIServicesTab,
   ConnectionsTab, AllowlistTab, PermissionsTab, AccessTab, NamingTab,
-  DisplayTab, NotificationsTab, UpdateStatus, TABS,
+  DisplayTab, NotificationsTab, FactsKnowledgeTab, UpdateStatus, TABS,
 } from './OptionsModal'
 import LayoutsTab from './LayoutsTab'
 import FactsPermissionsTab from './FactsPermissionsTab'
@@ -94,6 +94,7 @@ export default function SettingsPage({ initialTab, layoutState, userRole }) {
             {tab === 'Connections'    && <ConnectionsTab />}
             {tab === 'Permissions'    && <PermissionsTab />}
             {tab === 'Facts Permissions' && <FactsPermissionsTab userRole={userRole} />}
+            {tab === 'Facts & Knowledge' && <FactsKnowledgeTab draft={draft} update={update} />}
             {tab === 'Access'        && <AccessTab />}
             {tab === 'Naming'        && <NamingTab         draft={draft} update={update} />}
             {(tab === 'Appearance' || tab === 'Display') && <DisplayTab draft={draft} update={update} />}
