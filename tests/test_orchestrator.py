@@ -45,3 +45,34 @@ def test_verdict_from_text_healthy():
 def test_verdict_from_text_degraded():
     v = verdict_from_text("broker-2 is offline. Status: DEGRADED.")
     assert v["verdict"] in ("HALT", "ASK")
+
+
+def test_v245_31_explicit_plan_skips_auto_precheck():
+    """v2.45.31 — task mentioning plan_action explicitly should not get an
+    auto-prepended observe step from the 'before' keyword."""
+    from api.agents.orchestrator import build_step_plan
+    task = (
+        "perform a rolling restart of kafka brokers — use plan_action to "
+        "propose the restart plan before executing kafka_rolling_restart_safe"
+    )
+    steps = build_step_plan(task)
+    intents = [s["intent"] for s in steps]
+    assert "observe" not in intents, (
+        f"Expected no observe pre-step (explicit plan_action in task), "
+        f"got {intents}"
+    )
+    assert intents[0] in ("execute", "action"), (
+        f"Expected first step to be execute/action, got {intents}"
+    )
+
+
+def test_v245_31_check_keyword_still_triggers_precheck_when_no_plan():
+    """v2.45.31 — the pre-check heuristic still fires when plan_action is
+    NOT explicitly mentioned. Don't regress the original behaviour."""
+    from api.agents.orchestrator import build_step_plan
+    task = "verify kafka health then upgrade kafka-stack_kafka1"
+    steps = build_step_plan(task)
+    intents = [s["intent"] for s in steps]
+    assert "observe" in intents, (
+        f"Expected observe pre-step from 'verify' keyword, got {intents}"
+    )

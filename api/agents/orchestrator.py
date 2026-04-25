@@ -96,6 +96,24 @@ def build_step_plan(task: str) -> list:
     is_cleanup = bool(words & _CLEANUP_WORDS)
     has_precheck = bool(words & _CHECK_PREFIXES)
 
+    # v2.45.31 — Skip auto-prepended observe step when the user has named
+    # the gating tool explicitly. Tasks like "use plan_action to propose
+    # the restart before executing kafka_rolling_restart_safe" use "before"
+    # as a temporal preposition about the action sequence, not as a request
+    # to insert a separate pre-check. plan_action is itself the gating
+    # mechanism; the agent will call it on step 1 of the action.
+    #
+    # This also covers free-form tasks where the user has already specified
+    # an investigation+execute sequence in prose and we should not
+    # double-decompose. Cleanup operations still get pre+post observe
+    # steps because the verify-after-cleanup signal genuinely needs both.
+    _explicit_plan = (
+        "plan_action" in (task or "").lower()
+        or "plan first" in (task or "").lower()
+    )
+    if _explicit_plan and not is_cleanup:
+        has_precheck = False
+
     if intent in ("execute", "action"):
         steps = []
 
@@ -137,6 +155,15 @@ def build_step_plan(task: str) -> list:
     # Number steps
     for i, s in enumerate(steps):
         s["step"] = i + 1
+
+    # v2.45.31 — Diagnostic log when explicit-plan override fires, so the
+    # decision is visible in container logs. Cheap (one info per run).
+    if _explicit_plan and not is_cleanup and intent in ("execute", "action"):
+        import logging as _log_orch
+        _log_orch.getLogger(__name__).info(
+            "orchestrator: explicit plan_action mention in task — "
+            "skipped auto-prepended observe step (intent=%s)", intent,
+        )
 
     return steps
 
