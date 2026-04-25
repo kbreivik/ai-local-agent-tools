@@ -719,6 +719,53 @@ async def _handle_lifecycle_tools(
             state=state, session_id=session_id, task=task,
             manager=manager, owner_user=owner_user,
         )
+    # v2.47.4 — cap clarifying_question calls. The agent already has a
+    # clarification mechanism; without an upper bound it can loop on
+    # ambiguous prompts (especially on mem-off where there's no prior
+    # context to fill the gap). After 2 clarifications, harness rejects
+    # further calls and injects a "make your best judgment" directive.
+    if fn_name == "clarifying_question":
+        state.clarifying_question_count += 1
+        _CLARIFY_CEILING = 2
+        if state.clarifying_question_count > _CLARIFY_CEILING:
+            await manager.send_line(
+                "step",
+                f"[harness] clarifying_question #{state.clarifying_question_count} "
+                f"blocked — ceiling is {_CLARIFY_CEILING}/run",
+                status="warning", session_id=session_id,
+            )
+            if not state.clarification_force_nudge_fired:
+                state.clarification_force_nudge_fired = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"[harness] You have called clarifying_question "
+                        f"{state.clarifying_question_count} times. The maximum is "
+                        f"{_CLARIFY_CEILING}. Further clarification calls will be "
+                        "rejected. You now have all the information you are going "
+                        "to get from the user. Make your best judgment from the "
+                        "task description and any context already provided, then "
+                        "proceed with the task. "
+                        "If this is an EXECUTE-type task, your next tool call "
+                        "MUST be plan_action(). "
+                        "If this is an INVESTIGATE/OBSERVE task, call the most "
+                        "specific status tool for the system the user named."
+                    ),
+                })
+                try:
+                    from api.metrics import HARNESS_CLARIFY_CEILING_COUNTER
+                    HARNESS_CLARIFY_CEILING_COUNTER.labels(
+                        agent_type=getattr(state, "agent_type", "unknown"),
+                    ).inc()
+                except Exception:
+                    pass
+            return {
+                "status":  "error",
+                "message": (
+                    f"clarifying_question rejected — ceiling {_CLARIFY_CEILING}/run "
+                    "reached. Make your best judgment and proceed."
+                ),
+            }
     if fn_name == "clarifying_question":
         return await _handle_clarifying_question(
             tc, fn_args,

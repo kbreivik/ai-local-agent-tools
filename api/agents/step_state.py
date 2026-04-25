@@ -39,6 +39,8 @@ class StepState:
     working_memory: str = ""                               # compact facts from <think> blocks
     budget_nudge_fired: bool = False                       # v2.33.3: 70% nudge fires at most once
     plan_force_nudge_fired: bool = False                   # v2.47.3: force-plan_action nudge fires at most once
+    clarifying_question_count: int = 0                     # v2.47.4 — cap at 2 per run
+    clarification_force_nudge_fired: bool = False          # v2.47.4
 
     # Hallucination guard
     hallucination_block_fired: bool = False                # v2.34.8: legacy flag

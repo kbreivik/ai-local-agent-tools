@@ -79,6 +79,13 @@ HARNESS_PLAN_NUDGES_COUNTER = Counter(
     labelnames=["agent_type"],
 )
 
+# --- clarification ceiling (v2.47.4) ---
+HARNESS_CLARIFY_CEILING_COUNTER = Counter(
+    "deathstar_harness_clarify_ceiling_total",
+    "clarifying_question calls rejected by harness ceiling (v2.47.4)",
+    labelnames=["agent_type"],
+)
+
 # --- hallucination guard (v2.34.8) ---
 HALLUCINATION_GUARD_COUNTER = Counter(
     "deathstar_agent_hallucination_guards_total",
