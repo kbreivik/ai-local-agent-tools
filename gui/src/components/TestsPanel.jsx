@@ -486,9 +486,12 @@ function CompareTab() {
   const [selIds, setSelIds]     = useState(['','','',''])
   const [compared, setCompared] = useState(null)
   const [loading, setLoading]   = useState(false)
+  const [pickerSuites, setPickerSuites] = useState(['','','',''])
+  const [allSuitesList, setAllSuitesList] = useState([])
 
   useEffect(() => {
     api('/api/tests/runs?limit=100').then(r => r.json()).then(d => setAllRuns(d.runs || [])).catch(() => {})
+    api('/api/tests/suites').then(r => r.json()).then(d => setAllSuitesList(d.suites || [])).catch(() => {})
   }, [])
 
   const load = async () => {
@@ -517,13 +520,61 @@ function CompareTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
       {/* Run selectors */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
-        {[0,1,2,3].map(i => (
-          <select key={i} value={selIds[i]} onChange={e => setSelIds(s => { const n=[...s]; n[i]=e.target.value; return n })}
-            style={{ fontFamily: 'var(--font-mono)', fontSize: 9, padding: '3px 7px', background: 'var(--bg-1)', border: '1px solid var(--border)', color: 'var(--text-2)', borderRadius: 2, maxWidth: 200 }}>
-            <option value="">— run {i+1} —</option>
-            {allRuns.map(r => <option key={r.id} value={r.id}>{ago(r.started_at)} {r.suite_name || 'ad-hoc'} {r.score_pct?.toFixed(0)}%</option>)}
-          </select>
-        ))}
+        {[0,1,2,3].map(i => {
+          const filterSuite = pickerSuites[i]
+          const filteredRuns = filterSuite
+            ? allRuns.filter(r => r.suite_id === filterSuite || r.suite_name === filterSuite)
+            : allRuns
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <select
+                value={filterSuite}
+                onChange={e => setPickerSuites(p => { const n=[...p]; n[i]=e.target.value; return n })}
+                style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 8,
+                  padding: '2px 5px', background: 'var(--bg-1)',
+                  border: '1px solid var(--border)', color: 'var(--text-3)',
+                  borderRadius: 2, maxWidth: 200,
+                }}
+              >
+                <option value="">all suites</option>
+                {allSuitesList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <select
+                value={selIds[i]}
+                onChange={e => setSelIds(s => { const n=[...s]; n[i]=e.target.value; return n })}
+                style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 9,
+                  padding: '3px 7px', background: 'var(--bg-1)',
+                  border: '1px solid var(--border)', color: 'var(--text-2)',
+                  borderRadius: 2, maxWidth: 220,
+                }}
+              >
+                <option value="">— run {i+1} —</option>
+                {filteredRuns.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {ago(r.started_at)} {r.suite_name || 'ad-hoc'} {r.score_pct?.toFixed(0)}%
+                  </option>
+                ))}
+              </select>
+            </div>
+          )
+        })}
+        <select
+          onChange={e => {
+            const sid = e.target.value
+            setPickerSuites([sid, sid, sid, sid])
+          }}
+          style={{
+            fontFamily: 'var(--font-mono)', fontSize: 8,
+            padding: '2px 5px', background: 'var(--bg-1)',
+            border: '1px solid var(--border)', color: 'var(--text-3)',
+            borderRadius: 2,
+          }}
+        >
+          <option value="">filter all 4…</option>
+          {allSuitesList.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
         <Btn onClick={load} accent disabled={selIds.filter(Boolean).length < 2 || loading}>
           {loading ? '…' : '⊞ compare'}
         </Btn>
@@ -628,12 +679,16 @@ function TrendTab({ refresh }) {
   const [suites, setSuites]       = useState([])
   const [schedules, setSchedules] = useState([])
   const [newSched, setNewSched]   = useState({ name: '', suite_id: '', cron: '0 2 * * *', enabled: true })
+  const [trendSuiteFilter, setTrendSuiteFilter] = useState('')
 
   const load = useCallback(() => {
-    api('/api/tests/trend').then(r => r.json()).then(d => setTrend(d.trend || [])).catch(() => {})
+    const trendUrl = trendSuiteFilter
+      ? `/api/tests/trend?suite_id=${encodeURIComponent(trendSuiteFilter)}`
+      : '/api/tests/trend'
+    api(trendUrl).then(r => r.json()).then(d => setTrend(d.trend || [])).catch(() => {})
     api('/api/tests/suites').then(r => r.json()).then(d => setSuites(d.suites || [])).catch(() => {})
     api('/api/tests/schedules').then(r => r.json()).then(d => setSchedules(d.schedules || [])).catch(() => {})
-  }, [])
+  }, [trendSuiteFilter])
   useEffect(() => { load() }, [load, refresh])
 
   const addSchedule = async () => {
@@ -665,7 +720,22 @@ function TrendTab({ refresh }) {
 
       {/* Trend chart */}
       <div>
-        <Label>SCORE OVER TIME</Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <Label>SCORE OVER TIME</Label>
+          <select
+            value={trendSuiteFilter}
+            onChange={e => setTrendSuiteFilter(e.target.value)}
+            style={{
+              fontFamily: 'var(--font-mono)', fontSize: 9,
+              padding: '3px 7px', background: 'var(--bg-1)',
+              border: '1px solid var(--border)', color: 'var(--text-2)',
+              borderRadius: 2, marginLeft: 'auto',
+            }}
+          >
+            <option value="">all suites</option>
+            {suites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
         {trend.length < 2 && <Mono style={{ color: 'var(--text-3)' }}>Need at least 2 completed runs for trend.</Mono>}
         {trend.length >= 2 && (
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 2, padding: 12 }}>
