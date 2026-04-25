@@ -1,0 +1,289 @@
+# CC PROMPT — v2.47.1 — docs(status): generate STATUS_REPORT_v2.47.0 from live data
+
+## What this does
+Produces `docs/STATUS_REPORT_v2.47.0.md` — a fresh audit document modeled
+after `docs/STATUS_REPORT_v2.45.17.md`, generated from live signals:
+
+- Latest test run results (DB + filesystem)
+- Sensor stack output (`make check-agent`)
+- `git log v2.45.33..HEAD --oneline` — what's in v2.46.x and v2.47.0
+- Working-tree status (`git status --porcelain`) — uncommitted state
+- Codebase line counts on the agent loop split files
+- Database snapshots: `known_facts_current` source distribution,
+  `agent_attempts.summary` populated rows (post v2.45.33 fix should be > 0)
+
+This is a **read-only** prompt — Claude Code does **not** modify any code,
+only writes the new status report file. The previous status report
+(`STATUS_REPORT_v2.45.17.md`) stays in place; we're appending, not replacing.
+
+Version bump: 2.47.0 → 2.47.1 (doc-only patch)
+
+---
+
+## Operator context (for CC)
+
+Background CC needs to know:
+
+- v2.45.18 → v2.45.33 shipped through the queue between
+  `STATUS_REPORT_v2.45.17.md` and now. See `cc_prompts/INDEX.md` and
+  `cc_prompts/QUEUE_STATUS.md` for the per-prompt list.
+- v2.46.0 was a manual minor bump for "commit + build" (operator-driven,
+  outside the CC queue). It carried v2.45.32 + v2.45.33 fixes.
+- v2.47.0 was a second manual minor bump for the same purpose.
+- The sensor stack (`Makefile`, `.ruff.toml`, `.bandit`, `.gitleaks.toml`,
+  `.eslintrc.sensors.json`, `scripts/check_sensors.py`,
+  `.github/workflows/sensors.yml`) was added directly to main, likely in v2.46.x.
+- A/B test baselines (`full-mem-on-baseline`, `full-mem-off-baseline`) may
+  or may not have been re-run since v2.45.17. The report should use whatever
+  the most recent rows in `test_runs` show.
+
+---
+
+## Task
+
+CC: produce `docs/STATUS_REPORT_v2.47.0.md` with the structure below.
+Use **live data** — do not extrapolate or assume. Empty / unavailable signals
+should be noted explicitly ("not run since v2.45.17", "no data", etc).
+
+### Step 1 — Gather
+
+```bash
+# Read VERSION
+VERSION=$(cat VERSION)
+echo "Current VERSION: $VERSION"
+
+# Recent commit log (since the last queue-driven prompt)
+git log v2.45.33..HEAD --oneline 2>/dev/null \
+    || git log $(git rev-list --max-count=1 --grep="v2.45.33")..HEAD --oneline \
+    || git log --oneline -50  # fallback
+```
+
+If no v2.45.33 tag exists, search for the commit by message:
+
+```bash
+LAST_QUEUED=$(git log --grep="v2.45.33" --format="%H" -n 1)
+echo "Last queued commit: $LAST_QUEUED"
+git log ${LAST_QUEUED}..HEAD --oneline
+```
+
+Capture the output for §1 of the new doc.
+
+### Step 2 — Sensor stack
+
+```bash
+make check-agent 2>&1 | tee /tmp/sensors-v2.47.0.txt
+SENSOR_EXIT=$?
+echo "Sensor exit code: $SENSOR_EXIT"
+```
+
+Capture the output. If exit 0: report "Clean". If exit >0: include the full
+agent-format output and HINT lines.
+
+### Step 3 — Test run history
+
+Query the DB:
+
+```sql
+-- Most recent runs of each suite, with score and duration
+SELECT
+    suite_name,
+    started_at,
+    score_pct,
+    duration_seconds,
+    test_count,
+    passed_count
+FROM test_runs
+WHERE suite_name IN (
+    'smoke-mem-on-fast',
+    'full-mem-on-baseline',
+    'full-mem-off-baseline'
+)
+AND started_at > NOW() - INTERVAL '30 days'
+ORDER BY suite_name, started_at DESC;
+```
+
+If no rows: note "No A/B baseline run since v2.45.17 — re-baseline needed."
+
+For the most recent A/B pair, also pull per-test failures:
+
+```sql
+SELECT test_id, agent_type, passed, failures::text, duration_s, timed_out
+FROM test_run_results
+WHERE run_id = (
+    SELECT id FROM test_runs
+    WHERE suite_name = 'full-mem-on-baseline'
+    ORDER BY started_at DESC LIMIT 1
+)
+AND passed = false
+ORDER BY test_id;
+```
+
+Same query for `full-mem-off-baseline`. Build the comparison table.
+
+CC: if the DB tools are unavailable in your environment, fall back to
+reading the JSON test result files in the working tree (typically under
+`reports/` or wherever the runner writes them). State the source explicitly.
+
+### Step 4 — Code architecture
+
+```bash
+# Line counts on agent loop split modules
+wc -l \
+    api/routers/agent.py \
+    api/agents/pipeline.py \
+    api/agents/context.py \
+    api/agents/gates.py \
+    api/agents/orchestrator.py \
+    api/agents/step_state.py \
+    api/agents/step_llm.py \
+    api/agents/step_guard.py \
+    api/agents/step_facts.py \
+    api/agents/step_synth.py \
+    api/agents/step_tools.py \
+    api/agents/step_persist.py \
+    api/agents/preflight.py \
+    api/agents/external_router.py \
+    api/agents/external_ai_client.py \
+    api/main.py \
+    api/maintenance.py \
+    api/scheduler.py \
+    2>/dev/null
+```
+
+Compare against the v2.45.17 numbers (from STATUS_REPORT_v2.45.17.md §2).
+Note any module that has grown materially.
+
+### Step 5 — Facts coverage
+
+Query:
+
+```sql
+SELECT source, COUNT(*) AS facts, MAX(last_verified) AS most_recent
+FROM known_facts_current
+GROUP BY source
+ORDER BY facts DESC;
+```
+
+Compare against the v2.45.17 expected set (proxmox, pbs, swarm,
+docker_agent, kafka, elastic, network_ssh, vm_hosts, agent_observation,
+unifi, fortigate). Flag any source with 0 facts as "not writing".
+
+### Step 6 — agent_attempts.summary check
+
+The v2.45.33 fix moved `last_reasoning` so `record_attempt` populates `summary`.
+Verify it actually works:
+
+```sql
+SELECT
+    COUNT(*) FILTER (WHERE summary != '' AND summary IS NOT NULL) AS populated,
+    COUNT(*) AS total,
+    MAX(created_at) AS most_recent
+FROM agent_attempts
+WHERE created_at > NOW() - INTERVAL '7 days';
+```
+
+Report populated/total ratio. Pre-fix this was 0 / total. Post-fix expectation
+is "most rows populated" for runs since v2.45.33 deployed.
+
+### Step 7 — Working-tree state
+
+```bash
+git status --porcelain
+git diff --stat HEAD
+```
+
+Capture any uncommitted modifications. Useful for "what's about to land".
+
+### Step 8 — Write the report
+
+File path: `docs/STATUS_REPORT_v2.47.0.md`
+
+Structure (modeled after STATUS_REPORT_v2.45.17.md):
+
+```markdown
+# DEATHSTAR Platform — Status Report
+**Generated:** YYYY-MM-DD | **Version:** v2.47.0 | **Build:** $(git rev-parse --short HEAD)
+**Previous report:** docs/STATUS_REPORT_v2.45.17.md (v2.45.17, 2026-04-24)
+
+---
+
+## 0. Summary
+3-5 sentences: where we are, what shipped since v2.45.17, what's open.
+
+## 1. What shipped since v2.45.17
+Output of git log v2.45.33..HEAD with brief grouping
+(Tier 1 fixes / Tier 2 fixes / sensor stack / etc).
+
+## 2. Test results
+Table from §3 above. Per-test failure analysis if any.
+
+## 3. Sensor stack
+Output of `make check-agent`. Clean / dirty status.
+
+## 4. Code architecture
+Line-count table from §4. Comparison to v2.45.17 baseline. Flag any module
+that grew past its target.
+
+## 5. Facts coverage
+Table from §5. Note v2.45.30 vm_hosts fix landed, v2.45.23 elastic +
+network_ssh fact writes shipped, v2.45.25 agent_observation write path live.
+Confirm or refute each from the live data.
+
+## 6. agent_attempts summary
+Populated / total ratio. Confirms or refutes the v2.45.33 last_reasoning fix.
+
+## 7. Working-tree state
+Anything uncommitted? List it.
+
+## 8. Open items
+Pull from TODO.md "Open ideas" section. Don't duplicate detail — just summarise.
+
+## 9. Scorecard
+Table with grades for: tests, agent correctness, code structure, security,
+UI completeness, fact coverage, ops readiness. Brief rationale per row.
+Overall grade.
+```
+
+Each section: keep it tight. Tables over prose. The audit is for skim-reading
+in a follow-up session — short and dense.
+
+### Step 9 — Bump VERSION
+
+Update `VERSION`: `2.47.0 → 2.47.1`
+
+(Doc-only patch — the report itself is the deliverable. No code changed.)
+
+---
+
+## Do NOT
+
+- Modify code outside the new doc file.
+- Replace `STATUS_REPORT_v2.45.17.md` — leave it as historical record.
+- Invent test scores or fact counts. If a query returns nothing, say so.
+- Edit `TODO.md` or `ROADMAP.md` — they were just rewritten by the operator.
+
+---
+
+## Verify
+
+```bash
+ls -la docs/STATUS_REPORT_v2.47.0.md
+wc -l docs/STATUS_REPORT_v2.47.0.md
+head -30 docs/STATUS_REPORT_v2.47.0.md
+cat VERSION
+```
+
+Expected: file exists, ~150-300 lines, starts with the YAML-ish header,
+VERSION reads 2.47.1.
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "docs(status): v2.47.1 STATUS_REPORT_v2.47.0 — fresh audit covering v2.45.18 → v2.47.0"
+git push origin main
+```
+
+No deploy step — pure documentation.
