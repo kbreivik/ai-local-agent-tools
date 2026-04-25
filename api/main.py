@@ -345,6 +345,13 @@ async def lifespan(app: FastAPI):
         start_auto_update()
     except Exception as e:
         _log.warning("Auto-update start skipped: %s", e)
+    # v2.45.19 — Test schedule executor: read test_schedules every 30s
+    # and fire _run_tests_bg for schedules whose next_run_at has arrived.
+    try:
+        from api.scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        _log.warning("Test scheduler start skipped: %s", e)
     # start Bookstack sync scheduler
     try:
         from api.rag.bookstack_sync import start_bookstack_scheduler
@@ -560,6 +567,11 @@ async def lifespan(app: FastAPI):
         pass
     try:
         stop_auto_update()
+    except Exception:
+        pass
+    try:
+        from api.scheduler import stop_scheduler
+        stop_scheduler()
     except Exception:
         pass
     try:

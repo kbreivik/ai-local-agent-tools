@@ -60,8 +60,8 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.15.md | v2.45.15 | fix(tests): clarification_answer + escalate rework + precheck routing + Results UI polish | DONE (78c798e) |
 | CC_PROMPT_v2.45.16.md | v2.45.16 | refactor(agent): split dispatch_tool_calls into category handlers | DONE (ef2ee92) |
 | CC_PROMPT_v2.45.17.md | v2.45.17 | refactor(agent): extract _stream_agent setup into api/agents/pipeline.py | DONE (f84fdda) |
-| CC_PROMPT_v2.45.18.md | v2.45.18 | fix(agent): clarify→plan_action — append system message to LLM messages list | RUNNING |
-| CC_PROMPT_v2.45.19.md | v2.45.19 | feat(tests): schedule executor — read test_schedules and fire runs at cron times | PENDING |
+| CC_PROMPT_v2.45.18.md | v2.45.18 | fix(agent): clarify→plan_action — append system message to LLM messages list | DONE (87b5ac6) |
+| CC_PROMPT_v2.45.19.md | v2.45.19 | feat(tests): schedule executor — read test_schedules and fire runs at cron times | RUNNING |
 | CC_PROMPT_v2.45.20.md | v2.45.20 | fix(tests): timeout headroom for 4 borderline failures | PENDING |
 | CC_PROMPT_v2.45.21.md | v2.45.21 | fix(security): /metrics auth + CORS_ALLOW_ALL startup warning | PENDING |
 | CC_PROMPT_v2.45.22.md | v2.45.22 | feat(ui): wire PreflightPanel — preflight_needed WS handler + Commands import | PENDING |
