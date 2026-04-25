@@ -104,8 +104,8 @@ SETTINGS_KEYS: dict[str, dict] = {
     "factAgeRejectionMode":              {"env": None, "sens": False, "default": "medium", "type": "str",   "group": "Facts & Knowledge"},
     "factAgeRejectionMaxAgeMin":         {"env": None, "sens": False, "default": 5,        "type": "int",   "group": "Facts & Knowledge"},
     "factAgeRejectionMinConfidence":     {"env": None, "sens": False, "default": 0.85,     "type": "float", "group": "Facts & Knowledge"},
-    # Runbook injection — enforced in v2.35.4 (augment is default rollout)
-    "runbookInjectionMode":              {"env": None, "sens": False, "default": "augment", "type": "str", "group": "Facts & Knowledge"},
+    # Runbook injection — v2.45.26 default is "replace" (matches implemented runtime behaviour)
+    "runbookInjectionMode":              {"env": None, "sens": False, "default": "replace", "type": "str", "group": "Facts & Knowledge"},
     "runbookClassifierMode":             {"env": None, "sens": False, "default": "keyword", "type": "str", "group": "Facts & Knowledge"},
     "runbookSemanticThreshold": {
         "type": "float",

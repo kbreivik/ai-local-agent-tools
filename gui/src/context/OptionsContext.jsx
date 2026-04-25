@@ -79,7 +79,7 @@ const DEFAULTS = {
   factAgeRejectionMode:              'medium',
   factAgeRejectionMaxAgeMin:         5,
   factAgeRejectionMinConfidence:     0.85,
-  runbookInjectionMode:              'augment',
+  runbookInjectionMode:              'replace',
   runbookClassifierMode:             'keyword',
   runbookSemanticThreshold:          0.55,
   preflightPanelMode:                'always_visible',

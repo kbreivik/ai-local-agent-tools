@@ -721,7 +721,11 @@ async def _maybe_route_to_external_ai(
     except Exception:
         provider, model, output_mode = "claude", "", "replace"
 
-    # v2.36.3 only implements REPLACE. Other modes deferred to v2.36.5+.
+    # v2.45.26 — Default is "replace" (matches what is implemented). Other
+    # modes ("augment", "replace+shrink") are accepted by settings validation
+    # but treated as "replace" at runtime. Real "augment" semantics is a
+    # planned v2.46.x change once a base-prompt + runbook-prepend strategy
+    # has been designed.
     if output_mode != "replace":
         await manager.send_line(
             "step",
