@@ -1,13 +1,25 @@
-# DEATHSTAR sensor stack — bandit config.
+# DEATHSTAR sensor stack — bandit config (YAML format).
 #
 # Calibrated against the existing codebase (v2.46.0). Each skip below has
 # a documented rationale. To reduce skipped rules, fix the underlying
 # pattern in the code, then remove the rule from this list.
 #
-# Format: bandit legacy INI. `bandit -c .bandit -r api mcp_server scripts`.
+# Invocation: `bandit -c .bandit -r api mcp_server scripts`
 
-[bandit]
-exclude_dirs = ['tests','gui','data','logs','node_modules','.venv','venv','.code-index','.pytest_cache','cc_prompts','docker','dist','build']
+exclude_dirs:
+  - tests
+  - gui
+  - data
+  - logs
+  - node_modules
+  - .venv
+  - venv
+  - .code-index
+  - .pytest_cache
+  - cc_prompts
+  - docker
+  - dist
+  - build
 
 # Skipped rules — calibrated to current state. Rationale:
 #
@@ -17,8 +29,7 @@ exclude_dirs = ['tests','gui','data','logs','node_modules','.venv','venv','.code
 # B105/B106/B107 — hardcoded passwords: NOT skipped (real signal).
 # B108 — insecure tempfile: 1 hit in ansible_inventory.py; TODO convert to
 #        NamedTemporaryFile.
-# B310 — urllib.request urlopen: 2 hits in non-user-input paths; TODO move
-#        to httpx for consistency.
+# B310 — urllib.request urlopen: non-user-input paths; TODO move to httpx.
 # B324 — SHA1 hashing: used for non-security identifiers (subtask de-dup,
 #        skill fingerprints), not authentication or signing.
 # B501 — httpx verify=False: collectors talk to internal targets with
@@ -35,4 +46,13 @@ exclude_dirs = ['tests','gui','data','logs','node_modules','.venv','venv','.code
 # B615 — Hugging Face Hub download without revision pinning: api/rag/doc_search
 #        loads sentence-transformers; pinning would require a vendored cache.
 
-skips = B104,B108,B310,B324,B501,B507,B601,B608,B615
+skips:
+  - B104
+  - B108
+  - B310
+  - B324
+  - B501
+  - B507
+  - B601
+  - B608
+  - B615
