@@ -68,6 +68,7 @@ class StepState:
     zero_streaks: dict = field(default_factory=dict)       # tool_name -> consecutive zero count
     nonzero_seen: dict = field(default_factory=dict)       # tool_name -> best non-zero count seen
     zero_pivot_fired: set = field(default_factory=set)     # tools already nudged
+    zero_window: dict = field(default_factory=dict)        # v2.45.27 — fn_name → deque of last N _count values
 
     # In-run fact tracking
     run_facts: dict = field(default_factory=dict)          # v2.35.2: key -> {value, step, tool, ...}

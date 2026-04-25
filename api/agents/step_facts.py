@@ -55,6 +55,68 @@ async def process_tool_result(
             state.zero_streaks[fn_name] = 0
             state.nonzero_seen[fn_name] = max(state.nonzero_seen.get(fn_name, 0), _count)
 
+    # ── v2.45.27: sliding-window zero-ratio guard ────────────────────────────
+    # The strict consecutive-zero guard misses patterns where a single nonzero
+    # result resets the streak (e.g. [10, 0, 0, 0, 5, 0, 0, 0] — 6/8 zeros).
+    # Track the last 6 _count values per tool; when 4-of-6 are zero AND there
+    # is at least one nonzero in the window AND we have not fired this signal
+    # for this tool yet, inject a harness nudge.
+    from collections import deque as _deque
+    _ZW_SIZE = 6
+    _ZW_TRIGGER = 4   # zeros in window required to fire
+    if _count is not None:
+        win = state.zero_window.get(fn_name)
+        if win is None:
+            win = _deque(maxlen=_ZW_SIZE)
+            state.zero_window[fn_name] = win
+        win.append(_count)
+        _zeros_in_win = sum(1 for v in win if v == 0)
+        _nonzeros_in_win = sum(1 for v in win if v and v > 0)
+        if (
+            len(win) >= _ZW_SIZE
+            and _zeros_in_win >= _ZW_TRIGGER
+            and _nonzeros_in_win >= 1
+            and fn_name not in state.zero_pivot_fired
+        ):
+            state.zero_pivot_fired.add(fn_name)
+            _max_seen = state.nonzero_seen.get(fn_name, 0)
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"HARNESS NUDGE: In your last {_ZW_SIZE} calls to {fn_name}, "
+                    f"{_zeros_in_win} returned 0 results (only {_nonzeros_in_win} "
+                    f"returned data; max seen: {_max_seen}). The query shape is "
+                    "mostly missing — flapping or filter-too-narrow. Stop "
+                    "repeating the same pattern. Your next step must either "
+                    "(a) synthesize from the calls that DID return data, "
+                    "(b) broaden the filter (drop level/service/host constraints), or "
+                    "(c) switch to a different tool. "
+                    "Do NOT call this tool again with the same shape."
+                ),
+            })
+            await manager.broadcast({
+                "type":              "zero_result_pivot",
+                "session_id":        session_id,
+                "tool":              fn_name,
+                "consecutive_zeros": state.zero_streaks.get(fn_name, 0),
+                "prior_nonzero":     _max_seen,
+                "window_size":       _ZW_SIZE,
+                "window_zeros":      _zeros_in_win,
+                "trigger":           "sliding_window_ratio",
+                "timestamp":         datetime.now(timezone.utc).isoformat(),
+            })
+            await manager.send_line(
+                "step",
+                f"[pivot:window] {fn_name} returned 0 in {_zeros_in_win}/{_ZW_SIZE} "
+                f"recent calls — nudging agent to broaden or switch",
+                status="warning", session_id=session_id,
+            )
+            try:
+                from api.metrics import ZERO_PIVOT_WINDOW_COUNTER
+                ZERO_PIVOT_WINDOW_COUNTER.labels(tool=fn_name).inc()
+            except Exception:
+                pass
+
     # ── in-run fact extraction + contradiction (v2.35.2) ─────────────────────
     try:
         from api.facts.tool_extractors import extract_facts_from_tool_result

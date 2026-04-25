@@ -1,0 +1,365 @@
+# CC PROMPT — v2.45.29 — feat(security): nginx TLS reverse proxy + secure cookie behind HTTPS
+
+## What this does
+Closes the highest-severity finding from the v2.45.17 security audit:
+`secure=False` on the auth cookie. Currently the JWT session cookie is
+transmitted over plain HTTP — anyone with LAN packet capture can hijack
+sessions. There is no HTTPS configuration anywhere in the repo.
+
+This prompt:
+1. Adds an `nginx` reverse-proxy service to `docker/docker-compose.yml` that
+   terminates TLS on :8443 and proxies to `hp1_agent:8000`.
+2. Provides a self-signed cert generation script + a starter `nginx.conf`
+   that handles HTTP→HTTPS redirect, WebSocket upgrades, and proper proxy
+   headers.
+3. Flips `secure=True` on the auth cookie when `HP1_BEHIND_HTTPS=true` is
+   set in `.env`. Falls back to `secure=False` otherwise so plain-HTTP
+   deployments keep working.
+4. Adds a startup warning when `secure=False` so the risk is visible at
+   every boot.
+
+This is **opt-in via env var** — bare-metal HTTP deployments are unaffected
+unless they set `HP1_BEHIND_HTTPS=true`.
+
+Version bump: 2.45.28 → 2.45.29
+
+---
+
+## Context
+
+`api/routers/auth.py` currently sets:
+
+```python
+response.set_cookie("hp1_auth", token, ..., secure=False, samesite="strict")
+```
+
+The audit comment in the source says "set True when behind HTTPS" — this
+prompt turns that into actual conditional behaviour driven by an env var.
+
+The compose file's hp1_agent service binds `8000:8000` directly. After this
+prompt, operators who enable nginx will hit `:8443` (HTTPS) and the proxy
+forwards to the agent's internal :8000.
+
+---
+
+## Change 1 — `api/routers/auth.py` — conditional secure cookie
+
+CC: open `api/routers/auth.py`. Find the `response.set_cookie(` calls (there
+may be one for login and one for refresh). Each looks like:
+
+```python
+response.set_cookie(
+    "hp1_auth", token,
+    httponly=True, samesite="strict",
+    secure=False,  # set True when behind HTTPS
+    max_age=...,
+)
+```
+
+Replace `secure=False` with a module-level constant evaluated once:
+
+Near the top of the file (after imports), add:
+
+```python
+import os
+
+# v2.45.29 — When nginx TLS proxy is in front, set HP1_BEHIND_HTTPS=true in .env
+# so the auth cookie is only sent over HTTPS. Default is False (preserves
+# bare-metal HTTP deployments).
+_COOKIE_SECURE = os.environ.get("HP1_BEHIND_HTTPS", "false").lower() == "true"
+```
+
+Then replace every `secure=False` in cookie set calls with `secure=_COOKIE_SECURE`.
+
+CC: be conservative — find every `set_cookie(` call in `api/routers/auth.py`
+and update each. Do not change `samesite=` or `httponly=` values.
+
+---
+
+## Change 2 — `api/main.py` — startup warning when secure=False
+
+In the `lifespan` function, find the existing v2.45.21 CORS warning block
+(if v2.45.21 has not yet shipped, place this near `check_secrets()` instead):
+
+```python
+    if CORS_ORIGINS_ALL:
+        import logging as _logging_cors
+        _logging_cors.getLogger(__name__).critical(
+            "SECURITY: CORS_ALLOW_ALL=true ..."
+        )
+```
+
+Right AFTER that block, insert:
+
+```python
+    # v2.45.29 — Loud auth-cookie security warning. The auth cookie is
+    # transmitted over the wire; without TLS, LAN packet capture can steal
+    # active sessions. Suppress by setting HP1_BEHIND_HTTPS=true once nginx
+    # TLS proxy is in front (see docker/nginx.conf).
+    if os.environ.get("HP1_BEHIND_HTTPS", "false").lower() != "true":
+        import logging as _logging_tls
+        _logging_tls.getLogger(__name__).warning(
+            "SECURITY: HP1_BEHIND_HTTPS not set — auth cookie sent over HTTP. "
+            "Deploy nginx TLS proxy and set HP1_BEHIND_HTTPS=true to enable "
+            "Secure cookie attribute. See docker/nginx.conf."
+        )
+```
+
+---
+
+## Change 3 — NEW FILE — `docker/nginx.conf`
+
+Create new file `docker/nginx.conf`:
+
+```nginx
+# DEATHSTAR nginx reverse proxy — v2.45.29
+#
+# Terminates TLS on :443 and proxies to hp1_agent:8000.
+# Handles WebSocket upgrades for /ws/* paths.
+# Redirects plain HTTP :80 → HTTPS :443.
+#
+# Cert paths (mounted from compose volume):
+#   /etc/nginx/certs/server.crt
+#   /etc/nginx/certs/server.key
+#
+# For self-signed dev certs, run docker/gen_self_signed_cert.sh first.
+# For production, replace with your own cert/key (Let's Encrypt, internal CA, etc.).
+
+worker_processes auto;
+events {
+    worker_connections 1024;
+}
+
+http {
+    sendfile      on;
+    tcp_nopush    on;
+    tcp_nodelay   on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent"';
+    access_log /var/log/nginx/access.log main;
+    error_log  /var/log/nginx/error.log warn;
+
+    # ── HTTP → HTTPS redirect ────────────────────────────────────────────
+    server {
+        listen 80;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    # ── HTTPS reverse proxy ──────────────────────────────────────────────
+    server {
+        listen 443 ssl http2;
+        server_name _;
+
+        ssl_certificate     /etc/nginx/certs/server.crt;
+        ssl_certificate_key /etc/nginx/certs/server.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache   shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # HSTS — enable once you trust the cert chain (Let's Encrypt or internal CA).
+        # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+        client_max_body_size 50m;
+
+        # WebSocket upgrade for /ws/* paths
+        location /ws/ {
+            proxy_pass http://hp1_agent:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade            $http_upgrade;
+            proxy_set_header Connection         "upgrade";
+            proxy_set_header Host               $host;
+            proxy_set_header X-Real-IP          $remote_addr;
+            proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto  https;
+            proxy_read_timeout 3600s;     # long-running agent sessions
+            proxy_send_timeout 3600s;
+        }
+
+        # Everything else
+        location / {
+            proxy_pass http://hp1_agent:8000;
+            proxy_http_version 1.1;
+            proxy_set_header Host               $host;
+            proxy_set_header X-Real-IP          $remote_addr;
+            proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto  https;
+            proxy_read_timeout 600s;
+        }
+    }
+}
+```
+
+---
+
+## Change 4 — NEW FILE — `docker/gen_self_signed_cert.sh`
+
+Create new file `docker/gen_self_signed_cert.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Generate a self-signed cert + key for nginx TLS proxy.
+# For dev / homelab use only. For production, use Let's Encrypt or internal CA.
+#
+# Usage:
+#   bash docker/gen_self_signed_cert.sh [hostname]
+#
+# Default hostname: agent-01.lan
+
+set -euo pipefail
+
+HOSTNAME="${1:-agent-01.lan}"
+CERT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/certs"
+
+mkdir -p "$CERT_DIR"
+
+if [[ -f "$CERT_DIR/server.crt" && -f "$CERT_DIR/server.key" ]]; then
+    echo "[gen-cert] $CERT_DIR already has server.crt + server.key"
+    echo "[gen-cert] Delete them first if you want to regenerate."
+    exit 0
+fi
+
+openssl req -x509 -nodes -newkey rsa:4096 \
+    -keyout "$CERT_DIR/server.key" \
+    -out    "$CERT_DIR/server.crt" \
+    -days 825 \
+    -subj "/CN=${HOSTNAME}/O=DEATHSTAR/OU=homelab" \
+    -addext "subjectAltName=DNS:${HOSTNAME},DNS:localhost,IP:127.0.0.1,IP:192.168.199.10"
+
+chmod 600 "$CERT_DIR/server.key"
+chmod 644 "$CERT_DIR/server.crt"
+
+echo "[gen-cert] Wrote $CERT_DIR/server.crt and server.key"
+echo "[gen-cert] Mount this directory into the nginx container as /etc/nginx/certs:ro"
+echo "[gen-cert] Then set HP1_BEHIND_HTTPS=true in docker/.env and restart hp1_agent."
+```
+
+CC: make the script executable on Unix systems where possible. On Windows
+this is informational — the script runs via Git Bash.
+
+---
+
+## Change 5 — `docker/docker-compose.yml` — add nginx service
+
+CC: open `docker/docker-compose.yml`. Find the `hp1_agent` service block.
+After it (alongside other services, before the end of `services:`), add:
+
+```yaml
+  # ── nginx TLS reverse proxy (v2.45.29) ───────────────────────────────────
+  # Terminates TLS on 443 and proxies to hp1_agent:8000. Self-signed cert
+  # for homelab use; replace certs/ with your own for production.
+  #
+  # Enable: opt-in via the 'tls' profile.
+  #   1. bash docker/gen_self_signed_cert.sh agent-01.lan
+  #   2. Set HP1_BEHIND_HTTPS=true in docker/.env
+  #   3. docker compose -f docker/docker-compose.yml --profile tls up -d
+  #
+  # Result: https://agent-01.lan:8443 → hp1_agent:8000 over TLS.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: hp1_nginx
+    restart: unless-stopped
+    profiles: ["tls"]
+    networks:
+      - agent-net
+    ports:
+      - "8080:80"      # HTTP — redirects to HTTPS
+      - "8443:443"     # HTTPS
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      hp1_agent:
+        condition: service_healthy
+```
+
+CC: keep the existing `8000:8000` port mapping on `hp1_agent` for now —
+once operators are comfortable with the TLS setup, they can drop the bare
+port mapping in a follow-up. The nginx service does not displace the
+existing direct-access port; it is opt-in via the `tls` profile.
+
+---
+
+## Change 6 — `.env.example` — document new env var
+
+CC: open `.env.example` (or `docker/.env.example` if that is the canonical
+file — check both). Add at the bottom:
+
+```
+# v2.45.29 — TLS reverse proxy
+# Set to "true" only when nginx (or another HTTPS proxy) is in front of hp1_agent.
+# When true, the auth cookie gets the Secure attribute and is only sent over HTTPS.
+# When false (default), cookie works over plain HTTP for bare-metal homelab use.
+HP1_BEHIND_HTTPS=false
+```
+
+Also pass this through the compose `hp1_agent` service environment block
+(open the compose file, find the `environment:` list under `hp1_agent`),
+adding:
+
+```yaml
+      - HP1_BEHIND_HTTPS=${HP1_BEHIND_HTTPS:-false}
+```
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/routers/auth.py api/main.py
+grep -n "HP1_BEHIND_HTTPS\|_COOKIE_SECURE\|secure=_COOKIE_SECURE" api/routers/auth.py api/main.py
+ls docker/nginx.conf docker/gen_self_signed_cert.sh
+docker compose -f docker/docker-compose.yml config --profiles | grep -q tls && echo "tls profile present"
+```
+
+Expected:
+- `_COOKIE_SECURE` defined; every `set_cookie(...)` uses it.
+- nginx.conf and gen_self_signed_cert.sh exist.
+- Compose has the `tls` profile.
+
+Manual test path:
+```
+1. bash docker/gen_self_signed_cert.sh
+2. echo "HP1_BEHIND_HTTPS=true" >> docker/.env
+3. docker compose -f docker/docker-compose.yml --profile tls up -d
+4. curl -k https://localhost:8443/api/health     # works, ignores self-signed
+5. curl -L http://localhost:8080/api/health      # 301 → 443
+6. Browser: log in via https://localhost:8443, inspect cookie — Secure=true
+```
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.28` → `2.45.29`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(security): v2.45.29 nginx TLS reverse proxy + secure cookie behind HTTPS (opt-in)"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+This closes the high-severity `secure=False` finding from the v2.45.17
+security audit. After enabling the `tls` profile and setting
+`HP1_BEHIND_HTTPS=true`, packet capture on the LAN no longer yields valid
+session cookies.

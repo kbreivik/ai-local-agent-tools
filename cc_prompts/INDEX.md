@@ -68,4 +68,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.23.md | v2.45.23 | feat(facts): elastic + network_ssh write to known_facts_current | DONE (f03194d) |
 | CC_PROMPT_v2.45.24.md | v2.45.24 | feat(ui): Facts & Knowledge settings tab | DONE (278bfb5) |
 | CC_PROMPT_v2.45.25.md | v2.45.25 | feat(facts): agent_observation write path — drain state.run_facts to known_facts_current | DONE (660d30b) |
-| CC_PROMPT_v2.45.26.md | v2.45.26 | fix(settings): runbookInjectionMode default — align with implemented behaviour | RUNNING |
+| CC_PROMPT_v2.45.26.md | v2.45.26 | fix(settings): runbookInjectionMode default — align with implemented behaviour | DONE (2f9b181) |
+| CC_PROMPT_v2.45.27.md | v2.45.27 | fix(agent): sliding-window zero-ratio guard — catches loop patterns the consecutive guard misses | RUNNING |
+| CC_PROMPT_v2.45.28.md | v2.45.28 | feat(ui): Trend tab suite filter + Compare tab run-picker filters | PENDING |
+| CC_PROMPT_v2.45.29.md | v2.45.29 | feat(security): nginx TLS reverse proxy + secure cookie behind HTTPS (opt-in) | PENDING |

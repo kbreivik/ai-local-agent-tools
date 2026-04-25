@@ -298,6 +298,13 @@ INRUN_CONTRADICTION_COUNTER = Counter(
     ["fact_key_prefix"],   # truncated to first 3 dotted segments for cardinality safety
 )
 
+# --- sliding-window zero-pivot guard (v2.45.27) ---
+ZERO_PIVOT_WINDOW_COUNTER = Counter(
+    "deathstar_zero_pivot_window_total",
+    "Sliding-window zero-ratio pivot guard fired (4-of-6 zeros)",
+    labelnames=["tool"],
+)
+
 AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER = Counter(
     "deathstar_agent_observation_facts_written_total",
     "Facts written to known_facts from completed agent runs",
