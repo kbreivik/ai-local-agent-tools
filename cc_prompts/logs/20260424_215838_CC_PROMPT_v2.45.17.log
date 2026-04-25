@@ -1,0 +1,267 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.17.md (v2.45.17)
+Theme: refactor(agent): extract _stream_agent setup into api/agents/pipeline.py
+
+Prompt content:
+
+# CC PROMPT — v2.45.17 — refactor(agent): extract _stream_agent setup into pipeline functions
+
+## What this does
+
+`_stream_agent` is 975 lines. It builds up system_prompt and runs the agent loop
+but all the setup logic is inline. Extract into pipeline functions:
+
+**New module: `api/agents/pipeline.py`** — setup helpers for _stream_agent:
+
+```python
+# api/agents/pipeline.py
+
+def build_system_prompt(task: str, first_intent: str) -> str:
+    """Get base prompt for intent, apply runbook injection."""
+
+def inject_memory_history(system_prompt: str, task: str, first_intent: str) -> str:
+    """Inject MuninnDB history hint if memoryEnabled and hint exists."""
+
+def inject_prior_attempts(system_prompt: str, task: str, first_intent: str,
+                          session_id: str) -> str:
+    """Inject coordinator prior-attempts section if coordinatorPriorAttemptsEnabled."""
+
+def inject_capability_hint(system_prompt: str, agent_type: str) -> str:
+    """Inject capability/step-cap hint."""
+
+def inject_facts_block(system_prompt: str, task: str, agent_type: str) -> str:
+    """Inject relevant FACTS block for the task domain."""
+
+def inject_tool_signatures(system_prompt: str, first_intent: str, domain: str) -> str:
+    """Inject MCP tool signatures section."""
+
+async def run_preflight(task: str, session_id: str, operation_id: str) -> tuple[str, str]:
+    """Run preflight resolution. Returns (preflight_block, error_or_empty)."""
+
+async def broadcast_preflight(session_id: str, operation_id: str, preflight_result) -> None:
+    """Broadcast preflight WS event if clarifying_needed."""
+```
+
+`_stream_agent` becomes:
+
+```python
+async def _stream_agent(task, session_id, operation_id, owner_user="admin",
+                        parent_context="", parent_session_id="", force_external=False):
+    from api.agents.pipeline import (
+        build_system_prompt, inject_memory_history, inject_prior_attempts,
+        inject_capability_hint, inject_facts_block, inject_tool_signatures,
+        run_preflight, broadcast_preflight,
+    )
+
+    first_intent = classify_task(task) or "action"
+    system_prompt = build_system_prompt(task, first_intent)
+    system_prompt = inject_memory_history(system_prompt, task, first_intent)
+
+    preflight_block, _ = await run_preflight(task, session_id, operation_id)
+    await broadcast_preflight(session_id, operation_id, preflight_block)
+
+    system_prompt = inject_prior_attempts(system_prompt, task, first_intent, session_id)
+    system_prompt = inject_capability_hint(system_prompt, first_intent)
+    system_prompt = inject_facts_block(system_prompt, task, first_intent)
+    system_prompt = inject_tool_signatures(system_prompt, first_intent, detect_domain(task))
+
+    tools_spec = filter_tools(first_intent, detect_domain(task))
+    client = _make_client()
+
+    # External AI routing (unchanged logic)
+    if force_external or _maybe_route_to_external_ai(task, first_intent):
+        ...
+
+    # Coordinator (unchanged logic)
+    if should_use_coordinator(task, first_intent):
+        ...
+
+    # Main agent step
+    result = await _run_single_agent_step(
+        task, session_id, operation_id, owner_user,
+        system_prompt=system_prompt,
+        tools_spec=tools_spec,
+        agent_type=first_intent,
+        client=client,
+    )
+    ...
+```
+
+Target: `_stream_agent` ≤ 200 lines after extraction. All extracted logic
+lives in `api/agents/pipeline.py`.
+
+Version bump: 2.45.16 → 2.45.17.
+
+---
+
+## Implementation approach
+
+CC: This is a large refactor — be methodical.
+
+1. Read `_stream_agent` in full (lines ~1906–2880 in agent.py).
+2. Identify each coherent setup block (runbook injection, preflight, memory
+   injection, prior-attempts, capability hint, facts, tool signatures).
+3. Create `api/agents/pipeline.py` with one function per block. Each function
+   takes exactly the params it needs (no giant god-objects).
+4. Replace each inline block in `_stream_agent` with a call to the pipeline
+   function.
+5. Leave the external AI routing block and coordinator routing block inline
+   for now (they have complex branching that's harder to isolate safely).
+6. Verify no behaviour changes — same imports, same side effects.
+
+Critical: do NOT move any WebSocket broadcast calls into pipeline.py. Broadcasts
+stay in _stream_agent or _run_single_agent_step where they're currently called.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.16` → `2.45.17`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "refactor(agent): v2.45.17 extract _stream_agent setup into api/agents/pipeline.py"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-24 21:58:38
+========================================================================
+Commit pushed as `f84fdda`. Per the instructions, I do NOT modify INDEX.md — the runner handles that.
+[STATUS] 7m10s
+
+PROMPT COMPLETE: v2.45.17
+
+Summary:
+- Created `api/agents/pipeline.py` (446 lines) with 8 extracted setup helpers: `build_system_prompt`, `run_preflight`, `broadcast_preflight`, `inject_tool_signatures`, `inject_capability_hint`, `inject_memory_history`, `inject_prior_attempts`, `inject_facts_block`.
+- `_stream_agent` reduced from 975 → 689 lines (~30%). Coordinator loop and external-AI routing stayed inline per the prompt's constraints (the 200-line target wasn't reachable given those exclusions).
+- Behaviour preserved: same imports, same side effects, same prompt-injection order. WS broadcasts for `memory` send_lines stay in `_stream_agent`; `broadcast_preflight` is a thin wrapper as the prompt explicitly requested.
+- VERSION bumped 2.45.16 → 2.45.17, committed and pushed as `f84fdda`.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  7m10s
+========================================================================

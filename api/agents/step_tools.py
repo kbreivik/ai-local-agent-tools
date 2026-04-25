@@ -271,7 +271,7 @@ async def _handle_plan_action(
 
 async def _handle_clarifying_question(
     tc, fn_args: dict, *,
-    state, session_id: str, task: str, manager,
+    state, session_id: str, task: str, manager, messages: list,
 ) -> dict:
     """Broadcast clarification prompt to GUI and suspend until answered."""
     from api.clarification import wait_for_clarification
@@ -300,6 +300,30 @@ async def _handle_clarifying_question(
         "" if _is_cancel
         else " Your NEXT tool call MUST be plan_action(). Do NOT call audit_log."
     )
+    # v2.45.18 — inject system message into the LLM messages list so the
+    # directive is visible in the conversation context on the next turn.
+    # The tool result message alone (with embedded directive) is being
+    # ignored by the model; a follow-up system message is the pattern that
+    # works (see sub-agent distrust signal and budget-truncate nudge).
+    if not _is_cancel:
+        messages.append({
+            "role": "system",
+            "content": (
+                f"[harness] User clarification received: '{answer}'. "
+                "You now have all information needed to proceed. "
+                "Your NEXT tool call MUST be plan_action() with concrete "
+                "summary + steps. "
+                "Do NOT call audit_log. "
+                "Do NOT ask another clarifying_question. "
+                "Do NOT call escalate. "
+                "Call plan_action() now."
+            ),
+        })
+        await manager.send_line(
+            "step",
+            "[clarify→plan] system directive injected into LLM context",
+            status="ok", session_id=session_id,
+        )
     return {
         "status":  "ok",
         "answer":  answer,
@@ -699,6 +723,7 @@ async def _handle_lifecycle_tools(
         return await _handle_clarifying_question(
             tc, fn_args,
             state=state, session_id=session_id, task=task, manager=manager,
+            messages=messages,
         )
     if fn_name == "propose_subtask":
         await _handle_propose_subtask(

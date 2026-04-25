@@ -1,5 +1,5 @@
 # DEATHSTAR — Claude Code Guide
-## Version: 2.15.10
+## Version: 2.45.17
 
 Self-hosted infrastructure monitoring and AI agent orchestration platform.
 FastMCP + FastAPI backend, React (Vite) frontend, Docker Swarm deployment.
@@ -11,7 +11,7 @@ FastMCP + FastAPI backend, React (Vite) frontend, Docker Swarm deployment.
 | Item | Value |
 |---|---|
 | Repo | github.com/kbreivik/ai-local-agent-tools (public, MIT) |
-| Current version | v2.15.10 |
+| Current version | v2.45.17 (see `VERSION` — single source of truth) |
 | Stack | FastMCP + FastAPI (Python 3.13) + React (Vite/JSX) |
 | Deploy target | agent-01 at `192.168.199.10:8000` (standalone container) |
 | Docker image | `ghcr.io/kbreivik/hp1-ai-agent:latest` |
@@ -38,10 +38,15 @@ Claude in chat writes the prompts; CC implements them.
 ### File structure
 ```
 cc_prompts/
-  INDEX.md              ← queue table + phase summaries (source of truth)
+  INDEX.md              ← queue table + phase summaries (source of truth, Claude Desktop owns)
   QUEUE_RUNNER.md       ← project context injected into every CC run
-  run_queue.sh          ← queue runner (Git Bash)
-  CC_PROMPT_vX.Y.Z.md  ← one file per version bump
+  QUEUE_STATE.json      ← runner internal state (machine-readable)
+  QUEUE_STATUS.md       ← runner live progress view (auto-generated)
+  run_queue.py          ← canonical queue runner (Python, persistent watcher)
+  run_queue.sh          ← legacy Git Bash runner (still works, prefer .py)
+  run_queue.ps1         ← PowerShell variant
+  logs/                 ← per-prompt run logs
+  CC_PROMPT_vX.Y.Z.md   ← one file per version bump
 ```
 
 ### Prompt file format
@@ -71,13 +76,15 @@ git push origin main
 
 ### Running the queue
 ```bash
-bash cc_prompts/run_queue.py          # all pending, streams output live
-bash cc_prompts/run_queue.py --one    # one at a time
-bash cc_prompts/run_queue.py --dry-run
+python cc_prompts/run_queue.py            # persistent watcher, 3 min poll
+python cc_prompts/run_queue.py --poll 60  # poll every 60s
+python cc_prompts/run_queue.py --one      # run next pending, then exit
+python cc_prompts/run_queue.py --dry-run  # show current status
 ```
 CC implements the prompt, commits, pushes, then updates `INDEX.md`
 changing `PENDING` → `DONE (SHA)` and commits that too.
 Runner verifies git hash changed before moving to next prompt.
+`QUEUE_STATE.json` / `QUEUE_STATUS.md` track live runner state across restarts.
 
 ### Version bump convention
 | Bump | When |
@@ -100,62 +107,102 @@ Runner verifies git hash changed before moving to next prompt.
 
 ## Architecture
 
+High-level layout. Use `ls` / `Glob` for an authoritative file list — the tree
+is illustrative, not exhaustive.
+
 ```
 ai-local-agent-tools/
 ├── api/
-│   ├── main.py                 ← App entry, startup, router mounts
-│   ├── auth.py                 ← JWT + API token fallback
-│   ├── connections.py          ← Connections DB, Fernet encryption
+│   ├── main.py                       ← App entry, startup, router mounts
+│   ├── auth.py                       ← JWT + API token fallback
+│   ├── connections.py                ← Connections DB, Fernet encryption
 │   ├── agents/
-│   │   └── router.py           ← Task classifier, tool allowlists, system prompts
+│   │   ├── router.py                 ← Task classifier, tool allowlists, prompts
+│   │   ├── orchestrator.py           ← Multi-step agent orchestration
+│   │   ├── pipeline.py               ← _stream_agent setup (extracted v2.45.17)
+│   │   ├── preflight.py              ← Pre-action validation (e.g. pre_kafka_check)
+│   │   ├── gates.py / gate_rules.py / gate_detection.py
+│   │   ├── context.py                ← Per-task context assembly
+│   │   ├── step_state.py / step_facts.py / step_llm.py
+│   │   │     step_tools.py / step_synth.py / step_guard.py
+│   │   ├── propose_dedup.py          ← Subtask proposal de-dup
+│   │   ├── runbook_classifier.py
+│   │   ├── fabrication_detector.py   ← Detects hallucinated facts
+│   │   ├── fact_age_rejection.py     ← Rejects stale facts
+│   │   ├── forced_synthesis.py
+│   │   ├── external_ai_client.py / external_ai_confirmation.py / external_router.py
+│   │   ├── tool_metadata.py
+│   │   └── task_templates/           ← Task template definitions
 │   ├── collectors/
-│   │   ├── manager.py          ← CollectorManager, trigger_poll()
-│   │   ├── external_services.py
-│   │   ├── proxmox_vms.py
-│   │   ├── swarm.py
-│   │   ├── kafka.py
-│   │   ├── vm_hosts.py
-│   │   ├── unifi.py
-│   │   ├── pbs.py
-│   │   └── truenas.py
+│   │   ├── manager.py                ← CollectorManager, trigger_poll()
+│   │   ├── base.py
+│   │   ├── external_services.py / proxmox_vms.py / swarm.py / kafka.py
+│   │   ├── vm_hosts.py / unifi.py / pbs.py / truenas.py / fortigate.py
+│   │   ├── docker_agent01.py / docker_hosts.py
+│   │   ├── elastic.py / network_ssh.py / windows.py
 │   ├── db/
-│   │   ├── result_store.py     ← Large tool result storage (2h TTL)
-│   │   ├── entity_history.py   ← Change tracking + event log
-│   │   ├── infra_inventory.py  ← Host discovery registry
-│   │   ├── credential_profiles.py ← Named shared auth sets
-│   │   └── ssh_capabilities.py
-│   └── routers/
-│       ├── agent.py            ← POST /api/agent/run, WebSocket agent loop
-│       ├── connections.py      ← CRUD + auto-trigger collector poll
-│       ├── users.py            ← User + API token CRUD
-│       ├── layout.py           ← Layout templates endpoint
-│       ├── escalations.py      ← Agent escalation table + endpoints
-│       └── credential_profiles.py
+│   │   ├── base.py / models.py / migrations.py / migrate_sqlite.py / queries.py
+│   │   ├── result_store.py           ← Large tool result storage (2h TTL)
+│   │   ├── entity_history.py / entity_maintenance.py / drift_events.py
+│   │   ├── infra_inventory.py        ← Host discovery registry
+│   │   ├── credential_profiles.py    ← Named shared auth sets
+│   │   ├── ssh_capabilities.py / ssh_log.py
+│   │   ├── audit_log.py / vm_action_log.py
+│   │   ├── agent_actions.py / agent_attempts.py / agent_blackouts.py
+│   │   ├── subagent_runs.py / subtask_proposals.py
+│   │   ├── known_facts.py / metric_samples.py / notifications.py
+│   │   ├── llm_traces.py / llm_trace_retention.py / external_ai_calls.py
+│   │   ├── runbooks.py / card_templates.py / display_aliases.py
+│   │   ├── skill_candidates.py / skill_executions.py
+│   │   ├── test_definitions.py / test_runs.py / vm_exec_allowlist.py
+│   └── routers/                      ← FastAPI routers (one per concern)
+│       agent.py, agent_actions_api.py, agent_blackouts_api.py, alerts.py,
+│       analysis.py, ansible.py, auth.py, card_templates.py, connections.py,
+│       credential_profiles.py, dashboard.py, discovery.py, display_aliases.py,
+│       docs.py, elastic.py, entities.py, errors.py, escalations.py,
+│       external_ai.py, facts.py, feedback.py, gates.py, ingest.py,
+│       kafka_overview.py, layout.py, lock.py, logs.py, maintenance.py,
+│       memory.py, notifications.py, runbooks.py, settings.py, skills.py,
+│       status.py, tests_api.py, tools.py, users.py, vm_exec_allowlist.py
 ├── mcp_server/
-│   ├── server.py               ← ALL MCP tool registrations here
+│   ├── server.py                     ← ALL MCP tool registrations here
 │   └── tools/
-│       ├── vm.py               ← vm_exec, kafka_exec, swarm_node_status,
-│       │                           swarm_service_force_update, proxmox_vm_power
-│       └── skills/             ← Self-improving skill system
+│       ├── vm.py                     ← vm_exec, kafka_exec, swarm_node_status,
+│       │                               swarm_service_force_update, proxmox_vm_power
+│       ├── swarm.py / docker_api.py / docker_engine.py
+│       ├── kafka.py / kafka_inspect.py
+│       ├── elastic.py / log_timeline.py / network.py
+│       ├── pbs.py / pbs_health.py
+│       ├── container_introspect.py / metric_tools.py / agent_perf.py
+│       ├── entity_history_tools.py / result_tools.py / render_tools.py
+│       ├── orchestration.py / ingest.py / skill_meta_tools.py
+│       └── skills/                   ← Self-improving skill system
 ├── gui/src/
-│   ├── App.jsx                 ← Sidebar nav, routing, DashboardView, DrillDownBar
-│   ├── components/
-│   │   ├── ServiceCards.jsx    ← All infra cards (VM, container, external, UniFi, etc.)
-│   │   ├── Sidebar.jsx         ← Navigation + user menu + footer
-│   │   ├── SettingsPage.jsx    ← All settings tabs
-│   │   ├── OptionsModal.jsx    ← Connections form, ProfileForm, BulkForm
-│   │   ├── ComparePanel.jsx    ← Right-side compare panel, exports SLOT_COLORS
-│   │   ├── VMHostsSection.jsx  ← VM_HOSTS dashboard section
-│   │   ├── EscalationBanner.jsx ← Persistent amber banner for agent escalations
-│   │   ├── LayoutsTab.jsx      ← Layout templates + current layout management
-│   │   └── CardFilterBar.jsx   ← INFRA_SECTION_KEYS filter bar
-│   ├── hooks/useLayout.js      ← Layout state management
-│   └── index.css               ← V3a Imperial theme (CSS vars)
-├── cc_prompts/                 ← CC prompt queue (see above)
+│   ├── App.jsx                       ← Top-level routing, providers, dashboard host
+│   ├── api.js                        ← API client
+│   ├── context/                      ← Auth, Options, Agent, Task, Dashboard providers
+│   ├── components/                   ← ~60 components — see Glob for full list
+│   │   │  Key ones:
+│   │   ├── ServiceCards.jsx          ← All infra cards
+│   │   ├── DashboardCards.jsx / DashboardLayout.jsx
+│   │   ├── Sidebar.jsx / SettingsPage.jsx / OptionsModal.jsx
+│   │   ├── ComparePanel.jsx          ← exports SLOT_COLORS
+│   │   ├── CardFilterBar.jsx         ← INFRA_SECTION_KEYS filter bar
+│   │   ├── VMHostsSection.jsx / WindowsSection.jsx
+│   │   ├── EscalationBanner.jsx / LayoutsTab.jsx
+│   │   ├── KafkaTab.jsx / LogsPanel.jsx / FactsView.jsx / GatesView.jsx
+│   │   ├── PlanConfirmModal.jsx / ExternalAIConfirmModal.jsx
+│   │   ├── ClarificationWidget.jsx / SubtaskOfferBanner.jsx / RunbookPopup.jsx
+│   │   ├── AgentFeed.jsx / AgentDiagnostics.jsx / TraceView.jsx
+│   │   └── SkillsPanel.jsx / SkillsTab.jsx / TestsPanel.jsx
+│   ├── hooks/                        ← useLayout.js, useCardTemplate.js
+│   ├── schemas/ / styles/ / utils/ / dev/
+│   └── index.css                     ← V3a Imperial theme (CSS vars)
+├── cc_prompts/                       ← CC prompt queue (see above)
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
-└── VERSION                     ← Single source of version truth
+└── VERSION                           ← Single source of version truth
 ```
 
 ---
@@ -286,6 +333,13 @@ Auth flow:
 | execute/action | fix/restart/deploy | plan_action required for destructive ops |
 | build | skill management | skill_create, skill_regenerate |
 
+Each turn flows through a step pipeline (`api/agents/step_*.py`) wrapped by
+`orchestrator.py` and set up by `pipeline.py`:
+`step_state → step_facts → step_llm → step_tools → step_synth → step_guard`.
+Gates (`gates.py`, `gate_rules.py`, `gate_detection.py`) and the fabrication
+detector (`fabrication_detector.py` + `fact_age_rejection.py`) reject
+hallucinated or stale facts before they reach the user.
+
 Key agent tools:
 - `vm_exec(host, command)` — SSH to vm_host connection, allowlisted commands
 - `kafka_exec(broker_label, command)` — SSH to worker, exec in kafka container
@@ -298,6 +352,10 @@ that check is for precautionary ops, not for fixing known-degraded components.
 
 **Blocked tool rule:** When a tool is unavailable, agent outputs exact manual SSH
 command instead of escalating.
+
+**External AI escalation:** When the local agent can't make progress, it can
+escalate to an external model via `external_ai_client.py` — gated by user
+confirmation (`ExternalAIConfirmModal.jsx`).
 
 ---
 
