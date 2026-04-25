@@ -419,13 +419,24 @@ def extract_facts_from_vm_hosts_snapshot(snapshot: dict) -> list[dict]:
         if vm.get("docker_version"):
             _add(facts, f"{fkey_base}.docker_version", "vm_hosts_collector",
                  vm["docker_version"], md)
-        # Per-service systemd status (services is list of {name, status})
-        for svc in vm.get("services") or []:
-            sname = svc.get("name") if isinstance(svc, dict) else None
-            sstatus = svc.get("status") if isinstance(svc, dict) else None
-            if sname and sstatus:
-                _add(facts, f"{fkey_base}.service.{sname}", "vm_hosts_collector",
-                     sstatus, md)
+        # Per-service systemd status. Collector emits a dict {name: status}
+        # (api/collectors/vm_hosts.py:_parse_poll_output). Fall back to list
+        # shape for forward-compat if a future collector version changes.
+        services = vm.get("services") or {}
+        if isinstance(services, dict):
+            for sname, sstatus in services.items():
+                if sname and sstatus:
+                    _add(facts, f"{fkey_base}.service.{sname}",
+                         "vm_hosts_collector", sstatus, md)
+        elif isinstance(services, list):
+            for svc in services:
+                if not isinstance(svc, dict):
+                    continue
+                sname = svc.get("name")
+                sstatus = svc.get("status")
+                if sname and sstatus:
+                    _add(facts, f"{fkey_base}.service.{sname}",
+                         "vm_hosts_collector", sstatus, md)
     return facts
 
 

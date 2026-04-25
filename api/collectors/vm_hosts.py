@@ -561,20 +561,49 @@ class VMHostsCollector(BaseCollector):
         health = "healthy" if red == 0 else ("degraded" if ok > 0 else "error")
         snapshot = {"health": health, "vms": vms, "total": total, "ok": ok, "issues": red}
 
-        # v2.39.0: best-effort fact extraction
+        # v2.39.0 + v2.45.30: best-effort fact extraction with visibility.
         try:
             from api.facts.extractors import extract_facts_from_vm_hosts_snapshot
             from api.db.known_facts import batch_upsert_facts
             from api.metrics import FACTS_UPSERTED_COUNTER
             facts = extract_facts_from_vm_hosts_snapshot(snapshot)
+            n_vms = len(snapshot.get("vms") or [])
             result = batch_upsert_facts(facts, actor="collector")
             for action, count in result.items():
                 if count > 0:
                     FACTS_UPSERTED_COUNTER.labels(
                         source="vm_hosts_collector", action=action
                     ).inc(count)
+            # v2.45.30: log at info level so operators can see whether the
+            # collector is actually populating known_facts. Surfaces the gap
+            # between "ran" and "wrote useful data".
+            log.info(
+                "vm_hosts: extracted %d facts from %d vms (insert=%d touch=%d "
+                "change=%d conflict=%d noop=%d)",
+                len(facts), n_vms,
+                result.get("insert", 0), result.get("touch", 0),
+                result.get("change", 0), result.get("conflict", 0),
+                result.get("noop", 0),
+            )
+            if facts and n_vms and len(facts) < (n_vms * 2):
+                # Pathological: some vms have so little data that fewer than
+                # 2 facts per vm are emitted (we expect ~10 per healthy vm,
+                # ~5 per failed-SSH vm). Likely a credential failure —
+                # surface it once per poll.
+                _failed = [
+                    v.get("label") or v.get("host", "?")
+                    for v in (snapshot.get("vms") or [])
+                    if v.get("dot") == "red"
+                ]
+                if _failed:
+                    log.warning(
+                        "vm_hosts: %d/%d hosts in 'red' state — likely SSH "
+                        "credential failure. Failed: %s",
+                        len(_failed), n_vms, ", ".join(_failed[:5]),
+                    )
         except Exception as _fe:
-            log.warning("Fact extraction failed for vm_hosts: %s", _fe)
+            log.warning("Fact extraction failed for vm_hosts: %s", _fe,
+                        exc_info=True)
 
         return snapshot
 
