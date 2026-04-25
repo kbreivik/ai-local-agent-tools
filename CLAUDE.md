@@ -1,5 +1,5 @@
 # DEATHSTAR — Claude Code Guide
-## Version: 2.45.17
+## Version: 2.46.0
 
 Self-hosted infrastructure monitoring and AI agent orchestration platform.
 FastMCP + FastAPI backend, React (Vite) frontend, Docker Swarm deployment.
@@ -11,7 +11,7 @@ FastMCP + FastAPI backend, React (Vite) frontend, Docker Swarm deployment.
 | Item | Value |
 |---|---|
 | Repo | github.com/kbreivik/ai-local-agent-tools (public, MIT) |
-| Current version | v2.45.17 (see `VERSION` — single source of truth) |
+| Current version | v2.46.0 (see `VERSION` — single source of truth) |
 | Stack | FastMCP + FastAPI (Python 3.13) + React (Vite/JSX) |
 | Deploy target | agent-01 at `192.168.199.10:8000` (standalone container) |
 | Docker image | `ghcr.io/kbreivik/hp1-ai-agent:latest` |
@@ -115,7 +115,20 @@ ai-local-agent-tools/
 ├── api/
 │   ├── main.py                       ← App entry, startup, router mounts
 │   ├── auth.py                       ← JWT + API token fallback
+│   ├── users.py                      ← User CRUD, bcrypt password hashing
 │   ├── connections.py                ← Connections DB, Fernet encryption
+│   ├── crypto.py / settings_manager.py
+│   ├── session_store.py / lock.py / logger.py / metrics.py
+│   ├── scheduler.py                  ← APScheduler-driven jobs (collectors, tests, retention)
+│   ├── correlator.py / clarification.py / confirmation.py
+│   ├── elastic_alerter.py / notifications.py / alerts.py
+│   ├── analysis_templates.py / constants.py
+│   ├── plugin_loader.py / tool_registry.py / websocket.py
+│   ├── facts/                        ← known_facts pipeline (current+history+rejection)
+│   ├── memory/                       ← MuninnDB integration
+│   ├── rag/                          ← Document ingest + retrieval
+│   ├── security/                     ← Secure cookie / TLS / CORS guardrails
+│   ├── skills/                       ← Self-improving skill runtime (server side)
 │   ├── agents/
 │   │   ├── router.py                 ← Task classifier, tool allowlists, prompts
 │   │   ├── orchestrator.py           ← Multi-step agent orchestration
@@ -124,7 +137,7 @@ ai-local-agent-tools/
 │   │   ├── gates.py / gate_rules.py / gate_detection.py
 │   │   ├── context.py                ← Per-task context assembly
 │   │   ├── step_state.py / step_facts.py / step_llm.py
-│   │   │     step_tools.py / step_synth.py / step_guard.py
+│   │   │     step_tools.py / step_synth.py / step_guard.py / step_persist.py
 │   │   ├── propose_dedup.py          ← Subtask proposal de-dup
 │   │   ├── runbook_classifier.py
 │   │   ├── fabrication_detector.py   ← Detects hallucinated facts
@@ -199,9 +212,17 @@ ai-local-agent-tools/
 │   ├── schemas/ / styles/ / utils/ / dev/
 │   └── index.css                     ← V3a Imperial theme (CSS vars)
 ├── cc_prompts/                       ← CC prompt queue (see above)
+├── scripts/
+│   ├── check_sensors.py              ← Sensor stack runner (see Sensor Protocol)
+│   ├── gen_build_info.py / rotate_encryption_key.py
+│   ├── deathstar-backup.sh / deathstar-verify-bundle.sh
+│   └── deploy/                       ← One-shot bootstrap scripts
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
+├── .ruff.toml / .eslintrc.sensors.json / .gitleaks.toml
+├── Makefile                          ← `make check` / `make check-agent`
+├── .github/workflows/                ← build.yml + sensors.yml
 └── VERSION                           ← Single source of version truth
 ```
 
@@ -320,6 +341,16 @@ Auth flow:
 1. Login → JWT from users table (bcrypt) → falls back to env var
 2. API calls → JWT decode → SHA256 hash lookup in api_tokens → 401
 
+`/metrics` is auth-protected (v2.45.21+). `CORS_ALLOW_ALL=1` is logged as a
+security warning on startup.
+
+### Optional TLS reverse proxy (v2.45.29+)
+
+nginx-fronted HTTPS with secure cookies — opt-in, off by default. See
+`docker/docker-compose.yml` for the `nginx` profile and `api/security/` for
+secure-cookie behaviour. When enabled, the agent listens behind nginx and
+issues `Secure; HttpOnly; SameSite=Strict` cookies.
+
 ---
 
 ## Agent Architecture
@@ -335,10 +366,19 @@ Auth flow:
 
 Each turn flows through a step pipeline (`api/agents/step_*.py`) wrapped by
 `orchestrator.py` and set up by `pipeline.py`:
-`step_state → step_facts → step_llm → step_tools → step_synth → step_guard`.
+`step_state → step_facts → step_llm → step_tools → step_synth → step_guard → step_persist`.
 Gates (`gates.py`, `gate_rules.py`, `gate_detection.py`) and the fabrication
 detector (`fabrication_detector.py` + `fact_age_rejection.py`) reject
 hallucinated or stale facts before they reach the user.
+
+### Facts pipeline (v2.45.23+)
+
+Collectors (`elastic`, `network_ssh`, `vm_hosts`) and the agent observation path
+(`step_persist`, `step_facts.drain_run_facts`) write into
+`api/db/known_facts_current` (with rolling history in `known_facts_history`).
+The agent reads these as authoritative facts for the current turn — the
+fabrication detector cross-checks LLM claims against this store and rejects
+unsupported or stale assertions.
 
 Key agent tools:
 - `vm_exec(host, command)` — SSH to vm_host connection, allowlisted commands
@@ -374,6 +414,7 @@ confirmation (`ExternalAIConfirmModal.jsx`).
 ```bash
 python -m py_compile api/main.py
 python -m py_compile mcp_server/server.py
+make check-agent                                  # sensor stack — failures only with HINTs
 curl -s http://192.168.199.10:8000/api/health
 docker logs hp1_agent --tail 50
 ```
@@ -396,7 +437,7 @@ Three-layer linting stack for CI + local + agent workflows. Source files:
 | eslint | JS/JSX complexity, max-lines, max-params, no-unused-vars | `.eslintrc.sensors.json` (loaded via generated flat-config wrapper) |
 | mypy | Static type errors in `api/`, `mcp_server/`, `scripts/` | inline (`--ignore-missing-imports`) |
 
-### Calibrated thresholds (v2.45.32)
+### Calibrated thresholds (v2.46.0)
 
 | Threshold | Setting | Codebase peak | Note |
 |---|---|---|---|
