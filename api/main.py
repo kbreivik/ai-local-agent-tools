@@ -129,6 +129,17 @@ async def lifespan(app: FastAPI):
             "SECURITY: CORS_ALLOW_ALL=true — every origin is accepted. "
             "Set CORS_ALLOW_ALL=false and use CORS_ORIGINS for specific hosts."
         )
+    # v2.45.29 — Loud auth-cookie security warning. The auth cookie is
+    # transmitted over the wire; without TLS, LAN packet capture can steal
+    # active sessions. Suppress by setting HP1_BEHIND_HTTPS=true once nginx
+    # TLS proxy is in front (see docker/nginx.conf).
+    if os.environ.get("HP1_BEHIND_HTTPS", "false").lower() != "true":
+        import logging as _logging_tls
+        _logging_tls.getLogger(__name__).warning(
+            "SECURITY: HP1_BEHIND_HTTPS not set — auth cookie sent over HTTP. "
+            "Deploy nginx TLS proxy and set HP1_BEHIND_HTTPS=true to enable "
+            "Secure cookie attribute. See docker/nginx.conf."
+        )
     await _start_logger()
     await _start_session_store()
     import logging as _logging

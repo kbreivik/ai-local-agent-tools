@@ -1,4 +1,5 @@
 """Auth endpoints: login, me, logout."""
+import os
 import time
 from typing import Optional
 from collections import defaultdict
@@ -7,6 +8,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from api.auth import authenticate, create_token, get_current_user, get_user_role
+
+# v2.45.29 — When nginx TLS proxy is in front, set HP1_BEHIND_HTTPS=true in .env
+# so the auth cookie is only sent over HTTPS. Default is False (preserves
+# bare-metal HTTP deployments).
+_COOKIE_SECURE = os.environ.get("HP1_BEHIND_HTTPS", "false").lower() == "true"
 
 _login_attempts: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT = 5
@@ -45,7 +51,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
         value=token,
         httponly=True,
         samesite="strict",
-        secure=False,        # set True when behind HTTPS
+        secure=_COOKIE_SECURE,  # True when HP1_BEHIND_HTTPS=true (nginx TLS proxy)
         max_age=86400 * 7,   # 7 days
         path="/",
     )
