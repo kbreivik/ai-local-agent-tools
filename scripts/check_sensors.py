@@ -211,6 +211,9 @@ def run_ruff(result: Result) -> None:
         ))
 
 
+BANDIT_CONFIG = REPO_ROOT / ".bandit"
+
+
 def run_bandit(result: Result) -> None:
     exe = _which("bandit")
     if not exe:
@@ -218,6 +221,8 @@ def run_bandit(result: Result) -> None:
         return
     cmd = [exe, "-r", *PY_TARGETS, "-f", "json", "-q",
            "--severity-level", "medium", "--confidence-level", "medium"]
+    if BANDIT_CONFIG.exists():
+        cmd[1:1] = ["-c", str(BANDIT_CONFIG)]
     try:
         cp = _run(cmd, cwd=REPO_ROOT)
     except subprocess.TimeoutExpired:
@@ -252,7 +257,11 @@ def run_gitleaks(result: Result) -> None:
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         report_path = Path(tf.name)
     try:
-        cmd = [exe, "detect", "--no-banner", "--config", str(GITLEAKS_CONFIG),
+        # --no-git: scan the working tree only, not git history (avoids
+        # noise from old commits that contained sample tokens before the
+        # cc_prompts/ allowlist landed).
+        cmd = [exe, "detect", "--no-banner", "--no-git",
+               "--config", str(GITLEAKS_CONFIG),
                "--report-format", "json", "--report-path", str(report_path),
                "--source", str(REPO_ROOT), "--redact"]
         try:
@@ -410,6 +419,10 @@ RUNNERS = {
     "mypy": run_mypy,
 }
 
+# mypy is opt-in: the codebase is largely untyped, so a default run produces
+# noise. Use `--only mypy` (or `make mypy`) to run it on demand.
+DEFAULT_SENSORS = ["ruff", "bandit", "gitleaks", "eslint"]
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DEATHSTAR sensor stack runner")
@@ -419,10 +432,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         for name in RUNNERS:
-            print(name)
+            tag = " (opt-in)" if name not in DEFAULT_SENSORS else ""
+            print(f"{name}{tag}")
         return 0
 
-    selected = [s.strip() for s in args.only.split(",") if s.strip()] or list(RUNNERS)
+    selected = [s.strip() for s in args.only.split(",") if s.strip()] or list(DEFAULT_SENSORS)
     unknown = [s for s in selected if s not in RUNNERS]
     if unknown:
         print(f"Unknown sensors: {', '.join(unknown)}", file=sys.stderr)

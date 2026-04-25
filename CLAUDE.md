@@ -456,10 +456,15 @@ The intent: **catch new outliers**, then progressively tighten as code improves.
 
 | Command | Purpose |
 |---|---|
-| `make check` | Full human-readable run, every tool's native output. |
-| `make check-agent` | Agent-optimized: failures only, one per line, with HINTs. Delegates to `scripts/check_sensors.py`. |
-| `python scripts/check_sensors.py --only ruff` | Run a single sensor (`--list` to see options). |
+| `make check` | Default sensors (ruff, bandit, gitleaks, eslint) — full human-readable output. |
+| `make check-all` | Includes mypy. Untyped-codebase noise expected. |
+| `make check-agent` | Agent-optimized: failures only, one per line, with HINTs. Default sensors only. |
+| `python scripts/check_sensors.py --only ruff,mypy` | Run an explicit subset (`--list` to see options). |
 | `make sensors-install` | Install Python sensors (ruff, bandit, mypy) via pip. gitleaks/eslint installed separately. |
+
+**Note on mypy:** opt-in only. Most of the codebase is untyped, so a full mypy pass
+produces hundreds of errors. Run it on a focused subdirectory before merging
+type-related changes (`python scripts/check_sensors.py --only mypy`).
 
 ### Output format (agent mode)
 

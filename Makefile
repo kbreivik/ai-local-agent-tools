@@ -13,12 +13,20 @@ ESLINT_CONFIG := .eslintrc.sensors.json
 GITLEAKS_CONFIG := .gitleaks.toml
 GUI_DIR := gui
 
-.PHONY: check check-agent sensors-install ruff bandit gitleaks eslint mypy
+.PHONY: check check-agent check-all sensors-install ruff bandit gitleaks eslint mypy
 
-check: ruff bandit gitleaks eslint mypy
+# `make check` excludes mypy by default — codebase is largely untyped, so a
+# full mypy pass produces noise. Use `make check-all` (or `make mypy`) to opt in.
+check: ruff bandit gitleaks eslint
 	@echo ""
 	@echo "================================================================"
-	@echo "  DEATHSTAR sensor stack: full check complete."
+	@echo "  DEATHSTAR sensor stack: default check complete (mypy skipped)."
+	@echo "================================================================"
+
+check-all: ruff bandit gitleaks eslint mypy
+	@echo ""
+	@echo "================================================================"
+	@echo "  DEATHSTAR sensor stack: full check complete (incl. mypy)."
 	@echo "================================================================"
 
 ruff:
@@ -29,12 +37,12 @@ ruff:
 bandit:
 	@echo "── bandit ──────────────────────────────────────────────────────"
 	@command -v bandit >/dev/null 2>&1 || { echo "  bandit not installed (pip install bandit)"; exit 0; }
-	bandit -r $(PY_TARGETS) --severity-level medium --confidence-level medium
+	bandit -c .bandit -r $(PY_TARGETS) --severity-level medium --confidence-level medium
 
 gitleaks:
 	@echo "── gitleaks ────────────────────────────────────────────────────"
 	@command -v gitleaks >/dev/null 2>&1 || { echo "  gitleaks not installed (see github.com/gitleaks/gitleaks)"; exit 0; }
-	gitleaks detect --no-banner --config $(GITLEAKS_CONFIG) --source . --redact --verbose
+	gitleaks detect --no-banner --no-git --config $(GITLEAKS_CONFIG) --source . --redact --verbose
 
 eslint:
 	@echo "── eslint (sensors) ────────────────────────────────────────────"

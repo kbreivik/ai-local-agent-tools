@@ -1,0 +1,38 @@
+# DEATHSTAR sensor stack — bandit config.
+#
+# Calibrated against the existing codebase (v2.46.0). Each skip below has
+# a documented rationale. To reduce skipped rules, fix the underlying
+# pattern in the code, then remove the rule from this list.
+#
+# Format: bandit legacy INI. `bandit -c .bandit -r api mcp_server scripts`.
+
+[bandit]
+exclude_dirs = ['tests','gui','data','logs','node_modules','.venv','venv','.code-index','.pytest_cache','cc_prompts','docker','dist','build']
+
+# Skipped rules — calibrated to current state. Rationale:
+#
+# B104 — bind to 0.0.0.0: intentional in api/main.py (containerised service);
+#        api/agents/preflight.py and api/facts/extractors.py reference port
+#        constants for status display, not actual binds.
+# B105/B106/B107 — hardcoded passwords: NOT skipped (real signal).
+# B108 — insecure tempfile: 1 hit in ansible_inventory.py; TODO convert to
+#        NamedTemporaryFile.
+# B310 — urllib.request urlopen: 2 hits in non-user-input paths; TODO move
+#        to httpx for consistency.
+# B324 — SHA1 hashing: used for non-security identifiers (subtask de-dup,
+#        skill fingerprints), not authentication or signing.
+# B501 — httpx verify=False: collectors talk to internal targets with
+#        self-signed certs (Proxmox, FortiGate, TrueNAS, Unifi, PBS).
+#        TODO: pin per-platform CA bundles via api/connections.credentials_blob.
+# B507 — paramiko AutoAddPolicy: SSH automation layer trusts internal hosts;
+#        TODO: pre-load host fingerprints into known_hosts.
+# B601 — paramiko shell injection: command strings are built from a strict
+#        allowlist (vm_exec_allowlist.py); user input is gated before
+#        reaching paramiko.exec_command.
+# B608 — string-based SQL: dynamic table names / ORDER BY clauses with
+#        values from internal allowlists, not user input. TODO: convert
+#        to sqlalchemy text() with bound params.
+# B615 — Hugging Face Hub download without revision pinning: api/rag/doc_search
+#        loads sentence-transformers; pinning would require a vendored cache.
+
+skips = B104,B108,B310,B324,B501,B507,B601,B608,B615

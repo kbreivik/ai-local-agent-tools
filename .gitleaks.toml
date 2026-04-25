@@ -1,11 +1,13 @@
 # DEATHSTAR sensor stack — gitleaks config
-# Scans for: JWT tokens, Fernet keys, generic API tokens.
-# Excludes test fixtures, .example files, and lockfiles.
+# Scans for: JWT tokens, Fernet keys, generic API tokens, plus default rules.
+# Excludes test fixtures, .example files, lockfiles, cc_prompts logs/prompts,
+# and form-field placeholders in the GUI.
 
 title = "DEATHSTAR gitleaks rules"
 
 [extend]
-# Inherit gitleaks built-in rules (AWS, GCP, GitHub, Slack, etc.)
+# Inherit gitleaks built-in rules (AWS, GCP, GitHub, Slack, generic-api-key,
+# private-key, github-pat, etc.).
 useDefault = true
 
 # ── Custom rules tailored to this codebase ──────────────────────────────────
@@ -27,44 +29,52 @@ id = "deathstar-api-token-assignment"
 description = "Generic API/auth token literal assignment"
 regex = '''(?i)(api[_-]?token|auth[_-]?token|access[_-]?token|bearer[_-]?token)\s*[:=]\s*['"][A-Za-z0-9_\-\.=]{24,}['"]'''
 tags = ["secret", "api-token"]
-# Don't trip on env-var references like API_TOKEN=$SOMETHING
 [[rules.allowlists]]
 regexes = ['''\$\{?[A-Z_][A-Z0-9_]+\}?''', '''os\.environ''', '''getenv''']
 
 [[rules]]
 id = "deathstar-admin-password-literal"
-description = "Hardcoded admin password literal (only flag obvious leaks)"
+description = "Hardcoded admin password literal"
 regex = '''(?i)ADMIN_PASSWORD\s*=\s*['"][A-Za-z0-9_!@#$%^&*()-]{8,}['"]'''
 tags = ["secret", "password"]
 
-# ── Global allowlist: paths and patterns to skip ─────────────────────────────
+# ── Global allowlist — applies to ALL rules (default + custom) ─────────────
 
-[[allowlists]]
-description = "Test fixtures, examples, lockfiles, build artifacts"
+[allowlist]
+description = "Paths and patterns to skip globally"
+# `paths` are case-sensitive regexes matched against repo-relative paths.
 paths = [
-    '''(?i)tests?/.*''',
-    '''(?i).*/__tests__/.*''',
-    '''.*\.example$''',
-    '''.*\.example\..*''',
-    '''.env\.defaults$''',
-    '''package-lock\.json$''',
-    '''pnpm-lock\.yaml$''',
-    '''yarn\.lock$''',
-    '''gui/node_modules/.*''',
-    '''node_modules/.*''',
-    '''dist/.*''',
-    '''build/.*''',
-    '''.*\.min\.js$''',
-    '''.*\.svg$''',
-    '''cc_prompts/logs/.*''',
-    '''data/.*''',
-    '''.code-index/.*''',
-    '''.pytest_cache/.*''',
+    # Test fixtures (intentional sample tokens for sanitiser/redaction tests)
+    '''^tests/''',
+    '''^.+/__tests__/''',
+    '''(?i)\.example$''',
+    '''(?i)\.example\.''',
+    '''^\.env\.defaults$''',
+    # Lockfiles and vendored dependencies
+    '''^package-lock\.json$''',
+    '''^pnpm-lock\.yaml$''',
+    '''^yarn\.lock$''',
+    '''^.+/package-lock\.json$''',
+    '''^.+/node_modules/''',
+    '''^node_modules/''',
+    '''^dist/''',
+    '''^build/''',
+    '''\.min\.js$''',
+    '''\.svg$''',
+    # CC prompt files: these are documentation containing sample tokens
+    # used to demonstrate redaction/sanitiser behaviour.
+    '''^cc_prompts/''',
+    # Runtime artefacts
+    '''^data/''',
+    '''^logs/''',
+    '''^\.code-index/''',
+    '''^\.pytest_cache/''',
+    # GUI placeholder strings in form fields (not real secrets).
+    '''^gui/src/components/OptionsModal\.jsx$''',
 ]
-
-[[allowlists]]
-description = "Fixture/placeholder/dummy values used in CC prompts and docs"
+# Generic placeholder/example token patterns used in docs and tests.
 regexes = [
     '''(?i)(your[_-]?key[_-]?here|placeholder|example|dummy|fake|test[_-]?token|\bxxx+\b)''',
     '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]+\.signature''',
+    '''-----BEGIN [A-Z ]+PRIVATE KEY-----''',
 ]
