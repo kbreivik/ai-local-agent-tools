@@ -71,6 +71,7 @@ class StepState:
 
     # In-run fact tracking
     run_facts: dict = field(default_factory=dict)          # v2.35.2: key -> {value, step, tool, ...}
+    run_facts_persisted: bool = False                      # v2.45.25 — drain to known_facts_current
 
     # Propose dedup
     propose_state: object = None                           # ProposeState instance

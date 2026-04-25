@@ -1635,6 +1635,20 @@ async def _run_single_agent_step(
         )
 
     state.steps_taken = step
+
+    # v2.45.25 — drain agent_observation facts to known_facts_current
+    try:
+        from api.agents.step_persist import persist_run_facts
+        persist_run_facts(
+            state,
+            operation_id=operation_id,
+            session_id=session_id,
+            agent_type=agent_type,
+            task=task,
+        )
+    except Exception as _ppe:
+        log.debug("persist_run_facts failed: %s", _ppe)
+
     return state.to_result_dict()
 
 

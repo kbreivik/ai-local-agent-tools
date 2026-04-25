@@ -305,6 +305,15 @@ AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER = Counter(
     ["wrote_or_skipped"],
 )
 
+# v2.45.25 — per-step persist hook (api/agents/step_persist.py).
+# Distinct metric name from the aggregated _written_total counter above to
+# avoid prometheus_client duplicate-registration collision.
+AGENT_OBSERVATION_FACTS_WRITTEN = Counter(
+    "deathstar_agent_observation_facts_persisted_total",
+    "Number of agent_observation facts persisted to known_facts_current per step",
+    labelnames=["agent_type"],
+)
+
 # --- fact-age rejection (v2.35.3) ---
 FACT_AGE_REJECTIONS_COUNTER = Counter(
     "deathstar_fact_age_rejections_total",

@@ -449,3 +449,24 @@ Do NOT modify INDEX.md or any queue status files — the runner handles that.
 ========================================================================
 CLAUDE OUTPUT — 2026-04-25 11:41:53
 ========================================================================
+Pushed cleanly as `278bfb5`.
+[STATUS] 2m55s
+
+Summary of changes:
+- `gui/src/components/OptionsModal.jsx` — added `'Facts & Knowledge'` to TABS, exported new `FactsKnowledgeTab` component (6 sections: Injection, Half-life decay, Source weights, Fact-age rejection, Runbook injection, Preflight), wired into modal body routing.
+- `gui/src/components/SettingsPage.jsx` — imported and routed `FactsKnowledgeTab` in the full-page settings view.
+- `VERSION` — bumped 2.45.23 → 2.45.24.
+
+Cross-checked all 27 keys against `api/routers/settings.py`:
+- Dropped `factInjectionTopN` (not registered in source).
+- Used source-of-truth defaults: `runbookInjectionMode='augment'` (not 'replace'), `runbookClassifierMode='keyword'` (with options keyword/semantic/llm — 'heuristic' not a valid value in source).
+- Added two v2.40.x+ keys missing from prompt list: `runbookSemanticThreshold` (under Runbook), `preflightLLMFallbackMaxTokens` (under Preflight).
+
+Build passed (`vite build` in 2.70s, only pre-existing warnings).
+
+PROMPT COMPLETE: v2.45.24
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m55s
+========================================================================
