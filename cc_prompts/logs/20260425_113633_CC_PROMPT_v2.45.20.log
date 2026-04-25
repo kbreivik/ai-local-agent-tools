@@ -1,0 +1,217 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.45.20.md (v2.45.20)
+Theme: fix(tests): timeout headroom for 4 borderline failures
+
+Prompt content:
+
+# CC PROMPT — v2.45.20 — fix(tests): timeout headroom for 4 borderline failures
+
+## What this does
+Bumps timeouts on 4 tests that fail by <5s while doing the right thing. From
+the v2.45.17 status report:
+- research-versions-01 — times out at 151s vs 150s limit → 180s
+- clarify-01 — times out at 152s vs 150s limit → 240s
+- action-rollback-01 — still clarifying at 153s → 240s
+- safety-no-plan-01 — clarification loop times out at 90s → 120s
+
+These are correctness-correct, speed-bounded failures.
+
+Version bump: 2.45.19 → 2.45.20
+
+---
+
+## Context
+
+Test cases live in `api/db/test_definitions.py` as a `TEST_CASES` list of
+`TestCase(...)` calls, each with a `timeout_s=N` field.
+
+CC: open the file, locate each TestCase by its `id="..."` string, and update
+its `timeout_s=` value. If the field is absent (uses a default), add it.
+
+---
+
+## Change — `api/db/test_definitions.py`
+
+Apply 4 edits, one per test case. Match the existing TestCase line indent.
+
+### Edit 1: research-versions-01
+
+Find the TestCase with `id="research-versions-01"`. Locate its `timeout_s=`
+parameter. Change to `timeout_s=180`. If `timeout_s` is not present in this
+case's call, add `timeout_s=180,` next to the existing parameters.
+
+### Edit 2: clarify-01
+
+Find the TestCase with `id="clarify-01"`. Set `timeout_s=240`.
+
+### Edit 3: action-rollback-01
+
+Find the TestCase with `id="action-rollback-01"`. Set `timeout_s=240`.
+
+### Edit 4: safety-no-plan-01
+
+Find the TestCase with `id="safety-no-plan-01"`. Set `timeout_s=120`.
+
+CC: if any of these IDs are not found, STOP and report which one is missing —
+do not invent values or guess at IDs.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/db/test_definitions.py
+python -c "from api.db.test_definitions import TEST_CASES; \
+    ids = {'research-versions-01': 180, 'clarify-01': 240, \
+           'action-rollback-01': 240, 'safety-no-plan-01': 120}; \
+    [print(tc.id, tc.timeout_s, '✓' if tc.timeout_s == ids.get(tc.id) else '✗ mismatch') \
+     for tc in TEST_CASES if tc.id in ids]"
+```
+
+Expected: all four print `✓`.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.45.19` → `2.45.20`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(tests): v2.45.20 timeout headroom — research-versions-01 + clarify-01 + action-rollback-01 + safety-no-plan-01"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-25 11:36:33
+========================================================================
+PROMPT COMPLETE: v2.45.20
+[STATUS] 48s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  49s
+========================================================================

@@ -122,6 +122,13 @@ async def lifespan(app: FastAPI):
     from api.crypto import check_encryption_key_safe
     check_encryption_key_safe()
     check_secrets()
+    # v2.45.21 — Loud CORS warning. Mirrors the ADMIN_PASSWORD default check.
+    if CORS_ORIGINS_ALL:
+        import logging as _logging_cors
+        _logging_cors.getLogger(__name__).critical(
+            "SECURITY: CORS_ALLOW_ALL=true — every origin is accepted. "
+            "Set CORS_ALLOW_ALL=false and use CORS_ORIGINS for specific hosts."
+        )
     await _start_logger()
     await _start_session_store()
     import logging as _logging
@@ -684,7 +691,14 @@ async def active_sessions(user: str = Depends(get_current_user)):
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(_: str = Depends(get_current_user)):
+    """Prometheus metrics endpoint (auth-required since v2.45.21).
+
+    Operator scrapers must include the JWT bearer token or auth cookie.
+    Returns 401 for unauthenticated requests. This protects operational
+    intelligence (escalation frequency, hallucination guard hits, tool
+    failure patterns) from anonymous LAN scraping.
+    """
     body, ctype = render_metrics()
     return Response(content=body, media_type=ctype)
 
