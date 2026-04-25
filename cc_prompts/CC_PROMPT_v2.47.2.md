@@ -1,0 +1,288 @@
+# CC PROMPT — v2.47.2 — fix(memory): scoped fact/outcome retrieval to break self-poisoning loop
+
+## What this does
+Closes the 9.1pp mem-on regression seen between 2026-04-24 (95.5%) and
+2026-04-25 (86.4%). Memory store gained 19+ `agent_observation` facts and
+many `tools_for:*`/`outcome:*` engrams during that window, and they are
+now poisoning the first-tool hint and past-outcomes injection on
+subsequent mem-on runs.
+
+Three concrete changes:
+
+1. **Scope `get_first_tool_hint` to actual task-slug match** — currently
+   `client.activate(task_terms + [agent_type])` returns engrams that share
+   *some* words with the task, not engrams that are FOR the task. A successful
+   "investigate kafka logs" run can hint a wrong first-tool to "investigate
+   elasticsearch logs" because both share "investigate" and "logs". Add a
+   strict `concept == f"tools_for:{task_slug}"` filter after activation.
+
+2. **Drop `tool_association/success` writes on FAILED action tests** — the
+   agent finishing without error but ALSO without calling `plan_action` on an
+   action task is a failure (the harness even flagged it). Currently
+   `record_outcome(status='completed', positive_signals=0, negative_signals=0)`
+   writes the bad tool sequence as a success and reinforces the wrong path
+   for next time. Detect this case and downgrade to a failure write.
+
+3. **Filter `agent_observation` facts by recency window for `inject_facts_block`** —
+   facts written within the last 60 minutes from the same agent run shape
+   (same agent_type, same task slug) are excluded from injection. Prevents
+   self-loop poisoning where a wrong observation written 5 minutes ago gets
+   injected as authoritative on the next test run.
+
+Version bump: 2.47.1 → 2.47.2
+
+---
+
+## Change 1 — `api/memory/feedback.py` — strict task-slug match in `get_first_tool_hint`
+
+Find the existing function. Replace the body of `success_engrams` filter
+with a stricter version:
+
+```python
+async def get_first_tool_hint(task: str, agent_type: str) -> str | None:
+    """Return the first tool from the most-activated successful sequence for
+    this task, or None if no data exists.
+
+    v2.47.2 — strict task-slug match. Previously, activate-by-words returned
+    engrams that shared SOME words with the task (e.g. "investigate kafka logs"
+    polluted "investigate elasticsearch logs"). Now the engram concept must
+    equal f"tools_for:{task_slug}" exactly. This makes hints precise but
+    sparse — that's the right tradeoff: a missed hint is fine, a wrong hint
+    actively damages mem-on score.
+    """
+    try:
+        client = get_client()
+        task_key = task[:50].strip()
+        task_slug = _slugify(task_key)
+        target_concept = f"tools_for:{task_slug}"
+
+        task_terms = [w for w in task_key.lower().split() if len(w) > 3][:5]
+        if not task_terms:
+            return None
+
+        results = await client.activate(task_terms + [agent_type], max_results=10)
+        if not results:
+            return None
+
+        # v2.47.2 — concept must match the SLUG of THIS task. Prior version
+        # accepted any tools_for:* engram that came back from activate(), which
+        # cross-pollinated unrelated tasks.
+        success_engrams = [
+            r for r in results
+            if "success" in r.get("tags", [])
+            and agent_type in r.get("tags", [])
+            and r.get("concept", "") == target_concept
+        ]
+
+        if not success_engrams:
+            return None
+
+        best = success_engrams[0]
+        content = best.get("content", "")
+
+        match = re.search(r":\s*([a-z_][a-z0-9_,]+)", content)
+        if not match:
+            return None
+
+        first_tool = match.group(1).split(",")[0].strip()
+        if not first_tool or len(first_tool) < 3:
+            return None
+
+        return first_tool
+
+    except Exception as _e:
+        log.debug("get_first_tool_hint failed: %s", _e)
+        return None
+```
+
+CC: keep the existing `import re` at module level; the inline `import re`
+inside the original function body should be removed (top of file already
+has `import re`).
+
+---
+
+## Change 2 — `api/memory/feedback.py` — detect "completed but failed-by-harness" action runs
+
+Find `record_outcome`. Replace the success association block with a stricter
+variant that demotes "completed without plan_action on action tasks":
+
+Find:
+
+```python
+        if status == "completed" and net >= 0:
+            assoc_content = (
+                f"Successful tool sequence for '{task_key}': {tool_seq}. "
+                f"Outcome: {status}. Agent: {agent_type}."
+            )
+            assoc_tags = ["tool_association", agent_type, "success"]
+            # Two stores = stronger recall weight
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+        else:
+            assoc_content = (
+                f"Failed/cancelled tool sequence for '{task_key}': {tool_seq}. "
+                f"Outcome: {status}. Avoid or add pre-checks."
+            )
+            assoc_tags = ["tool_association", agent_type, "failure"]
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+```
+
+Replace with:
+
+```python
+        # v2.47.2 — detect "harness-failed but completed" action runs.
+        # An action/execute agent that finishes status='completed' without
+        # calling plan_action() failed the test even if the agent itself did
+        # not error. Recording its tool sequence as 'success' poisons future
+        # mem-on runs (next time same task gets the same wrong first tool).
+        # Downgrade these to failure writes.
+        _action_no_plan = (
+            agent_type in ("action", "execute")
+            and status == "completed"
+            and "plan_action" not in tools_used
+        )
+
+        if status == "completed" and net >= 0 and not _action_no_plan:
+            assoc_content = (
+                f"Successful tool sequence for '{task_key}': {tool_seq}. "
+                f"Outcome: {status}. Agent: {agent_type}."
+            )
+            assoc_tags = ["tool_association", agent_type, "success"]
+            # Two stores = stronger recall weight
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+        else:
+            _why = "harness-failed (action without plan_action)" if _action_no_plan else status
+            assoc_content = (
+                f"Failed/cancelled tool sequence for '{task_key}': {tool_seq}. "
+                f"Outcome: {_why}. Avoid or add pre-checks."
+            )
+            assoc_tags = ["tool_association", agent_type, "failure"]
+            await client.store(assoc_concept, assoc_content, assoc_tags)
+```
+
+---
+
+## Change 3 — `api/agents/step_persist.py` — exclude self-loop observation facts from same-task injection
+
+CC: open `api/agents/step_persist.py`. The current write path persists every
+fact to `known_facts_current` with `metadata = {operation_id, session_id,
+agent_type, task_snippet, ...}`. Tasks identified by their first 200 chars.
+
+We need a complementary read-side filter so when `inject_facts_block` (or
+`build_facts_section` in `api/agents/context.py`) pulls facts for prompt
+context, recent agent_observation facts from the SAME task slug are
+excluded.
+
+CC: search `api/agents/context.py` and `api/agents/pipeline.py` for any
+direct read of `known_facts_current` for prompt injection. The likely path
+is `from api.db.known_facts import get_facts_for_prompt` or similar — find
+the function that returns facts for the current run's prompt.
+
+```bash
+grep -rn "agent_observation\|fact_key.*injection\|get_facts.*prompt" api/agents/ api/db/known_facts.py | head -20
+```
+
+Read the function. Add a same-task exclusion:
+
+```python
+# v2.47.2 — exclude agent_observation facts written by the SAME task slug
+# within the last 60 minutes. Prevents self-loop poisoning where a fact
+# written by a wrong run 5 minutes ago is injected as authoritative on the
+# next test run for the same task.
+def _is_self_loop_fact(fact: dict, current_task_slug: str) -> bool:
+    if fact.get("source") != "agent_observation":
+        return False
+    md = fact.get("metadata") or {}
+    if not isinstance(md, dict):
+        return False
+    fact_task = (md.get("task_snippet") or "").lower()
+    if not fact_task:
+        return False
+    # Crude slug match: same first 30 chars
+    if fact_task[:30] != (current_task_slug or "")[:30]:
+        return False
+    # Time check — only filter recent ones (< 60 min old)
+    last_verified = fact.get("last_verified")
+    if not last_verified:
+        return True  # no timestamp → assume recent and filter
+    try:
+        from datetime import datetime, timezone, timedelta
+        if isinstance(last_verified, str):
+            ts = datetime.fromisoformat(last_verified.replace("Z", "+00:00"))
+        else:
+            ts = last_verified
+        age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60
+        return age_min < 60
+    except Exception:
+        return False
+```
+
+CC: integrate this guard into whatever function reads `known_facts_current`
+for prompt injection. The function should accept the current task as a
+parameter (slug or first 200 chars), filter out self-loop facts, then
+return the rest.
+
+If no such function exists yet (maybe v2.45.25 wrote facts but the read
+side reads from elsewhere), add a TODO comment and don't introduce dead
+code. The two main fixes (Changes 1 and 2) are sufficient on their own
+to close most of the regression.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/memory/feedback.py
+python -c "
+import asyncio
+from api.memory.feedback import get_first_tool_hint
+async def t():
+    # Sparse return is fine — what matters is no false positives
+    h = await get_first_tool_hint('investigate elasticsearch cluster health', 'investigate')
+    print('hint:', h)
+asyncio.run(t())
+"
+```
+
+After deploy, re-run `full-mem-on-baseline`. Expected: score returns to
+≥93% (most of the 9.1pp regression closed).
+
+If score is still depressed, run query against MuninnDB to inspect what
+hints are actually firing for the regressed tests:
+
+```sql
+-- Count active tools_for:* engrams by access frequency
+SELECT concept, access_count, last_accessed
+FROM engrams
+WHERE concept LIKE 'tools_for:%'
+ORDER BY access_count DESC LIMIT 30;
+```
+
+(Adjust schema to actual MuninnDB structure if different.)
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.1` → `2.47.2`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(memory): v2.47.2 scoped fact/outcome retrieval to break self-poisoning loop"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After this lands, the mem-on baseline should recover most of the lost 9.1pp.
+v2.47.3 (force plan_action on action tests) and v2.47.4 (clarification
+ceiling) close the remaining gap.

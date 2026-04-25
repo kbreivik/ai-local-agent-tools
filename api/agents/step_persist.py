@@ -10,9 +10,50 @@ runs that call this hook from different code paths.
 """
 from __future__ import annotations
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
+
+
+# v2.47.2 — exclude agent_observation facts written by the SAME task slug
+# within the last 60 minutes. Prevents self-loop poisoning where a fact
+# written by a wrong run 5 minutes ago is injected as authoritative on the
+# next test run for the same task.
+#
+# TODO(v2.47.x): wire this into the read side. Today the fact-injection path
+# is `api/agents/preflight.py::resolve_against_inventory` →
+# `get_confident_facts_for_entity` → `api/db/known_facts.get_confident_facts`.
+# That path resolves by entity_id, not task_snippet, so applying the filter
+# requires plumbing the current task slug down through `preflight_resolve`
+# and `resolve_against_inventory`. Until that lands, this helper is exposed
+# for callers that already have both the fact dict and the current task
+# slug (e.g. future targeted injection paths). Changes 1 + 2 close most of
+# the regression on their own.
+def _is_self_loop_fact(fact: dict, current_task_slug: str) -> bool:
+    if fact.get("source") != "agent_observation":
+        return False
+    md = fact.get("metadata") or {}
+    if not isinstance(md, dict):
+        return False
+    fact_task = (md.get("task_snippet") or "").lower()
+    if not fact_task:
+        return False
+    # Crude slug match: same first 30 chars
+    if fact_task[:30] != (current_task_slug or "")[:30]:
+        return False
+    # Time check — only filter recent ones (< 60 min old)
+    last_verified = fact.get("last_verified")
+    if not last_verified:
+        return True  # no timestamp → assume recent and filter
+    try:
+        if isinstance(last_verified, str):
+            ts = datetime.fromisoformat(last_verified.replace("Z", "+00:00"))
+        else:
+            ts = last_verified
+        age = datetime.now(timezone.utc) - ts
+        return age < timedelta(minutes=60)
+    except Exception:
+        return False
 
 
 def persist_run_facts(

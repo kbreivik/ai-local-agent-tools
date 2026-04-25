@@ -67,7 +67,19 @@ async def record_outcome(
         # ── Association engram: task description ↔ tool sequence ─────────────
         # Repeat on success to raise access-frequency (simulates Hebbian link strength)
         assoc_concept = f"tools_for:{_slugify(task_key)}"
-        if status == "completed" and net >= 0:
+        # v2.47.2 — detect "harness-failed but completed" action runs.
+        # An action/execute agent that finishes status='completed' without
+        # calling plan_action() failed the test even if the agent itself did
+        # not error. Recording its tool sequence as 'success' poisons future
+        # mem-on runs (next time same task gets the same wrong first tool).
+        # Downgrade these to failure writes.
+        _action_no_plan = (
+            agent_type in ("action", "execute")
+            and status == "completed"
+            and "plan_action" not in tools_used
+        )
+
+        if status == "completed" and net >= 0 and not _action_no_plan:
             assoc_content = (
                 f"Successful tool sequence for '{task_key}': {tool_seq}. "
                 f"Outcome: {status}. Agent: {agent_type}."
@@ -77,9 +89,10 @@ async def record_outcome(
             await client.store(assoc_concept, assoc_content, assoc_tags)
             await client.store(assoc_concept, assoc_content, assoc_tags)
         else:
+            _why = "harness-failed (action without plan_action)" if _action_no_plan else status
             assoc_content = (
                 f"Failed/cancelled tool sequence for '{task_key}': {tool_seq}. "
-                f"Outcome: {status}. Avoid or add pre-checks."
+                f"Outcome: {_why}. Avoid or add pre-checks."
             )
             assoc_tags = ["tool_association", agent_type, "failure"]
             await client.store(assoc_concept, assoc_content, assoc_tags)
@@ -149,17 +162,19 @@ async def get_first_tool_hint(task: str, agent_type: str) -> str | None:
     """Return the first tool from the most-activated successful sequence for
     this task, or None if no data exists.
 
-    Uses the existing `tools_for:{task_slug}` engrams written by record_outcome.
-    The most-accessed (highest weight) engram represents the most consistently
-    successful starting approach for similar tasks.
+    v2.47.2 — strict task-slug match. Previously, activate-by-words returned
+    engrams that shared SOME words with the task (e.g. "investigate kafka logs"
+    polluted "investigate elasticsearch logs"). Now the engram concept must
+    equal f"tools_for:{task_slug}" exactly. This makes hints precise but
+    sparse — that's the right tradeoff: a missed hint is fine, a wrong hint
+    actively damages mem-on score.
     """
     try:
         client = get_client()
         task_key = task[:50].strip()
         task_slug = _slugify(task_key)
-        concept = f"tools_for:{task_slug}"
+        target_concept = f"tools_for:{task_slug}"
 
-        # Activate with task terms — the engram is found by concept match
         task_terms = [w for w in task_key.lower().split() if len(w) > 3][:5]
         if not task_terms:
             return None
@@ -168,23 +183,22 @@ async def get_first_tool_hint(task: str, agent_type: str) -> str | None:
         if not results:
             return None
 
-        # Filter to success engrams for this agent_type
+        # v2.47.2 — concept must match the SLUG of THIS task. Prior version
+        # accepted any tools_for:* engram that came back from activate(), which
+        # cross-pollinated unrelated tasks.
         success_engrams = [
             r for r in results
             if "success" in r.get("tags", [])
             and agent_type in r.get("tags", [])
-            and r.get("concept", "").startswith("tools_for:")
+            and r.get("concept", "") == target_concept
         ]
 
         if not success_engrams:
             return None
 
-        # Most-activated engram is at index 0 (MuninnDB sorts by activation weight)
         best = success_engrams[0]
         content = best.get("content", "")
 
-        # Extract tool sequence: "Successful tool sequence for '...': tool1,tool2,tool3"
-        import re
         match = re.search(r":\s*([a-z_][a-z0-9_,]+)", content)
         if not match:
             return None
