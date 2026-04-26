@@ -86,6 +86,14 @@ HARNESS_CLARIFY_CEILING_COUNTER = Counter(
     labelnames=["agent_type"],
 )
 
+# --- no-evidence rebuke (v2.47.6) ---
+HARNESS_NO_EVIDENCE_REBUKE_COUNTER = Counter(
+    "deathstar_harness_no_evidence_rebuke_total",
+    "No-evidence rebukes fired (v2.47.6) — agent tried to exit without "
+    "gathering evidence on a subsystem-specific task",
+    labelnames=["agent_type"],
+)
+
 # --- hallucination guard (v2.34.8) ---
 HALLUCINATION_GUARD_COUNTER = Counter(
     "deathstar_agent_hallucination_guards_total",

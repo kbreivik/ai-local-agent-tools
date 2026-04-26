@@ -1394,6 +1394,72 @@ async def _run_single_agent_step(
                         pass
                     continue   # one more LLM turn
 
+                # v2.47.6 — no-evidence rebuke. Pattern observed in
+                # status-elastic-01, research-elastic-index-01: agent
+                # exits via finish=="stop" on step 1 having called ZERO
+                # substantive tools. The dense system prompt's KAFKA
+                # TRIAGE / EXIT CODE / NETWORK QUERIES sections steer the
+                # model toward "this isn't a kafka problem, must be done"
+                # for elastic-only tasks. Reject the empty exit and force
+                # one more turn with a concrete tool hint.
+                if (
+                    agent_type in ("observe", "status", "investigate", "research")
+                    and state.substantive_tool_calls == 0
+                    and not state.no_evidence_rebuke_fired
+                    and step <= 2
+                ):
+                    state.no_evidence_rebuke_fired = True
+                    # Detect named subsystem to give a concrete hint
+                    _t_lower = (task or "").lower()
+                    _hint = ""
+                    if "elastic" in _t_lower or "elasticsearch" in _t_lower:
+                        if "index" in _t_lower or "stat" in _t_lower:
+                            _hint = " Call elastic_index_stats() now."
+                        elif "health" in _t_lower or "cluster" in _t_lower:
+                            _hint = " Call elastic_cluster_health() now."
+                        elif "log" in _t_lower or "search" in _t_lower:
+                            _hint = " Call elastic_search_logs() now."
+                    elif "kafka" in _t_lower:
+                        if "broker" in _t_lower:
+                            _hint = " Call kafka_broker_status() now."
+                        elif "lag" in _t_lower or "consumer" in _t_lower:
+                            _hint = " Call kafka_consumer_lag() now."
+                        elif "topic" in _t_lower:
+                            _hint = " Call kafka_topic_health() now."
+                    elif "swarm" in _t_lower or "service" in _t_lower:
+                        if "node" in _t_lower:
+                            _hint = " Call swarm_node_status() now."
+                        else:
+                            _hint = " Call service_list() or swarm_status() now."
+
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "[harness] You exited without gathering any "
+                            "evidence. The user's task names a specific "
+                            "subsystem and expects you to query it before "
+                            "concluding. Calling audit_log() or producing "
+                            "a text-only answer with zero tool calls is a "
+                            "protocol failure. Re-read the task, identify "
+                            "the specific tool that answers the user's "
+                            "question, and call it now." + _hint
+                        ),
+                    })
+                    await manager.send_line(
+                        "step",
+                        f"[harness] no-evidence rebuke — forcing one more turn"
+                        + (f" ({_hint.strip()})" if _hint else ""),
+                        status="warning", session_id=session_id,
+                    )
+                    try:
+                        from api.metrics import HARNESS_NO_EVIDENCE_REBUKE_COUNTER
+                        HARNESS_NO_EVIDENCE_REBUKE_COUNTER.labels(
+                            agent_type=agent_type,
+                        ).inc()
+                    except Exception:
+                        pass
+                    continue   # one more LLM turn
+
                 # Synthesise degraded findings if present and summary is thin
                 if state.degraded_findings and (not state.last_reasoning or len(state.last_reasoning) < 100):
                     try:
@@ -1543,6 +1609,56 @@ async def _run_single_agent_step(
                 try:
                     from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
                     HARNESS_PLAN_NUDGES_COUNTER.labels(
+                        agent_type=agent_type,
+                    ).inc()
+                except Exception:
+                    pass
+                continue
+
+            # v2.47.6 — audit_log-only step on observe/research/investigate
+            # with ZERO substantive tool calls: agent called audit_log as
+            # a "done" signal without gathering evidence. Same rebuke as
+            # the natural-exit path. Idempotent.
+            if (
+                _step_names
+                and all(n == "audit_log" for n in _step_names)
+                and agent_type in ("observe", "status", "investigate", "research")
+                and state.substantive_tool_calls == 0
+                and not state.no_evidence_rebuke_fired
+            ):
+                state.no_evidence_rebuke_fired = True
+                _t_lower = (task or "").lower()
+                _hint = ""
+                if "elastic" in _t_lower:
+                    if "index" in _t_lower or "stat" in _t_lower:
+                        _hint = " Call elastic_index_stats() now."
+                    elif "health" in _t_lower or "cluster" in _t_lower:
+                        _hint = " Call elastic_cluster_health() now."
+                elif "kafka" in _t_lower:
+                    if "broker" in _t_lower:
+                        _hint = " Call kafka_broker_status() now."
+                    elif "lag" in _t_lower:
+                        _hint = " Call kafka_consumer_lag() now."
+
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[harness] You called audit_log() without gathering "
+                        "evidence first. audit_log() is for AFTER you have "
+                        "called the read-only status tools the user's task "
+                        "implies. Re-read the task and call the specific "
+                        "tool that answers it now." + _hint
+                    ),
+                })
+                await manager.send_line(
+                    "step",
+                    f"[harness] audit_log-only no-evidence rebuke"
+                    + (f" — {_hint.strip()}" if _hint else ""),
+                    status="warning", session_id=session_id,
+                )
+                try:
+                    from api.metrics import HARNESS_NO_EVIDENCE_REBUKE_COUNTER
+                    HARNESS_NO_EVIDENCE_REBUKE_COUNTER.labels(
                         agent_type=agent_type,
                     ).inc()
                 except Exception:

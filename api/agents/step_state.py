@@ -41,6 +41,7 @@ class StepState:
     plan_force_nudge_fired: bool = False                   # v2.47.3: force-plan_action nudge fires at most once
     clarifying_question_count: int = 0                     # v2.47.4 — cap at 2 per run
     clarification_force_nudge_fired: bool = False          # v2.47.4
+    no_evidence_rebuke_fired: bool = False     # v2.47.6 — rebuke audit-only / empty exit
 
     # Hallucination guard
     hallucination_block_fired: bool = False                # v2.34.8: legacy flag

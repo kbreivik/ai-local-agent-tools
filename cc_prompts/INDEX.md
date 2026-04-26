@@ -78,5 +78,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.45.33.md | v2.45.33 | fix(sensors): clear all 5 violations from f346017 — F821 (correlator + agent), E501, C901 | DONE (62d4435) |
 | CC_PROMPT_v2.47.1.md | v2.47.1 | docs(status): generate STATUS_REPORT_v2.47.0 from live data | DONE (2afd8af) |
 | CC_PROMPT_v2.47.2.md | v2.47.2 | fix(memory): scoped fact/outcome retrieval to break self-poisoning loop | DONE (c361a53) |
-| CC_PROMPT_v2.47.3.md | v2.47.3 | fix(agent): force plan_action on action-typed runs after 2 tool calls without plan | RUNNING |
-| CC_PROMPT_v2.47.4.md | v2.47.4 | fix(agent): clarification ceiling — cap clarifying_question at 2/run | PENDING |
+| CC_PROMPT_v2.47.3.md | v2.47.3 | fix(agent): force plan_action on action-typed runs after 2 tool calls without plan | DONE (5cfc1b9) |
+| CC_PROMPT_v2.47.4.md | v2.47.4 | fix(agent): clarification ceiling — cap clarifying_question at 2/run | DONE (005ca6c) |
+| CC_PROMPT_v2.47.5.md | v2.47.5 | fix(agent): clarify-then-text-exit rescue for action/execute runs | DONE (18a3ee1) |
+| CC_PROMPT_v2.47.6.md | v2.47.6 | fix(agent): rebuke audit_log-only step when no substantive evidence gathered | RUNNING |
