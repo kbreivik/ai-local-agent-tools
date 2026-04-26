@@ -84,4 +84,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.6.md | v2.47.6 | fix(agent): rebuke audit_log-only step when no substantive evidence gathered | DONE (6e49e86) |
 | CC_PROMPT_v2.47.7.md | v2.47.7 | feat(docs): auto-generated REFERENCE.md as living source-of-truth | DONE (9c518de) |
 | CC_PROMPT_v2.47.8.md | v2.47.8 | fix(agent): stronger clarification rejection + specific halluc-guard hints | DONE (26c800b) |
-| CC_PROMPT_v2.47.9.md | v2.47.9 | fix(tests): isolate test runs from external AI gate + memory writes | RUNNING |
+| CC_PROMPT_v2.47.9.md | v2.47.9 | fix(tests): isolate test runs from external AI gate + memory writes | DONE (7385879) |
+| CC_PROMPT_v2.47.10.md | v2.47.10 | fix(ci): exclude version line from REFERENCE.md drift check | RUNNING |

@@ -587,9 +587,14 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         existing = OUTPUT_PATH.read_text(encoding="utf-8")
-        # Strip the "Generated:" timestamp line — that's expected to drift run-to-run
+        # Strip lines expected to drift between commits — the timestamp moves
+        # every regeneration, the version moves every VERSION bump. Comparing
+        # them to the committed copy would force a manual `make reference`
+        # commit on every version bump, defeating the point of CI verification.
         def _strip_ts(s: str) -> str:
-            return re.sub(r"\*\*Generated:\*\*[^\n]+", "**Generated:** -", s)
+            s = re.sub(r"\*\*Generated:\*\*[^\n]+", "**Generated:** -", s)
+            s = re.sub(r"\*\*Version:\*\*[^\n]+", "**Version:** -", s)
+            return s
         if _strip_ts(existing) == _strip_ts(body):
             print("[gen_reference] OK — REFERENCE.md is up-to-date.")
             return 0
