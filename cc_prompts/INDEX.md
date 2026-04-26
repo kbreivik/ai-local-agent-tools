@@ -81,4 +81,6 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.3.md | v2.47.3 | fix(agent): force plan_action on action-typed runs after 2 tool calls without plan | DONE (5cfc1b9) |
 | CC_PROMPT_v2.47.4.md | v2.47.4 | fix(agent): clarification ceiling — cap clarifying_question at 2/run | DONE (005ca6c) |
 | CC_PROMPT_v2.47.5.md | v2.47.5 | fix(agent): clarify-then-text-exit rescue for action/execute runs | DONE (18a3ee1) |
-| CC_PROMPT_v2.47.6.md | v2.47.6 | fix(agent): rebuke audit_log-only step when no substantive evidence gathered | RUNNING |
+| CC_PROMPT_v2.47.6.md | v2.47.6 | fix(agent): rebuke audit_log-only step when no substantive evidence gathered | DONE (6e49e86) |
+| CC_PROMPT_v2.47.7.md | v2.47.7 | feat(docs): auto-generated REFERENCE.md as living source-of-truth | DONE (9c518de) |
+| CC_PROMPT_v2.47.8.md | v2.47.8 | fix(agent): stronger clarification rejection + specific halluc-guard hints | RUNNING |

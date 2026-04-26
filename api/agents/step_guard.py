@@ -108,6 +108,44 @@ async def run_stop_path_guards(
                 "Final warning: call real data-returning tools or escalate. "
                 "Fabricated evidence will cause this task to fail."
             ))
+            # v2.47.8 — task-specific tool hint. Pattern observed in
+            # status-elastic-01 (2026-04-26 08:59): agent reasons about
+            # elasticsearch but calls zero tools, halluc guard fires
+            # generic "call data-gathering tools" message. Without a
+            # specific tool name, the model retries with the same
+            # generic reasoning. Detecting subsystem keywords in the
+            # task and appending a concrete tool hint makes the retry
+            # actionable.
+            _t_lower = (task or "").lower()
+            _hint = ""
+            if "elastic" in _t_lower or "elasticsearch" in _t_lower:
+                if "index" in _t_lower or "stat" in _t_lower:
+                    _hint = " For this task, call elastic_index_stats() now."
+                elif "log" in _t_lower or "search" in _t_lower:
+                    _hint = " For this task, call elastic_search_logs() now."
+                else:
+                    _hint = " For this task, call elastic_cluster_health() now."
+            elif "kafka" in _t_lower:
+                if "broker" in _t_lower:
+                    _hint = " For this task, call kafka_broker_status() now."
+                elif "lag" in _t_lower or "consumer" in _t_lower:
+                    _hint = " For this task, call kafka_consumer_lag() now."
+                elif "topic" in _t_lower:
+                    _hint = " For this task, call kafka_topic_health() now."
+                else:
+                    _hint = " For this task, call kafka_broker_status() now."
+            elif "swarm" in _t_lower:
+                if "node" in _t_lower:
+                    _hint = " For this task, call swarm_node_status() now."
+                else:
+                    _hint = " For this task, call swarm_status() now."
+            elif "service" in _t_lower:
+                if "list" in _t_lower:
+                    _hint = " For this task, call service_list() now."
+                else:
+                    _hint = " For this task, call service_health() now."
+
+            _esc_msg = _esc_msg + _hint
             if msg.content:
                 messages.append({"role": "assistant", "content": msg.content})
             messages.append({"role": "system", "content": f"[harness] {_esc_msg}"})

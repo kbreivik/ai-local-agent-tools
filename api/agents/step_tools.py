@@ -766,6 +766,56 @@ async def _handle_lifecycle_tools(
                     "reached. Make your best judgment and proceed."
                 ),
             }
+        # v2.47.8 — reject clarifying_question if force-plan nudge has
+        # already fired for this run. Pattern observed in action-drain-01
+        # (2026-04-26 08:59): v2.47.3 nudge appends a system message
+        # telling the model "do not ask another clarifying_question",
+        # but the model ignores it and calls clarifying_question anyway.
+        # The nudge is advisory; this is enforceable. Once we've told
+        # the model to stop clarifying and start planning, every
+        # subsequent clarifying_question call is rejected at dispatch.
+        if (
+            state.plan_force_nudge_fired
+            and getattr(state, "agent_type", "") in ("action", "execute")
+        ):
+            await manager.send_line(
+                "step",
+                "[harness] clarifying_question rejected — force-plan nudge "
+                "already fired this run, agent must call plan_action() now",
+                status="warning", session_id=session_id,
+            )
+            if not state.clarification_force_nudge_fired:
+                state.clarification_force_nudge_fired = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[harness] clarifying_question is REJECTED for the "
+                        "rest of this run because force-plan nudge already "
+                        "fired. You have been told twice that your next "
+                        "tool call must be plan_action(). Stop trying to "
+                        "clarify and CALL plan_action() with concrete "
+                        "summary + steps based on the task you were given. "
+                        "If the entity ID does not exist, plan_action() "
+                        "with that ID and let the user reject — do NOT "
+                        "ask another clarifying question."
+                    ),
+                })
+                try:
+                    from api.metrics import HARNESS_CLARIFY_CEILING_COUNTER
+                    HARNESS_CLARIFY_CEILING_COUNTER.labels(
+                        agent_type=getattr(state, "agent_type", "unknown"),
+                    ).inc()
+                except Exception:
+                    pass
+            return {
+                "status":  "error",
+                "message": (
+                    "clarifying_question rejected — force-plan nudge "
+                    "already fired this run. You MUST call plan_action() "
+                    "next with concrete summary and steps. The user has "
+                    "given you the task; act on it."
+                ),
+            }
     if fn_name == "clarifying_question":
         return await _handle_clarifying_question(
             tc, fn_args,
