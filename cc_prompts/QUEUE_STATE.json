@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-26T14:02:25",
+  "updated_at": "2026-04-26T14:18:11",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4293,10 +4293,26 @@
       "filename": "CC_PROMPT_v2.47.8.md",
       "version": "v2.47.8",
       "theme": "fix(agent): stronger clarification rejection + specific halluc-guard hints",
+      "runner_status": "DONE",
+      "commit_sha": "26c800b",
+      "error": "",
+      "started_at": "2026-04-26T14:02:25",
+      "finished_at": "2026-04-26T14:04:14",
+      "duration_s": 109.43202790000942,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260426_140225_CC_PROMPT_v2.47.8.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.47.9.md",
+      "version": "v2.47.9",
+      "theme": "fix(tests): isolate test runs from external AI gate + memory writes",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-26T14:02:25",
+      "started_at": "2026-04-26T14:18:11",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

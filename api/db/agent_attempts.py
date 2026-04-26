@@ -149,6 +149,17 @@ def record_attempt(
     propose_subtask — lets downstream analysis distinguish fresh investigations
     from harness-triggered handoffs.
     """
+    # v2.47.9 — skip during test runs. agent_attempts.summary is read by
+    # the prior-attempts injection path and steers future runs; tests
+    # should not write to it for the same isolation reasons as
+    # known_facts and engrams.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return
+    except Exception:
+        pass
+
     tools_json = json.dumps(tools_used or [])
     entity_id = (entity_id or "")[:200]
     task_type = (task_type or "")[:50]

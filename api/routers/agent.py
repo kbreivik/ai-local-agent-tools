@@ -658,6 +658,24 @@ async def _maybe_route_to_external_ai(
     prerun_digest (v2.38.7): infrastructure context injected into synthesize_replace
     digest param so external AI has evidence at prerun time (no tool history yet).
     """
+    # v2.47.9 — skip external AI entirely during test runs. Tests should
+    # measure the local agent loop in isolation; external AI rescue
+    # confounds the signal (8s latency, eventual rejection by harness
+    # gate, requireConfirmation popup blocking 300s waiting for an
+    # operator click that may never come). The score regression analysis
+    # at 2026-04-26 traced a popup-during-tests issue back to this.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            await manager.send_line(
+                "step",
+                "[external-ai] skipped — test run in progress (v2.47.9)",
+                status="ok", session_id=session_id,
+            )
+            return None
+    except Exception:
+        pass
+
     from api.agents.external_router import (
         should_escalate_to_external_ai, record_decision, RouterState, RouterDecision,
     )
@@ -2708,7 +2726,18 @@ async def _stream_agent(task: str, session_id: str, operation_id: str,
         # error, fabrication firing) is skipped and recorded on the metric.
         try:
             _facts_reason = None
-            if final_status != "completed":
+            # v2.47.9 — skip agent_observation writes during test runs.
+            # Tests must not poison known_facts_current; cross-test
+            # contamination causes mem-on baseline drift over time.
+            try:
+                from api.routers.tests_api import test_run_active
+                _is_test_run = test_run_active
+            except Exception:
+                _is_test_run = False
+
+            if _is_test_run:
+                _facts_reason = "skipped_test_run"
+            elif final_status != "completed":
                 _facts_reason = "skipped_nonterminal"
             elif any_fabrication_detected:
                 _facts_reason = "skipped_fabrication"

@@ -40,6 +40,16 @@ async def wait_for_confirmation(session_id: str, timeout_s: int = 300) -> str:
     session_id without an intervening resolve returns the cached decision
     of the first wait.
     """
+    # v2.47.9 — defensive auto-reject during test runs in case the
+    # _maybe_route_to_external_ai short-circuit is bypassed by a future
+    # code path that reaches this gate directly.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return "rejected"
+    except Exception:
+        pass
+
     _cleanup_stale()
     pending = _pending.get(session_id)
     if pending is None:

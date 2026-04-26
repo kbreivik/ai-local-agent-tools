@@ -36,6 +36,18 @@ async def record_outcome(
     Also stores a task→tool-sequence association engram for future injection.
     Stores extra copies of successful sequences to strengthen Hebbian recall.
     """
+    # v2.47.9 — skip MuninnDB writes during test runs. Tests must not
+    # poison the engram store; cross-test contamination breaks first-tool
+    # hint accuracy (v2.47.2 partially addressed this with strict-slug
+    # filtering, but not writing the bad engram in the first place is
+    # the cleaner design).
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return
+    except Exception:
+        pass
+
     try:
         client = get_client()
         tool_seq = ",".join(tools_used[:8])

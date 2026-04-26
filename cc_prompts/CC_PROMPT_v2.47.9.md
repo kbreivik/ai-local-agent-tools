@@ -1,0 +1,350 @@
+# CC PROMPT — v2.47.9 — fix(tests): isolate test runs from gates + memory writes
+
+## What this does
+Closes two design gaps exposed during the v2.47.6 mem-on baseline analysis
+(2026-04-26 09:50):
+
+**Gap 1 — Popups during test runs.** The v2.45.32 pre-arm covers two of
+four gate types:
+
+| Gate | Pre-arm? |
+|------|----------|
+| `clarifying_question` (`/api/agent/clarify`) | ✅ via `_prearmed_answers` |
+| `plan_action` (`/api/agent/confirm`) | ✅ via `_prearmed_decisions` |
+| External AI confirmation (`/api/agent/operations/{id}/confirm-external`) | ❌ NO PRE-ARM |
+| Preflight disambiguation (`/api/agent/preflight/clarify`) | ❌ NO PRE-ARM |
+
+Trace from the failed `status-elastic-01` and `research-elastic-index-01`
+runs shows external AI was triggered:
+```
+[external-ai] calling claude/claude-sonnet-4-6 (rule=gate_failure)
+[external-ai] output rejected by harness gate
+```
+
+When `requireConfirmation=true` (the default), this opens an
+`external_ai_confirm_pending` modal that blocks for 300s waiting for an
+operator click. During a 47-minute test suite run, the operator may
+genuinely not be at the keyboard, leaving multiple zombies.
+
+**Gap 2 — Test runs poison persistent memory.** Every successful test
+writes to:
+
+1. `known_facts_current` (via `step_persist.persist_run_facts` → 19+ rows
+   per run after v2.45.25)
+2. MuninnDB engrams (via `record_outcome` → `tools_for:*`,
+   `outcome:*` engrams that v2.47.2 had to scope down)
+3. `agent_attempts` table (via `record_attempt`)
+
+Tests #1-37 contaminate test #38's context. The mem-on baseline drifts
+over time even with identical code. The 95.5% → 90.9% regression is
+partially attributable to this — `known_facts_current` had grown past
+its v2.45.17 size by the time the v2.47.6 baseline ran.
+
+**The fix uses an existing module-level flag.** `tests_api.py` already
+exports `test_run_active` (used by `api/alerts.py` to suppress collector
+noise during tests). We extend it as the single signal that controls:
+
+1. External AI routing → skip entirely (no popup, no API spend, no 8s wait)
+2. Preflight disambiguation → auto-pick first candidate
+3. `agent_observation` fact writes → skipped per existing `_facts_reason`
+   skip switch
+4. `record_outcome` MuninnDB writes → skipped (no engram pollution)
+5. `record_attempt` writes → skipped (no `agent_attempts` accumulation)
+
+After this lands, the mem-on baseline becomes a measurement of the
+local agent loop in isolation — no popups, no cross-test memory drift,
+no external AI rescue contamination.
+
+A separate v2.48.x will add full snapshot/restore for true cross-run
+stability. v2.47.9 is the minimal change that fixes the immediate pain.
+
+Version bump: 2.47.8 → 2.47.9
+
+---
+
+## Change 1 — `api/routers/agent.py` — skip external AI routing during test runs
+
+CC: open `api/routers/agent.py`. Find `_maybe_route_to_external_ai`
+(it's defined around line 360 just before `_PrerunShortCircuit`).
+
+Add this short-circuit at the very top of the function body, BEFORE
+the `from api.agents.external_router import ...` line:
+
+```python
+    # v2.47.9 — skip external AI entirely during test runs. Tests should
+    # measure the local agent loop in isolation; external AI rescue
+    # confounds the signal (8s latency, eventual rejection by harness
+    # gate, requireConfirmation popup blocking 300s waiting for an
+    # operator click that may never come). The score regression analysis
+    # at 2026-04-26 traced a popup-during-tests issue back to this.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            await manager.send_line(
+                "step",
+                "[external-ai] skipped — test run in progress (v2.47.9)",
+                status="ok", session_id=session_id,
+            )
+            return None
+    except Exception:
+        pass
+```
+
+CC: place this block AFTER the function `async def _maybe_route_to_external_ai(...)` signature
+and the docstring, but BEFORE any `from api.agents.external_router import ...`.
+
+The function already has `manager` and `session_id` in scope as parameters/closure, and
+returning `None` means "no escalation" — the caller continues with whatever local
+forced_synthesis path applies.
+
+---
+
+## Change 2 — `api/agents/external_ai_confirmation.py` — defensive auto-reject
+
+CC: open `api/agents/external_ai_confirmation.py`. Find
+`wait_for_confirmation`. Add the same `test_run_active` short-circuit
+BEFORE the existing `_cleanup_stale()` call:
+
+```python
+async def wait_for_confirmation(session_id: str, timeout_s: int = 300) -> str:
+    """Block until the user approves/rejects, or timeout_s elapses.
+
+    Returns one of 'approved' | 'rejected' | 'timeout'. Safe to call
+    concurrently for different session_ids; calling twice for the same
+    session_id without an intervening resolve returns the cached decision
+    of the first wait.
+    """
+    # v2.47.9 — defensive auto-reject during test runs in case Change 1's
+    # short-circuit is bypassed by a future code path.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return "rejected"
+    except Exception:
+        pass
+
+    _cleanup_stale()
+    # ... existing body unchanged ...
+```
+
+This is belt-and-braces — Change 1 is the primary fix (skip routing
+entirely); Change 2 catches any caller that reaches the gate directly.
+
+---
+
+## Change 3 — `api/routers/agent.py` — skip `agent_observation` writes for test runs
+
+CC: same file. Find the `agent_observation fact writer` block in
+`_stream_agent` (search for `_facts_reason = None`).
+
+Current logic:
+```python
+        try:
+            _facts_reason = None
+            if final_status != "completed":
+                _facts_reason = "skipped_nonterminal"
+            elif any_fabrication_detected:
+                _facts_reason = "skipped_fabrication"
+            elif not all_run_facts:
+                _facts_reason = None  # nothing to write — no metric
+```
+
+Add a NEW skip condition at the top of this if-chain:
+
+```python
+        try:
+            _facts_reason = None
+            # v2.47.9 — skip agent_observation writes during test runs.
+            # Tests must not poison known_facts_current; cross-test
+            # contamination causes mem-on baseline drift over time.
+            try:
+                from api.routers.tests_api import test_run_active
+                _is_test_run = test_run_active
+            except Exception:
+                _is_test_run = False
+
+            if _is_test_run:
+                _facts_reason = "skipped_test_run"
+            elif final_status != "completed":
+                _facts_reason = "skipped_nonterminal"
+            elif any_fabrication_detected:
+                _facts_reason = "skipped_fabrication"
+            elif not all_run_facts:
+                _facts_reason = None  # nothing to write — no metric
+```
+
+The existing metric counter `AGENT_OBSERVATION_FACTS_WRITTEN_COUNTER`
+already accepts arbitrary string labels for `wrote_or_skipped`, so
+`"skipped_test_run"` is a fresh label that shows up automatically in
+`/metrics`.
+
+---
+
+## Change 4 — `api/memory/feedback.py` — skip outcome writes during test runs
+
+CC: open `api/memory/feedback.py`. Find `record_outcome` (the function that
+writes `tool_association` engrams — same file we touched in v2.47.2).
+
+Add a short-circuit at the very top, BEFORE the function tries to call
+`get_client()`:
+
+```python
+async def record_outcome(
+    *, session_id: str, task: str, agent_type: str,
+    tools_used: list, status: str, steps: int,
+    positive_signals: int, negative_signals: int,
+) -> None:
+    # v2.47.9 — skip MuninnDB writes during test runs. Tests must not
+    # poison the engram store; cross-test contamination breaks first-tool
+    # hint accuracy (v2.47.2 partially addressed this with strict-slug
+    # filtering, but not writing the bad engram in the first place is
+    # the cleaner design).
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return
+    except Exception:
+        pass
+
+    # ... existing body ...
+```
+
+CC: place this BEFORE the `try: client = get_client()` line at the top
+of the existing function body. Match the indentation of the existing code.
+
+---
+
+## Change 5 — `api/db/agent_attempts.py` — skip attempt records during test runs
+
+CC: open `api/db/agent_attempts.py`. Find `record_attempt` (the function
+that INSERTs into `agent_attempts`).
+
+Add the same short-circuit at the top of the function:
+
+```python
+def record_attempt(
+    *, entity_id: str, task_type: str, task_text: str,
+    tools_used: list, outcome: str, summary: str = "",
+    session_id: str = "", operation_id: str = "",
+) -> None:
+    # v2.47.9 — skip during test runs. agent_attempts.summary is read by
+    # the prior-attempts injection path and steers future runs; tests
+    # should not write to it for the same isolation reasons as
+    # known_facts and engrams.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            return
+    except Exception:
+        pass
+
+    # ... existing body ...
+```
+
+CC: place this BEFORE the existing function body's first line. The
+function may not be `async`; if it's sync, omit the `async` keyword
+in the surrounding context but keep the test_run_active check pattern.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile \
+    api/routers/agent.py \
+    api/agents/external_ai_confirmation.py \
+    api/memory/feedback.py \
+    api/db/agent_attempts.py
+
+# All five test_run_active checks should grep cleanly
+grep -n "test_run_active" \
+    api/routers/agent.py \
+    api/agents/external_ai_confirmation.py \
+    api/memory/feedback.py \
+    api/db/agent_attempts.py
+# Expected: 5 matches across 4 files (agent.py has 2)
+```
+
+After deploy, run a fresh `full-mem-on-baseline`. The trace should show:
+
+```
+[external-ai] skipped — test run in progress (v2.47.9)
+```
+
+instead of `[external-ai] calling claude/...` for tests that previously
+triggered external AI.
+
+Verify no popups:
+- Watch the GUI during the run
+- No `external_ai_confirm_pending` modal should appear
+
+Verify memory isolation:
+```sql
+-- After the test suite finishes, check that no agent_observation rows
+-- were written during the test window
+SELECT COUNT(*) FROM known_facts_current
+WHERE source = 'agent_observation'
+  AND last_verified > '<suite_start_ts>';
+-- Expected: 0
+```
+
+Verify Prometheus counter shows the new label:
+```
+deathstar_agent_observation_facts_written_total{wrote_or_skipped="skipped_test_run"} 38
+```
+(One per test in a 38-test suite run.)
+
+---
+
+## Trade-offs (intentionally accepted)
+
+- **Tests no longer measure end-to-end including external AI.** That's
+  correct — external AI behavior is tested separately via dedicated
+  integration tests (not in scope of `full-mem-on-baseline`).
+- **Tests can't accumulate learned-from-prior-runs benefit.** Also
+  correct — that's the bug we're fixing. Each run measures the local
+  agent loop in clean state.
+- **Real user runs are unaffected.** All gates and writes work as before
+  when `test_run_active = False` (the normal state).
+
+---
+
+## What this does NOT fix (v2.48.x)
+
+- True cross-run baseline stability (snapshot/restore of MuninnDB engrams
+  + `known_facts_current` + `agent_attempts` before/after each suite)
+- Pre-arm for preflight disambiguation gate (no test currently triggers
+  this; deferred until a test does)
+- Test runner auth header coverage for the `python -m tests.integration.test_agent`
+  CLI path (works fine via GUI Tests panel where `_run_tests_bg`
+  injects an internal token)
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.8` → `2.47.9`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "fix(tests): v2.47.9 isolate test runs from external AI gate + memory writes"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy + fresh `full-mem-on-baseline`, predict:
+- No popups during the run
+- Mem-on score ≥ 95% (combines v2.47.8's tool-hint fixes with v2.47.9's
+  contamination fix)
+- Mem-off score ≥ 92% (also benefits from no external AI distraction
+  + cleaner halluc-guard hints)
+- The numbers will be stable across re-runs (no drift)
