@@ -43,8 +43,33 @@ async def wait_for_clarification(session_id: str, timeout: float = 300.0) -> str
     v2.45.32: reuses any future created by prearm_clarification(); also
     consumes a pre-armed answer if one was deposited before the agent reached
     this call.
+    v2.47.11: when test_run_active is True and no pre-arm exists, auto-cancel
+    instead of blocking on a modal that no operator will click.
     """
     future = prearm_clarification(session_id)
+
+    # If pre-armed, future is already done — return immediately
+    if future.done():
+        try:
+            return future.result()
+        finally:
+            _pending.pop(session_id, None)
+
+    # v2.47.11 — auto-cancel during test runs to prevent zombie modals.
+    # The test runner pre-arms gates it expects (triggers_clarification=True);
+    # gates triggered unexpectedly (e.g. v2.45.18 clarify→plan injection on
+    # observe tasks, agent deciding to clarify when test didn't anticipate)
+    # would otherwise pop a modal and block for the full timeout.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            log.info("[clarification] auto-cancel session %s (test run, no pre-arm)",
+                     session_id)
+            _pending.pop(session_id, None)
+            return "cancel"
+    except Exception:
+        pass
+
     try:
         return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
     except asyncio.TimeoutError:

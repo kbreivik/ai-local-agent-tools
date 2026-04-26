@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-26T14:53:37",
+  "updated_at": "2026-04-26T15:57:26",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4325,10 +4325,26 @@
       "filename": "CC_PROMPT_v2.47.10.md",
       "version": "v2.47.10",
       "theme": "fix(ci): exclude version line from REFERENCE.md drift check",
+      "runner_status": "DONE",
+      "commit_sha": "d0c5038",
+      "error": "",
+      "started_at": "2026-04-26T14:53:37",
+      "finished_at": "2026-04-26T14:55:52",
+      "duration_s": 134.90062119998038,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260426_145337_CC_PROMPT_v2.47.10.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.47.11.md",
+      "version": "v2.47.11",
+      "theme": "fix(tests): auto-cancel un-pre-armed gates during test runs",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-26T14:53:37",
+      "started_at": "2026-04-26T15:57:26",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

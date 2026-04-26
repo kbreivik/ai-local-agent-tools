@@ -30,6 +30,32 @@ def prearm_confirmation(session_id: str) -> asyncio.Future:
 
 async def wait_for_confirmation(session_id: str, timeout: float = 300.0) -> bool:
     future = prearm_confirmation(session_id)
+
+    # If pre-armed, future is already done — return immediately
+    if future.done():
+        try:
+            return future.result()
+        finally:
+            _pending.pop(session_id, None)
+
+    # v2.47.11 — auto-reject during test runs to prevent zombie modals.
+    # See companion change in api/clarification.py for rationale. Tests
+    # that explicitly trigger plan_action pre-arm via tc.triggers_plan;
+    # gates triggered unexpectedly (e.g. v2.45.18 clarify→plan injection)
+    # would otherwise block for the full 300s timeout.
+    # Defaults to False (rejected) — matches the assertion in
+    # tests/integration/test_agent.py:main that no test may have
+    # auto_confirm=True.
+    try:
+        from api.routers.tests_api import test_run_active
+        if test_run_active:
+            log.info("[confirmation] auto-reject session %s (test run, no pre-arm)",
+                     session_id)
+            _pending.pop(session_id, None)
+            return False
+    except Exception:
+        pass
+
     try:
         return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
     except asyncio.TimeoutError:
