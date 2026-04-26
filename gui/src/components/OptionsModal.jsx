@@ -846,6 +846,62 @@ function AIServicesTab({ draft, update }) {
           ))}
         </div>
 
+        {/* Agent Token Caps — per-type (v2.47.14) */}
+        <div className="mt-4 pt-3 border-t border-white/5">
+          <h4 className="text-xs font-mono uppercase tracking-wider text-[var(--accent)] mb-1">
+            Token Caps
+          </h4>
+          <p className="text-xs text-gray-500 mb-3">
+            Cumulative prompt + completion tokens per agent run. When exceeded,
+            the loop forces synthesis and status becomes 'capped'. Per-type values
+            override the global. Subagents get their own fresh counter.
+            Range 10000..250000. Changes take effect on the next task.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              ['agentMaxTotalTokens_observe',     'Observe',     'short tool chains'],
+              ['agentMaxTotalTokens_investigate', 'Investigate', 'longest, most token-hungry'],
+              ['agentMaxTotalTokens_execute',     'Execute',     'plus verify steps'],
+              ['agentMaxTotalTokens_build',       'Build',       'moderate verbosity'],
+            ].map(([key, label, hint]) => (
+              <div key={key}>
+                <label className="block text-xs uppercase text-gray-400 mb-1">
+                  {label}
+                  <span className="ml-2 normal-case text-gray-500">— {hint}</span>
+                </label>
+                <input
+                  type="number"
+                  min="10000"
+                  max="250000"
+                  step="10000"
+                  value={draft[key] ?? ''}
+                  onChange={e => update(key, parseInt(e.target.value) || 0)}
+                  className="w-32 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Global token cap fallback (v2.47.14) */}
+        <div className="mt-3">
+          <label className="block text-xs uppercase text-gray-400 mb-1">
+            Global token cap (fallback)
+            <span className="ml-2 normal-case text-gray-500">
+              — used when no per-type override is set
+            </span>
+          </label>
+          <input
+            type="number"
+            min="10000"
+            max="250000"
+            step="10000"
+            value={draft.agentMaxTotalTokens ?? ''}
+            onChange={e => update('agentMaxTotalTokens', parseInt(e.target.value) || 0)}
+            className="w-32 bg-[var(--bg-1)] border border-white/10 px-2 py-1 text-sm"
+          />
+        </div>
+
         {/* v2.36.8 — LARGE-LIST RENDERING prompt toggle (dark launch) */}
         <div className="mt-4 pt-3 border-t border-white/5">
           <label className="flex items-center gap-2 text-sm">

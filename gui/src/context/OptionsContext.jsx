@@ -92,6 +92,12 @@ const DEFAULTS = {
   agentToolBudget_investigate: 16,
   agentToolBudget_execute:     14,
   agentToolBudget_build:       12,
+  // Agent Token Caps (v2.47.12 + v2.47.13 + v2.47.14 GUI)
+  agentMaxTotalTokens:             200000,  // global fallback
+  agentMaxTotalTokens_observe:     80000,
+  agentMaxTotalTokens_investigate: 200000,
+  agentMaxTotalTokens_execute:     150000,
+  agentMaxTotalTokens_build:       120000,
   renderToolPromptEnabled:     false,  // v2.36.8 — dark launch
   memoryEnabled:               true,   // v2.43.8 — MuninnDB memory toggle
   memoryBackend:               'muninndb', // v2.43.9 — 'muninndb'|'postgres'
@@ -156,6 +162,10 @@ const SERVER_KEYS = new Set([
   // Agent Budgets (v2.36.5 — v2.36.6 allowlisted)
   'agentToolBudget_observe', 'agentToolBudget_investigate',
   'agentToolBudget_execute', 'agentToolBudget_build',
+  // Agent Token Caps (v2.47.12 + v2.47.13 + v2.47.14 GUI)
+  'agentMaxTotalTokens',
+  'agentMaxTotalTokens_observe', 'agentMaxTotalTokens_investigate',
+  'agentMaxTotalTokens_execute', 'agentMaxTotalTokens_build',
   'renderToolPromptEnabled',  // v2.36.8
   'memoryEnabled',            // v2.43.8
   'memoryBackend',            // v2.43.9
