@@ -170,6 +170,54 @@ SETTINGS_KEYS: dict[str, dict] = {
         ),
     },
 
+    # --- Per-agent-type Token Caps (v2.47.13) ---
+    # Per-type overrides for the v2.47.12 global agentMaxTotalTokens.
+    # Lookup at every cap check: per-type key → global → env → hardcoded.
+    # Defaults calibrated to each type's tool budget and typical tool result
+    # sizes. Tune individually in the GUI based on observed run patterns.
+    "agentMaxTotalTokens_observe": {
+        "env": None, "sens": False,
+        "default": 80000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Token cap for observe (status) runs. Short tool chains, small "
+            "results — 80000 is generous for typical status checks. "
+            "Range 10000..250000."
+        ),
+    },
+    "agentMaxTotalTokens_investigate": {
+        "env": None, "sens": False,
+        "default": 200000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Token cap for investigate (research) runs. Longest tool chains, "
+            "biggest cumulative prompts — 200000 matches the global default. "
+            "Range 10000..250000."
+        ),
+    },
+    "agentMaxTotalTokens_execute": {
+        "env": None, "sens": False,
+        "default": 150000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Token cap for execute (action) runs. Moderate length plus "
+            "post-action verify steps. Range 10000..250000."
+        ),
+    },
+    "agentMaxTotalTokens_build": {
+        "env": None, "sens": False,
+        "default": 120000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Token cap for build (skill creation) runs. Moderate verbosity "
+            "from skill_create / skill_regenerate. Range 10000..250000."
+        ),
+    },
+
     # --- Render-and-caption prompt (v2.36.8) ---
     # Dark launch: tool is always registered & allowlisted; this flag only
     # controls whether the prompt section teaching the agent to use it is

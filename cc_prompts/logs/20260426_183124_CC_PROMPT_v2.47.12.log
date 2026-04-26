@@ -1,0 +1,537 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.47.12.md (v2.47.12)
+Theme: feat(agent): settings-driven token cap with per-type fallback chain
+
+Prompt content:
+
+# CC PROMPT — v2.47.12 — feat(agent): settings-driven token cap with per-agent-type fallback chain
+
+## What this does
+
+Two related changes that address operator-reported `token cap exceeded`
+alerts on legitimate investigate workloads:
+
+**1. Make the token cap settings-driven.** Currently `AGENT_MAX_TOTAL_TOKENS`
+is read from env at module-load. Operators must edit `.env` and redeploy
+to change it. After this lands, it's a Settings key tunable from the
+GUI like every other agent budget.
+
+**2. Lay groundwork for per-agent-type token budgets.** The lookup
+function checks for a per-type setting (`agentMaxTotalTokens_{canonical}`)
+FIRST, then falls back to a global setting (`agentMaxTotalTokens`),
+then to env, then to a hardcoded default. v2.47.12 only registers the
+global key — but adding per-type keys later is purely a settings-registry
+change with zero code changes. Same pattern as `_tool_budget_for`
+(observe/investigate/execute/build).
+
+**Default raised from 120000 → 200000.** Qwen3-Coder-30B has a 256k
+context window. The 120k default was conservative and gets hit on
+realistic investigate runs (16-step diagnostic chains accumulate prompt
+tokens roughly linearly because each step's prompt contains the prior
+step's tool results). User confirmed alerts fire mostly during testing
+but the test cases are intentionally realistic — the cap is genuinely
+too low for the workload.
+
+After this lands:
+- Default 200k per run (settings-tunable from GUI without redeploy)
+- Subagents still get their own fresh counter (existing behaviour
+  unchanged — each `_stream_agent` invocation has its own `StepState`)
+- Per-agent-type budgets remain a one-line settings registry change
+  away in v2.47.13+
+
+Version bump: 2.47.11 → 2.47.12
+
+NOTE: v2.47.11 (popup auto-cancel) MUST land first since it's already
+PENDING in the queue.
+
+---
+
+## Change 1 — `api/routers/agent.py` — add `_token_cap_for()` helper
+
+CC: open `api/routers/agent.py`. Find `_AGENT_MAX_TOTAL_TOKENS` (around
+line 626 in the "Hard caps on agent runs" section). Current:
+
+```python
+# ─── Hard caps on agent runs (v2.31.8) ───────────────────────────────────────
+# All env-configurable so an operator can tighten them without a redeploy.
+_AGENT_MAX_WALL_CLOCK_S   = int(os.environ.get("AGENT_MAX_WALL_CLOCK_S",   "600"))   # 10 min
+_AGENT_MAX_TOTAL_TOKENS   = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS",   "120000"))
+_AGENT_MAX_DESTRUCTIVE    = int(os.environ.get("AGENT_MAX_DESTRUCTIVE",    "3"))
+_AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
+```
+
+Replace with:
+
+```python
+# ─── Hard caps on agent runs (v2.31.8, v2.47.12) ─────────────────────────────
+# All env-configurable so an operator can tighten them without a redeploy.
+# v2.47.12: token cap is now settings-driven via _token_cap_for(); env var
+# becomes the seed default at first run.
+_AGENT_MAX_WALL_CLOCK_S   = int(os.environ.get("AGENT_MAX_WALL_CLOCK_S",   "600"))   # 10 min
+_AGENT_MAX_TOTAL_TOKENS_DEFAULT = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS", "200000"))
+_AGENT_MAX_DESTRUCTIVE    = int(os.environ.get("AGENT_MAX_DESTRUCTIVE",    "3"))
+_AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
+
+# Token cap bounds — values outside this range are treated as misconfigured
+# and fall back to the default. 10k is the floor below which even a single
+# step's prompt+completion can fail; 250k is the ceiling because Qwen3-Coder-30B
+# has a 256k context window and we need headroom for the response.
+_TOKEN_CAP_MIN = 10_000
+_TOKEN_CAP_MAX = 250_000
+
+
+def _token_cap_for(agent_type: str) -> int:
+    """Return the total-token cap for `agent_type`, read fresh from Settings.
+
+    Lookup order (first hit wins):
+      1. Per-agent-type setting `agentMaxTotalTokens_{canonical}` (v2.47.13+ when registered)
+      2. Global setting `agentMaxTotalTokens`
+      3. Env var `AGENT_MAX_TOTAL_TOKENS`
+      4. Hardcoded default `_AGENT_MAX_TOTAL_TOKENS_DEFAULT` (200_000)
+
+    Aliases match `_tool_budget_for`: status→observe, research→investigate,
+    action→execute, ambiguous→observe. Misconfigured values (None, non-int,
+    outside [10_000, 250_000]) log a warning and fall back to the default.
+
+    The lookup happens at cap-check time (every step), so operators can tune
+    without redeploy via POST /api/settings.
+    """
+    canonical = _TOOL_BUDGET_ALIASES.get(agent_type, agent_type)
+
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        backend = get_backend()
+    except Exception as e:
+        log.debug("token cap settings backend unavailable: %s", e)
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+
+    # 1. Per-agent-type setting (registered later for v2.47.13)
+    try:
+        per_type = backend.get_setting(f"agentMaxTotalTokens_{canonical}")
+        if per_type not in (None, ""):
+            return _coerce_token_cap(per_type, source=f"agentMaxTotalTokens_{canonical}")
+    except Exception:
+        pass
+
+    # 2. Global setting
+    try:
+        global_val = backend.get_setting("agentMaxTotalTokens")
+        if global_val not in (None, ""):
+            return _coerce_token_cap(global_val, source="agentMaxTotalTokens")
+    except Exception:
+        pass
+
+    # 3. Env var (already captured at module load) → 4. hardcoded default
+    return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+
+
+def _coerce_token_cap(raw, *, source: str) -> int:
+    """Validate a token-cap value. Returns _AGENT_MAX_TOTAL_TOKENS_DEFAULT on misconfig."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "token cap setting %s has non-int value %r; using default %d",
+            source, raw, _AGENT_MAX_TOTAL_TOKENS_DEFAULT,
+        )
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    if value <= 0:
+        # Operator explicitly set 0 → fall back to default (documented behaviour).
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    if value < _TOKEN_CAP_MIN or value > _TOKEN_CAP_MAX:
+        log.warning(
+            "token cap setting %s=%d outside safe range [%d..%d]; using default %d",
+            source, value, _TOKEN_CAP_MIN, _TOKEN_CAP_MAX,
+            _AGENT_MAX_TOTAL_TOKENS_DEFAULT,
+        )
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    return value
+```
+
+CC: this replaces the old single-line `_AGENT_MAX_TOTAL_TOKENS` constant
+with `_AGENT_MAX_TOTAL_TOKENS_DEFAULT` (the seed default) plus
+`_token_cap_for()` and its `_coerce_token_cap()` helper. Place the new
+helpers IMMEDIATELY after the constants block. They must come BEFORE
+`_cap_exceeded` since `_cap_exceeded` will be modified to call
+`_token_cap_for`.
+
+The reference to `_TOOL_BUDGET_ALIASES` is forward-looking — that
+constant is already defined earlier in the file (around line 80) so
+the import order is fine.
+
+---
+
+## Change 2 — `api/routers/agent.py` — `_cap_exceeded` accepts agent_type, uses helper
+
+CC: same file. Find `_cap_exceeded` (around line 645). Current:
+
+```python
+def _cap_exceeded(
+    *,
+    started_monotonic: float,
+    total_tokens: int,
+    destructive_calls: int,
+    tool_failures: int,
+) -> tuple[bool, str]:
+    """Return (exceeded, reason). reason is human-readable or empty."""
+    import time as _t
+    elapsed = _t.monotonic() - started_monotonic
+    if elapsed > _AGENT_MAX_WALL_CLOCK_S:
+        return True, (f"wall-clock cap exceeded ({int(elapsed)}s > "
+                      f"{_AGENT_MAX_WALL_CLOCK_S}s)")
+    if total_tokens > _AGENT_MAX_TOTAL_TOKENS:
+        return True, (f"token cap exceeded ({total_tokens} > "
+                      f"{_AGENT_MAX_TOTAL_TOKENS})")
+    if destructive_calls > _AGENT_MAX_DESTRUCTIVE:
+        return True, (f"destructive-call cap exceeded ({destructive_calls} > "
+                      f"{_AGENT_MAX_DESTRUCTIVE})")
+    if tool_failures > _AGENT_MAX_TOOL_FAILURES:
+        return True, (f"tool-failure cap exceeded ({tool_failures} > "
+                      f"{_AGENT_MAX_TOOL_FAILURES})")
+    return False, ""
+```
+
+Replace with:
+
+```python
+def _cap_exceeded(
+    *,
+    started_monotonic: float,
+    total_tokens: int,
+    destructive_calls: int,
+    tool_failures: int,
+    agent_type: str = "investigate",
+) -> tuple[bool, str]:
+    """Return (exceeded, reason). reason is human-readable or empty.
+
+    v2.47.12: token cap is now read from Settings via _token_cap_for(agent_type),
+    enabling operator tuning without redeploy AND laying groundwork for
+    per-agent-type budgets. Wall-clock / destructive / tool-failure caps remain
+    env-driven for now; they are less workload-dependent.
+    """
+    import time as _t
+    elapsed = _t.monotonic() - started_monotonic
+    if elapsed > _AGENT_MAX_WALL_CLOCK_S:
+        return True, (f"wall-clock cap exceeded ({int(elapsed)}s > "
+                      f"{_AGENT_MAX_WALL_CLOCK_S}s)")
+    token_cap = _token_cap_for(agent_type)
+    if total_tokens > token_cap:
+        return True, (f"token cap exceeded ({total_tokens} > "
+                      f"{token_cap}, agent_type={agent_type})")
+    if destructive_calls > _AGENT_MAX_DESTRUCTIVE:
+        return True, (f"destructive-call cap exceeded ({destructive_calls} > "
+                      f"{_AGENT_MAX_DESTRUCTIVE})")
+    if tool_failures > _AGENT_MAX_TOOL_FAILURES:
+        return True, (f"tool-failure cap exceeded ({tool_failures} > "
+                      f"{_AGENT_MAX_TOOL_FAILURES})")
+    return False, ""
+```
+
+CC: the new keyword-only parameter `agent_type` defaults to `"investigate"`
+so existing callers that haven't been updated still work (with the most
+permissive type's cap). Update all call sites in the next change.
+
+---
+
+## Change 3 — `api/routers/agent.py` — pass agent_type at every `_cap_exceeded` call site
+
+CC: same file. Search for every `_cap_exceeded(` call. There should be
+2-4 call sites inside `_run_single_agent_step` and `_stream_agent`.
+Each one has access to the local `agent_type` variable (or a similar
+name like `first_intent` or `intent`).
+
+For each call site, add `agent_type=agent_type,` (or whichever local
+variable holds the canonical agent type) as a keyword argument. Example:
+
+Before:
+```python
+exceeded, reason = _cap_exceeded(
+    started_monotonic=t0,
+    total_tokens=state.total_prompt_tokens + state.total_completion_tokens,
+    destructive_calls=destructive_calls,
+    tool_failures=tool_failures,
+)
+```
+
+After:
+```python
+exceeded, reason = _cap_exceeded(
+    started_monotonic=t0,
+    total_tokens=state.total_prompt_tokens + state.total_completion_tokens,
+    destructive_calls=destructive_calls,
+    tool_failures=tool_failures,
+    agent_type=agent_type,   # v2.47.12 — settings-driven token cap
+)
+```
+
+CC: use whatever local variable already holds the agent type at that
+call site. Do NOT introduce new variables. If a call site genuinely
+has no agent type in scope (unlikely — the agent loop always knows its
+type), leave the call without the kwarg and rely on the default.
+
+---
+
+## Change 4 — `api/routers/settings.py` — register the new settings key
+
+CC: open `api/routers/settings.py`. Find the "Agent Budgets" section
+of `SETTINGS_KEYS` (the block with `agentToolBudget_observe` etc.,
+around line 175). Add this entry to the bottom of that group, right
+after `agentToolBudget_build`:
+
+```python
+    # --- Agent Token Cap (v2.47.12) ---
+    # Cumulative input + output tokens across an entire agent run. When
+    # exceeded, the loop forces synthesis and operations.status becomes
+    # 'capped'. Each subagent gets its own fresh counter (no shared cap).
+    # Safe range 10_000..250_000. Set to 0 to restore the default (200_000).
+    # Per-agent-type overrides (agentMaxTotalTokens_observe etc.) can be
+    # added to this registry in a future version without code changes.
+    "agentMaxTotalTokens": {
+        "env": "AGENT_MAX_TOTAL_TOKENS", "sens": False,
+        "default": 200000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Maximum cumulative tokens (prompt + completion, summed across "
+            "all steps) per agent run. When exceeded, the loop forces "
+            "synthesis and the operation is marked 'capped'. Subagents get "
+            "their own fresh counter. Safe range 10000..250000."
+        ),
+    },
+```
+
+CC: place this AFTER `agentToolBudget_build` and BEFORE the next
+section comment. Match the trailing-comma style of surrounding entries.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile api/routers/agent.py api/routers/settings.py
+
+# Confirm helper is defined
+grep -n "_token_cap_for\|_AGENT_MAX_TOTAL_TOKENS_DEFAULT\|_coerce_token_cap" api/routers/agent.py
+# Expected: definition + at least one call site in _cap_exceeded
+
+# Confirm setting key is registered
+grep -n "agentMaxTotalTokens" api/routers/settings.py
+# Expected: 1 match (the registry entry)
+
+# Confirm _cap_exceeded callers pass agent_type
+grep -n "_cap_exceeded(" api/routers/agent.py
+# Expected: 1 def line + N call sites; each call site should have
+# agent_type= on a subsequent line (use grep -A 6 to see context)
+```
+
+After deploy, verify the setting is exposed:
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://192.168.199.10:8000/api/settings | jq '.settings | keys[] | select(contains("Tokens"))'
+# Expected: "agentMaxTotalTokens"
+```
+
+Update the value live (no redeploy):
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://192.168.199.10:8000/api/settings \
+  -d '{"agentMaxTotalTokens": 220000}'
+```
+
+Run a long investigate task and watch logs:
+```bash
+docker logs hp1_agent --since 10m 2>&1 | grep -E "token cap"
+# If cap fires: should show the new format including agent_type
+# If cap doesn't fire (preferred): no output
+```
+
+---
+
+## Path to v2.47.13 — per-agent-type budgets
+
+Once v2.47.12 is in production and you have data on which agent types
+hit the cap most often, adding per-type budgets is purely a settings
+registry change. Add to `api/routers/settings.py`:
+
+```python
+    "agentMaxTotalTokens_observe":     {"env": None, ..., "default": 80000,  "group": "Agent Budgets"},
+    "agentMaxTotalTokens_investigate": {"env": None, ..., "default": 200000, "group": "Agent Budgets"},
+    "agentMaxTotalTokens_execute":     {"env": None, ..., "default": 150000, "group": "Agent Budgets"},
+    "agentMaxTotalTokens_build":       {"env": None, ..., "default": 100000, "group": "Agent Budgets"},
+```
+
+The `_token_cap_for` lookup chain already checks for these keys —
+zero code changes needed. Just register the keys, and they take effect
+on the next agent run.
+
+---
+
+## What this does NOT do
+
+- **Does not introduce a tree-wide token cap** for sub-agent trees.
+  The existing `SUBAGENT_TREE_WALL_CLOCK_S` (1800s) still serves as the
+  whole-tree limit; per-subagent token budgets would compound. Adding
+  a tree-wide token cap would require threading a counter through the
+  subagent dispatch — defer to a future prompt if it becomes an issue.
+- **Does not modify `max_tokens=2048`** on individual LLM calls in
+  `step_llm.py`. That's a per-step output limit, separate from the
+  cumulative cap. Single-step output truncation is not the user-reported
+  issue.
+- **Does not touch the wall-clock / destructive / tool-failure caps.**
+  Those remain env-driven; they're less workload-dependent and rarely
+  need tuning. Could be moved to settings in a separate prompt if
+  operator demand warrants it.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.11` → `2.47.12`
+
+---
+
+## Commit
+
+```
+git add -A
+git commit -m "feat(agent): v2.47.12 settings-driven token cap with per-type fallback chain"
+git push origin main
+```
+
+Deploy:
+```
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy + fresh full-mem-on-baseline:
+- Token cap alerts should drop to zero (200k headroom vs 120k previously)
+- If still hit, raise via `POST /api/settings` without redeploy
+- Trace shows `agent_type=` in any cap-exceeded message, useful for
+  identifying which type is most token-hungry → guides v2.47.13 defaults
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-26 18:31:24
+========================================================================
+Committed and pushed as 7253445. The runner handles INDEX.md status updates per the runner instructions ("Do NOT modify INDEX.md or any queue status files — the runner handles that").
+[STATUS] 2m15s
+
+PROMPT COMPLETE: v2.47.12
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m15s
+========================================================================

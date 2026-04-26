@@ -87,4 +87,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.9.md | v2.47.9 | fix(tests): isolate test runs from external AI gate + memory writes | DONE (7385879) |
 | CC_PROMPT_v2.47.10.md | v2.47.10 | fix(ci): exclude version line from REFERENCE.md drift check | DONE (d0c5038) |
 | CC_PROMPT_v2.47.11.md | v2.47.11 | fix(tests): auto-cancel un-pre-armed gates during test runs | DONE (43fd653) |
-| CC_PROMPT_v2.47.12.md | v2.47.12 | feat(agent): settings-driven token cap with per-type fallback chain | RUNNING |
+| CC_PROMPT_v2.47.12.md | v2.47.12 | feat(agent): settings-driven token cap with per-type fallback chain | DONE (7253445) |
+| CC_PROMPT_v2.47.13.md | v2.47.13 | feat(agent): register per-agent-type token cap settings | RUNNING |
