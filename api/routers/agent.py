@@ -1347,6 +1347,53 @@ async def _run_single_agent_step(
                     break
                 # GuardOutcome.PROCEED — fall through to degraded synthesis + done
 
+                # v2.47.5 — clarify-then-text-exit rescue.
+                # Pattern observed in action-drain-01, action-rollback-01,
+                # action-upgrade-01 (mem-on baseline 2026-04-25): agent
+                # called clarifying_question, received prearmed answer,
+                # then exited via finish=="stop" with text instead of
+                # calling plan_action(). The v2.45.18 system-message
+                # injection in step_tools._handle_clarifying_question
+                # told the model to call plan_action() next, but the
+                # model produced text. This guard rejects the empty
+                # completion and forces ONE more LLM turn with a hard
+                # directive. Idempotent — re-uses the v2.47.3 nudge flag.
+                if (
+                    agent_type in ("action", "execute")
+                    and not state.plan_action_called
+                    and "clarifying_question" in state.tools_used_names
+                    and not state.plan_force_nudge_fired
+                ):
+                    state.plan_force_nudge_fired = True
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "[harness] You called clarifying_question() and "
+                            "received an answer, then exited with text instead "
+                            "of calling plan_action(). For an EXECUTE-type "
+                            "task this is a protocol failure. Re-read the task "
+                            "and the user's clarification answer above, then "
+                            "your NEXT response MUST be a plan_action() tool "
+                            "call (NOT text) with concrete summary + steps. "
+                            "Do NOT respond with prose. Do NOT call audit_log. "
+                            "Do NOT call escalate. Call plan_action() now."
+                        ),
+                    })
+                    await manager.send_line(
+                        "step",
+                        "[harness] clarify-then-text-exit rescue — forcing one "
+                        "more turn for plan_action()",
+                        status="warning", session_id=session_id,
+                    )
+                    try:
+                        from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+                        HARNESS_PLAN_NUDGES_COUNTER.labels(
+                            agent_type=agent_type,
+                        ).inc()
+                    except Exception:
+                        pass
+                    continue   # one more LLM turn
+
                 # Synthesise degraded findings if present and summary is thin
                 if state.degraded_findings and (not state.last_reasoning or len(state.last_reasoning) < 100):
                     try:
@@ -1460,6 +1507,48 @@ async def _run_single_agent_step(
             # Exception: if escalate was just blocked, the model may call audit_log
             # as a confused "done" signal — don't treat it as completion; let loop continue.
             _step_names = [tc.function.name for tc in msg.tool_calls]
+
+            # v2.47.5 — audit_log-only step on action/execute that already
+            # clarified but never planned: same rescue path. The model
+            # took clarification answer → wrote audit_log → would otherwise
+            # exit. Force one more turn for plan_action().
+            if (
+                _step_names
+                and all(n == "audit_log" for n in _step_names)
+                and agent_type in ("action", "execute")
+                and not state.plan_action_called
+                and "clarifying_question" in state.tools_used_names
+                and not state.plan_force_nudge_fired
+            ):
+                state.plan_force_nudge_fired = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[harness] You called audit_log() after the "
+                        "clarification but never called plan_action(). "
+                        "audit_log() is for AFTER an action completes — "
+                        "not as a substitute for plan_action(). Your NEXT "
+                        "response MUST be plan_action() as a tool call "
+                        "with concrete summary + steps. "
+                        "Do NOT call audit_log() again. "
+                        "Do NOT respond with text."
+                    ),
+                })
+                await manager.send_line(
+                    "step",
+                    "[harness] audit_log-only after clarify rescue — "
+                    "forcing plan_action()",
+                    status="warning", session_id=session_id,
+                )
+                try:
+                    from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+                    HARNESS_PLAN_NUDGES_COUNTER.labels(
+                        agent_type=agent_type,
+                    ).inc()
+                except Exception:
+                    pass
+                continue
+
             if (_step_names and all(n == "audit_log" for n in _step_names)
                     and state.last_blocked_tool != "escalate"):
                 # Synthesise degraded findings before broadcasting done
