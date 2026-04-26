@@ -48,6 +48,10 @@ jobs:
         working-directory: gui
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Check REFERENCE.md is up-to-date
+        run: make reference-check
+        continue-on-error: false
+
       - name: Run sensor stack (full output)
         id: check
         run: make check

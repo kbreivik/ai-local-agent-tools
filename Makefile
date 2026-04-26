@@ -13,7 +13,7 @@ ESLINT_CONFIG := .eslintrc.sensors.json
 GITLEAKS_CONFIG := .gitleaks.toml
 GUI_DIR := gui
 
-.PHONY: check check-agent check-all sensors-install ruff bandit gitleaks eslint mypy
+.PHONY: check check-agent check-all sensors-install ruff bandit gitleaks eslint mypy reference reference-check
 
 # `make check` excludes mypy by default — codebase is largely untyped, so a
 # full mypy pass produces noise. Use `make check-all` (or `make mypy`) to opt in.
@@ -68,3 +68,13 @@ sensors-install:
 	pip install --quiet ruff bandit mypy
 	@echo "gitleaks: install via your package manager (brew/scoop/apt)."
 	@echo "eslint: run \`npm install\` in $(GUI_DIR)/"
+
+# ──── REFERENCE.md generation (v2.47.7) ──────────────────────────────────────
+
+reference:
+	@echo "── Generating docs/REFERENCE.md ────────────────────────────────"
+	@python scripts/gen_reference.py
+
+reference-check:
+	@echo "── Checking docs/REFERENCE.md is up-to-date ────────────────────"
+	@python scripts/gen_reference.py --check --no-db
