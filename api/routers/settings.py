@@ -150,6 +150,26 @@ SETTINGS_KEYS: dict[str, dict] = {
     "agentToolBudget_execute":      {"env": None, "sens": False, "default": 14, "type": "int", "group": "Agent Budgets"},
     "agentToolBudget_build":        {"env": None, "sens": False, "default": 12, "type": "int", "group": "Agent Budgets"},
 
+    # --- Agent Token Cap (v2.47.12) ---
+    # Cumulative input + output tokens across an entire agent run. When
+    # exceeded, the loop forces synthesis and operations.status becomes
+    # 'capped'. Each subagent gets its own fresh counter (no shared cap).
+    # Safe range 10_000..250_000. Set to 0 to restore the default (200_000).
+    # Per-agent-type overrides (agentMaxTotalTokens_observe etc.) can be
+    # added to this registry in a future version without code changes.
+    "agentMaxTotalTokens": {
+        "env": "AGENT_MAX_TOTAL_TOKENS", "sens": False,
+        "default": 200000, "type": "int",
+        "min": 10000, "max": 250000,
+        "group": "Agent Budgets",
+        "description": (
+            "Maximum cumulative tokens (prompt + completion, summed across "
+            "all steps) per agent run. When exceeded, the loop forces "
+            "synthesis and the operation is marked 'capped'. Subagents get "
+            "their own fresh counter. Safe range 10000..250000."
+        ),
+    },
+
     # --- Render-and-caption prompt (v2.36.8) ---
     # Dark launch: tool is always registered & allowlisted; this flag only
     # controls whether the prompt section teaching the agent to use it is

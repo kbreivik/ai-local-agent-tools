@@ -278,12 +278,89 @@ async def _auto_verify(
     }
 
 
-# ─── Hard caps on agent runs (v2.31.8) ───────────────────────────────────────
+# ─── Hard caps on agent runs (v2.31.8, v2.47.12) ─────────────────────────────
 # All env-configurable so an operator can tighten them without a redeploy.
+# v2.47.12: token cap is now settings-driven via _token_cap_for(); env var
+# becomes the seed default at first run.
 _AGENT_MAX_WALL_CLOCK_S   = int(os.environ.get("AGENT_MAX_WALL_CLOCK_S",   "600"))   # 10 min
-_AGENT_MAX_TOTAL_TOKENS   = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS",   "120000"))
+_AGENT_MAX_TOTAL_TOKENS_DEFAULT = int(os.environ.get("AGENT_MAX_TOTAL_TOKENS", "200000"))
 _AGENT_MAX_DESTRUCTIVE    = int(os.environ.get("AGENT_MAX_DESTRUCTIVE",    "3"))
 _AGENT_MAX_TOOL_FAILURES  = int(os.environ.get("AGENT_MAX_TOOL_FAILURES",  "8"))
+
+# Token cap bounds — values outside this range are treated as misconfigured
+# and fall back to the default. 10k is the floor below which even a single
+# step's prompt+completion can fail; 250k is the ceiling because Qwen3-Coder-30B
+# has a 256k context window and we need headroom for the response.
+_TOKEN_CAP_MIN = 10_000
+_TOKEN_CAP_MAX = 250_000
+
+
+def _token_cap_for(agent_type: str) -> int:
+    """Return the total-token cap for `agent_type`, read fresh from Settings.
+
+    Lookup order (first hit wins):
+      1. Per-agent-type setting `agentMaxTotalTokens_{canonical}` (v2.47.13+ when registered)
+      2. Global setting `agentMaxTotalTokens`
+      3. Env var `AGENT_MAX_TOTAL_TOKENS`
+      4. Hardcoded default `_AGENT_MAX_TOTAL_TOKENS_DEFAULT` (200_000)
+
+    Aliases match `_tool_budget_for`: status→observe, research→investigate,
+    action→execute, ambiguous→observe. Misconfigured values (None, non-int,
+    outside [10_000, 250_000]) log a warning and fall back to the default.
+
+    The lookup happens at cap-check time (every step), so operators can tune
+    without redeploy via POST /api/settings.
+    """
+    canonical = _TOOL_BUDGET_ALIASES.get(agent_type, agent_type)
+
+    try:
+        from mcp_server.tools.skills.storage import get_backend
+        backend = get_backend()
+    except Exception as e:
+        log.debug("token cap settings backend unavailable: %s", e)
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+
+    # 1. Per-agent-type setting (registered later for v2.47.13)
+    try:
+        per_type = backend.get_setting(f"agentMaxTotalTokens_{canonical}")
+        if per_type not in (None, ""):
+            return _coerce_token_cap(per_type, source=f"agentMaxTotalTokens_{canonical}")
+    except Exception:
+        pass
+
+    # 2. Global setting
+    try:
+        global_val = backend.get_setting("agentMaxTotalTokens")
+        if global_val not in (None, ""):
+            return _coerce_token_cap(global_val, source="agentMaxTotalTokens")
+    except Exception:
+        pass
+
+    # 3. Env var (already captured at module load) → 4. hardcoded default
+    return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+
+
+def _coerce_token_cap(raw, *, source: str) -> int:
+    """Validate a token-cap value. Returns _AGENT_MAX_TOTAL_TOKENS_DEFAULT on misconfig."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "token cap setting %s has non-int value %r; using default %d",
+            source, raw, _AGENT_MAX_TOTAL_TOKENS_DEFAULT,
+        )
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    if value <= 0:
+        # Operator explicitly set 0 → fall back to default (documented behaviour).
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    if value < _TOKEN_CAP_MIN or value > _TOKEN_CAP_MAX:
+        log.warning(
+            "token cap setting %s=%d outside safe range [%d..%d]; using default %d",
+            source, value, _TOKEN_CAP_MIN, _TOKEN_CAP_MAX,
+            _AGENT_MAX_TOTAL_TOKENS_DEFAULT,
+        )
+        return _AGENT_MAX_TOTAL_TOKENS_DEFAULT
+    return value
 
 # ─── Sub-agent runtime caps (v2.34.0) ─────────────────────────────────────────
 # Configurable via env var — operator-tunable without a redeploy.
@@ -310,16 +387,24 @@ def _cap_exceeded(
     total_tokens: int,
     destructive_calls: int,
     tool_failures: int,
+    agent_type: str = "investigate",
 ) -> tuple[bool, str]:
-    """Return (exceeded, reason). reason is human-readable or empty."""
+    """Return (exceeded, reason). reason is human-readable or empty.
+
+    v2.47.12: token cap is now read from Settings via _token_cap_for(agent_type),
+    enabling operator tuning without redeploy AND laying groundwork for
+    per-agent-type budgets. Wall-clock / destructive / tool-failure caps remain
+    env-driven for now; they are less workload-dependent.
+    """
     import time as _t
     elapsed = _t.monotonic() - started_monotonic
     if elapsed > _AGENT_MAX_WALL_CLOCK_S:
         return True, (f"wall-clock cap exceeded ({int(elapsed)}s > "
                       f"{_AGENT_MAX_WALL_CLOCK_S}s)")
-    if total_tokens > _AGENT_MAX_TOTAL_TOKENS:
+    token_cap = _token_cap_for(agent_type)
+    if total_tokens > token_cap:
         return True, (f"token cap exceeded ({total_tokens} > "
-                      f"{_AGENT_MAX_TOTAL_TOKENS})")
+                      f"{token_cap}, agent_type={agent_type})")
     if destructive_calls > _AGENT_MAX_DESTRUCTIVE:
         return True, (f"destructive-call cap exceeded ({destructive_calls} > "
                       f"{_AGENT_MAX_DESTRUCTIVE})")
@@ -1080,6 +1165,7 @@ async def _run_single_agent_step(
                 total_tokens=state.total_prompt_tokens + state.total_completion_tokens,
                 destructive_calls=_destructive_calls,
                 tool_failures=_tool_failures,
+                agent_type=agent_type,   # v2.47.12 — settings-driven token cap
             )
             if exceeded:
                 await manager.send_line(
