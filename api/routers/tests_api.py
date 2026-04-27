@@ -20,7 +20,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 
@@ -359,3 +359,83 @@ async def remove_schedule(schedule_id: str, _: str = Depends(get_current_user)):
 async def toggle_schedule_endpoint(schedule_id: str, body: dict, _: str = Depends(get_current_user)):
     tr_db.toggle_schedule(schedule_id, body.get("enabled", True))
     return {"status": "ok"}
+
+
+# ── v2.47.18 — Gate macros (Phase 1: record-only) ────────────────────────────
+
+@router.get("/macros")
+async def list_macros_endpoint(
+    name: str | None = None,
+    _: str = Depends(get_current_user),
+):
+    """List all gate macros, optionally filtered by name prefix."""
+    from api.db.gate_macros import list_macros
+    return {"macros": await list_macros(name)}
+
+
+@router.post("/macros/from-run")
+async def macro_from_run(
+    body: dict = Body(...),
+    user: str = Depends(get_current_user),
+):
+    """Record a macro from one or more test results in a completed run.
+
+    Body:
+      {
+        "name": "macro-name",
+        "description": "optional",
+        "source_run_id": "<test_runs.id>",
+        "test_ids": ["status-elastic-01", ...]  # optional; default all in run
+      }
+    """
+    from api.db.gate_macros import (
+        extract_gates_from_test_result, record_macro,
+    )
+    name = (body.get("name") or "").strip()
+    description = body.get("description") or ""
+    source_run_id = body.get("source_run_id") or ""
+    test_ids_filter = body.get("test_ids") or None
+
+    if not name or not source_run_id:
+        raise HTTPException(400, "name and source_run_id are required")
+
+    # Fetch the run (reuses GET /api/tests/runs/{run_id} helper)
+    run = tr_db.get_run(source_run_id)
+    if not run:
+        raise HTTPException(404, f"run {source_run_id} not found")
+
+    recorded = []
+    skipped = []
+    for tr in (run.get("results") or []):
+        tid = tr.get("test_id")
+        if test_ids_filter and tid not in test_ids_filter:
+            continue
+        gates = extract_gates_from_test_result(tr)
+        if not gates:
+            skipped.append({"test_id": tid, "reason": "no gates fired"})
+            continue
+        await record_macro(
+            name=name, description=description,
+            source_run_id=source_run_id, test_id=tid,
+            gates=gates, created_by=user,
+        )
+        recorded.append({"test_id": tid, "gates_count": len(gates)})
+
+    return {
+        "name": name,
+        "source_run_id": source_run_id,
+        "recorded": recorded,
+        "skipped": skipped,
+    }
+
+
+@router.delete("/macros/{name}")
+async def delete_macro_endpoint(
+    name: str,
+    test_id: str | None = None,
+    _: str = Depends(get_current_user),
+):
+    """Delete a macro (all test_ids if test_id is omitted)."""
+    from api.db.gate_macros import delete_macro
+    rows = await delete_macro(name, test_id)
+    return {"name": name, "test_id": test_id, "deleted": rows}
