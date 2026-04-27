@@ -19,8 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 # Install transformers without deps to prevent PyTorch from being pulled in.
 # Only tokenizers, numpy, huggingface-hub, safetensors are needed at runtime.
+# v2.47.22: pin to <5.0 — transformers 5.6.2 (released 2026-04) tightened
+# its tokenizers upper bound to <=0.23.0, conflicting with the latest
+# tokenizers 0.23.1 that pip resolves from requirements.txt. The 4.x line
+# has compatible pinning and is sufficient for our tokenizer-only usage.
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt && \
-    pip wheel --no-cache-dir --wheel-dir /wheels transformers --no-deps
+    pip wheel --no-cache-dir --wheel-dir /wheels "transformers<5.0" --no-deps
 
 # ── Stage 2: Runtime ────────────────────────────────────────────────────────
 FROM python:3.13-slim
@@ -47,7 +51,13 @@ COPY --from=builder /wheels /wheels
 # meant `|| true` ALSO swallowed pip install failures — building broken
 # images that report "Success". v2.47.19 and v2.47.20 hit this exact
 # trap (8MB installed instead of 512MB; pip silently failed partway).
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+# v2.47.22 — added --no-deps. The builder stage already resolved deps
+# via `pip wheel -r requirements.txt`; /wheels IS the resolved set.
+# Re-running the resolver at runtime install adds nothing except
+# conflict surface (e.g. transformers 5.6.2 + tokenizers 0.23.1 from
+# v2.47.21's failure). --no-deps tells pip to install the listed wheels
+# without re-resolving — exactly what we want.
+RUN pip install --no-cache-dir --no-deps /wheels/*.whl && rm -rf /wheels
 # Sanity-check: torch must NOT have been pulled in. The negation
 # inverts the condition cleanly without short-circuit pitfalls.
 RUN if python -c "import torch" 2>/dev/null; then \

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-27T21:26:42",
+  "updated_at": "2026-04-27T21:37:47",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4501,10 +4501,26 @@
       "filename": "CC_PROMPT_v2.47.21.md",
       "version": "v2.47.21",
       "theme": "fix(ci): force no-cache on Docker build (v2.47.19/20 broke at 279MB)",
+      "runner_status": "DONE",
+      "commit_sha": "cba27c1",
+      "error": "",
+      "started_at": "2026-04-27T21:26:42",
+      "finished_at": "2026-04-27T21:27:49",
+      "duration_s": 67.55652510002255,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260427_212642_CC_PROMPT_v2.47.21.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.47.22.md",
+      "version": "v2.47.22",
+      "theme": "fix(docker): pin transformers<5.0 + --no-deps runtime install",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-27T21:26:42",
+      "started_at": "2026-04-27T21:37:47",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

@@ -409,6 +409,40 @@ agent-01 (`docker images`) is the source of truth for what versions
 actually pulled cleanly. CI "Success" means the steps ran without
 error — it does not guarantee a complete artifact was published.
 
+### Transient PyPI dependency conflicts in Docker builds
+**Symptom**: A previously-working Docker build suddenly fails (or in
+older Dockerfiles, silently produces a tiny image) with pip resolution
+errors. Often happens when a major dependency (transformers, pydantic,
+sqlalchemy) ships a new version with tighter pins.
+
+**Root cause**: requirements.txt without upper-bound pins allows pip
+to pick the latest version of every dep. When an upstream package
+ships a new release with stricter constraints (e.g. transformers 5.6.2
+adding `tokenizers<=0.23.0`), the resolver fails because we already
+have a newer version (e.g. 0.23.1) selected from requirements.txt's
+floor-only pin.
+
+**Diagnosis**: search the failed pip install log for `looking at
+multiple versions` or `depends on X<=Y`. The package right before that
+line is the conflicting dep.
+
+**Fix patterns** (in order of preference):
+1. **Add `--no-deps` to the runtime `pip install`** — the builder
+   stage already resolved deps via `pip wheel -r requirements.txt`.
+   Re-running the resolver at runtime install adds no value, only
+   conflict surface. This is the standard pattern in the repo since
+   v2.47.22.
+2. **Pin the offending package to a major version** in the Dockerfile
+   (e.g. `transformers<5.0`) — surgical and explicit.
+3. **Pin in requirements.txt** with both lower and upper bounds — only
+   if multiple Dockerfile-side pins would compound.
+
+**Why this is sneaky in CI**: PyPI is mutable. The same source code +
+same Dockerfile can produce different builds on different days because
+upstream packages publish new versions between runs. Without `--no-deps`
+in the runtime install, this class of failure can recur any time a
+deeply-pinned dependency releases a tighter version.
+
 ### Communication style with the user
 - Brief and technically direct
 - Confirms builds with commit hashes
