@@ -93,4 +93,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.15.md | v2.47.15 | fix(agent): proactive canonical first-tool hint for status/observe tasks | DONE (65122d9) |
 | CC_PROMPT_v2.47.16.md | v2.47.16 | fix(agent): timeout bumps + consecutive-same-tool loop guard | DONE (e0b8d3b) |
 | CC_PROMPT_v2.47.17.md | v2.47.17 | fix(gui+agent): results expansion clip + tighter elastic_search_logs loop guard | DONE (3ac4542) |
-| CC_PROMPT_v2.47.18.md | v2.47.18 | feat(tests): gate macro recording phase 1 (record-only) | RUNNING |
+| CC_PROMPT_v2.47.18.md | v2.47.18 | feat(tests): gate macro recording phase 1 (record-only) | DONE (d43faad) |
+| CC_PROMPT_v2.47.19.md | v2.47.19 | fix(tests): rewrite gate_macros to match codebase sync DB pattern | RUNNING |

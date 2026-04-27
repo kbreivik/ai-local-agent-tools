@@ -370,7 +370,7 @@ async def list_macros_endpoint(
 ):
     """List all gate macros, optionally filtered by name prefix."""
     from api.db.gate_macros import list_macros
-    return {"macros": await list_macros(name)}
+    return {"macros": list_macros(name)}
 
 
 @router.post("/macros/from-run")
@@ -414,12 +414,15 @@ async def macro_from_run(
         if not gates:
             skipped.append({"test_id": tid, "reason": "no gates fired"})
             continue
-        await record_macro(
+        result = record_macro(
             name=name, description=description,
             source_run_id=source_run_id, test_id=tid,
             gates=gates, created_by=user,
         )
-        recorded.append({"test_id": tid, "gates_count": len(gates)})
+        if result.get("error"):
+            skipped.append({"test_id": tid, "reason": result["error"]})
+        else:
+            recorded.append({"test_id": tid, "gates_count": len(gates)})
 
     return {
         "name": name,
@@ -437,5 +440,5 @@ async def delete_macro_endpoint(
 ):
     """Delete a macro (all test_ids if test_id is omitted)."""
     from api.db.gate_macros import delete_macro
-    rows = await delete_macro(name, test_id)
+    rows = delete_macro(name, test_id)
     return {"name": name, "test_id": test_id, "deleted": rows}

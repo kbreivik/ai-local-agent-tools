@@ -206,12 +206,12 @@ async def _init_db_tables(_log) -> None:
         init_display_aliases()
     except Exception as e:
         _log.debug("display_aliases init skipped: %s", e)
-    # gate_macros (v2.47.18)
+    # gate_macros (v2.47.18, sync rewrite v2.47.19)
     try:
-        from api.db.gate_macros import ensure_schema as gm_schema
-        await gm_schema()
+        from api.db.gate_macros import init_gate_macros
+        init_gate_macros()
     except Exception as e:
-        _log.warning("gate_macros schema init failed: %s", e)
+        _log.warning("gate_macros init failed: %s", e)
 
 HOST = os.environ.get("API_HOST", "0.0.0.0")
 PORT = int(os.environ.get("API_PORT", str(DEFAULT_API_PORT)))
