@@ -157,6 +157,73 @@ Always force-refresh browser after deploy to clear stale JS bundles.
 
 ## Critical Architecture Notes
 
+### Database access pattern — CRITICAL
+
+**The codebase uses sync psycopg2 for DB access, NOT async SQLAlchemy.**
+Every existing DB module follows this pattern. Match it exactly when adding a new table.
+
+Reference modules: `api/db/known_facts.py`, `api/db/test_runs.py`, `api/db/agent_actions.py`, `api/db/agent_attempts.py`, `api/db/gate_macros.py`. ~15 modules follow this convention.
+
+Canonical shape:
+
+```python
+from api.connections import _get_conn
+
+def _conn():
+    return _get_conn()
+
+def _is_pg() -> bool:
+    return "postgres" in os.environ.get("DATABASE_URL", "")
+
+def init_my_table() -> bool:
+    """Create table + indexes. Idempotent. Sync. Best-effort."""
+    if not _is_pg():
+        return True
+    try:
+        conn = _conn()
+        if conn is None:
+            return False
+        conn.autocommit = True
+        cur = conn.cursor()
+        # CRITICAL: split DDL on ';' and execute each statement individually.
+        # asyncpg/psycopg2 do NOT run multi-statement strings cleanly.
+        for stmt in _DDL_PG.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                cur.execute(stmt)
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        log.warning("my_table init failed: %s", e)
+        return False
+```
+
+**Schema init wiring**: `init_*` is called sync (no `await`) from `_init_db_tables()` in `api/main.py`:
+
+```python
+try:
+    from api.db.my_table import init_my_table
+    init_my_table()
+except Exception as e:
+    _log.debug("my_table init skipped: %s", e)
+```
+
+**Async SQLAlchemy is the wrong pattern here.** asyncpg rejects multi-statement queries by default — DDL with multiple `CREATE TABLE` / `CREATE INDEX` wrapped in a single `text(_DDL)` will fail silently. Table never gets created, read endpoints 500 when they query the missing table. Lesson learned in v2.47.18 → v2.47.19.
+
+**Endpoints stay async**: FastAPI route handlers in `api/routers/*.py` are typically `async def`. Inside them, sync DB helper calls go WITHOUT `await`:
+
+```python
+@router.get("/things")
+async def list_things(_: str = Depends(get_current_user)):
+    from api.db.things import list_things
+    return {"things": list_things()}   # sync call, no await
+```
+
+**Sentinel return values, not raises**: every DB helper returns `[]`, `{}`, `None`, or a sentinel dict on failure — never raises into the caller. The endpoint stays simple, no try/except needed. See `api/db/test_runs.py:get_run` for a representative example.
+
+**SQLAlchemy async (`from api.db.base import get_engine`) DOES exist** and is used in some legacy places (e.g. one-off migrations in `api/main.py` lifespan), but it is NOT the pattern for new tables. New DB modules use psycopg2 sync.
+
 ### Entity ID format
 `platform:name:id` — e.g. `proxmox:hp1-agent:9200`, `external_services:unifi`, `connection:42`
 
@@ -302,6 +369,46 @@ Roles: `sith_lord` (full admin) | `imperial_officer` (ops) | `stormtrooper` (mon
 - `operations.session_id` ≠ `operations.id`
 - Counter names exist in metrics.py but appear in `/metrics` only after first `.inc()`
 
+### CI build failure — broken `:latest` image recovery
+**Symptom**: Container restart-loops with exit code 127 (command not found).
+GUI unreachable. `docker logs hp1_agent` shows entrypoint binary missing.
+
+**Diagnosis** (single command):
+```bash
+sudo docker images | grep hp1-ai-agent
+```
+
+If `:latest` image size is significantly smaller than tagged versions
+(e.g. 279MB vs 783MB), the CI build pushed a partial/broken artifact
+even though the Actions run reported "Success". GHCR may have the same
+broken image; pulling fresh won't help.
+
+**Recovery** (60 seconds):
+```bash
+cd /opt/hp1-agent/docker
+sudo cp docker-compose.yml docker-compose.yml.bak
+# Pin to last-known-good tagged version (check sizes via docker images)
+sudo sed -i 's|hp1-ai-agent:latest|hp1-ai-agent:<good-version>|' docker-compose.yml
+sudo docker compose --env-file .env up -d hp1_agent
+sleep 10
+curl -s http://localhost:8000/api/health | jq .version
+```
+
+**Permanent fix**: bump VERSION (no code changes needed) and push to
+trigger a fresh CI build. The new build typically succeeds. Once it
+completes and GHCR shows the expected size, pin compose to the new
+explicit version.
+
+**Going forward**: prefer pinning compose to explicit `:X.Y.Z` over
+`:latest`. The `:latest` tag offers no protection against this class of
+failure. Each successful CC deploy can update the pin as part of its
+verification step.
+
+**Lesson learned**: Don't trust `:latest` blindly. Image listing on
+agent-01 (`docker images`) is the source of truth for what versions
+actually pulled cleanly. CI "Success" means the steps ran without
+error — it does not guarantee a complete artifact was published.
+
 ### Communication style with the user
 - Brief and technically direct
 - Confirms builds with commit hashes
@@ -337,6 +444,8 @@ Roles: `sith_lord` (full admin) | `imperial_officer` (ops) | `stormtrooper` (mon
 1. Read `VERSION` — confirm current version
 2. Read `cc_prompts/INDEX.md` tail — find next available version
 3. Read the file(s) being modified — confirm current state matches assumptions
-4. Write prompt as `CC_PROMPT_v{next}.md`
-5. Append PENDING row to INDEX.md
-6. Stop. Do NOT execute. CC owns execution.
+4. **If introducing a new DB table or function: read an existing similar module (`known_facts.py`, `test_runs.py`, `agent_actions.py`) FIRST and match its conventions verbatim. Sync psycopg2, not async SQLAlchemy. Split DDL on `;`. Sentinel return values on failure.**
+5. **If introducing a new settings-driven variable: confirm all 4 layers are in the prompt (backend `SETTINGS_KEYS`, frontend `DEFAULTS`, frontend `SERVER_KEYS`, frontend render in `OptionsModal.jsx`). Backend-only is invisible to the operator.**
+6. Write prompt as `CC_PROMPT_v{next}.md`
+7. Append PENDING row to INDEX.md
+8. Stop. Do NOT execute. CC owns execution.
