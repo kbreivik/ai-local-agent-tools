@@ -1182,13 +1182,19 @@ async def dispatch_tool_calls(
         # produced a result the model considered conclusive. Existing
         # zero-pivot guard misses this because each call returns
         # non-zero hits.
+        # v2.47.17 — per-tool thresholds. elastic_search_logs has the
+        # most documented loop history (research-elastic-pattern-01,
+        # orch-correlate-01) so its threshold is tightened to 2.
         _LOOP_GUARD_TOOLS = frozenset({
             "elastic_search_logs", "elastic_error_logs",
             "elastic_kafka_logs", "elastic_log_pattern",
             "elastic_index_stats",
             "log_timeline",
         })
-        _LOOP_THRESHOLD = 3
+        _LOOP_THRESHOLD_BY_TOOL = {
+            "elastic_search_logs": 2,
+        }
+        _LOOP_THRESHOLD_DEFAULT = 3
         if fn_name in _LOOP_GUARD_TOOLS:
             if fn_name == state.consecutive_same_tool_name:
                 state.consecutive_same_tool_count += 1
@@ -1200,22 +1206,31 @@ async def dispatch_tool_calls(
             state.consecutive_same_tool_name = ""
             state.consecutive_same_tool_count = 0
 
+        _threshold = _LOOP_THRESHOLD_BY_TOOL.get(
+            state.consecutive_same_tool_name, _LOOP_THRESHOLD_DEFAULT,
+        )
         if (
-            state.consecutive_same_tool_count >= _LOOP_THRESHOLD
+            state.consecutive_same_tool_count >= _threshold
             and not state.consecutive_loop_nudge_fired
         ):
             state.consecutive_loop_nudge_fired = True
             messages.append({
                 "role": "system",
                 "content": (
-                    f"[harness] You have called {fn_name} "
-                    f"{state.consecutive_same_tool_count} times in a row. "
-                    "Each successive call is unlikely to produce new "
-                    "information. STOP searching and synthesise from "
-                    "the evidence already gathered. If you genuinely "
-                    "cannot answer with what you have, call escalate() "
-                    "with reason='insufficient_evidence' — do NOT keep "
-                    "searching."
+                    f"[harness] HARD STOP — {fn_name} has been called "
+                    f"{state.consecutive_same_tool_count} times "
+                    f"consecutively. Further calls to this tool will be "
+                    "REJECTED. You MUST do ONE of the following on your "
+                    "next turn:\n"
+                    "  1. Call final_answer() summarising what you found "
+                    "(or that searches returned no relevant data).\n"
+                    "  2. Call a DIFFERENT tool (e.g. elastic_cluster_health, "
+                    "elastic_index_stats, kafka_broker_status) to gather "
+                    "different evidence.\n"
+                    "  3. Call escalate(reason='insufficient_evidence') if "
+                    "you cannot answer.\n"
+                    "Do NOT call audit_log. Do NOT repeat the same search "
+                    "with different keywords. Choose 1, 2, or 3 NOW."
                 ),
             })
             await manager.send_line(

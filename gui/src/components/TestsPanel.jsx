@@ -442,7 +442,7 @@ function ResultsTab({ refresh, isRunning, onRefresh }) {
         {loading && <Mono style={{ color: 'var(--text-3)' }}>Loading runs…</Mono>}
         {!loading && visibleRuns.length === 0 && <Mono style={{ color: 'var(--text-3)' }}>No runs yet. Trigger a run from Library or Suites tab.</Mono>}
         {visibleRuns.map(run => (
-          <div key={run.id} style={{ border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 2, overflow: 'hidden' }}>
+          <div key={run.id} style={{ border: '1px solid var(--border)', background: 'var(--bg-2)', borderRadius: 2, overflow: 'visible' }}>
             <div onClick={() => expand(run)} style={{ display: 'flex', gap: 10, padding: '7px 12px', cursor: 'pointer', alignItems: 'center' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-3)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>

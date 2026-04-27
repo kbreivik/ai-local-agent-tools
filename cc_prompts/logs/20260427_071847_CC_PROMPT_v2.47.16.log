@@ -1,0 +1,438 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.47.16.md (v2.47.16)
+Theme: fix(agent): timeout bumps + consecutive-same-tool loop guard
+
+Prompt content:
+
+# CC PROMPT — v2.47.16 — fix(agent): timeout bumps + consecutive-same-tool guard
+
+## What this does
+
+Closes the 3 timeout-by-margin failures and the elastic loop pattern
+observed in the v2.47.14 baseline (run c852809f).
+
+**From the trace analysis:**
+
+| Test | Cap | Actual | Margin | Pattern |
+|------|-----|--------|--------|---------|
+| `clarify-01` | 240s | 252.2s | -12s | Correct workflow, just over time |
+| `orch-verify-01` | 120s | 121.5s | -1.5s | Correct workflow, just over time |
+| `orch-correlate-01` | 180s | 206.4s | -26s | Loop: `elastic_search_logs ×4` consecutive |
+
+The first two need timeout headroom — the agent did the right thing
+but ran a few seconds long. The third needs both more time AND a
+loop guard: the existing zero-pivot guard (`zero_streaks`) doesn't
+catch consecutive same-tool calls when each call returns non-zero
+results that don't advance the synthesis.
+
+**Fix is two-part:**
+
+1. **Timeout bumps** in `api/db/test_definitions.py` for the three
+   tests above. Test-data only change.
+2. **Consecutive-same-tool guard** in `api/agents/step_tools.py`:
+   track per-tool consecutive call count via a new `StepState` field;
+   after N (default 3) consecutive calls to the SAME tool, inject a
+   harness directive telling the model to synthesise from what it has
+   gathered. Bounded scope: only fires for tools in a frozenset of
+   "search/scan" tools where looping is the failure mode.
+
+The guard is intentionally narrow. It's not a generic loop detector —
+that's what the existing wall-clock + budget caps are for. It catches
+the specific pattern observed in `orch-correlate-01` and similar
+elastic search loops without affecting correct multi-step workflows
+(e.g. checking three different services in sequence).
+
+Version bump: 2.47.15 → 2.47.16
+
+NOTE: v2.47.15 (canonical first-tool hint) MUST land first.
+
+---
+
+## Change 1 — `api/db/test_definitions.py` — timeout bumps
+
+CC: open `api/db/test_definitions.py`. Find the three test cases below
+and update each `timeout_s=` value as shown.
+
+### 1a. `clarify-01` (line ~120)
+
+Current:
+```python
+    TestCase(id="clarify-01", category="clarification",
+        task="upgrade kafka", triggers_clarification=True, agent_type="action",
+        clarification_answer="kafka-stack_kafka1", timeout_s=240, soft=True),
+```
+
+Change `timeout_s=240` to `timeout_s=300`.
+
+### 1b. `orch-verify-01` (line ~180)
+
+Current:
+```python
+    TestCase(id="orch-verify-01", category="orchestration",
+        task="call post_upgrade_verify for workload-stack_workload to confirm it is healthy after the last upgrade",
+        expect_tools=["post_upgrade_verify"], max_steps=10, timeout_s=120, soft=True),
+```
+
+Change `timeout_s=120` to `timeout_s=180`.
+
+### 1c. `orch-correlate-01` (line ~183)
+
+Current:
+```python
+    TestCase(id="orch-correlate-01", category="orchestration",
+        task="use elastic_correlate_operation to correlate the last agent operation with elasticsearch logs",
+        expect_tools=["elastic_correlate_operation"], max_steps=12, timeout_s=180, soft=True),
+```
+
+Change `timeout_s=180` to `timeout_s=240`.
+
+CC: these are test-data only edits. No code logic changes from this section.
+
+---
+
+## Change 2 — `api/agents/step_state.py` — add consecutive-tool counter
+
+CC: open `api/agents/step_state.py`. Find the "Tool tracking" block:
+
+```python
+    # Tool tracking
+    tools_used_names: list = field(default_factory=list)
+    tool_history: list = field(default_factory=list)       # v2.33.13: for contradiction detection
+    substantive_tool_calls: int = 0                        # v2.34.8: hallucination guard counter
+```
+
+Add ONE new field right after `substantive_tool_calls`:
+
+```python
+    # Tool tracking
+    tools_used_names: list = field(default_factory=list)
+    tool_history: list = field(default_factory=list)       # v2.33.13: for contradiction detection
+    substantive_tool_calls: int = 0                        # v2.34.8: hallucination guard counter
+    consecutive_same_tool_count: int = 0                   # v2.47.16: same-tool loop guard
+    consecutive_same_tool_name: str = ""                   # v2.47.16: tool name being repeated
+    consecutive_loop_nudge_fired: bool = False             # v2.47.16: nudge fires once per run
+```
+
+Three new fields, all with default values. Existing field defaults
+unchanged.
+
+---
+
+## Change 3 — `api/agents/step_tools.py` — fire the guard inside dispatch_tool_calls
+
+CC: open `api/agents/step_tools.py`. Find the per-tool-call loop inside
+`dispatch_tool_calls`. Search for the line:
+
+```python
+    halt = False
+    for tc in _proposed_tcs:
+        fn_name = tc.function.name
+        state.tools_used_names.append(fn_name)
+```
+
+IMMEDIATELY AFTER the `state.tools_used_names.append(fn_name)` line,
+insert this block:
+
+```python
+        # v2.47.16 — consecutive-same-tool loop guard. After N
+        # consecutive calls to the same search/scan tool (where each
+        # successive call returns non-zero results but doesn't
+        # advance synthesis), inject a directive to synthesise from
+        # what's been gathered. Pattern observed in orch-correlate-01:
+        # elastic_search_logs called 4× back-to-back, none of which
+        # produced a result the model considered conclusive. Existing
+        # zero-pivot guard misses this because each call returns
+        # non-zero hits.
+        _LOOP_GUARD_TOOLS = frozenset({
+            "elastic_search_logs", "elastic_error_logs",
+            "elastic_kafka_logs", "elastic_log_pattern",
+            "elastic_index_stats",
+            "log_timeline",
+        })
+        _LOOP_THRESHOLD = 3
+        if fn_name in _LOOP_GUARD_TOOLS:
+            if fn_name == state.consecutive_same_tool_name:
+                state.consecutive_same_tool_count += 1
+            else:
+                state.consecutive_same_tool_name = fn_name
+                state.consecutive_same_tool_count = 1
+        else:
+            # Different tool resets the counter
+            state.consecutive_same_tool_name = ""
+            state.consecutive_same_tool_count = 0
+
+        if (
+            state.consecutive_same_tool_count >= _LOOP_THRESHOLD
+            and not state.consecutive_loop_nudge_fired
+        ):
+            state.consecutive_loop_nudge_fired = True
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"[harness] You have called {fn_name} "
+                    f"{state.consecutive_same_tool_count} times in a row. "
+                    "Each successive call is unlikely to produce new "
+                    "information. STOP searching and synthesise from "
+                    "the evidence already gathered. If you genuinely "
+                    "cannot answer with what you have, call escalate() "
+                    "with reason='insufficient_evidence' — do NOT keep "
+                    "searching."
+                ),
+            })
+            await manager.send_line(
+                "step",
+                f"[loop-guard] {fn_name} called "
+                f"{state.consecutive_same_tool_count}× consecutively — "
+                "synthesis directive injected",
+                status="warning", session_id=session_id,
+            )
+            try:
+                from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+                # Reuse existing harness counter; label distinguishes the cause
+                HARNESS_PLAN_NUDGES_COUNTER.labels(
+                    agent_type=f"{agent_type}_loop_guard",
+                ).inc()
+            except Exception:
+                pass
+
+```
+
+CC: indentation must match the surrounding `for tc in _proposed_tcs:`
+loop body — it's an 8-space block inside the outer function. The
+counter update happens BEFORE the actual tool call dispatch (which
+is the `result = None` block further down), so the directive lands
+in `messages` and the model sees it on the NEXT step's LLM turn.
+
+---
+
+## Verify
+
+```bash
+python -m py_compile \
+    api/db/test_definitions.py \
+    api/agents/step_state.py \
+    api/agents/step_tools.py
+
+# Confirm timeout bumps
+grep -n "timeout_s=" api/db/test_definitions.py | grep -E "clarify-01|orch-verify-01|orch-correlate-01"
+# Should show new values; or use a more targeted check:
+grep -B 1 "timeout_s=300" api/db/test_definitions.py | grep clarify-01
+grep -B 1 "timeout_s=180.*soft=True" api/db/test_definitions.py | grep orch-verify-01
+grep -B 1 "timeout_s=240.*soft=True" api/db/test_definitions.py | grep orch-correlate-01
+
+# Confirm new StepState fields
+grep -n "consecutive_same_tool_count\|consecutive_same_tool_name\|consecutive_loop_nudge_fired" api/agents/step_state.py
+# Expected: 3 matches
+
+# Confirm guard logic in step_tools.py
+grep -n "_LOOP_GUARD_TOOLS\|consecutive_loop_nudge_fired" api/agents/step_tools.py
+# Expected: 1 frozenset definition + 1+ usage
+```
+
+After deploy + fresh full baseline:
+
+1. `clarify-01`, `orch-verify-01` should pass (the workflow was correct,
+   timeout was the only blocker)
+2. `orch-correlate-01`: trace should show 3× `elastic_search_logs`
+   followed by `[loop-guard] ... synthesis directive injected` and
+   then a final_answer instead of more elastic calls. Test passes if
+   the model heeds the directive.
+3. Hard score should hit **96.6%** (22/22 hard) when combined with
+   v2.47.15. Soft score should improve from 6 fails → 3 fails (only
+   the 3 "Expected plan_pending, none triggered" leftovers remain
+   for v2.47.17+).
+
+---
+
+## Why a narrow tool list (not generic)
+
+The guard intentionally only fires for search/scan tools where looping
+is the documented failure mode. A generic "same tool 3× in a row" guard
+would break legitimate workflows like:
+
+- `vm_exec` called 3× to check df / free / journalctl on different hosts
+  (legit — different commands)
+- `service_health` polled multiple times during a rolling restart verify
+  (legit — checking convergence)
+- `kafka_topic_inspect` called per topic in a multi-topic check
+
+So the threshold + frozenset combo gives us "loop on search tool" without
+"loop on any tool". If a future failure pattern shows another tool
+needing the guard, add it to `_LOOP_GUARD_TOOLS`.
+
+---
+
+## What this does NOT do
+
+- **Does not implement the 3 "Expected plan_pending, none triggered"
+  fixes** for action tests. Those are deferred to v2.47.17+ — the
+  pattern is a deeper agent-prompt issue (action agents leak into
+  clarification despite v2.47.8's strengthened rejection) and deserves
+  its own focused prompt.
+- **Does not modify the existing zero-pivot guard.** That fires on
+  zero-result patterns; this fires on non-zero-but-redundant patterns.
+  Both are useful in different scenarios.
+- **Does not change the wall-clock cap.** Tests that genuinely run
+  longer because they have more legitimate work still hit the per-test
+  `timeout_s` limit, not the agent's wall clock.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.15` → `2.47.16`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "fix(agent): v2.47.16 timeout bumps + consecutive-same-tool loop guard"
+git push origin main
+```
+
+Deploy:
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy:
+- Trace shows `[loop-guard]` lines if any test triggers consecutive
+  search-tool calls
+- Three previously-timing-out tests now pass with the bumped budgets
+- Full baseline hard score targets 96.6% (22/22 hard), soft fails
+  drop from 6 → 3
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-27 07:18:47
+========================================================================
+Pushed as `e0b8d3b`. Summary of changes:
+[STATUS] 1m44s
+
+- **VERSION**: 2.47.15 → 2.47.16
+- **api/db/test_definitions.py**: timeout bumps for `clarify-01` (240→300), `orch-verify-01` (120→180), `orch-correlate-01` (180→240)
+- **api/agents/step_state.py**: 3 new fields (`consecutive_same_tool_count`, `consecutive_same_tool_name`, `consecutive_loop_nudge_fired`)
+- **api/agents/step_tools.py**: consecutive-same-tool loop guard inside `dispatch_tool_calls`, scoped to a frozenset of search/scan tools, fires once per run after 3 consecutive same-tool calls
+
+PROMPT COMPLETE: v2.47.16
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m44s
+========================================================================

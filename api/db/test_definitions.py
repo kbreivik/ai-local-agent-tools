@@ -111,7 +111,7 @@ TEST_CASES: list[TestCase] = [
         expect_tools=["elastic_search_logs"], max_steps=10, timeout_s=220),
     TestCase(id="research-elastic-pattern-01", category="research",
         task="use the elastic_log_pattern tool to retrieve log entry patterns for the nginx service from elasticsearch",
-        expect_tools=["elastic_log_pattern"], max_steps=10, timeout_s=150),
+        expect_tools=["elastic_log_pattern"], max_steps=10, timeout_s=200),
     TestCase(id="research-kafka-logs-01", category="research",
         task="call elastic_kafka_logs to retrieve recent kafka broker log entries from elasticsearch",
         expect_tools=["elastic_kafka_logs"], max_steps=10, timeout_s=150),

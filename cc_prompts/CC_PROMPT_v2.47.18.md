@@ -1,0 +1,454 @@
+# CC PROMPT — v2.47.18 — feat(tests): gate macro recording from real runs (Phase 1 — record only)
+
+## What this does
+
+Phase 1 of a "macro replay" system that lets a real run's gate
+interactions (clarifications + plan_actions) be captured and replayed
+in future test runs without hardcoding them in `TEST_CASES`.
+
+**User context**: today, test pre-arming lives in
+`api/db/test_definitions.py:TestCase`:
+
+```python
+TestCase(id="clarify-01", ...,
+    triggers_clarification=True,
+    clarification_answer="kafka-stack_kafka1",
+    triggers_plan=True,
+    auto_confirm=False, ...)
+```
+
+This works but requires editing source for every new test or change in
+gate behaviour. User wants to:
+
+> "Rerun as a simulation, check all approvals exactly as they appeared,
+> do a full audit, and use it as a macro for later runs."
+
+**Phase 1 (this prompt)**: capture every gate fired during a real run
+into a new `gate_macros` table. Adds a `POST /api/tests/macros/from-run`
+endpoint that takes a run ID and writes the gate sequence as a named
+macro. Adds `GET /api/tests/macros` to list macros.
+
+**Phase 2 (future, v2.47.19+)**: wire macro replay into the test runner
+— pre-arm gates from a macro instead of from `TEST_CASES` fields. Adds
+GUI to manage macros.
+
+This split keeps the change small and reviewable. Phase 1 is a
+read-only feature that doesn't affect existing runs at all.
+
+Version bump: 2.47.17 → 2.47.18
+
+---
+
+## Change 1 — `api/db/gate_macros.py` — new module for macro storage
+
+CC: create a new file `api/db/gate_macros.py` with this content:
+
+```python
+"""gate_macros — store recorded gate sequences from real test runs.
+
+A macro is a named replayable sequence of gate answers (clarifications
++ plan_action approvals/cancels) captured from one specific test_run.
+Macros are addressable by name and can later be applied to a fresh
+test run instead of using the TestCase's hardcoded fields.
+
+v2.47.18 — Phase 1: record-only. Replay is wired in Phase 2.
+"""
+from __future__ import annotations
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import text
+
+from api.db.base import get_engine
+
+log = logging.getLogger(__name__)
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+_DDL = """
+CREATE TABLE IF NOT EXISTS gate_macros (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    source_run_id UUID,
+    test_id       TEXT NOT NULL,
+    -- gates: JSON array of {kind, question?, answer?, plan_summary?, approved?}
+    gates         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by    TEXT NOT NULL DEFAULT 'system',
+    UNIQUE (name, test_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_gate_macros_name ON gate_macros (name);
+CREATE INDEX IF NOT EXISTS ix_gate_macros_test ON gate_macros (test_id);
+"""
+
+
+async def ensure_schema() -> None:
+    """Create gate_macros table if missing."""
+    try:
+        async with get_engine().begin() as conn:
+            await conn.execute(text(_DDL))
+    except Exception as e:
+        log.warning("gate_macros schema init failed: %s", e)
+
+
+# ── Read API ──────────────────────────────────────────────────────────────────
+async def list_macros(name_filter: Optional[str] = None) -> list[dict]:
+    """Return all macros, optionally filtered by name prefix."""
+    sql = (
+        "SELECT id, name, description, source_run_id, test_id, "
+        "gates, created_at, created_by "
+        "FROM gate_macros"
+    )
+    params: dict = {}
+    if name_filter:
+        sql += " WHERE name LIKE :pat"
+        params["pat"] = f"{name_filter}%"
+    sql += " ORDER BY name, test_id"
+
+    async with get_engine().begin() as conn:
+        rows = (await conn.execute(text(sql), params)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def get_macro(name: str, test_id: str) -> Optional[dict]:
+    """Return one macro by (name, test_id) or None."""
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(
+            text(
+                "SELECT id, name, description, source_run_id, test_id, "
+                "gates, created_at, created_by "
+                "FROM gate_macros WHERE name = :n AND test_id = :t"
+            ),
+            {"n": name, "t": test_id},
+        )).mappings().first()
+    return dict(row) if row else None
+
+
+# ── Write API ─────────────────────────────────────────────────────────────────
+async def record_macro(
+    *,
+    name: str,
+    description: str,
+    source_run_id: str,
+    test_id: str,
+    gates: list[dict],
+    created_by: str = "system",
+) -> dict:
+    """Insert or replace a macro for (name, test_id).
+
+    `gates` is a list of dicts. Recognised shapes:
+      {"kind": "clarification", "question": str, "answer": str}
+      {"kind": "plan", "summary": str, "steps_count": int, "approved": bool}
+    """
+    async with get_engine().begin() as conn:
+        # Upsert
+        await conn.execute(
+            text(
+                "INSERT INTO gate_macros "
+                "(name, description, source_run_id, test_id, gates, created_by) "
+                "VALUES (:n, :d, :s, :t, CAST(:g AS jsonb), :u) "
+                "ON CONFLICT (name, test_id) DO UPDATE SET "
+                "description = EXCLUDED.description, "
+                "source_run_id = EXCLUDED.source_run_id, "
+                "gates = EXCLUDED.gates, "
+                "created_by = EXCLUDED.created_by, "
+                "created_at = now()"
+            ),
+            {
+                "n": name, "d": description, "s": source_run_id,
+                "t": test_id, "g": json.dumps(gates), "u": created_by,
+            },
+        )
+    return {
+        "name": name, "test_id": test_id, "gates_count": len(gates),
+    }
+
+
+async def delete_macro(name: str, test_id: Optional[str] = None) -> int:
+    """Delete one macro (if test_id given) or all macros named `name`."""
+    if test_id:
+        sql = "DELETE FROM gate_macros WHERE name = :n AND test_id = :t"
+        params = {"n": name, "t": test_id}
+    else:
+        sql = "DELETE FROM gate_macros WHERE name = :n"
+        params = {"n": name}
+    async with get_engine().begin() as conn:
+        result = await conn.execute(text(sql), params)
+    return result.rowcount or 0
+
+
+# ── Run-to-macro extraction ───────────────────────────────────────────────────
+def extract_gates_from_test_result(test_result: dict) -> list[dict]:
+    """Pull gate events from a single test_run_result row.
+
+    Returns a list with at most 2 entries (one clarification, one plan)
+    matching the test_run_results schema:
+      - clarification_question + clarification_answer_used
+      - plan_summary + plan_steps_count + plan_approved
+    """
+    gates: list[dict] = []
+    if test_result.get("clarification_question"):
+        gates.append({
+            "kind": "clarification",
+            "question": test_result.get("clarification_question") or "",
+            "answer":   test_result.get("clarification_answer_used") or "",
+        })
+    if test_result.get("plan_summary"):
+        gates.append({
+            "kind":        "plan",
+            "summary":     test_result.get("plan_summary") or "",
+            "steps_count": int(test_result.get("plan_steps_count") or 0),
+            "approved":    bool(test_result.get("plan_approved")),
+        })
+    return gates
+```
+
+CC: create the file with the content above. No modifications to other
+files in this Change.
+
+---
+
+## Change 2 — `api/main.py` — call ensure_schema on startup
+
+CC: open `api/main.py`. Find the existing schema-init block (look for
+other `ensure_schema()` or `await known_facts.ensure_schema()` calls
+in the lifespan / startup section). Add a call to
+`api.db.gate_macros.ensure_schema()` alongside them.
+
+If the structure looks like:
+
+```python
+async def startup():
+    ...
+    from api.db.known_facts import ensure_schema as kf_schema
+    await kf_schema()
+    ...
+```
+
+Add after the existing schema init:
+
+```python
+    try:
+        from api.db.gate_macros import ensure_schema as gm_schema
+        await gm_schema()
+    except Exception as e:
+        log.warning("gate_macros schema init failed: %s", e)
+```
+
+CC: place the new try/except block right after any other DDL-init
+block in startup. Match the existing error-handling style.
+
+---
+
+## Change 3 — `api/routers/tests_api.py` — add macro endpoints
+
+CC: open `api/routers/tests_api.py`. At the bottom of the file (or
+wherever other routes live), add these three endpoints. Place them
+after any existing `/api/tests/runs/{run_id}` route:
+
+```python
+# ── v2.47.18 — Gate macros (Phase 1: record-only) ────────────────────────────
+
+@router.get("/macros")
+async def list_macros_endpoint(
+    name: str | None = None,
+    _: str = Depends(get_current_user),
+):
+    """List all gate macros, optionally filtered by name prefix."""
+    from api.db.gate_macros import list_macros
+    return {"macros": await list_macros(name)}
+
+
+@router.post("/macros/from-run")
+async def macro_from_run(
+    body: dict = Body(...),
+    user: str = Depends(get_current_user),
+):
+    """Record a macro from one or more test results in a completed run.
+
+    Body:
+      {
+        "name": "macro-name",
+        "description": "optional",
+        "source_run_id": "<test_runs.id>",
+        "test_ids": ["status-elastic-01", ...]  # optional; default all in run
+      }
+    """
+    from api.db.gate_macros import (
+        extract_gates_from_test_result, record_macro,
+    )
+    name = (body.get("name") or "").strip()
+    description = body.get("description") or ""
+    source_run_id = body.get("source_run_id") or ""
+    test_ids_filter = body.get("test_ids") or None
+
+    if not name or not source_run_id:
+        raise HTTPException(400, "name and source_run_id are required")
+
+    # Fetch the run
+    run = await _get_run_with_results(source_run_id)
+    if not run:
+        raise HTTPException(404, f"run {source_run_id} not found")
+
+    recorded = []
+    skipped = []
+    for tr in (run.get("results") or []):
+        tid = tr.get("test_id")
+        if test_ids_filter and tid not in test_ids_filter:
+            continue
+        gates = extract_gates_from_test_result(tr)
+        if not gates:
+            skipped.append({"test_id": tid, "reason": "no gates fired"})
+            continue
+        await record_macro(
+            name=name, description=description,
+            source_run_id=source_run_id, test_id=tid,
+            gates=gates, created_by=user,
+        )
+        recorded.append({"test_id": tid, "gates_count": len(gates)})
+
+    return {
+        "name": name,
+        "source_run_id": source_run_id,
+        "recorded": recorded,
+        "skipped": skipped,
+    }
+
+
+@router.delete("/macros/{name}")
+async def delete_macro_endpoint(
+    name: str,
+    test_id: str | None = None,
+    _: str = Depends(get_current_user),
+):
+    """Delete a macro (all test_ids if test_id is omitted)."""
+    from api.db.gate_macros import delete_macro
+    rows = await delete_macro(name, test_id)
+    return {"name": name, "test_id": test_id, "deleted": rows}
+```
+
+CC: notes for placement:
+
+- These endpoints reuse the existing `router` instance, `Depends(get_current_user)`,
+  `Body`, and `HTTPException` imports already present in `tests_api.py`.
+- `_get_run_with_results` is the existing helper used by
+  `GET /api/tests/runs/{run_id}` — reuse it. If it's named slightly
+  differently (e.g. `_load_run_with_results`), use that name.
+- If `tests_api.py` doesn't have `Body` imported, add `Body` to the
+  existing FastAPI imports at the top:
+  `from fastapi import APIRouter, Depends, HTTPException, Body`
+
+---
+
+## Change 4 — quick smoke tests
+
+After deploy:
+
+```bash
+TOKEN=$(...)  # operator-supplied bearer
+
+# 1. Confirm endpoint exists
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://192.168.199.10:8000/api/tests/macros | jq
+
+# 2. Find a recent run with gates
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://192.168.199.10:8000/api/tests/runs?limit=1" | \
+  jq '.runs[0].id'
+
+# 3. Record a macro from that run
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://192.168.199.10:8000/api/tests/macros/from-run \
+  -d '{
+    "name": "baseline-2026-04-27",
+    "description": "Captured from full-mem-on-baseline 04504024",
+    "source_run_id": "04504024-c89d-44cb-976a-837b37fa263a"
+  }' | jq
+
+# 4. Verify
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://192.168.199.10:8000/api/tests/macros | \
+  jq '.macros[] | select(.name == "baseline-2026-04-27")'
+```
+
+Expected output for step 3: `recorded` array with ~13 entries (the
+13 tests that fired gates in the latest baseline), `skipped` array
+with ~25 entries (the rest).
+
+---
+
+## Verify
+
+```bash
+python -m py_compile \
+    api/db/gate_macros.py \
+    api/main.py \
+    api/routers/tests_api.py
+
+# Confirm new file exists
+ls -l api/db/gate_macros.py
+
+# Confirm endpoints registered
+grep -n "macros" api/routers/tests_api.py | grep -E "(get|post|delete).*macros"
+# Expected: 3 route decorators + handler signatures
+```
+
+---
+
+## What this does NOT do (Phase 2)
+
+- **No replay logic.** Macros are stored but not yet consumed. The
+  test runner still uses `TestCase.clarification_answer` and
+  `TestCase.auto_confirm` from `api/db/test_definitions.py`.
+- **No GUI.** Macro management is API-only for Phase 1. A future
+  prompt adds a "Macros" tab in TestsPanel.
+- **No diff/audit view.** Comparing two runs' gate sequences is
+  manual via API for now.
+
+Phase 2 work (v2.47.19 or later):
+
+1. Add `macro_name` and `macro_test_id` optional fields to the
+   `/api/tests/run` request body. If set, the runner pre-arms from
+   the macro's `gates` array instead of from TestCase fields.
+2. Add a "Macros" sub-tab in `TestsPanel.jsx` with: list of macros,
+   "record from latest run" button, "compare with run" diff view.
+3. Add a `/api/tests/macros/{name}/audit` endpoint that returns a
+   diff between the macro and the gates of a specified run.
+
+Phase 1 is the foundation; Phase 2 is the user-facing payoff. Splitting
+keeps the v2.47.18 change small and verifiable.
+
+---
+
+## Version bump
+
+Update `VERSION`: `2.47.17` → `2.47.18`
+
+---
+
+## Commit
+
+```bash
+git add -A
+git commit -m "feat(tests): v2.47.18 gate macro recording (phase 1 of replay system)"
+git push origin main
+```
+
+Deploy:
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+After deploy:
+- `gate_macros` table created on startup
+- 3 new endpoints: `GET /api/tests/macros`, `POST /api/tests/macros/from-run`,
+  `DELETE /api/tests/macros/{name}`
+- Operator can record a macro from any completed run via curl
+- No behavioural change for existing tests
