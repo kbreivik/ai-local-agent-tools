@@ -297,6 +297,68 @@ def inject_prior_attempts(system_prompt: str, task: str,
     return system_prompt
 
 
+# Meta-tools that don't answer a status question — never accept these as
+# the canonical first tool, even if memory hints suggest them.
+_META_FIRST_TOOLS = frozenset({
+    "audit_log", "runbook_search", "memory_recall", "engram_activate",
+    "propose_subtask", "plan_action", "checkpoint_save",
+})
+
+
+def _canonical_first_tool_for_status(task: str, first_intent: str) -> str:
+    """Return a canonical first tool for status/observe tasks, or "".
+
+    Matches v2.47.8's reactive hint logic (in step_guard.py) but fires
+    proactively at prompt-build time. Only applies to status/observe
+    intents; investigate/execute/build have richer first-tool patterns
+    that are better served by memory than by hardcoded mapping.
+
+    Returns "" when no strong keyword match exists — caller falls
+    through to MuninnDB's hint.
+    """
+    if first_intent not in ("status", "observe"):
+        return ""
+    t = (task or "").lower()
+    if not t:
+        return ""
+
+    # Elastic
+    if "elastic" in t or "elasticsearch" in t:
+        if "index" in t or "stat" in t:
+            return "elastic_index_stats"
+        if "log" in t or "search" in t:
+            return "elastic_search_logs"
+        return "elastic_cluster_health"
+
+    # Kafka
+    if "kafka" in t:
+        if "broker" in t:
+            return "kafka_broker_status"
+        if "lag" in t or "consumer" in t:
+            return "kafka_consumer_lag"
+        if "topic" in t:
+            return "kafka_topic_health"
+        return "kafka_broker_status"
+
+    # Swarm
+    if "swarm" in t:
+        if "node" in t:
+            return "swarm_node_status"
+        return "swarm_status"
+
+    # Service
+    if "service" in t:
+        if "list" in t or "running" in t:
+            return "service_list"
+        if "version" in t and "history" in t:
+            return "service_version_history"
+        if "version" in t:
+            return "service_current_version"
+        return "service_health"
+
+    return ""
+
+
 async def inject_facts_block(system_prompt: str, task: str, first_intent: str,
                              preflight_facts_block: str = "",
                              preflight_skills_block: str = ""):
@@ -422,15 +484,47 @@ async def inject_facts_block(system_prompt: str, task: str, first_intent: str,
         try:
             from api.memory.feedback import get_first_tool_hint
             first_tool_hint = await get_first_tool_hint(task, first_intent) or ""
-            if first_tool_hint:
+        except Exception as e:
+            log.debug("first_tool_hint failed: %s", e)
+            first_tool_hint = ""
+
+        # v2.47.15 — proactive canonical first-tool override for
+        # status/observe tasks. When the task has a strong domain
+        # keyword match, the canonical tool wins over MuninnDB's hint
+        # if MuninnDB returned nothing or a meta-tool (audit_log,
+        # runbook_search). Fixes the persistent status-elastic-01
+        # failure where the model picks audit_log instead of
+        # elastic_cluster_health.
+        canonical = _canonical_first_tool_for_status(task, first_intent)
+        if canonical and (not first_tool_hint
+                          or first_tool_hint in _META_FIRST_TOOLS):
+            if first_tool_hint and first_tool_hint != canonical:
+                log.info(
+                    "first_tool_hint canonical override: muninn=%s -> canonical=%s "
+                    "(task=%r intent=%s)",
+                    first_tool_hint, canonical, task[:80], first_intent,
+                )
+            first_tool_hint = canonical
+
+        if first_tool_hint:
+            # v2.47.15 — stronger directive for canonical hints; the
+            # weaker "Consider this" wording from MuninnDB hints was
+            # ignored by the model on status-elastic-01.
+            if canonical and first_tool_hint == canonical:
+                hint_block = (
+                    f"FIRST TOOL DIRECTIVE: For this task, your FIRST "
+                    f"tool call MUST be {first_tool_hint}(). This is the "
+                    f"canonical tool for this question type. Do NOT call "
+                    f"audit_log, runbook_search, or any meta-tool first. "
+                    f"Call {first_tool_hint}() now."
+                )
+            else:
                 hint_block = (
                     f"HISTORICAL HINT: For tasks similar to this, "
                     f"successful runs typically started with: {first_tool_hint}. "
                     f"Consider this as your first tool call."
                 )
-                injected_sections.append(hint_block)
-        except Exception as e:
-            log.debug("first_tool_hint failed: %s", e)
+            injected_sections.append(hint_block)
 
         if injected_sections:
             injection = "\n\n".join(injected_sections) + "\n\n"
