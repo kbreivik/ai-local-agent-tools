@@ -42,8 +42,17 @@ RUN groupadd -g ${DOCKER_GID} docker 2>/dev/null || true && \
 
 # Install Python wheels from builder (all deps, no pip at runtime)
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels && \
-    python -c "import torch" 2>/dev/null && echo "ERROR: torch installed" && exit 1 || true
+# v2.47.21 — split previous chain. The old line had `|| true` at the end
+# to handle the torch-absent case, but shell short-circuit semantics
+# meant `|| true` ALSO swallowed pip install failures — building broken
+# images that report "Success". v2.47.19 and v2.47.20 hit this exact
+# trap (8MB installed instead of 512MB; pip silently failed partway).
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+# Sanity-check: torch must NOT have been pulled in. The negation
+# inverts the condition cleanly without short-circuit pitfalls.
+RUN if python -c "import torch" 2>/dev/null; then \
+        echo "ERROR: torch installed unexpectedly — check requirements.txt" && exit 1; \
+    fi
 
 # Optionally validate clean build — set BUILD_DIRTY_OK=1 to skip
 ARG BUILD_DIRTY_OK=0

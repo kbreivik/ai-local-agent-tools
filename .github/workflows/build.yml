@@ -85,6 +85,15 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          # v2.47.21: force no-cache + pull. Defense in depth alongside
+          # the Dockerfile silent-failure fix. v2.47.19 and v2.47.20 both
+          # produced 279MB images (vs v2.47.18's 783MB) due to BuildKit
+          # potentially reusing a cached broken layer. no-cache=true
+          # forces every layer to rebuild; pull=true forces a fresh
+          # base image pull. Adds ~2 min per build but eliminates an
+          # entire class of CI flake.
+          no-cache: true
+          pull: true
           tags: |
             ${{ steps.tag.outputs.image_tag }}
             ${{ steps.tag.outputs.version_tag }}

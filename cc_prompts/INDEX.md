@@ -96,4 +96,4 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.18.md | v2.47.18 | feat(tests): gate macro recording phase 1 (record-only) | DONE (d43faad) |
 | CC_PROMPT_v2.47.19.md | v2.47.19 | fix(tests): rewrite gate_macros to match codebase sync DB pattern | DONE (db67489) |
 | CC_PROMPT_v2.47.20.md | v2.47.20 | chore: rebuild — v2.47.19 image was a CI flake (279MB instead of 783MB) | DONE (3438363) |
-| CC_PROMPT_v2.47.21.md | v2.47.21 | fix(ci): force no-cache on Docker build (v2.47.19/20 broke at 279MB) | PENDING |
+| CC_PROMPT_v2.47.21.md | v2.47.21 | fix(ci): force no-cache on Docker build (v2.47.19/20 broke at 279MB) | RUNNING |
