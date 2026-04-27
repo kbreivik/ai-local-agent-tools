@@ -1173,6 +1173,67 @@ async def dispatch_tool_calls(
     for tc in _proposed_tcs:
         fn_name = tc.function.name
         state.tools_used_names.append(fn_name)
+        # v2.47.16 — consecutive-same-tool loop guard. After N
+        # consecutive calls to the same search/scan tool (where each
+        # successive call returns non-zero results but doesn't
+        # advance synthesis), inject a directive to synthesise from
+        # what's been gathered. Pattern observed in orch-correlate-01:
+        # elastic_search_logs called 4× back-to-back, none of which
+        # produced a result the model considered conclusive. Existing
+        # zero-pivot guard misses this because each call returns
+        # non-zero hits.
+        _LOOP_GUARD_TOOLS = frozenset({
+            "elastic_search_logs", "elastic_error_logs",
+            "elastic_kafka_logs", "elastic_log_pattern",
+            "elastic_index_stats",
+            "log_timeline",
+        })
+        _LOOP_THRESHOLD = 3
+        if fn_name in _LOOP_GUARD_TOOLS:
+            if fn_name == state.consecutive_same_tool_name:
+                state.consecutive_same_tool_count += 1
+            else:
+                state.consecutive_same_tool_name = fn_name
+                state.consecutive_same_tool_count = 1
+        else:
+            # Different tool resets the counter
+            state.consecutive_same_tool_name = ""
+            state.consecutive_same_tool_count = 0
+
+        if (
+            state.consecutive_same_tool_count >= _LOOP_THRESHOLD
+            and not state.consecutive_loop_nudge_fired
+        ):
+            state.consecutive_loop_nudge_fired = True
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"[harness] You have called {fn_name} "
+                    f"{state.consecutive_same_tool_count} times in a row. "
+                    "Each successive call is unlikely to produce new "
+                    "information. STOP searching and synthesise from "
+                    "the evidence already gathered. If you genuinely "
+                    "cannot answer with what you have, call escalate() "
+                    "with reason='insufficient_evidence' — do NOT keep "
+                    "searching."
+                ),
+            })
+            await manager.send_line(
+                "step",
+                f"[loop-guard] {fn_name} called "
+                f"{state.consecutive_same_tool_count}× consecutively — "
+                "synthesis directive injected",
+                status="warning", session_id=session_id,
+            )
+            try:
+                from api.metrics import HARNESS_PLAN_NUDGES_COUNTER
+                # Reuse existing harness counter; label distinguishes the cause
+                HARNESS_PLAN_NUDGES_COUNTER.labels(
+                    agent_type=f"{agent_type}_loop_guard",
+                ).inc()
+            except Exception:
+                pass
+
         if fn_name not in META_TOOLS:
             state.substantive_tool_calls += 1  # v2.34.8: hallucination guard counter
         tool_content_suffix = ""  # v2.32.2: populated by auto-verify after destructive tools

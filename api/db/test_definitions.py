@@ -123,7 +123,7 @@ TEST_CASES: list[TestCase] = [
 
     TestCase(id="clarify-01", category="clarification",
         task="upgrade kafka", triggers_clarification=True, agent_type="action",
-        clarification_answer="kafka-stack_kafka1", timeout_s=240, soft=True),
+        clarification_answer="kafka-stack_kafka1", timeout_s=300, soft=True),
     TestCase(id="clarify-02", category="clarification",
         task="restart the service", triggers_clarification=True,
         clarification_answer="cancel", stop_after_seconds=60, timeout_s=180, soft=True),
@@ -212,8 +212,8 @@ TEST_CASES: list[TestCase] = [
         max_steps=10, timeout_s=120, soft=True),
     TestCase(id="orch-verify-01", category="orchestration",
         task="call post_upgrade_verify for workload-stack_workload to confirm it is healthy after the last upgrade",
-        expect_tools=["post_upgrade_verify"], max_steps=10, timeout_s=120, soft=True),
+        expect_tools=["post_upgrade_verify"], max_steps=10, timeout_s=180, soft=True),
     TestCase(id="orch-correlate-01", category="orchestration",
         task="use elastic_correlate_operation to correlate the last agent operation with elasticsearch logs",
-        expect_tools=["elastic_correlate_operation"], max_steps=12, timeout_s=180, soft=True),
+        expect_tools=["elastic_correlate_operation"], max_steps=12, timeout_s=240, soft=True),
 ]

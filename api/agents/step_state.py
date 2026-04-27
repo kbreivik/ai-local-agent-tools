@@ -24,6 +24,9 @@ class StepState:
     tools_used_names: list = field(default_factory=list)
     tool_history: list = field(default_factory=list)       # v2.33.13: for contradiction detection
     substantive_tool_calls: int = 0                        # v2.34.8: hallucination guard counter
+    consecutive_same_tool_count: int = 0                   # v2.47.16: same-tool loop guard
+    consecutive_same_tool_name: str = ""                   # v2.47.16: tool name being repeated
+    consecutive_loop_nudge_fired: bool = False             # v2.47.16: nudge fires once per run
 
     # Signal counters
     positive_signals: int = 0
