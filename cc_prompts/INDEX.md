@@ -104,4 +104,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.0.md | v2.49.0 | feat(infra): PgBouncer transaction-pool in front of Postgres | DONE (c45aadc) |
 | CC_PROMPT_v2.49.1.md | v2.49.1 | feat(infra): PgBouncer Unix socket + trust auth (replaces v2.49.0 TCP+md5) | DONE (c0bfb07) |
 | CC_PROMPT_v2.49.2.md | v2.49.2 | fix(infra): correct edoburu/pgbouncer image tag (1.22.1 doesn't exist → v1.25.1-p0) | DONE (363fa74) |
-| CC_PROMPT_v2.49.3.md | v2.49.3 | fix(infra): split BACKEND_DATABASE_URL (asyncpg parse fix) + pin LISTEN_PORT=6432 + doc TCP listener | RUNNING |
+| CC_PROMPT_v2.49.3.md | v2.49.3 | fix(infra): split BACKEND_DATABASE_URL (asyncpg parse fix) + pin LISTEN_PORT=6432 + doc TCP listener | DONE (cf7ccb2) |
+| CC_PROMPT_v2.49.4.md | v2.49.4 | fix(infra): AUTH_TYPE=scram-sha-256 + revert BACKEND_DATABASE_URL split (v2.49.3 misdiagnosis) | RUNNING |

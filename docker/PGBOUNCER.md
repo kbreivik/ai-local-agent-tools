@@ -69,25 +69,46 @@ If you tighten the threat model later (adversarial sidecars in the
 same compose project), set `UNIX_SOCKET_GROUP` to a shared GID and
 `UNIX_SOCKET_MODE: "0770"`.
 
-### 4. Two URLs, two readers (split since v2.49.3)
+### 4. Single DATABASE_URL serves both readers
 
-PgBouncer and hp1_agent read **different** env vars in `docker/.env`:
+`DATABASE_URL` in `docker/.env` is read by both:
 
-| Env var | Reader | Scheme | Notes |
-|---|---|---|---|
-| `DATABASE_URL` | hp1_agent | `postgresql+asyncpg://...` | Uses asyncpg driver |
-| `BACKEND_DATABASE_URL` | pgbouncer | `postgresql://...` | Bare scheme — edoburu can't parse `+asyncpg` |
+- **hp1_agent**: connects front-side via the Unix socket. The form
+  is `postgresql+asyncpg://USER:PASS@/dbname?host=/var/run/pgbouncer&port=6432`.
+  asyncpg interprets `?host=` as a socket directory and `port=6432`
+  as the socket file suffix.
+- **pgbouncer**: connects upstream to hp1-postgres on TCP. Its
+  entrypoint parses the same URL, ignores `?host=` (it's connecting
+  elsewhere), and uses USER/PASS to authenticate to hp1-postgres.
 
-The split exists because the edoburu entrypoint's URL parser silently
-mangles usernames when the scheme contains a `+`-delimited driver
-suffix (observed: `hp1user` parsed as `hp1`, breaking upstream auth).
+The edoburu entrypoint handles the `+asyncpg` driver suffix in the
+scheme correctly — the suffix sits in the scheme part and the parser
+strips it before extracting credentials. (v2.49.3 introduced a
+`BACKEND_DATABASE_URL` split based on a wrong diagnosis; v2.49.4
+reverted it.)
 
-Both URLs point at the same database with the same credentials. The
-hp1_agent URL uses the socket form (`@/hp1_agent?host=/var/run/pgbouncer`);
-the pgbouncer URL uses TCP form (`@hp1-postgres:5432/hp1_agent`)
-because that's how pgbouncer reaches Postgres upstream.
+If credentials change in PG, update this single value.
 
-If the credentials change in Postgres, update **both** values.
+### 5. SCRAM-SHA-256 end to end
+
+Front-side (hp1_agent ↔ pgbouncer) and back-side (pgbouncer ↔ PG)
+both use SCRAM-SHA-256.
+
+Mechanism: edoburu's entrypoint writes the password as **plaintext**
+to `/etc/pgbouncer/userlist.txt` (its branch logic for AUTH_TYPE in
+{plain, scram-sha-256}). When hp1_agent connects, pgbouncer
+challenges and verifies SCRAM against the plaintext. When pgbouncer
+opens an upstream connection to PG, it derives a SCRAM proof from the
+same plaintext. PG14+ accepts because it stores SCRAM verifiers
+internally and verifies the proof — at no point does PG see the
+plaintext over the wire.
+
+The plaintext lives in `/etc/pgbouncer/userlist.txt` inside the
+container's writable layer. It is not on the host filesystem and not
+in any named volume — only for the container's lifetime. `docker
+inspect` and `docker exec cat` can still read it; tighten with the
+`auth_user` + `auth_query` pattern (see pgbouncer docs) if that's a
+concern for your threat model.
 
 ### 5. TCP listener is active inside the container
 

@@ -126,14 +126,24 @@ services:
       - hp1-pg-net
     env_file: .env
     environment:
-      # Backend connection — pgbouncer reads BACKEND_DATABASE_URL from
-      # docker/.env and exposes it to its entrypoint as DATABASE_URL.
-      # BACKEND_DATABASE_URL must use the bare 'postgresql://' scheme
-      # (no '+asyncpg'); the edoburu entrypoint's URL parser cannot
-      # tolerate driver suffixes and silently mangles the username.
-      DATABASE_URL: ${BACKEND_DATABASE_URL}
+      # Backend connection — image generates pgbouncer.ini from this.
+      # DATABASE_URL must use the *internal* PG hostname/port
+      # (hp1-postgres:5432 on hp1-pg-net), not the host-mapped 5433.
+      # The edoburu entrypoint parses the URL fine including the
+      # '+asyncpg' driver suffix; v2.49.3's BACKEND_DATABASE_URL
+      # split was based on a wrong diagnosis and is reverted here.
+      DATABASE_URL: ${DATABASE_URL}
       POOL_MODE: transaction
-      AUTH_TYPE: trust
+      # v2.49.4 — scram-sha-256 instead of trust:
+      #   PG14+ defaults to password_encryption=scram-sha-256 and rejects
+      #   md5-hashed userlist entries (which the entrypoint generates with
+      #   AUTH_TYPE=trust). With AUTH_TYPE=scram-sha-256, the entrypoint
+      #   writes plaintext to userlist.txt; pgbouncer uses it to derive
+      #   SCRAM proofs against PG upstream.
+      #   Front-side: hp1_agent must now send the password. It already
+      #   does (the password is in DATABASE_URL).
+      #   Volume isolation still applies as defense in depth.
+      AUTH_TYPE: scram-sha-256
       # v2.49.3 — pin to 6432 (pgbouncer convention). Image default
       # is 5432, which collides with Postgres conventions and causes
       # the socket to land at .s.PGSQL.5432 instead of .s.PGSQL.6432.
