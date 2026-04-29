@@ -104,6 +104,42 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── PgBouncer transaction pool (v2.49.0) ────────────────────────────
+  # Multiplexes app-side conns onto a small backend pool to avoid
+  # exhausting Postgres max_connections. Activated via the 'pgbouncer'
+  # profile.
+  #
+  # Setup:
+  #   1. Populate docker/pgbouncer/userlist.txt with md5 hashes
+  #      (see file header for the recipe).
+  #   2. In docker/.env, set DATABASE_URL to point at pgbouncer:
+  #        DATABASE_URL=postgresql+asyncpg://hp1user:PASS@pgbouncer:6432/hp1_agent
+  #   3. docker compose -f docker/docker-compose.yml \
+  #        --profile pgbouncer up -d pgbouncer
+  #      docker compose -f docker/docker-compose.yml up -d hp1_agent
+  #
+  # Health: docker exec hp1_pgbouncer \
+  #           psql -p 6432 -U pgbouncer pgbouncer -c 'SHOW POOLS;'
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1
+    container_name: hp1_pgbouncer
+    restart: unless-stopped
+    profiles: ["pgbouncer"]
+    networks:
+      - agent-net
+      - hp1-pg-net
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
   # IMPORTANT: Build from a clean git checkout to prevent frontend/backend version mismatch.
   # If building locally with uncommitted changes, run: git stash && docker compose build && git stash pop
   # Or set an explicit version: docker build --build-arg APP_VERSION=$(git describe --tags)

@@ -183,3 +183,54 @@ docker service logs hp1_agent -f  # Swarm
 curl -H "Authorization: Bearer <token>" http://localhost:8000/api/agent \
   -d '{"task": "skill_health_summary"}'
 ```
+
+## PgBouncer transaction pool (v2.49.0)
+
+Optional transaction-pool layer between hp1_agent and hp1-postgres.
+Activate when scaling out (multiple agent replicas) or when sustained
+PG `max_connections` pressure is observed.
+
+### Activate
+
+1. Generate md5 hashes and populate `docker/pgbouncer/userlist.txt`:
+
+   ```bash
+   USER=hp1user
+   PASSWORD=...   # match docker/.env
+   HASH=$(echo -n "${PASSWORD}${USER}" | md5sum | awk '{print "md5"$1}')
+   echo "\"${USER}\" \"${HASH}\"" >> docker/pgbouncer/userlist.txt
+   ```
+
+2. Update `docker/.env` to route hp1_agent through pgbouncer:
+
+   ```
+   DATABASE_URL=postgresql+asyncpg://hp1user:PASS@pgbouncer:6432/hp1_agent
+   ```
+
+3. Bring up the service and restart hp1_agent so it picks up the new DSN:
+
+   ```bash
+   docker compose -f docker/docker-compose.yml \
+     --profile pgbouncer up -d pgbouncer
+   docker compose -f docker/docker-compose.yml up -d hp1_agent
+   ```
+
+### Verify
+
+```bash
+docker exec hp1_pgbouncer \
+  psql -p 6432 -U pgbouncer pgbouncer -c 'SHOW POOLS;'
+```
+
+Healthy steady state: most clients in `cl_idle`, a small number of
+backend conns in `sv_active` / `sv_idle`. Active client count should
+match what hp1_agent's pools have currently checked out.
+
+### Caveats
+
+- Transaction-pool mode breaks `LISTEN/NOTIFY` and per-session `SET`
+  — DEATHSTAR does not currently use either.
+- Prepared-statement protocol is supported in pgbouncer ≥1.21. Image
+  pinned to 1.22.1.
+- If `userlist.txt` is empty, pgbouncer rejects all clients with an
+  authentication failure. Always populate before activation.

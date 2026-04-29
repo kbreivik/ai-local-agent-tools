@@ -1,0 +1,19 @@
+;; PgBouncer userlist — md5 hashes
+;;
+;; Format per line: "username" "md5<hash>"
+;;
+;; Generate the hash for a given user/password with:
+;;   echo -n "${PASSWORD}${USERNAME}" | md5sum | awk '{print "md5"$1}'
+;;
+;; Example workflow:
+;;   USER=hp1user
+;;   PASSWORD=...        # from docker/.env DB_PASSWORD or DATABASE_URL
+;;   HASH=$(echo -n "${PASSWORD}${USER}" | md5sum | awk '{print "md5"$1}')
+;;   echo "\"${USER}\" \"${HASH}\"" >> docker/pgbouncer/userlist.txt
+;;
+;; Add an admin entry as well so 'psql -p 6432 -U pgbouncer pgbouncer'
+;; works:
+;;   "pgbouncer" "md5<hash for the pgbouncer admin password>"
+;;
+;; This file MUST be populated before bringing up the pgbouncer
+;; service. An empty userlist means pgbouncer rejects all clients.
