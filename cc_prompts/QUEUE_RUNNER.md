@@ -4,7 +4,8 @@ You are implementing ONE specific prompt for the DEATHSTAR project.
 The prompt file and version are specified below by the calling script.
 
 DO NOT loop to the next prompt. Implement ONLY the prompt provided.
-The bash script (run_queue.sh) controls iteration — your job is one prompt.
+The runner script (run_queue.py) controls iteration and status tracking —
+your job is one prompt.
 
 ---
 
@@ -21,22 +22,22 @@ Read the prompt content carefully. It specifies:
 ### Step 2 — Read existing files before editing
 
 Before changing any file, read its current content so you understand
-the existing structure. Use exact function names and file paths from the prompt.
-Never rewrite a whole file when the prompt says to add or update a section.
+the existing structure. Use exact function names and file paths from
+the prompt. Never rewrite a whole file when the prompt says to add or
+update a section.
 
 ### Step 3 — Implement all changes
 
-Make every change described in the prompt. If the prompt says NEW FILE, create it.
-If it says "add after X" or "replace Y with Z", do exactly that.
-Update the VERSION file to the version number in the prompt header.
+Make every change described in the prompt. If the prompt says NEW FILE,
+create it. If it says "add after X" or "replace Y with Z", do exactly
+that. Update the VERSION file to the version number in the prompt header.
 
 ### Step 4 — Verify
 
 Run syntax checks on changed Python files:
-```bash
-cd D:\claude_code\ai-local-agent-tools
-python -m py_compile <any changed .py files>
-```
+
+    cd D:\claude_code\ai-local-agent-tools
+    python -m py_compile <any changed .py files>
 
 If py_compile fails, fix the error before committing.
 
@@ -44,48 +45,31 @@ If py_compile fails, fix the error before committing.
 
 Use the exact commit message from the prompt's ## Commit section.
 
-```bash
-git add -A
-git commit -m "<message from prompt>"
-git push origin main
-```
+    git add -A
+    git commit -m "<message from prompt>"
+    git push origin main
 
 Verify push succeeded:
-```bash
-git log --oneline -1
-```
 
-### Step 6 — Mark DONE in INDEX.md
+    git log --oneline -1
 
-Update cc_prompts/INDEX.md: change the status column for this prompt
-from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+### Step 6 — STOP
 
-Example — change:
-  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
-To:
-  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+After the feature commit is pushed, output a single line:
 
-Then commit the index update:
-```bash
-git add cc_prompts/INDEX.md
-git commit -m "chore: mark v<version> DONE in prompt queue"
-git push origin main
-```
+    PROMPT COMPLETE: <version>
 
-### Step 7 — STOP
-
-After marking DONE and pushing the index update, output a single line:
-  PROMPT COMPLETE: <version>
-
-Then stop. Do not read the next prompt. Do not continue to the next item.
-The bash script will invoke you again for the next prompt if needed.
+Then stop. Do not read the next prompt. Do not edit
+cc_prompts/INDEX.md, cc_prompts/QUEUE_STATE.json, or
+cc_prompts/QUEUE_STATUS.md — the runner script owns those entirely.
+The runner will invoke you again for the next prompt if needed.
 
 ---
 
 ## Error handling
 
 If any step fails:
-- Do not mark the prompt DONE
+- Do not proceed to commit
 - Output: PROMPT FAILED: <version> — <reason>
 - Stop immediately
 
@@ -97,4 +81,5 @@ If any step fails:
 - Read files before editing — prompts reference existing functions
 - Frozensets: append to existing set, don't replace it
 - Test imports: `python -c "from api.db.entity_history import init_entity_history"`
-- One prompt per invocation. The loop is in run_queue.sh, not here.
+- One prompt per invocation. The loop is in run_queue.py, not here.
+- INDEX.md, QUEUE_STATE.json, QUEUE_STATUS.md are the runner's domain — never touch them.

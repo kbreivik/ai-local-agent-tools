@@ -135,7 +135,7 @@ class StateEntry:
     filename: str
     version: str
     theme: str
-    runner_status: str   # PENDING | RUNNING | DONE | ERROR
+    runner_status: str   # PENDING | RUNNING | DONE | ERROR | WAITING
     commit_sha: str = ""
     error: str = ""
     started_at: str = ""
@@ -146,6 +146,7 @@ class StateEntry:
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
+    first_waiting_at: str = ""  # ISO timestamp set when entering WAITING
 
 
 @dataclass
@@ -353,7 +354,7 @@ class QueueState:
 
 # ─── QUEUE_STATUS.md writer ──────────────────────────────────────────────────
 
-STATUS_SYM = {"PENDING": "⏳", "RUNNING": "🔄", "DONE": "✅", "ERROR": "❌"}
+STATUS_SYM = {"PENDING": "⏳", "RUNNING": "🔄", "DONE": "✅", "ERROR": "❌", "WAITING": "⏸"}
 
 def write_status_md(path: Path, state: QueueState, stats: Optional[SessionStats] = None):
     entries = state.all()
@@ -362,6 +363,7 @@ def write_status_md(path: Path, state: QueueState, stats: Optional[SessionStats]
     errs  = sum(1 for e in entries if e.runner_status == "ERROR")
     pend  = sum(1 for e in entries if e.runner_status == "PENDING")
     run   = sum(1 for e in entries if e.runner_status == "RUNNING")
+    wait  = sum(1 for e in entries if e.runner_status == "WAITING")
 
     lines = [
         "# Queue Status",
@@ -375,6 +377,7 @@ def write_status_md(path: Path, state: QueueState, stats: Optional[SessionStats]
     if errs: summary += f" · {errs} error(s)"
     if pend: summary += f" · {pend} pending"
     if run:  summary += f" · 1 running"
+    if wait: summary += f" · {wait} waiting"
     lines.append(summary)
 
     # Cost summary
@@ -668,7 +671,7 @@ def print_table(state: QueueState):
     print(f"  {'──':<4} {'───────':<10} {'────':<35} {'────':<9} {'───':<9} {'────'}")
     for e in entries:
         sym = STATUS_SYM.get(e.runner_status, "?")
-        c = {"DONE":C.GREEN,"RUNNING":C.MAGENTA,"PENDING":C.YELLOW,"ERROR":C.RED}.get(e.runner_status, C.DIM)
+        c = {"DONE":C.GREEN,"RUNNING":C.MAGENTA,"PENDING":C.YELLOW,"ERROR":C.RED,"WAITING":C.CYAN}.get(e.runner_status, C.DIM)
         sha = e.commit_sha[:7] if e.commit_sha else "—"
         dur = fmt_duration(e.duration_s) if e.duration_s else "—"
         cost = fmt_cost(e.cost_usd) if e.cost_usd > 0 else "—"
@@ -722,6 +725,9 @@ def main():
     p.add_argument("--log-dir",     type=str, default=None)
     p.add_argument("--timeout",     type=int, default=600)
     p.add_argument("--max-runs",    type=int, default=20)
+    p.add_argument("--wait-timeout", type=int, default=600,
+                   help="Seconds to wait for a missing prompt file before "
+                        "marking ERROR (default 600 = 10 min)")
     p.add_argument("--no-push",     action="store_true")
     args = p.parse_args()
 
@@ -942,6 +948,44 @@ def main():
                 stats.prompts_total += len(new)
                 write_status_md(md_path, state, stats)
 
+            # ── Tolerant runner: promote WAITING entries ────────────
+            # Re-check WAITING entries each loop. If the file has now
+            # appeared on disk, promote back to PENDING. If we've been
+            # waiting longer than args.wait_timeout, give up and mark
+            # ERROR. This lets Desktop update INDEX.md slightly before
+            # (or after) writing the prompt file without producing
+            # sticky ERROR rows.
+            now_ts = time.time()
+            for w in [e for e in state.all() if e.runner_status == "WAITING"]:
+                wpath = pdir / w.filename
+                if wpath.exists():
+                    info(f"WAITING → PENDING: {w.filename} (file appeared)")
+                    w.runner_status = "PENDING"
+                    w.first_waiting_at = ""
+                    state.upsert(w)
+                    write_status_md(md_path, state, stats)
+                    continue
+                if w.first_waiting_at:
+                    try:
+                        waiting_since = datetime.datetime.fromisoformat(
+                            w.first_waiting_at
+                        ).timestamp()
+                        elapsed = now_ts - waiting_since
+                    except Exception:
+                        elapsed = 0
+                    if elapsed > args.wait_timeout:
+                        warn(f"WAITING timed out: {w.filename} "
+                             f"({fmt_duration(elapsed)} > "
+                             f"{fmt_duration(args.wait_timeout)})")
+                        w.runner_status = "ERROR"
+                        w.error = (f"file not found after "
+                                   f"{fmt_duration(elapsed)} waiting")
+                        w.finished_at = _now_iso()
+                        state.upsert(w)
+                        update_index_entry(idx, w)
+                        stats.prompts_failed += 1
+                        write_status_md(md_path, state, stats)
+
             entry = state.next_pending()
             if not entry:
                 if args.one:
@@ -955,13 +999,15 @@ def main():
 
             prompt_path = pdir / entry.filename
             if not prompt_path.exists():
-                err(f"Missing: {prompt_path}")
-                entry.runner_status = "ERROR"
-                entry.error = "file not found"
-                entry.finished_at = _now_iso()
+                # Tolerant: file may not have been written yet by Desktop.
+                # Mark WAITING (not ERROR), record start time, skip to next.
+                # Promotion or timeout-to-ERROR is handled at the top of
+                # the next loop iteration.
+                if not entry.first_waiting_at:
+                    entry.first_waiting_at = _now_iso()
+                    info(f"File not yet present, marking WAITING: {entry.filename}")
+                entry.runner_status = "WAITING"
                 state.upsert(entry)
-                update_index_entry(idx, entry)
-                stats.prompts_failed += 1
                 write_status_md(md_path, state, stats)
                 continue
 
