@@ -74,6 +74,18 @@ _INFRA_TOOLS = frozenset({
     "entity_events", "get_host_network", "result_fetch", "result_query",
 })
 
+# v2.47.24 — destructive tools serialised by a Postgres advisory lock.
+# Only one of these can run platform-wide at a time. Closes the
+# 'two operators in two tabs' concurrent-destructive gap.
+DESTRUCTIVE_TOOLS = frozenset({
+    "vm_exec",
+    "kafka_exec",
+    "proxmox_vm_power",
+    "swarm_service_force_update",
+    "swarm_node_drain",
+    "swarm_node_activate",
+})
+
 
 # Sentinel: a handler has fully processed the tool call (messages,
 # logging, state updates done inside) and the dispatcher should skip
@@ -1288,47 +1300,81 @@ async def dispatch_tool_calls(
             state.audit_logged = True
 
         # ── Category-handler dispatch ───────────────────────────────
+        # v2.47.24 — wrap destructive tools in a Postgres advisory lock.
+        # Non-blocking try-acquire; if held by another session, surface
+        # a structured 'busy' result and skip the dispatch entirely.
+        _adv_holder = None
+        _adv_busy = False
+        if fn_name in DESTRUCTIVE_TOOLS:
+            from api.db.pg_advisory import try_acquire as _adv_try_acquire
+            _adv_holder = _adv_try_acquire("destructive_global")
+            if _adv_holder is None:
+                _adv_busy = True
         result = None
-        try:
-            for _handler in _HANDLERS:
+        if _adv_busy:
+            result = {
+                "status": "busy",
+                "message": (
+                    "Another destructive operation is currently running. "
+                    "Wait for it to finish, then retry."
+                ),
+                "tool": fn_name,
+                "data": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await manager.send_line(
+                "step",
+                f"[advisory_lock] {fn_name} blocked — destructive_global held elsewhere",
+                tool=fn_name, status="warning", session_id=session_id,
+            )
+        else:
+            try:
                 try:
-                    result = await _handler(
-                        tc=tc, fn_name=fn_name, fn_args=fn_args,
-                        state=state, session_id=session_id,
-                        operation_id=operation_id, task=task,
-                        agent_type=agent_type, messages=messages,
-                        step=step, manager=manager,
-                        owner_user=owner_user, client=client,
-                    )
-                    break
-                except NotImplementedError:
-                    continue
-        except Exception as e:
-            err_str = str(e)
-            result = {"status": "error", "message": err_str, "data": None,
-                      "timestamp": datetime.now(timezone.utc).isoformat()}
-            # v2.34.9: track kwarg hallucination via TypeError fingerprints
-            if isinstance(e, TypeError) or (
-                "unexpected keyword argument" in err_str
-                or "missing 1 required positional argument" in err_str
-                or "missing" in err_str and "required positional" in err_str
-            ):
-                try:
-                    from api.metrics import TOOL_SIGNATURE_ERROR_COUNTER
-                    TOOL_SIGNATURE_ERROR_COUNTER.labels(tool_name=fn_name).inc()
-                except Exception:
-                    pass
-            if "401" in err_str or "403" in err_str or "Unauthorized" in err_str:
-                await manager.send_line(
-                    "step",
-                    f"[auth] Token may have expired — tool {fn_name!r} got auth error. "
-                    "Try stopping and re-running the task.",
-                    status="error", session_id=session_id,
-                )
-            log.debug("Tool %r raised exception:", fn_name, exc_info=True)
-            state.negative_signals += 1
-            from api.memory.feedback import record_feedback_signal as _rfs
-            asyncio.create_task(_rfs(task, "tool_error", f"{fn_name}: {str(e)[:80]}"))
+                    for _handler in _HANDLERS:
+                        try:
+                            result = await _handler(
+                                tc=tc, fn_name=fn_name, fn_args=fn_args,
+                                state=state, session_id=session_id,
+                                operation_id=operation_id, task=task,
+                                agent_type=agent_type, messages=messages,
+                                step=step, manager=manager,
+                                owner_user=owner_user, client=client,
+                            )
+                            break
+                        except NotImplementedError:
+                            continue
+                except Exception as e:
+                    err_str = str(e)
+                    result = {"status": "error", "message": err_str, "data": None,
+                              "timestamp": datetime.now(timezone.utc).isoformat()}
+                    # v2.34.9: track kwarg hallucination via TypeError fingerprints
+                    if isinstance(e, TypeError) or (
+                        "unexpected keyword argument" in err_str
+                        or "missing 1 required positional argument" in err_str
+                        or "missing" in err_str and "required positional" in err_str
+                    ):
+                        try:
+                            from api.metrics import TOOL_SIGNATURE_ERROR_COUNTER
+                            TOOL_SIGNATURE_ERROR_COUNTER.labels(tool_name=fn_name).inc()
+                        except Exception:
+                            pass
+                    if "401" in err_str or "403" in err_str or "Unauthorized" in err_str:
+                        await manager.send_line(
+                            "step",
+                            f"[auth] Token may have expired — tool {fn_name!r} got auth error. "
+                            "Try stopping and re-running the task.",
+                            status="error", session_id=session_id,
+                        )
+                    log.debug("Tool %r raised exception:", fn_name, exc_info=True)
+                    state.negative_signals += 1
+                    from api.memory.feedback import record_feedback_signal as _rfs
+                    asyncio.create_task(_rfs(task, "tool_error", f"{fn_name}: {str(e)[:80]}"))
+            finally:
+                # v2.47.24 — always release the advisory lock if we acquired one
+                if _adv_holder is not None:
+                    from api.db.pg_advisory import release as _adv_release
+                    _adv_release(_adv_holder)
+                    _adv_holder = None
 
         # Defensive: misc is the catch-all, so this should never fire. If it
         # does, something is wrong with the handler chain.

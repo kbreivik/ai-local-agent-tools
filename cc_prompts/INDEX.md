@@ -98,7 +98,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.20.md | v2.47.20 | chore: rebuild — v2.47.19 image was a CI flake (279MB instead of 783MB) | DONE (3438363) |
 | CC_PROMPT_v2.47.21.md | v2.47.21 | fix(ci): force no-cache on Docker build (v2.47.19/20 broke at 279MB) | DONE (cba27c1) |
 | CC_PROMPT_v2.47.22.md | v2.47.22 | fix(docker): pin transformers<5.0 + --no-deps runtime install | DONE (393c34d) |
-| CC_PROMPT_v2.47.23.md | v2.47.23 | fix(db): ThreadedConnectionPool + maxconn=20 + connect_timeout in postgres_backend | RUNNING |
-| CC_PROMPT_v2.47.24.md | v2.47.24 | feat(db): pg_advisory_lock around destructive tool dispatch | PENDING |
+| CC_PROMPT_v2.47.23.md | v2.47.23 | fix(db): ThreadedConnectionPool + maxconn=20 + connect_timeout in postgres_backend | DONE (672f8ce) |
+| CC_PROMPT_v2.47.24.md | v2.47.24 | feat(db): pg_advisory_lock around destructive tool dispatch | RUNNING |
 | CC_PROMPT_v2.48.0.md | v2.48.0 | refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim | PENDING |
 | CC_PROMPT_v2.49.0.md | v2.49.0 | feat(infra): PgBouncer transaction-pool in front of Postgres | PENDING |
