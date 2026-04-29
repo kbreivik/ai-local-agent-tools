@@ -5,12 +5,12 @@
 ```
 hp1_agent ──┐
             │
-            ▼ Unix socket (no auth — trust)
+            ▼ Unix socket + SCRAM-SHA-256
         ┌──────────┐
         │ PgBouncer│  ← shared volume: pgbouncer-socket
         └──────────┘
             │
-            ▼ TCP + password (DATABASE_URL credential)
+            ▼ TCP + SCRAM-SHA-256
         ┌──────────┐
         │ Postgres │ (hp1-postgres on hp1-pg-net)
         └──────────┘
@@ -19,14 +19,19 @@ hp1_agent ──┐
 ### How it works
 
 - **Front-end (hp1_agent ↔ PgBouncer)**: Unix domain socket inside
-  a shared Docker volume `pgbouncer-socket`. Auth type: `trust`.
-  Security: only containers that mount the volume can reach the
-  socket. There is no password.
+  a shared Docker volume `pgbouncer-socket`. Auth type:
+  `scram-sha-256`. hp1_agent sends the password (URL-encoded inside
+  `DATABASE_URL`); pgbouncer verifies SCRAM against the plaintext
+  in its in-container userlist.txt. Volume isolation is defence
+  in depth — only containers that mount `pgbouncer-socket` can
+  reach the socket at all.
 
 - **Back-end (PgBouncer ↔ Postgres)**: TCP on `hp1-pg-net` (the
   Ansible-managed bridge). PgBouncer authenticates with the
-  credential in `docker/.env` `DATABASE_URL`. The password lives
-  exactly once, in that file (chmod 600, gitignored).
+  credential in `docker/.env` `POSTGRES_PASSWORD`. The same
+  plaintext is read by both legs of SCRAM (front-side verify,
+  back-side proof) — it lives exactly once on disk, in `.env`
+  (chmod 600, gitignored).
 
 - **Pool mode**: `transaction`. Each Postgres transaction claims a
   backend connection, releases on commit/rollback. Backend
@@ -130,7 +135,7 @@ inspect` and `docker exec cat` can still read it; tighten with the
 `auth_user` + `auth_query` pattern (see pgbouncer docs) if that's a
 concern for your threat model.
 
-### 5. TCP listener is active inside the container
+### 6. TCP listener is active inside the container
 
 Despite `LISTEN_ADDR=""`, the edoburu image keeps a TCP listener on
 `0.0.0.0:6432` inside the container. No host port is mapped, so this
@@ -148,7 +153,7 @@ If a future requirement tightens this further (e.g., adversarial
 sidecars in the same compose project), use the mTLS migration recipe
 to enforce cert-based auth on the TCP listener.
 
-### 6. PgBouncer admin requires the socket too
+### 7. PgBouncer admin requires the socket too
 
 You can only reach the admin console from a container with the
 volume mounted. There is no remote access:
@@ -161,7 +166,7 @@ docker exec -it hp1_pgbouncer \
 Then `SHOW POOLS;`, `SHOW STATS;`, `SHOW CLIENTS;`, `SHOW SERVERS;`,
 `RELOAD;`, etc.
 
-### 7. Startup ordering
+### 8. Startup ordering
 
 When activating the pgbouncer profile, bring pgbouncer up first,
 wait for the healthcheck to pass, then restart hp1_agent. The
@@ -386,17 +391,27 @@ in pgbouncer env to disable socket creation.
 
 ## Threat model summary
 
-### Option G (current — Unix socket + trust)
+### Current — Unix socket + SCRAM-SHA-256
 
 - **Trusted scope**: the agent-01 host. Anyone with shell access to
   agent-01 plus Docker permissions can reach the socket via
-  `/var/lib/docker/volumes/agent_pgbouncer-socket/_data/`.
-- **Untrusted scope**: the LAN, the internet, other hosts on
-  hp1-pg-net. None can reach PgBouncer (no TCP listener).
+  `/var/lib/docker/volumes/docker_pgbouncer-socket/_data/`.
+  Inside the docker network, anyone on the `hp1-pg-net` bridge can
+  also reach pgbouncer's in-container TCP listener (no host port
+  exposed; reachable only from `hp1_agent` and `hp1-postgres`).
+- **Untrusted scope**: the LAN, the internet. Neither can reach
+  PgBouncer (no host TCP port).
+- **Auth boundary**: SCRAM-SHA-256 on both legs — front-side
+  (hp1_agent → pgbouncer via socket) and back-side (pgbouncer →
+  PG via TCP). PG never sees plaintext on the wire; pgbouncer's
+  userlist.txt holds plaintext only inside the container's
+  writable layer (no host filesystem, no named volume).
 - **Credential at rest**: the Postgres password in `docker/.env`
-  (chmod 600, gitignored, Ansible-managed).
+  as `POSTGRES_PASSWORD` and embedded URL-encoded inside
+  `DATABASE_URL` (chmod 600, gitignored, Ansible-managed). To
+  rotate, update both fields.
 
-### Option H (future — mTLS)
+### Future — mTLS (multi-host)
 
 - **Trusted scope**: holders of valid client certs signed by your
   CA. Compromise of `client.key` requires re-issuing certs

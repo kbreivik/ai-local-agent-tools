@@ -109,4 +109,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.5.md | v2.49.5 | fix(infra): bypass DATABASE_URL parsing in pgbouncer (URL-encoding bug — use discrete DB_* env vars) | DONE (aafb043) |
 | CC_PROMPT_v2.49.6.md | v2.49.6 | fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD) | DONE (f369d3d) |
 | CC_PROMPT_v2.49.7.md | v2.49.7 | fix(infra): drop env_file from pgbouncer service (compose #11740 — empty-string override doesn't beat env_file) | DONE (bb54bed) |
-| CC_PROMPT_v2.49.8.md | v2.49.8 | docs+infra: pgbouncer cutover runbook + hp1_agent depends_on pgbouncer (required:false) + .env.example $ gotcha footnote | RUNNING |
+| CC_PROMPT_v2.49.8.md | v2.49.8 | docs+infra: pgbouncer cutover runbook + hp1_agent depends_on pgbouncer (required:false) + .env.example $ gotcha footnote | DONE (ba5aec3) |
+| CC_PROMPT_v2.49.9.md | v2.49.9 | docs: PGBOUNCER.md staleness fixes — trust→SCRAM in architecture/bullets, deduped section numbering, Option G/H → plain language | RUNNING |
