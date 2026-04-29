@@ -463,6 +463,10 @@ deeply-pinned dependency releases a tighter version.
 - TLS reverse proxy (no nginx/traefik config in repo)
 - `/metrics` localhost-only restriction or auth tightening
 - Tree-wide token cap for sub-agent trees
+- **Safe-deploy / fail-safe Docker update** (designed in chat 2026-04-27, not yet implemented). Two parts:
+  1. CI smoke test before `:latest` tag: image-size check (reject if <600MB), Python import sanity, 20s container spin-up + healthcheck. Broken artifacts never get the `:latest` tag. Caught by v2.47.19's 279MB image incident.
+  2. `scripts/safe-deploy.sh` on agent-01: capture current image hash, pull new + start, poll `/api/health` for 120s, retag old + restart on timeout. Catches runtime failures CI can't see (DB schema mismatches, env var changes).
+  - Skipped for now: `:edge` vs `:stable` tag separation (hygiene only); manual approval gate (negative ROI for homelab cadence); Swarm conversion (over-engineering for single-node hp1_agent)
 
 ---
 

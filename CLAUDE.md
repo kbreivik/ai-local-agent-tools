@@ -69,10 +69,21 @@ git push origin main
 ```
 
 ### Adding to the queue
-1. Write `cc_prompts/CC_PROMPT_vX.Y.Z.md`
-2. Add row to `INDEX.md` Phase Queue table:
+
+**ORDER MATTERS — the runner watches `INDEX.md`.** Update INDEX.md only AFTER
+the prompt files exist in the folder, or the runner will mark the rows as
+`ERROR (file not found)` and require multi-file recovery to clear.
+
+Correct sequence:
+1. Write `cc_prompts/CC_PROMPT_vX.Y.Z.md` to disk.
+2. Verify the file is present in `cc_prompts/` (e.g. `ls cc_prompts/CC_PROMPT_vX.Y.Z.md`).
+3. THEN append the row to `INDEX.md` Phase Queue table:
    `| CC_PROMPT_vX.Y.Z.md | vX.Y.Z | Short description | PENDING |`
-3. Add summary paragraph under `## Phase summaries`
+4. Add summary paragraph under `## Phase summaries`.
+
+Never reverse steps 1 and 3. The runner polls `INDEX.md` and immediately
+tries to run any new PENDING row — premature INDEX.md edits trigger
+ERROR rows that must be cleaned up before the queue can resume.
 
 ### Running the queue
 ```bash
