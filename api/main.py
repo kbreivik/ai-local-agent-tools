@@ -627,6 +627,12 @@ async def lifespan(app: FastAPI):
     collector_manager.stop_all()
     await _close_memory()
     await _flush_logger()
+    # v2.48.0 — release pooled DB connections cleanly
+    try:
+        from api.db.pg_pool import shutdown as _pg_pool_shutdown
+        _pg_pool_shutdown()
+    except Exception as e:
+        _log.warning("pg_pool shutdown failed: %s", e)
 
 
 app = FastAPI(

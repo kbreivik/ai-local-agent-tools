@@ -199,13 +199,18 @@ def _is_postgres() -> bool:
 
 
 def _get_conn():
-    """Get a psycopg2 connection for direct SQL. Returns None if not PostgreSQL."""
+    """Get a pooled psycopg2 connection (proxy). Returns None if not PostgreSQL.
+
+    v2.48.0: was `psycopg2.connect(dsn)` — unbounded, no pool. Now
+    delegates to api.db.pg_pool.get_pooled_conn() which returns a proxy
+    that transparently returns the conn to a ThreadedConnectionPool on
+    .close(). API-compatible: existing callers that do `conn.close()`
+    automatically benefit from pooling with zero code changes.
+    """
     if not _is_postgres():
         return None
-    import psycopg2
-    dsn = os.environ.get("DATABASE_URL", "")
-    dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
-    return psycopg2.connect(dsn)
+    from api.db.pg_pool import get_pooled_conn
+    return get_pooled_conn()
 
 
 def _get_sa_conn():
