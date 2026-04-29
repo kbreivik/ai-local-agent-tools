@@ -24,6 +24,7 @@ volumes:
   agent-data:
   agent-logs:
   agent-plugins:
+  pgbouncer-socket:  # v2.49.1 — shared Unix socket between pgbouncer and hp1_agent
 
 services:
   # ── Dev-only PostgreSQL ───────────────────────────────────────────────────────
@@ -104,37 +105,50 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── PgBouncer transaction pool (v2.49.0) ────────────────────────────
-  # Multiplexes app-side conns onto a small backend pool to avoid
-  # exhausting Postgres max_connections. Activated via the 'pgbouncer'
-  # profile.
+  # ── PgBouncer transaction pool (v2.49.1, Unix socket + trust) ────────
+  # Listens ONLY on a Unix socket inside the shared `pgbouncer-socket`
+  # volume. No TCP port exposed. No userlist.txt. Front-end auth is
+  # 'trust' — security relies on docker volume isolation: only
+  # containers that mount pgbouncer-socket can reach the socket.
   #
-  # Setup:
-  #   1. Populate docker/pgbouncer/userlist.txt with md5 hashes
-  #      (see file header for the recipe).
-  #   2. In docker/.env, set DATABASE_URL to point at pgbouncer:
-  #        DATABASE_URL=postgresql+asyncpg://hp1user:PASS@pgbouncer:6432/hp1_agent
-  #   3. docker compose -f docker/docker-compose.yml \
-  #        --profile pgbouncer up -d pgbouncer
-  #      docker compose -f docker/docker-compose.yml up -d hp1_agent
+  # Backend (pgbouncer → hp1-postgres) auth uses the credential in
+  # docker/.env (DATABASE_URL), inherited via env_file.
   #
-  # Health: docker exec hp1_pgbouncer \
-  #           psql -p 6432 -U pgbouncer pgbouncer -c 'SHOW POOLS;'
+  # Activate: docker compose --profile pgbouncer up -d pgbouncer
+  # Then bring hp1_agent up; its DATABASE_URL must point at the socket.
+  # See docker/PGBOUNCER.md for restrictions, debugging, and mTLS migration.
   pgbouncer:
     image: edoburu/pgbouncer:1.22.1
     container_name: hp1_pgbouncer
     restart: unless-stopped
     profiles: ["pgbouncer"]
     networks:
-      - agent-net
       - hp1-pg-net
-    ports:
-      - "6432:6432"
+    env_file: .env
+    environment:
+      # Backend connection — image generates pgbouncer.ini from this.
+      # DATABASE_URL in .env must use the *internal* PG hostname/port
+      # (hp1-postgres:5432 on hp1-pg-net), not the host-mapped 5433.
+      DATABASE_URL: ${DATABASE_URL}
+      POOL_MODE: transaction
+      AUTH_TYPE: trust
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 25
+      RESERVE_POOL_SIZE: 5
+      RESERVE_POOL_TIMEOUT: 3
+      SERVER_IDLE_TIMEOUT: 300
+      SERVER_LIFETIME: 3600
+      QUERY_WAIT_TIMEOUT: 30
+      ADMIN_USERS: pgbouncer
+      STATS_USERS: pgbouncer
+      # Unix socket only — no TCP listener.
+      LISTEN_ADDR: ""
+      UNIX_SOCKET_DIR: /var/run/pgbouncer
+      UNIX_SOCKET_MODE: "0777"
     volumes:
-      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
-      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+      - pgbouncer-socket:/var/run/pgbouncer
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      test: ["CMD-SHELL", "test -S /var/run/pgbouncer/.s.PGSQL.6432 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -192,6 +206,11 @@ services:
       - agent-data:/app/data
       - agent-logs:/app/logs
       - agent-plugins:/app/plugins
+      # v2.49.1 — PgBouncer Unix socket. The volume is always mounted
+      # (no profile gating in compose volume mounts). When the
+      # pgbouncer profile is inactive, this is just an empty dir.
+      # DATABASE_URL must point at hp1-postgres directly in that case.
+      - pgbouncer-socket:/var/run/pgbouncer
     depends_on:
       muninndb:
         condition: service_healthy

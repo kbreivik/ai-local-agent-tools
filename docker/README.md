@@ -184,30 +184,31 @@ curl -H "Authorization: Bearer <token>" http://localhost:8000/api/agent \
   -d '{"task": "skill_health_summary"}'
 ```
 
-## PgBouncer transaction pool (v2.49.0)
+## PgBouncer transaction pool (v2.49.1, Unix socket + trust)
 
 Optional transaction-pool layer between hp1_agent and hp1-postgres.
-Activate when scaling out (multiple agent replicas) or when sustained
-PG `max_connections` pressure is observed.
+Eliminates the credential-on-disk problem of v2.49.0's userlist.txt
+by using a Unix socket inside a shared Docker volume — only
+containers that mount the volume can reach PgBouncer.
+
+**Single-host only.** Works because pgbouncer and hp1_agent run on
+the same Docker host. For multi-host deployments, migrate to mTLS
+(recipe in `docker/PGBOUNCER.md`).
 
 ### Activate
 
-1. Generate md5 hashes and populate `docker/pgbouncer/userlist.txt`:
-
-   ```bash
-   USER=hp1user
-   PASSWORD=...   # match docker/.env
-   HASH=$(echo -n "${PASSWORD}${USER}" | md5sum | awk '{print "md5"$1}')
-   echo "\"${USER}\" \"${HASH}\"" >> docker/pgbouncer/userlist.txt
-   ```
-
-2. Update `docker/.env` to route hp1_agent through pgbouncer:
+1. Update `docker/.env` — set `DATABASE_URL` to the socket form:
 
    ```
-   DATABASE_URL=postgresql+asyncpg://hp1user:PASS@pgbouncer:6432/hp1_agent
+   DATABASE_URL=postgresql+asyncpg://hp1user:PASS@/hp1_agent?host=/var/run/pgbouncer
    ```
 
-3. Bring up the service and restart hp1_agent so it picks up the new DSN:
+   When PgBouncer is active, this URL has two readers. PgBouncer
+   reads it (with the password) to authenticate upstream. hp1_agent
+   reads the same string to connect front-side via the socket.
+   PgBouncer's trust auth ignores the password the agent sends.
+
+2. Bring up the pgbouncer profile, then restart hp1_agent:
 
    ```bash
    docker compose -f docker/docker-compose.yml \
@@ -215,22 +216,16 @@ PG `max_connections` pressure is observed.
    docker compose -f docker/docker-compose.yml up -d hp1_agent
    ```
 
-### Verify
+3. Verify:
 
-```bash
-docker exec hp1_pgbouncer \
-  psql -p 6432 -U pgbouncer pgbouncer -c 'SHOW POOLS;'
-```
+   ```bash
+   docker exec hp1_pgbouncer test -S /var/run/pgbouncer/.s.PGSQL.6432 \
+     && echo "socket OK"
+   docker exec hp1_pgbouncer \
+     psql -h /var/run/pgbouncer -p 6432 -U pgbouncer pgbouncer \
+     -c 'SHOW POOLS;'
+   curl -sf http://localhost:8000/api/health
+   ```
 
-Healthy steady state: most clients in `cl_idle`, a small number of
-backend conns in `sv_active` / `sv_idle`. Active client count should
-match what hp1_agent's pools have currently checked out.
-
-### Caveats
-
-- Transaction-pool mode breaks `LISTEN/NOTIFY` and per-session `SET`
-  — DEATHSTAR does not currently use either.
-- Prepared-statement protocol is supported in pgbouncer ≥1.21. Image
-  pinned to 1.22.1.
-- If `userlist.txt` is empty, pgbouncer rejects all clients with an
-  authentication failure. Always populate before activation.
+For the operator guide, restrictions, debugging recipes, and the
+mTLS migration path, see `docker/PGBOUNCER.md`.
