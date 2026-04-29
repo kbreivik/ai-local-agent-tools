@@ -91,6 +91,16 @@ If PG credentials change, update `POSTGRES_USER` / `POSTGRES_PASSWORD`
 in `docker/.env` AND the embedded credentials in `DATABASE_URL` (the
 latter URL-encoded as needed for the URL form).
 
+Note (v2.49.6): the pgbouncer service explicitly sets
+`DATABASE_URL: ""` and `DATABASE_URLS: ""` in its compose `environment:`
+block. This is required because the edoburu entrypoint
+unconditionally re-parses `DATABASE_URL` (when non-empty) and
+overwrites the discrete `DB_PASSWORD` we set with the URL-extracted
+substring — which is URL-encoded and breaks SCRAM. Compose's
+`environment:` overrides `env_file:` per-service, so this neutralises
+the inherited value inside the container without affecting any other
+service that needs `DATABASE_URL` (notably hp1_agent).
+
 ### 5. SCRAM-SHA-256 end to end
 
 Front-side (hp1_agent ↔ pgbouncer) and back-side (pgbouncer ↔ PG)

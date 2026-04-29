@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T13:09:23",
+  "updated_at": "2026-04-29T17:42:50",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4952,10 +4952,27 @@
       "filename": "CC_PROMPT_v2.49.5.md",
       "version": "v2.49.5",
       "theme": "fix(infra): bypass DATABASE_URL parsing in pgbouncer (URL-encoding bug — use discrete DB_* env vars)",
+      "runner_status": "DONE",
+      "commit_sha": "aafb043",
+      "error": "",
+      "started_at": "2026-04-29T13:09:23",
+      "finished_at": "2026-04-29T13:11:10",
+      "duration_s": 107.16186060000018,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_130923_CC_PROMPT_v2.49.5.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.6.md",
+      "version": "v2.49.6",
+      "theme": "fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T13:09:23",
+      "started_at": "2026-04-29T17:42:50",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
