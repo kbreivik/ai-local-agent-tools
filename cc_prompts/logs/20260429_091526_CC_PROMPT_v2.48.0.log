@@ -1,0 +1,488 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The bash script (run_queue.sh) controls iteration — your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from the prompt.
+Never rewrite a whole file when the prompt says to add or update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE, create it.
+If it says "add after X" or "replace Y with Z", do exactly that.
+Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+```bash
+cd D:\claude_code\ai-local-agent-tools
+python -m py_compile <any changed .py files>
+```
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+```bash
+git add -A
+git commit -m "<message from prompt>"
+git push origin main
+```
+
+Verify push succeeded:
+```bash
+git log --oneline -1
+```
+
+### Step 6 — Mark DONE in INDEX.md
+
+Update cc_prompts/INDEX.md: change the status column for this prompt
+from `PENDING` to `DONE (SHA)` where SHA = `git rev-parse --short HEAD`.
+
+Example — change:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | PENDING |
+To:
+  | CC_PROMPT_v2.8.0.md | v2.8.0 | ... | DONE (abc1234) |
+
+Then commit the index update:
+```bash
+git add cc_prompts/INDEX.md
+git commit -m "chore: mark v<version> DONE in prompt queue"
+git push origin main
+```
+
+### Step 7 — STOP
+
+After marking DONE and pushing the index update, output a single line:
+  PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not continue to the next item.
+The bash script will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not mark the prompt DONE
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.sh, not here.
+
+
+---
+
+Prompt: CC_PROMPT_v2.48.0.md (v2.48.0)
+Theme: refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim
+
+Prompt content:
+
+# CC PROMPT — v2.48.0 — refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim
+
+## What this does
+
+Eliminates the unbounded-connection problem in `api/connections.py` and
+the ~15 modules in `api/db/` that import `_get_conn`. Today, each call
+to `_get_conn()` does `psycopg2.connect(dsn)` — there is no pool. Under
+concurrent load (collectors + agent + UI + settings I/O), this can open
+hundreds of TCP connections to Postgres, exhausting PG-side
+`max_connections` independent of any app-side pool.
+
+**Approach — single architectural move, zero callsite changes:**
+
+1. New module `api/db/pg_pool.py` with a singleton
+   `ThreadedConnectionPool(minconn=2, maxconn=20, connect_timeout=5)`.
+2. New helper `get_pooled_conn()` returns a `_PooledConnProxy` that
+   transparently wraps a real connection. **The proxy intercepts
+   `.close()` to return the underlying conn to the pool instead of
+   closing the TCP socket.** Existing callers — which all call
+   `conn.close()` after use — automatically benefit from pooling with
+   zero code changes.
+3. `api/connections.py::_get_conn()` becomes a 3-line shim that
+   delegates to `get_pooled_conn()`.
+
+After this lands, the entire codebase is bounded to:
+
+- ~20 sync-pool conns (this module)
+- ~30 async-pool conns (`api/db/base.py`)
+- ~20 storage-backend conns (`postgres_backend.py` from v2.47.23)
+
+Worst case: ~70 concurrent PG connections, comfortably under PG's
+default `max_connections=100`. With the v2.49.0 PgBouncer service in
+front, this drops to a small handful of real backend conns.
+
+This is a single-prompt refactor: the proxy preserves API
+compatibility, so no callsite changes are required. Future versions
+may migrate callers to the explicit `pooled_conn()` context manager
+for clarity, but that is optional polish — the connection-leak surface
+is closed the moment v2.48.0 ships.
+
+Version bump: 2.47.24 → 2.48.0 (minor — multi-file architectural)
+
+---
+
+## Change 1 — new file: `api/db/pg_pool.py`
+
+Create the file with exactly this content:
+
+```python
+"""Unified sync Postgres connection pool — the canonical sync DB path.
+
+Used by api/connections.py and the modules in api/db/ that perform
+sync psycopg2 work. Replaces the unbounded `psycopg2.connect(dsn)`
+per-call pattern that previously caused PG-side connection exhaustion
+under concurrent load.
+
+Architecture: a process-wide ThreadedConnectionPool (psycopg2's
+thread-safe variant). Connections handed to callers are wrapped in
+_PooledConnProxy, which intercepts `.close()` to return the underlying
+conn to the pool instead of closing it. This preserves API
+compatibility with the previous _get_conn() pattern — every existing
+caller that does `conn.close()` automatically benefits.
+
+SQLite is not pooled here — get_pooled_conn() returns None when
+DATABASE_URL is unset, and callers fall back to their existing SQLite
+paths.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from contextlib import contextmanager
+
+log = logging.getLogger(__name__)
+
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _is_postgres() -> bool:
+    return bool(os.environ.get("DATABASE_URL", ""))
+
+
+def _build_pool():
+    import psycopg2.pool
+    dsn = os.environ.get("DATABASE_URL", "").replace(
+        "postgresql+asyncpg://", "postgresql://"
+    )
+    if not dsn:
+        return None
+    pool = psycopg2.pool.ThreadedConnectionPool(
+        minconn=2,
+        maxconn=20,
+        dsn=dsn,
+        connect_timeout=5,
+    )
+    log.info("pg_pool: ThreadedConnectionPool initialised (min=2, max=20)")
+    return pool
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                if not _is_postgres():
+                    return None
+                _pool = _build_pool()
+    return _pool
+
+
+class _PooledConnProxy:
+    """Wraps a pooled psycopg2 connection.
+
+    Forwards every attribute access to the underlying connection EXCEPT
+    `.close()`, which returns the conn to the pool instead of closing
+    it. This makes the proxy a drop-in replacement for the previous
+    `psycopg2.connect(...)` pattern: callers that do `conn.close()`
+    after use now release to the pool transparently.
+
+    The proxy is single-use — once `.close()` is called, the underlying
+    conn is back in the pool and the proxy is inert. Calling `.close()`
+    twice is harmless.
+    """
+
+    __slots__ = ("_conn", "_pool", "_released")
+
+    def __init__(self, conn, pool):
+        # Use object.__setattr__ to bypass our __setattr__ forwarding
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_pool", pool)
+        object.__setattr__(self, "_released", False)
+
+    def __getattr__(self, name):
+        # Called only when name is not found on the proxy itself.
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        # Forward attribute writes to the underlying conn so callers
+        # that do `conn.autocommit = True` etc. work as expected.
+        if name in self.__slots__:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._conn, name, value)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        if self._released:
+            return
+        object.__setattr__(self, "_released", True)
+        # Defensive cleanup: rollback any half-finished tx so the next
+        # user gets a clean conn.
+        try:
+            if not self._conn.closed:
+                self._conn.rollback()
+        except Exception:
+            pass
+        try:
+            broken = bool(getattr(self._conn, "closed", 0))
+            if broken:
+                # Pool will discard and rebuild on next getconn
+                self._pool.putconn(self._conn, close=True)
+            else:
+                self._pool.putconn(self._conn)
+        except Exception as e:
+            log.debug("pg_pool: putconn failed (will be discarded): %s", e)
+
+    def __enter__(self):
+        # psycopg2 connections support `with conn:` for tx management
+        # (commit on success, rollback on exception). Forward, but DO
+        # NOT close — caller still owns the conn lifecycle via .close().
+        return self._conn.__enter__()
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+
+def get_pooled_conn():
+    """Return a pooled connection wrapped in _PooledConnProxy.
+
+    Returns None when DATABASE_URL is unset (SQLite mode). Caller MUST
+    call `.close()` to return the conn to the pool. Calling `.close()`
+    multiple times is safe.
+    """
+    pool = _get_pool()
+    if pool is None:
+        return None
+    try:
+        raw = pool.getconn()
+    except Exception as e:
+        log.warning("pg_pool: getconn failed: %s", e)
+        return None
+    return _PooledConnProxy(raw, pool)
+
+
+@contextmanager
+def pooled_conn():
+    """Context-manager variant — guaranteed release on exit.
+
+    Yields the proxy or None (SQLite mode). Prefer this in new code:
+
+        from api.db.pg_pool import pooled_conn
+        with pooled_conn() as conn:
+            if conn is None:
+                ... sqlite fallback ...
+            else:
+                cur = conn.cursor()
+                ...
+    """
+    proxy = get_pooled_conn()
+    try:
+        yield proxy
+    finally:
+        if proxy is not None:
+            try:
+                proxy.close()
+            except Exception:
+                pass
+
+
+def shutdown():
+    """Close all pool connections. Call from app shutdown lifespan."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+            _pool = None
+            log.info("pg_pool: shutdown complete")
+```
+
+## Change 2 — `api/connections.py::_get_conn` becomes a shim
+
+CC: open `api/connections.py`. Locate `_get_conn` (search for the
+function definition — it is preceded by `_get_sa_conn` and follows
+`_is_postgres`). Currently:
+
+```python
+def _get_conn():
+    """Get a psycopg2 connection for direct SQL. Returns None if not PostgreSQL."""
+    if not _is_postgres():
+        return None
+    import psycopg2
+    dsn = os.environ.get("DATABASE_URL", "")
+    dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
+    return psycopg2.connect(dsn)
+```
+
+Replace with:
+
+```python
+def _get_conn():
+    """Get a pooled psycopg2 connection (proxy). Returns None if not PostgreSQL.
+
+    v2.48.0: was `psycopg2.connect(dsn)` — unbounded, no pool. Now
+    delegates to api.db.pg_pool.get_pooled_conn() which returns a proxy
+    that transparently returns the conn to a ThreadedConnectionPool on
+    .close(). API-compatible: existing callers that do `conn.close()`
+    automatically benefit from pooling with zero code changes.
+    """
+    if not _is_postgres():
+        return None
+    from api.db.pg_pool import get_pooled_conn
+    return get_pooled_conn()
+```
+
+## Change 3 — wire pg_pool.shutdown() into the FastAPI lifespan
+
+CC: open `api/main.py`. Locate the lifespan function (look for
+`@asynccontextmanager` decorator on a function used as `lifespan=` in
+the FastAPI constructor; or `@app.on_event("shutdown")` decorators).
+
+**On the shutdown path**, after other DB cleanup but before the
+function returns, add:
+
+```python
+    # v2.48.0 — release pooled DB connections cleanly
+    try:
+        from api.db.pg_pool import shutdown as _pg_pool_shutdown
+        _pg_pool_shutdown()
+    except Exception as e:
+        log.warning("pg_pool shutdown failed: %s", e)
+```
+
+If main.py uses a different shutdown pattern, adapt placement
+accordingly. The hard requirement: `pg_pool.shutdown()` must run
+before the process exits so `closeall()` releases all pool conns.
+
+## Verify
+
+```bash
+# 1. Compile
+python -m py_compile api/db/pg_pool.py
+python -m py_compile api/connections.py
+python -m py_compile api/main.py
+
+# 2. Confirm the shim is in place
+grep -n "from api.db.pg_pool import get_pooled_conn" api/connections.py
+grep -n "pg_pool import shutdown" api/main.py
+
+# 3. After deploy:
+#    - GET /api/health → 200
+#    - Save settings with several keys → succeeds (no exhaustion)
+#    - Trigger heavy collector poll concurrent with settings save —
+#      no errors, no FATAL: too many connections
+#    - Watch psql for actual conn count:
+#        psql -h 192.168.199.10 -p 5433 -U hp1user -d hp1_agent \
+#          -c "SELECT count(*) FROM pg_stat_activity \
+#              WHERE datname = current_database();"
+#      Should hover under ~30 even under concurrent load.
+
+curl -s http://localhost:8000/api/health | head -c 200
+```
+
+## Version bump
+
+Update `VERSION`: 2.47.24 → 2.48.0
+
+## Commit
+
+```bash
+git add -A
+git commit -m "refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim (v2.48.0)
+
+Replaces unbounded psycopg2.connect(dsn) per-call in api/connections.py
+with a process-wide ThreadedConnectionPool. _get_conn() returns a proxy
+whose .close() releases to the pool instead of closing the socket, so
+all existing callers (api/db/*.py, ~15 modules) automatically benefit
+without code changes.
+
+Caps the previously-unbounded sync conn count at maxconn=20, eliminating
+the path that could exhaust PG-side max_connections under concurrent
+load. Combined with v2.47.23 (storage-backend pool), the worst-case
+sync conn count drops from unbounded to ~40."
+git push origin main
+```
+
+## Deploy
+
+```bash
+docker compose -f /opt/hp1-agent/docker/docker-compose.yml \
+  --env-file /opt/hp1-agent/docker/.env up -d hp1_agent
+```
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-29 09:15:26
+========================================================================
+Push succeeded.
+[STATUS] 2m16s
+
+PROMPT COMPLETE: v2.48.0
+
+Summary: Created `api/db/pg_pool.py` with a singleton `ThreadedConnectionPool` (min=2, max=20, connect_timeout=5) and a `_PooledConnProxy` that intercepts `.close()` to return conns to the pool. Converted `api/connections.py::_get_conn` into a 3-line shim delegating to `get_pooled_conn()`. Wired `pg_pool.shutdown()` into the FastAPI lifespan teardown after `_flush_logger()`. Bumped VERSION to 2.48.0. All py_compile checks pass; the only ruff failure (`_stream_agent` complexity in routers/agent.py) is pre-existing and unrelated. Commit `06365ff` pushed to main.
+
+========================================================================
+EXIT CODE: 0
+DURATION:  2m16s
+========================================================================

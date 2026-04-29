@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T09:15:26",
+  "updated_at": "2026-04-29T12:25:03",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -15,7 +15,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.17.0.md",
@@ -31,7 +32,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.17.1.md",
@@ -47,7 +49,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.18.0.md",
@@ -63,7 +66,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.18.1.md",
@@ -79,7 +83,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.19.0.md",
@@ -95,7 +100,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.19.1.md",
@@ -111,7 +117,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.20.0.md",
@@ -127,7 +134,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.20.1.md",
@@ -143,7 +151,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.20.2.md",
@@ -159,7 +168,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.21.0.md",
@@ -175,7 +185,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.21.1.md",
@@ -191,7 +202,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.21.2.md",
@@ -207,7 +219,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.0.md",
@@ -223,7 +236,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.1.md",
@@ -239,7 +253,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.3.md",
@@ -255,7 +270,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.4.md",
@@ -271,7 +287,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.5.md",
@@ -287,7 +304,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.22.6.md",
@@ -303,7 +321,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.23.0.md",
@@ -319,7 +338,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.23.1.md",
@@ -335,7 +355,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.23.2.md",
@@ -351,7 +372,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.23.3.md",
@@ -367,7 +389,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.23.4.md",
@@ -383,7 +406,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.0.md",
@@ -399,7 +423,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.1.md",
@@ -415,7 +440,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.2.md",
@@ -431,7 +457,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.3.md",
@@ -447,7 +474,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.4.md",
@@ -463,7 +491,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.5.md",
@@ -479,7 +508,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.24.6.md",
@@ -495,7 +525,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.25.0.md",
@@ -511,7 +542,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.25.1.md",
@@ -527,7 +559,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.0.md",
@@ -543,7 +576,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.1.md",
@@ -559,7 +593,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.2.md",
@@ -575,7 +610,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.3.md",
@@ -591,7 +627,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.4.md",
@@ -607,7 +644,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.5.md",
@@ -623,7 +661,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.6.md",
@@ -639,7 +678,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.7.md",
@@ -655,7 +695,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.8.md",
@@ -671,7 +712,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.9.md",
@@ -687,7 +729,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.26.10.md",
@@ -703,7 +746,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.0.md",
@@ -719,7 +763,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.1.md",
@@ -735,7 +780,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.2.md",
@@ -751,7 +797,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.3.md",
@@ -767,7 +814,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.4.md",
@@ -783,7 +831,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.5.md",
@@ -799,7 +848,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.6.md",
@@ -815,7 +865,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.7.md",
@@ -831,7 +882,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.8.md",
@@ -847,7 +899,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.27.9.md",
@@ -863,7 +916,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.0.md",
@@ -879,7 +933,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.1.md",
@@ -895,7 +950,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.2.md",
@@ -911,7 +967,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.3.md",
@@ -927,7 +984,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.4.md",
@@ -943,7 +1001,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.5.md",
@@ -959,7 +1018,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.6.md",
@@ -975,7 +1035,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.7.md",
@@ -991,7 +1052,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.8.md",
@@ -1007,7 +1069,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.28.9.md",
@@ -1023,7 +1086,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.0.md",
@@ -1039,7 +1103,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.1.md",
@@ -1055,7 +1120,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.2.md",
@@ -1071,7 +1137,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.3.md",
@@ -1087,7 +1154,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.4.md",
@@ -1103,7 +1171,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.29.5.md",
@@ -1119,7 +1188,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.30.0.md",
@@ -1135,7 +1205,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.30.1.md",
@@ -1151,7 +1222,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.0.md",
@@ -1167,7 +1239,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.1.md",
@@ -1183,7 +1256,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.2.md",
@@ -1199,7 +1273,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.3.md",
@@ -1215,7 +1290,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.4.md",
@@ -1231,7 +1307,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.5.md",
@@ -1247,7 +1324,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.6.md",
@@ -1263,7 +1341,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.7.md",
@@ -1279,7 +1358,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.8.md",
@@ -1295,7 +1375,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.9.md",
@@ -1311,7 +1392,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.10.md",
@@ -1327,7 +1409,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.11.md",
@@ -1343,7 +1426,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.12.md",
@@ -1359,7 +1443,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.13.md",
@@ -1375,7 +1460,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.14.md",
@@ -1391,7 +1477,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.15.md",
@@ -1407,7 +1494,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.16.md",
@@ -1423,7 +1511,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.17.md",
@@ -1439,7 +1528,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.18.md",
@@ -1455,7 +1545,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.19.md",
@@ -1471,7 +1562,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.20.md",
@@ -1487,7 +1579,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.21.md",
@@ -1503,7 +1596,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.31.22.md",
@@ -1519,7 +1613,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.0.md",
@@ -1535,7 +1630,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.1.md",
@@ -1551,7 +1647,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.2.md",
@@ -1567,7 +1664,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.3.md",
@@ -1583,7 +1681,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.4.md",
@@ -1599,7 +1698,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.5.md",
@@ -1615,7 +1715,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.32.6.md",
@@ -1631,7 +1732,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.0.md",
@@ -1647,7 +1749,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.1.md",
@@ -1663,7 +1766,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.2.md",
@@ -1679,7 +1783,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.3.md",
@@ -1695,7 +1800,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.4.md",
@@ -1711,7 +1817,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.5.md",
@@ -1727,7 +1834,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.6.md",
@@ -1743,7 +1851,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.7.md",
@@ -1759,7 +1868,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.8.md",
@@ -1775,7 +1885,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.9.md",
@@ -1791,7 +1902,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.10.md",
@@ -1807,7 +1919,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.11.md",
@@ -1823,7 +1936,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.12.md",
@@ -1839,7 +1953,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.13.md",
@@ -1855,7 +1970,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.14.md",
@@ -1871,7 +1987,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.15.md",
@@ -1887,7 +2004,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.16.md",
@@ -1903,7 +2021,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.17.md",
@@ -1919,7 +2038,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.18.md",
@@ -1935,7 +2055,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.19.md",
@@ -1951,7 +2072,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.33.20.md",
@@ -1967,7 +2089,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.0.md",
@@ -1983,7 +2106,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.1.md",
@@ -1999,7 +2123,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.2.md",
@@ -2015,7 +2140,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.3.md",
@@ -2031,7 +2157,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.4.md",
@@ -2047,7 +2174,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.5.md",
@@ -2063,7 +2191,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.6.md",
@@ -2079,7 +2208,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.7.md",
@@ -2095,7 +2225,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.8.md",
@@ -2111,7 +2242,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.9.md",
@@ -2127,7 +2259,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.10.md",
@@ -2143,7 +2276,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.11.md",
@@ -2159,7 +2293,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.12.md",
@@ -2175,7 +2310,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.13.md",
@@ -2191,7 +2327,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.14.md",
@@ -2207,7 +2344,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.15.md",
@@ -2223,7 +2361,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.16.md",
@@ -2239,7 +2378,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.34.17.md",
@@ -2255,7 +2395,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.0.md",
@@ -2271,7 +2412,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.0.1.md",
@@ -2287,7 +2429,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.1.md",
@@ -2303,7 +2446,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.2.md",
@@ -2319,7 +2463,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.3.md",
@@ -2335,7 +2480,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.4.md",
@@ -2351,7 +2497,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.5.md",
@@ -2367,7 +2514,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.6.md",
@@ -2383,7 +2531,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.7.md",
@@ -2399,7 +2548,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.8.md",
@@ -2415,7 +2565,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.9.md",
@@ -2431,7 +2582,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.10.md",
@@ -2447,7 +2599,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.11.md",
@@ -2463,7 +2616,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.12.md",
@@ -2479,7 +2633,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.13.md",
@@ -2495,7 +2650,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.14.md",
@@ -2511,7 +2667,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.15.md",
@@ -2527,7 +2684,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.16.md",
@@ -2543,7 +2701,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.17.md",
@@ -2559,7 +2718,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.18.md",
@@ -2575,7 +2735,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.19.md",
@@ -2591,7 +2752,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.20.md",
@@ -2607,7 +2769,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.35.21.md",
@@ -2623,7 +2786,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.0.md",
@@ -2639,7 +2803,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.1.md",
@@ -2655,7 +2820,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.2.md",
@@ -2671,7 +2837,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.3.md",
@@ -2687,7 +2854,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.4.md",
@@ -2703,7 +2871,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.5.md",
@@ -2719,7 +2888,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.6.md",
@@ -2735,7 +2905,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.7.md",
@@ -2751,7 +2922,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.8.md",
@@ -2767,7 +2939,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.36.9.md",
@@ -2783,7 +2956,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.37.0.md",
@@ -2799,7 +2973,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.37.1.md",
@@ -2815,7 +2990,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.37.2.md",
@@ -2831,7 +3007,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.0.md",
@@ -2847,7 +3024,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.1.md",
@@ -2863,7 +3041,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.2.md",
@@ -2879,7 +3058,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.3.md",
@@ -2895,7 +3075,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.4.md",
@@ -2911,7 +3092,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.5.md",
@@ -2927,7 +3109,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.6.md",
@@ -2943,7 +3126,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.7.md",
@@ -2959,7 +3143,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.8.md",
@@ -2975,7 +3160,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.38.9.md",
@@ -2991,7 +3177,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.39.0.md",
@@ -3007,7 +3194,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.39.1.md",
@@ -3023,7 +3211,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.39.2.md",
@@ -3039,7 +3228,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.39.3.md",
@@ -3055,7 +3245,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.39.4.md",
@@ -3071,7 +3262,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.40.0.md",
@@ -3087,7 +3279,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.40.1.md",
@@ -3103,7 +3296,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.40.2.md",
@@ -3119,7 +3313,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.40.3.md",
@@ -3135,7 +3330,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.40.4.md",
@@ -3151,7 +3347,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.0.md",
@@ -3167,7 +3364,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.1.md",
@@ -3183,7 +3381,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.2.md",
@@ -3199,7 +3398,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.3.md",
@@ -3215,7 +3415,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.4.md",
@@ -3231,7 +3432,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.41.5.md",
@@ -3247,7 +3449,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.42.0.md",
@@ -3263,7 +3466,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.42.1.md",
@@ -3279,7 +3483,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.42.2.md",
@@ -3295,7 +3500,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.42.3.md",
@@ -3311,7 +3517,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.0.md",
@@ -3327,7 +3534,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.1.md",
@@ -3343,7 +3551,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.2.md",
@@ -3359,7 +3568,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.3.md",
@@ -3375,7 +3585,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.4.md",
@@ -3391,7 +3602,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.5.md",
@@ -3407,7 +3619,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.6.md",
@@ -3423,7 +3636,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.7.md",
@@ -3439,7 +3653,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.8.md",
@@ -3455,7 +3670,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.43.9.md",
@@ -3471,7 +3687,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.0.md",
@@ -3487,7 +3704,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.1.md",
@@ -3503,7 +3721,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.2.md",
@@ -3519,7 +3738,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.3.md",
@@ -3535,7 +3755,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.4.md",
@@ -3551,7 +3772,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.5.md",
@@ -3567,7 +3789,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.6.md",
@@ -3583,7 +3806,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.7.md",
@@ -3599,7 +3823,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.8.md",
@@ -3615,7 +3840,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.44.9.md",
@@ -3631,7 +3857,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.0.md",
@@ -3647,7 +3874,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.1.md",
@@ -3663,7 +3891,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.2.md",
@@ -3679,7 +3908,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.3.md",
@@ -3695,7 +3925,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.4.md",
@@ -3711,7 +3942,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.5.md",
@@ -3727,7 +3959,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.6.md",
@@ -3743,7 +3976,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.7.md",
@@ -3759,7 +3993,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.8.md",
@@ -3775,7 +4010,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.9.md",
@@ -3791,7 +4027,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.10.md",
@@ -3807,7 +4044,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.11.md",
@@ -3823,7 +4061,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.12.md",
@@ -3839,7 +4078,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.13.md",
@@ -3855,7 +4095,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.14.md",
@@ -3871,7 +4112,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.15.md",
@@ -3887,7 +4129,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.16.md",
@@ -3903,7 +4146,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.17.md",
@@ -3919,7 +4163,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.18.md",
@@ -3935,7 +4180,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.19.md",
@@ -3951,7 +4197,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.20.md",
@@ -3967,7 +4214,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.21.md",
@@ -3983,7 +4231,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.22.md",
@@ -3999,7 +4248,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.23.md",
@@ -4015,7 +4265,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.24.md",
@@ -4031,7 +4282,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.25.md",
@@ -4047,7 +4299,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.26.md",
@@ -4063,7 +4316,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.27.md",
@@ -4079,7 +4333,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.28.md",
@@ -4095,7 +4350,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.29.md",
@@ -4111,7 +4367,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.30.md",
@@ -4127,7 +4384,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.31.md",
@@ -4143,7 +4401,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.32.md",
@@ -4159,7 +4418,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.45.33.md",
@@ -4175,7 +4435,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.1.md",
@@ -4191,7 +4452,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.2.md",
@@ -4207,7 +4469,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.3.md",
@@ -4223,7 +4486,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.4.md",
@@ -4239,7 +4503,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.5.md",
@@ -4255,7 +4520,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.6.md",
@@ -4271,7 +4537,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.7.md",
@@ -4287,7 +4554,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.8.md",
@@ -4303,7 +4571,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.9.md",
@@ -4319,7 +4588,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.10.md",
@@ -4335,7 +4605,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.11.md",
@@ -4351,7 +4622,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.12.md",
@@ -4367,7 +4639,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.13.md",
@@ -4383,7 +4656,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.14.md",
@@ -4399,7 +4673,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.15.md",
@@ -4415,7 +4690,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.16.md",
@@ -4431,7 +4707,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.17.md",
@@ -4447,7 +4724,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.18.md",
@@ -4463,7 +4741,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.19.md",
@@ -4479,7 +4758,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.20.md",
@@ -4495,7 +4775,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.21.md",
@@ -4511,7 +4792,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.22.md",
@@ -4527,7 +4809,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.23.md",
@@ -4543,7 +4826,8 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.47.24.md",
@@ -4559,39 +4843,76 @@
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.48.0.md",
       "version": "v2.48.0",
       "theme": "refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim",
-      "runner_status": "RUNNING",
-      "commit_sha": "",
+      "runner_status": "DONE",
+      "commit_sha": "06365ff",
       "error": "",
       "started_at": "2026-04-29T09:15:26",
-      "finished_at": "",
-      "duration_s": 0.0,
-      "log_file": "",
+      "finished_at": "2026-04-29T09:17:42",
+      "duration_s": 136.57612410001457,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_091526_CC_PROMPT_v2.48.0.log",
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     },
     {
       "filename": "CC_PROMPT_v2.49.0.md",
       "version": "v2.49.0",
       "theme": "feat(infra): PgBouncer transaction-pool in front of Postgres",
-      "runner_status": "PENDING",
+      "runner_status": "DONE",
+      "commit_sha": "c45aadc",
+      "error": "",
+      "started_at": "2026-04-29T09:17:45",
+      "finished_at": "2026-04-29T09:19:53",
+      "duration_s": 127.4759233999066,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_091745_CC_PROMPT_v2.49.0.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.1.md",
+      "version": "v2.49.1",
+      "theme": "feat(infra): PgBouncer Unix socket + trust auth (replaces v2.49.0 TCP+md5)",
+      "runner_status": "DONE",
+      "commit_sha": "c0bfb07",
+      "error": "",
+      "started_at": "2026-04-29T12:00:09",
+      "finished_at": "2026-04-29T12:04:07",
+      "duration_s": 237.5962881999999,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_120009_CC_PROMPT_v2.49.1.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.2.md",
+      "version": "v2.49.2",
+      "theme": "fix(infra): correct edoburu/pgbouncer image tag (1.22.1 doesn't exist → v1.25.1-p0)",
+      "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "",
+      "started_at": "2026-04-29T12:25:03",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
       "cost_usd": 0.0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "model": ""
+      "model": "",
+      "first_waiting_at": ""
     }
   ]
 }

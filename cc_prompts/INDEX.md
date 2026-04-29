@@ -100,5 +100,7 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.47.22.md | v2.47.22 | fix(docker): pin transformers<5.0 + --no-deps runtime install | DONE (393c34d) |
 | CC_PROMPT_v2.47.23.md | v2.47.23 | fix(db): ThreadedConnectionPool + maxconn=20 + connect_timeout in postgres_backend | DONE (672f8ce) |
 | CC_PROMPT_v2.47.24.md | v2.47.24 | feat(db): pg_advisory_lock around destructive tool dispatch | DONE (5c47481) |
-| CC_PROMPT_v2.48.0.md | v2.48.0 | refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim | RUNNING |
-| CC_PROMPT_v2.49.0.md | v2.49.0 | feat(infra): PgBouncer transaction-pool in front of Postgres | PENDING |
+| CC_PROMPT_v2.48.0.md | v2.48.0 | refactor(db): unified ThreadedConnectionPool + transparent _get_conn shim | DONE (06365ff) |
+| CC_PROMPT_v2.49.0.md | v2.49.0 | feat(infra): PgBouncer transaction-pool in front of Postgres | DONE (c45aadc) |
+| CC_PROMPT_v2.49.1.md | v2.49.1 | feat(infra): PgBouncer Unix socket + trust auth (replaces v2.49.0 TCP+md5) | DONE (c0bfb07) |
+| CC_PROMPT_v2.49.2.md | v2.49.2 | fix(infra): correct edoburu/pgbouncer image tag (1.22.1 doesn't exist → v1.25.1-p0) | RUNNING |

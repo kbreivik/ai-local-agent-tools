@@ -118,7 +118,7 @@ services:
   # Then bring hp1_agent up; its DATABASE_URL must point at the socket.
   # See docker/PGBOUNCER.md for restrictions, debugging, and mTLS migration.
   pgbouncer:
-    image: edoburu/pgbouncer:1.22.1
+    image: edoburu/pgbouncer:v1.25.1-p0
     container_name: hp1_pgbouncer
     restart: unless-stopped
     profiles: ["pgbouncer"]
