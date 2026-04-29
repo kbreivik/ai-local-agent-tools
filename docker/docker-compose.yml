@@ -126,13 +126,22 @@ services:
       - hp1-pg-net
     env_file: .env
     environment:
-      # Backend connection — image generates pgbouncer.ini from this.
-      # DATABASE_URL must use the *internal* PG hostname/port
-      # (hp1-postgres:5432 on hp1-pg-net), not the host-mapped 5433.
-      # The edoburu entrypoint parses the URL fine including the
-      # '+asyncpg' driver suffix; v2.49.3's BACKEND_DATABASE_URL
-      # split was based on a wrong diagnosis and is reverted here.
-      DATABASE_URL: ${DATABASE_URL}
+      # v2.49.5 — bypass DATABASE_URL parsing.
+      #   The edoburu entrypoint extracts the password substring from
+      #   DATABASE_URL without URL-decoding it. When the password contains
+      #   URL-special chars (%, $, @, :, etc.), the encoded form ends up
+      #   in userlist.txt verbatim, while asyncpg (front-side) and PG
+      #   (upstream) both work with the decoded form. Result: SCRAM fails
+      #   on both legs.
+      #   Discrete DB_* env vars bypass URL parsing entirely. The
+      #   entrypoint reads them as raw strings (see entrypoint.sh
+      #   generate_userlist_if_needed + generate_config_db_entry).
+      #   hp1_agent still uses DATABASE_URL — only pgbouncer changes here.
+      DB_HOST: hp1-postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-hp1_agent}
       POOL_MODE: transaction
       # v2.49.4 — scram-sha-256 instead of trust:
       #   PG14+ defaults to password_encryption=scram-sha-256 and rejects

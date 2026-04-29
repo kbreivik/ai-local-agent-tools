@@ -69,25 +69,27 @@ If you tighten the threat model later (adversarial sidecars in the
 same compose project), set `UNIX_SOCKET_GROUP` to a shared GID and
 `UNIX_SOCKET_MODE: "0770"`.
 
-### 4. Single DATABASE_URL serves both readers
+### 4. Two readers, two credential sources
 
-`DATABASE_URL` in `docker/.env` is read by both:
+| Reader | Credential source | Form |
+|---|---|---|
+| hp1_agent | `DATABASE_URL` in `docker/.env` | `postgresql+asyncpg://USER:PASS@/dbname?host=/var/run/pgbouncer&port=6432` |
+| pgbouncer | `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` in `docker/.env` | discrete env vars |
 
-- **hp1_agent**: connects front-side via the Unix socket. The form
-  is `postgresql+asyncpg://USER:PASS@/dbname?host=/var/run/pgbouncer&port=6432`.
-  asyncpg interprets `?host=` as a socket directory and `port=6432`
-  as the socket file suffix.
-- **pgbouncer**: connects upstream to hp1-postgres on TCP. Its
-  entrypoint parses the same URL, ignores `?host=` (it's connecting
-  elsewhere), and uses USER/PASS to authenticate to hp1-postgres.
+The split exists because the edoburu entrypoint extracts the password
+from `DATABASE_URL` **without URL-decoding it**. Passwords containing
+URL-special chars (`%`, `$`, `@`, `:`) get written to `userlist.txt`
+in URL-encoded form, while asyncpg (front-side) and PG (upstream)
+both expect the decoded form. SCRAM auth fails on both legs.
 
-The edoburu entrypoint handles the `+asyncpg` driver suffix in the
-scheme correctly — the suffix sits in the scheme part and the parser
-strips it before extracting credentials. (v2.49.3 introduced a
-`BACKEND_DATABASE_URL` split based on a wrong diagnosis; v2.49.4
-reverted it.)
+By passing pgbouncer the discrete `DB_HOST` / `DB_PORT` / `DB_USER` /
+`DB_PASSWORD` / `DB_NAME` env vars (mapped from `POSTGRES_*` in
+`.env`), the entrypoint takes them as raw strings — no URL parsing,
+no encoding artifacts.
 
-If credentials change in PG, update this single value.
+If PG credentials change, update `POSTGRES_USER` / `POSTGRES_PASSWORD`
+in `docker/.env` AND the embedded credentials in `DATABASE_URL` (the
+latter URL-encoded as needed for the URL form).
 
 ### 5. SCRAM-SHA-256 end to end
 

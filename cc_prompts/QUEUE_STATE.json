@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T12:57:52",
+  "updated_at": "2026-04-29T13:09:23",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4935,10 +4935,27 @@
       "filename": "CC_PROMPT_v2.49.4.md",
       "version": "v2.49.4",
       "theme": "fix(infra): AUTH_TYPE=scram-sha-256 + revert BACKEND_DATABASE_URL split (v2.49.3 misdiagnosis)",
+      "runner_status": "DONE",
+      "commit_sha": "a0b8d11",
+      "error": "",
+      "started_at": "2026-04-29T12:57:52",
+      "finished_at": "2026-04-29T13:00:23",
+      "duration_s": 151.11878310000066,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_125752_CC_PROMPT_v2.49.4.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.5.md",
+      "version": "v2.49.5",
+      "theme": "fix(infra): bypass DATABASE_URL parsing in pgbouncer (URL-encoding bug — use discrete DB_* env vars)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T12:57:52",
+      "started_at": "2026-04-29T13:09:23",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
