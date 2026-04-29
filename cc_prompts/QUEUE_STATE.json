@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T18:43:43",
+  "updated_at": "2026-04-29T19:30:01",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4986,10 +4986,27 @@
       "filename": "CC_PROMPT_v2.49.7.md",
       "version": "v2.49.7",
       "theme": "fix(infra): drop env_file from pgbouncer service (compose #11740 — empty-string override doesn't beat env_file)",
+      "runner_status": "DONE",
+      "commit_sha": "bb54bed",
+      "error": "",
+      "started_at": "2026-04-29T18:43:43",
+      "finished_at": "2026-04-29T18:45:11",
+      "duration_s": 88.41824020000058,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_184343_CC_PROMPT_v2.49.7.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.8.md",
+      "version": "v2.49.8",
+      "theme": "docs+infra: pgbouncer cutover runbook + hp1_agent depends_on pgbouncer (required:false) + .env.example $ gotcha footnote",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T18:43:43",
+      "started_at": "2026-04-29T19:30:01",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

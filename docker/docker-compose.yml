@@ -249,12 +249,21 @@ services:
       # pgbouncer profile is inactive, this is just an empty dir.
       # DATABASE_URL must point at hp1-postgres directly in that case.
       - pgbouncer-socket:/var/run/pgbouncer
+    # v2.49.8 — pgbouncer is profile-gated, so this dependency is
+    # marked required: false. When the pgbouncer profile is inactive,
+    # compose silently ignores the dep. When the profile IS active,
+    # compose waits for pgbouncer's healthcheck to pass before
+    # (re)creating hp1_agent — preventing the sidecar auto-update
+    # from racing pgbouncer at recreate time.
     depends_on:
       muninndb:
         condition: service_healthy
       postgres:
         condition: service_healthy
         required: false    # dev profile only; production uses hp1-postgres on hp1-pg-net
+      pgbouncer:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
       interval: 30s

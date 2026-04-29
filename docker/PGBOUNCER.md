@@ -406,3 +406,126 @@ in pgbouncer env to disable socket creation.
 - **Credential at rest**: the CA private key (`ca.key`, chmod 600,
   gitignored, ideally on a separate secure host or in a vault),
   server key, and per-host client keys.
+
+---
+
+## Operator runbook: cutting hp1_agent over to pgbouncer
+
+After the pgbouncer profile is up, healthy, and `SHOW POOLS;` works,
+hp1_agent still connects directly to PG until you flip its
+`DATABASE_URL`. This section is the one-shot recipe.
+
+### Pre-flight
+
+1. Pgbouncer container is healthy:
+   ```bash
+   docker compose -f docker/docker-compose.yml --profile pgbouncer ps pgbouncer
+   docker exec hp1_pgbouncer test -S /var/run/pgbouncer/.s.PGSQL.6432 && echo OK
+   ```
+2. Upstream auth works — should return one row:
+   ```bash
+   docker exec hp1_pgbouncer sh -c \
+     'PGPASSWORD="${DB_PASSWORD}" psql -h /var/run/pgbouncer -p 6432 \
+      -U ${DB_USER} -d ${DB_NAME} -c "SELECT 1;"'
+   ```
+3. hp1_agent is currently healthy on the direct PG connection. (Don't
+   flip if hp1_agent is already broken — debug that first.)
+
+### The flip
+
+Edit `docker/.env` and change `DATABASE_URL` from the direct form to
+the socket form:
+
+```diff
+-DATABASE_URL=postgresql+asyncpg://USER:PASS@hp1-postgres:5432/hp1_agent
++DATABASE_URL=postgresql+asyncpg://USER:PASS@/hp1_agent?host=/var/run/pgbouncer&port=6432
+```
+
+URL-encoding rules for `PASS`:
+- `$` → `%24` (per char)
+- `%` → `%25` (per char)
+- `@` → `%40` (per char)
+- `:` → `%3A` (per char)
+
+The `POSTGRES_PASSWORD` line below stays the same (literal password
+with `$$` → `$$$$` escaping for compose interpolation; see
+`.env.example` for details).
+
+Then recreate hp1_agent:
+
+```bash
+cd /opt/hp1-agent/docker
+docker compose --env-file .env up -d --force-recreate hp1_agent
+docker logs hp1_agent --tail 30
+docker compose ps hp1_agent
+```
+
+Expect `Up X (healthy)` and the usual startup banner. The agent's
+`/api/health` should respond within ~10s.
+
+### Verification
+
+The single most useful check — does the agent's pool actually use
+pgbouncer? Look at pgbouncer's client list:
+
+```bash
+docker exec hp1_pgbouncer sh -c \
+  'psql -h /var/run/pgbouncer -p 6432 -U pgbouncer pgbouncer \
+   -c "SHOW CLIENTS;"'
+```
+
+You should see entries with `database=hp1_agent`, `user=hp1`,
+`addr=unix`. If `addr=unix` is present, hp1_agent is genuinely
+talking through the socket.
+
+### Rollback
+
+If hp1_agent crash-loops or pool stats look wrong, revert to direct
+PG with one line edit and a recreate:
+
+```bash
+cd /opt/hp1-agent/docker
+sed -i 's|@/hp1_agent?host=/var/run/pgbouncer&port=6432|@hp1-postgres:5432/hp1_agent|' .env
+docker compose --env-file .env up -d --force-recreate hp1_agent
+```
+
+(Optional) Stop pgbouncer entirely:
+```bash
+docker compose --profile pgbouncer down
+```
+
+The `pgbouncer-socket` volume mount on hp1_agent stays; it's a
+harmless empty directory when pgbouncer isn't running.
+
+### Saga footnote (v2.49.0–v2.49.7, 2026-04-29)
+
+The path to this working configuration produced eight versions in a
+single afternoon. The shape of the final design encodes lessons from
+each:
+
+| Version | What was learned |
+|---|---|
+| v2.49.0 | First TCP+md5 design — superseded |
+| v2.49.1 | Unix socket + trust — image tag was bogus |
+| v2.49.2 | Real edoburu tag is `vX.Y.Z-pN`, not `X.Y.Z` |
+| v2.49.3 | Misdiagnosis: split URL split — wrong fix to wrong problem |
+| v2.49.4 | PG14+ rejects md5 → `AUTH_TYPE=scram-sha-256` |
+| v2.49.5 | Discrete `DB_*` vars to bypass URL-encoded password |
+| v2.49.6 | `DATABASE_URL: ""` to suppress entrypoint clobber — didn't work |
+| v2.49.7 | Drop `env_file:` from pgbouncer service entirely |
+| v2.49.8 | (this) — runbook + depends_on + escape footnote |
+
+The non-obvious traps, in order of how-much-time-they-cost:
+
+1. **edoburu's entrypoint always runs `parse_url(DATABASE_URL)`** when
+   that var is non-empty, even if you provided discrete `DB_PASSWORD`
+   yourself. The discrete vars get clobbered.
+2. **Compose's `environment: { VAR: "" }` does not override `env_file`**
+   for empty/null values. Open issue docker/compose#11740 since 2024.
+3. **Compose `${VAR}` interpolation reduces `$$` to `$`** during YAML
+   parsing. Passwords with literal `$$` need `$$$$` in `.env`.
+4. **edoburu writes md5 hashes to userlist when AUTH_TYPE=trust** —
+   the source-of-truth branch is in entrypoint.sh and only `plain`
+   and `scram-sha-256` write plaintext.
+5. **PG14+ stores SCRAM verifiers** and rejects md5-hashed login
+   attempts with `wrong password type`.
