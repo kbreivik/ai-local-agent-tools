@@ -1,0 +1,198 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The runner script (run_queue.py) controls iteration and status tracking —
+your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from
+the prompt. Never rewrite a whole file when the prompt says to add or
+update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE,
+create it. If it says "add after X" or "replace Y with Z", do exactly
+that. Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+
+    cd D:\claude_code\ai-local-agent-tools
+    python -m py_compile <any changed .py files>
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+    git add -A
+    git commit -m "<message from prompt>"
+    git push origin main
+
+Verify push succeeded:
+
+    git log --oneline -1
+
+### Step 6 — STOP
+
+After the feature commit is pushed, output a single line:
+
+    PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not edit
+cc_prompts/INDEX.md, cc_prompts/QUEUE_STATE.json, or
+cc_prompts/QUEUE_STATUS.md — the runner script owns those entirely.
+The runner will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not proceed to commit
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.py, not here.
+- INDEX.md, QUEUE_STATE.json, QUEUE_STATUS.md are the runner's domain — never touch them.
+
+
+---
+
+Prompt: CC_PROMPT_v2.49.2.md (v2.49.2)
+Theme: fix(infra): correct edoburu/pgbouncer image tag (1.22.1 doesn't exist → v1.25.1-p0)
+
+Prompt content:
+
+# CC PROMPT — v2.49.2 — fix(infra): correct edoburu/pgbouncer image tag
+
+## What this does
+
+Fixes the image tag introduced in v2.49.1. The pinned tag
+`edoburu/pgbouncer:1.22.1` does not exist on Docker Hub — edoburu
+uses the `vX.Y.Z-pN` tagging convention (leading `v`, `-pN` patch
+suffix). Pulling with `1.22.1` returns "manifest unknown" and the
+pgbouncer service cannot start.
+
+Pin to `v1.25.1-p0` — current latest as of 2025-12-20, based on
+upstream pgbouncer 1.25.1.
+
+Single-line change in compose. No behavioural change to the design.
+
+Version bump: 2.49.1 → 2.49.2
+
+---
+
+## Change 1 — `docker/docker-compose.yml`
+
+Find:
+
+````yaml
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.1
+    container_name: hp1_pgbouncer
+````
+
+Replace with:
+
+````yaml
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.1-p0
+    container_name: hp1_pgbouncer
+````
+
+## Change 2 — VERSION
+
+Update `VERSION`: 2.49.1 → 2.49.2
+
+## Verify
+
+````bash
+# 1. Compose lints clean
+docker compose -f docker/docker-compose.yml config > /dev/null
+
+# 2. Tag is the real one
+grep -q "edoburu/pgbouncer:v1.25.1-p0" docker/docker-compose.yml
+! grep -q "edoburu/pgbouncer:1.22.1" docker/docker-compose.yml
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "fix(infra): correct edoburu/pgbouncer image tag (v2.49.2)
+
+The tag pinned in v2.49.1 (edoburu/pgbouncer:1.22.1) does not exist
+on Docker Hub. edoburu publishes tags as vX.Y.Z-pN (with leading 'v'
+and '-pN' patch suffix). docker pull failed with 'manifest unknown'.
+
+Pin to v1.25.1-p0 — current latest stable, based on upstream
+pgbouncer 1.25.1."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI rebuilds, on agent-01:
+
+````bash
+cd /opt/hp1-agent
+git pull origin main
+docker compose -f docker/docker-compose.yml --env-file docker/.env \
+  --profile pgbouncer pull pgbouncer
+````
+
+If the operator already hotfixed the tag locally on agent-01, the
+`git pull` will fast-forward cleanly because the local edit was
+not committed there.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-29 12:25:03
+========================================================================
+Commit pushed successfully as `363fa74`.
+[STATUS] 30s
+
+PROMPT COMPLETE: v2.49.2
+
+========================================================================
+EXIT CODE: 0
+DURATION:  31s
+========================================================================

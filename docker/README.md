@@ -200,7 +200,8 @@ the same Docker host. For multi-host deployments, migrate to mTLS
 1. Update `docker/.env` — set `DATABASE_URL` to the socket form:
 
    ```
-   DATABASE_URL=postgresql+asyncpg://hp1user:PASS@/hp1_agent?host=/var/run/pgbouncer
+   DATABASE_URL=postgresql+asyncpg://hp1user:PASS@/hp1_agent?host=/var/run/pgbouncer&port=6432
+   BACKEND_DATABASE_URL=postgresql://hp1user:PASS@hp1-postgres:5432/hp1_agent
    ```
 
    When PgBouncer is active, this URL has two readers. PgBouncer

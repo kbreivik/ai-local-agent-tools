@@ -126,12 +126,18 @@ services:
       - hp1-pg-net
     env_file: .env
     environment:
-      # Backend connection — image generates pgbouncer.ini from this.
-      # DATABASE_URL in .env must use the *internal* PG hostname/port
-      # (hp1-postgres:5432 on hp1-pg-net), not the host-mapped 5433.
-      DATABASE_URL: ${DATABASE_URL}
+      # Backend connection — pgbouncer reads BACKEND_DATABASE_URL from
+      # docker/.env and exposes it to its entrypoint as DATABASE_URL.
+      # BACKEND_DATABASE_URL must use the bare 'postgresql://' scheme
+      # (no '+asyncpg'); the edoburu entrypoint's URL parser cannot
+      # tolerate driver suffixes and silently mangles the username.
+      DATABASE_URL: ${BACKEND_DATABASE_URL}
       POOL_MODE: transaction
       AUTH_TYPE: trust
+      # v2.49.3 — pin to 6432 (pgbouncer convention). Image default
+      # is 5432, which collides with Postgres conventions and causes
+      # the socket to land at .s.PGSQL.5432 instead of .s.PGSQL.6432.
+      LISTEN_PORT: "6432"
       MAX_CLIENT_CONN: 200
       DEFAULT_POOL_SIZE: 25
       RESERVE_POOL_SIZE: 5
@@ -141,8 +147,11 @@ services:
       QUERY_WAIT_TIMEOUT: 30
       ADMIN_USERS: pgbouncer
       STATS_USERS: pgbouncer
-      # Unix socket only — no TCP listener.
-      LISTEN_ADDR: ""
+      # NOTE: image keeps a TCP listener on 0.0.0.0:6432 inside the
+      # container regardless of LISTEN_ADDR setting. No host port is
+      # mapped, so reachability is confined to the hp1-pg-net bridge
+      # (hp1_agent, hp1-postgres, future containers on that bridge).
+      # See docker/PGBOUNCER.md "Threat model" for the implications.
       UNIX_SOCKET_DIR: /var/run/pgbouncer
       UNIX_SOCKET_MODE: "0777"
     volumes:

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T12:25:03",
+  "updated_at": "2026-04-29T12:31:35",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4901,10 +4901,27 @@
       "filename": "CC_PROMPT_v2.49.2.md",
       "version": "v2.49.2",
       "theme": "fix(infra): correct edoburu/pgbouncer image tag (1.22.1 doesn't exist → v1.25.1-p0)",
+      "runner_status": "DONE",
+      "commit_sha": "363fa74",
+      "error": "",
+      "started_at": "2026-04-29T12:25:03",
+      "finished_at": "2026-04-29T12:25:34",
+      "duration_s": 30.79277150000007,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_122503_CC_PROMPT_v2.49.2.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.3.md",
+      "version": "v2.49.3",
+      "theme": "fix(infra): split BACKEND_DATABASE_URL (asyncpg parse fix) + pin LISTEN_PORT=6432 + doc TCP listener",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T12:25:03",
+      "started_at": "2026-04-29T12:31:35",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

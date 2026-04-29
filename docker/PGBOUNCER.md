@@ -69,31 +69,45 @@ If you tighten the threat model later (adversarial sidecars in the
 same compose project), set `UNIX_SOCKET_GROUP` to a shared GID and
 `UNIX_SOCKET_MODE: "0770"`.
 
-### 4. DATABASE_URL serves two roles when PgBouncer is active
+### 4. Two URLs, two readers (split since v2.49.3)
 
-The same `DATABASE_URL` env var is read by:
+PgBouncer and hp1_agent read **different** env vars in `docker/.env`:
 
-- **hp1_agent**: to connect front-side via the socket. The password
-  in the URL is ignored (PgBouncer's trust auth doesn't check it).
-- **PgBouncer**: to connect backend to Postgres. The password IS
-  required here — PgBouncer authenticates upstream as `hp1user`.
+| Env var | Reader | Scheme | Notes |
+|---|---|---|---|
+| `DATABASE_URL` | hp1_agent | `postgresql+asyncpg://...` | Uses asyncpg driver |
+| `BACKEND_DATABASE_URL` | pgbouncer | `postgresql://...` | Bare scheme — edoburu can't parse `+asyncpg` |
 
-Both clients read the same URL because the form
-`postgresql+asyncpg://hp1user:PASS@/hp1_agent?host=/var/run/pgbouncer`
-is parsed by both: hp1_agent uses the `?host=` socket directive,
-PgBouncer ignores the socket directive (it's connecting elsewhere)
-and uses the `hp1user:PASS@` portion for upstream auth.
+The split exists because the edoburu entrypoint's URL parser silently
+mangles usernames when the scheme contains a `+`-delimited driver
+suffix (observed: `hp1user` parsed as `hp1`, breaking upstream auth).
 
-If you want to separate these (front-side gets no password,
-back-side gets a real one), split into two env vars:
-- `DATABASE_URL` for hp1_agent (no password)
-- `BACKEND_DATABASE_URL` for PgBouncer (with password)
+Both URLs point at the same database with the same credentials. The
+hp1_agent URL uses the socket form (`@/hp1_agent?host=/var/run/pgbouncer`);
+the pgbouncer URL uses TCP form (`@hp1-postgres:5432/hp1_agent`)
+because that's how pgbouncer reaches Postgres upstream.
 
-Then update `pgbouncer:` env block in compose to pass
-`BACKEND_DATABASE_URL` as `DATABASE_URL`. Not done by default to
-keep the configuration minimal.
+If the credentials change in Postgres, update **both** values.
 
-### 5. PgBouncer admin requires the socket too
+### 5. TCP listener is active inside the container
+
+Despite `LISTEN_ADDR=""`, the edoburu image keeps a TCP listener on
+`0.0.0.0:6432` inside the container. No host port is mapped, so this
+listener is reachable only from other containers on the
+`hp1-pg-net` Docker network: `hp1-postgres`, `hp1_agent`, and any
+future containers attached to that bridge.
+
+This is a deviation from v2.49.1's "Unix socket only" goal but the
+exposure surface is bounded to internal Docker networking. The
+documented threat model in this file already assumes the agent-01
+host is the trust boundary; an attacker with shell on agent-01
+already has Docker access and can reach the socket regardless.
+
+If a future requirement tightens this further (e.g., adversarial
+sidecars in the same compose project), use the mTLS migration recipe
+to enforce cert-based auth on the TCP listener.
+
+### 6. PgBouncer admin requires the socket too
 
 You can only reach the admin console from a container with the
 volume mounted. There is no remote access:
@@ -106,7 +120,7 @@ docker exec -it hp1_pgbouncer \
 Then `SHOW POOLS;`, `SHOW STATS;`, `SHOW CLIENTS;`, `SHOW SERVERS;`,
 `RELOAD;`, etc.
 
-### 6. Startup ordering
+### 7. Startup ordering
 
 When activating the pgbouncer profile, bring pgbouncer up first,
 wait for the healthcheck to pass, then restart hp1_agent. The
