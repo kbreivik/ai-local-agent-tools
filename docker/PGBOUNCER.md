@@ -91,15 +91,23 @@ If PG credentials change, update `POSTGRES_USER` / `POSTGRES_PASSWORD`
 in `docker/.env` AND the embedded credentials in `DATABASE_URL` (the
 latter URL-encoded as needed for the URL form).
 
-Note (v2.49.6): the pgbouncer service explicitly sets
-`DATABASE_URL: ""` and `DATABASE_URLS: ""` in its compose `environment:`
-block. This is required because the edoburu entrypoint
-unconditionally re-parses `DATABASE_URL` (when non-empty) and
-overwrites the discrete `DB_PASSWORD` we set with the URL-extracted
-substring — which is URL-encoded and breaks SCRAM. Compose's
-`environment:` overrides `env_file:` per-service, so this neutralises
-the inherited value inside the container without affecting any other
-service that needs `DATABASE_URL` (notably hp1_agent).
+Note (v2.49.7): the pgbouncer service does **not** set `env_file:` at
+all. Compose interpolates `${POSTGRES_USER}` / `${POSTGRES_PASSWORD}`
+from `docker/.env` via its standard project-default-env mechanism,
+but does not bulk-import `.env` into the container.
+
+This is required because the edoburu entrypoint unconditionally
+re-parses `DATABASE_URL` when non-empty and overwrites the discrete
+`DB_PASSWORD` with the URL-extracted (URL-encoded) substring,
+breaking SCRAM. Compose's documented `environment` > `env_file`
+precedence does **not** apply for empty/null values — empty-string
+overrides fall through to env_file values
+(github.com/docker/compose#11740, open since 2024). The only reliable
+workaround is to not have env_file inherit `DATABASE_URL` into this
+service at all.
+
+Other services in the compose file that need `DATABASE_URL` (notably
+hp1_agent) keep their `env_file: .env` and are unaffected.
 
 ### 5. SCRAM-SHA-256 end to end
 

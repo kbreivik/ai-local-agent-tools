@@ -107,4 +107,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.3.md | v2.49.3 | fix(infra): split BACKEND_DATABASE_URL (asyncpg parse fix) + pin LISTEN_PORT=6432 + doc TCP listener | DONE (cf7ccb2) |
 | CC_PROMPT_v2.49.4.md | v2.49.4 | fix(infra): AUTH_TYPE=scram-sha-256 + revert BACKEND_DATABASE_URL split (v2.49.3 misdiagnosis) | DONE (a0b8d11) |
 | CC_PROMPT_v2.49.5.md | v2.49.5 | fix(infra): bypass DATABASE_URL parsing in pgbouncer (URL-encoding bug — use discrete DB_* env vars) | DONE (aafb043) |
-| CC_PROMPT_v2.49.6.md | v2.49.6 | fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD) | RUNNING |
+| CC_PROMPT_v2.49.6.md | v2.49.6 | fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD) | DONE (f369d3d) |
+| CC_PROMPT_v2.49.7.md | v2.49.7 | fix(infra): drop env_file from pgbouncer service (compose #11740 — empty-string override doesn't beat env_file) | RUNNING |

@@ -124,28 +124,34 @@ services:
     profiles: ["pgbouncer"]
     networks:
       - hp1-pg-net
-    env_file: .env
     environment:
-      # v2.49.5 — bypass DATABASE_URL parsing. The edoburu entrypoint
-      # extracts the password from DATABASE_URL without URL-decoding it,
-      # so URL-special chars (%, $, @, :) land in userlist.txt
-      # URL-encoded while asyncpg and PG expect the decoded form. SCRAM
-      # fails on both legs. Discrete DB_* env vars take raw strings.
+      # v2.49.5–v2.49.7 — pgbouncer auth wiring.
+      #
+      # Why this looks the way it does:
+      # 1. env_file is intentionally NOT set on this service. The
+      #    edoburu entrypoint unconditionally runs parse_url against
+      #    DATABASE_URL when non-empty, overwriting DB_PASSWORD with
+      #    a URL-encoded substring. DATABASE_URL is required for
+      #    hp1_agent so we can't remove it from .env, and compose
+      #    issue #11740 prevents empty-string overrides on env_file
+      #    inheritance. Solution: don't inherit env_file here.
+      # 2. ${POSTGRES_USER} / ${POSTGRES_PASSWORD} interpolation still
+      #    pulls values from the project-default .env file at
+      #    docker/.env — that's a compose interpolation feature
+      #    independent of env_file: directive on the service.
+      # 3. AUTH_TYPE=scram-sha-256 makes the entrypoint write the
+      #    password as plaintext to userlist.txt (its branch logic
+      #    requires plain or scram-sha-256 for plaintext; trust falls
+      #    through to md5, which PG14+ rejects).
       DB_HOST: hp1-postgres
       DB_PORT: "5432"
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-hp1_agent}
-      # v2.49.6 — neutralize DATABASE_URL inheritance from env_file.
-      #   The edoburu entrypoint UNCONDITIONALLY runs parse_url() against
-      #   DATABASE_URL when it's non-empty, overwriting the DB_PASSWORD
-      #   we set above with the URL-extracted (encoded) form. Setting
-      #   DATABASE_URL: "" here overrides the env_file value within the
-      #   container so the entrypoint's `if [ -n ... ]` test fails and
-      #   parse_url is skipped. DATABASE_URLS handled the same way.
-      #   Verified against upstream entrypoint.sh source.
-      DATABASE_URL: ""
-      DATABASE_URLS: ""
+      # v2.49.7 — env_file dropped from this service entirely (see
+      # comment above). DATABASE_URL no longer reaches the container,
+      # so the entrypoint's parse_url branch never runs and DB_PASSWORD
+      # set above is preserved verbatim.
       POOL_MODE: transaction
       # v2.49.4 — scram-sha-256 instead of trust:
       #   PG14+ defaults to password_encryption=scram-sha-256 and rejects

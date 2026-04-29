@@ -1,0 +1,331 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The runner script (run_queue.py) controls iteration and status tracking —
+your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from
+the prompt. Never rewrite a whole file when the prompt says to add or
+update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE,
+create it. If it says "add after X" or "replace Y with Z", do exactly
+that. Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+
+    cd D:\claude_code\ai-local-agent-tools
+    python -m py_compile <any changed .py files>
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+    git add -A
+    git commit -m "<message from prompt>"
+    git push origin main
+
+Verify push succeeded:
+
+    git log --oneline -1
+
+### Step 6 — STOP
+
+After the feature commit is pushed, output a single line:
+
+    PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not edit
+cc_prompts/INDEX.md, cc_prompts/QUEUE_STATE.json, or
+cc_prompts/QUEUE_STATUS.md — the runner script owns those entirely.
+The runner will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not proceed to commit
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.py, not here.
+- INDEX.md, QUEUE_STATE.json, QUEUE_STATUS.md are the runner's domain — never touch them.
+
+
+---
+
+Prompt: CC_PROMPT_v2.49.6.md (v2.49.6)
+Theme: fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD)
+
+Prompt content:
+
+# CC PROMPT — v2.49.6 — fix(infra): unset DATABASE_URL in pgbouncer container (entrypoint clobber)
+
+## What this does
+
+Fixes a final SCRAM auth failure caused by the edoburu entrypoint
+unconditionally re-parsing `DATABASE_URL` and clobbering the
+explicitly-set `DB_PASSWORD`.
+
+### Root cause (from upstream entrypoint.sh)
+
+```sh
+if [ -n "${DATABASE_URLS}" ]; then
+  echo "${DATABASE_URLS}" | tr , '\n' | while read url; do
+    parse_url "$url"
+    generate_userlist_if_needed
+  done
+else
+  if [ -n "${DATABASE_URL}" ]; then
+    parse_url "${DATABASE_URL}"     # <-- overwrites DB_PASSWORD from URL
+  fi
+  generate_userlist_if_needed       # writes the OVERWRITTEN value to userlist
+fi
+```
+
+`parse_url` extracts the password substring from `DATABASE_URL`
+**without URL-decoding it** and **always** runs when `DATABASE_URL`
+is non-empty — regardless of whether the operator already provided a
+clean `DB_PASSWORD` via env. Result: the URL-encoded password
+(`Jw%25ZY%25F%24%24Bz2Fn2L`) lands in `userlist.txt` instead of the
+intended literal (`Jw%ZY%F$$Bz2Fn2L`).
+
+The pgbouncer service inherits `DATABASE_URL` from `env_file: .env`,
+which is required for `hp1_agent` and unrelated services. We can't
+remove it from `.env`, but we can override it to empty inside the
+pgbouncer service so the entrypoint's `if [ -n ... ]` test fails and
+`parse_url` is skipped.
+
+### Fix
+
+In compose, override `DATABASE_URL` to empty string for the pgbouncer
+service. The discrete `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT`
+/ `DB_NAME` from v2.49.5 then take effect untouched.
+
+Verified via direct read of upstream entrypoint.sh
+(github.com/edoburu/docker-pgbouncer/blob/master/entrypoint.sh):
+the `parse_url` function only runs when `DATABASE_URL` (or
+`DATABASE_URLS`) is non-empty. Setting it to empty string in the
+service `environment:` block — where compose env vars take precedence
+over `env_file:` — disables that branch entirely.
+
+Version bump: 2.49.5 → 2.49.6
+
+---
+
+## Change 1 — `docker/docker-compose.yml`
+
+Find the `pgbouncer:` service `environment:` block (post v2.49.5):
+
+````yaml
+    environment:
+      # v2.49.5 — bypass DATABASE_URL parsing.
+      #   The edoburu entrypoint extracts the password substring from
+      #   DATABASE_URL without URL-decoding it. When the password contains
+      #   URL-special chars (%, $, @, :, etc.), the encoded form ends up
+      #   in userlist.txt verbatim, while asyncpg (front-side) and PG
+      #   (upstream) both work with the decoded form. Result: SCRAM fails
+      #   on both legs.
+      #   Discrete DB_* env vars bypass URL parsing entirely. The
+      #   entrypoint reads them as raw strings (see entrypoint.sh
+      #   generate_userlist_if_needed + generate_config_db_entry).
+      #   hp1_agent still uses DATABASE_URL — only pgbouncer changes here.
+      DB_HOST: hp1-postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-hp1_agent}
+````
+
+Replace with:
+
+````yaml
+    environment:
+      # v2.49.5 — bypass DATABASE_URL parsing. The edoburu entrypoint
+      # extracts the password from DATABASE_URL without URL-decoding it,
+      # so URL-special chars (%, $, @, :) land in userlist.txt
+      # URL-encoded while asyncpg and PG expect the decoded form. SCRAM
+      # fails on both legs. Discrete DB_* env vars take raw strings.
+      DB_HOST: hp1-postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-hp1_agent}
+      # v2.49.6 — neutralize DATABASE_URL inheritance from env_file.
+      #   The edoburu entrypoint UNCONDITIONALLY runs parse_url() against
+      #   DATABASE_URL when it's non-empty, overwriting the DB_PASSWORD
+      #   we set above with the URL-extracted (encoded) form. Setting
+      #   DATABASE_URL: "" here overrides the env_file value within the
+      #   container so the entrypoint's `if [ -n ... ]` test fails and
+      #   parse_url is skipped. DATABASE_URLS handled the same way.
+      #   Verified against upstream entrypoint.sh source.
+      DATABASE_URL: ""
+      DATABASE_URLS: ""
+````
+
+(All other env vars below `DB_NAME` stay unchanged: `POOL_MODE`,
+`AUTH_TYPE`, `LISTEN_PORT`, etc. The healthcheck and volumes blocks
+also stay unchanged.)
+
+## Change 2 — `docker/PGBOUNCER.md`
+
+Find the section "### 4. Two readers, two credential sources" added
+in v2.49.5. Append a new sub-paragraph at the end of that section
+(immediately before the "### 5. SCRAM-SHA-256 end to end" heading):
+
+Find:
+
+````markdown
+If PG credentials change, update `POSTGRES_USER` / `POSTGRES_PASSWORD`
+in `docker/.env` AND the embedded credentials in `DATABASE_URL` (the
+latter URL-encoded as needed for the URL form).
+````
+
+Replace with:
+
+````markdown
+If PG credentials change, update `POSTGRES_USER` / `POSTGRES_PASSWORD`
+in `docker/.env` AND the embedded credentials in `DATABASE_URL` (the
+latter URL-encoded as needed for the URL form).
+
+Note (v2.49.6): the pgbouncer service explicitly sets
+`DATABASE_URL: ""` and `DATABASE_URLS: ""` in its compose `environment:`
+block. This is required because the edoburu entrypoint
+unconditionally re-parses `DATABASE_URL` (when non-empty) and
+overwrites the discrete `DB_PASSWORD` we set with the URL-extracted
+substring — which is URL-encoded and breaks SCRAM. Compose's
+`environment:` overrides `env_file:` per-service, so this neutralises
+the inherited value inside the container without affecting any other
+service that needs `DATABASE_URL` (notably hp1_agent).
+````
+
+## Change 3 — VERSION
+
+Update `VERSION`: 2.49.5 → 2.49.6
+
+## Verify
+
+````bash
+# 1. Compose lints clean
+docker compose -f docker/docker-compose.yml config > /dev/null
+
+# 2. Both DATABASE_URL and DATABASE_URLS are explicitly empty in the pgbouncer block
+grep -A 30 '^  pgbouncer:' docker/docker-compose.yml | grep -E 'DATABASE_URLS?:'
+# Should print exactly two lines, both with ""
+
+# 3. Discrete DB_* still present (v2.49.5 carryover)
+grep -q 'DB_PASSWORD: \${POSTGRES_PASSWORD}' docker/docker-compose.yml
+
+# 4. Other carryovers in place
+grep -q 'AUTH_TYPE: scram-sha-256' docker/docker-compose.yml
+grep -q 'LISTEN_PORT: "6432"' docker/docker-compose.yml
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "fix(infra): unset DATABASE_URL inside pgbouncer container (v2.49.6)
+
+The edoburu entrypoint unconditionally re-parses DATABASE_URL when
+non-empty and overwrites the explicit DB_PASSWORD env we set in
+v2.49.5. parse_url extracts the password substring without URL-
+decoding it, so the encoded form lands in userlist.txt and SCRAM
+fails on both legs.
+
+The pgbouncer service inherits DATABASE_URL via env_file: .env (which
+hp1_agent and other services still need). Override it to empty string
+in the service environment: block — compose env vars take precedence
+over env_file, so the entrypoint's 'if -n' test now fails and
+parse_url is skipped. DATABASE_URLS handled identically.
+
+Verified against upstream entrypoint.sh
+(github.com/edoburu/docker-pgbouncer)."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI image rebuild:
+
+````bash
+# On agent-01
+cd /opt/hp1-agent
+git pull origin main
+
+# .env is unchanged from v2.49.5 — POSTGRES_PASSWORD with $$$$ stays
+cd docker
+docker compose --env-file .env --profile pgbouncer up -d --force-recreate pgbouncer
+
+# Verify the container env now has DATABASE_URL empty
+docker exec hp1_pgbouncer env | grep -E '^(DATABASE_URL|DATABASE_URLS|DB_)'
+# Should show DATABASE_URL= (empty), DATABASE_URLS= (empty), and the DB_* set.
+
+# Userlist should now have LITERAL password (no %25, no %24)
+docker exec hp1_pgbouncer cat /etc/pgbouncer/userlist.txt
+
+docker compose ps pgbouncer
+# Expect (healthy)
+
+# Real upstream auth — should return 1 row
+docker exec -e PGPASSWORD='Jw%ZY%F$$Bz2Fn2L' hp1_pgbouncer \
+  psql -h /var/run/pgbouncer -p 6432 -U hp1 -d hp1_agent -c 'SELECT 1;'
+````
+
+If `SELECT 1;` returns one row, both SCRAM legs work and the
+front-side flip for hp1_agent (`DATABASE_URL` to socket form) is the
+next operator step.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-04-29 17:42:50
+========================================================================
+PROMPT COMPLETE: v2.49.6
+[STATUS] 1m15s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m15s
+========================================================================

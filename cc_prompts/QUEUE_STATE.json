@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T17:42:50",
+  "updated_at": "2026-04-29T18:43:43",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -4969,10 +4969,27 @@
       "filename": "CC_PROMPT_v2.49.6.md",
       "version": "v2.49.6",
       "theme": "fix(infra): unset DATABASE_URL inside pgbouncer container (entrypoint clobber of DB_PASSWORD)",
+      "runner_status": "DONE",
+      "commit_sha": "f369d3d",
+      "error": "",
+      "started_at": "2026-04-29T17:42:50",
+      "finished_at": "2026-04-29T17:44:05",
+      "duration_s": 75.64223349999884,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_174250_CC_PROMPT_v2.49.6.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.7.md",
+      "version": "v2.49.7",
+      "theme": "fix(infra): drop env_file from pgbouncer service (compose #11740 — empty-string override doesn't beat env_file)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T17:42:50",
+      "started_at": "2026-04-29T18:43:43",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
