@@ -139,6 +139,9 @@ async def _run_tests_bg(
 
     try:
         # ── 1. Load suite config if suite_id provided ─────────────────────
+        # v2.49.13: also read auto_approve_all and propagate to the runner
+        # via env var HP1_TEST_AUTO_APPROVE_ALL=1.
+        auto_approve_all = False
         if suite_id:
             try:
                 from api.db import test_runs as _tr
@@ -155,8 +158,22 @@ async def _run_tests_bg(
                         memory_enabled = cfg.get("memoryEnabled", True)
                     if memory_backend is None:
                         memory_backend = cfg.get("memoryBackend", "muninndb")
+                    auto_approve_all = bool(cfg.get("auto_approve_all", False))
             except Exception as _se:
                 import logging; logging.getLogger(__name__).debug("suite load: %s", _se)
+
+        # v2.49.13: in-process flag picked up by the integration runner
+        # via os.environ. Cleared in the finally block to avoid leakage
+        # between consecutive suite runs.
+        import os as _os
+        if auto_approve_all:
+            _os.environ["HP1_TEST_AUTO_APPROVE_ALL"] = "1"
+            import logging
+            logging.getLogger(__name__).info(
+                "[tests] suite '%s' has auto_approve_all=True — all plan gates will be approved",
+                suite_name)
+        else:
+            _os.environ.pop("HP1_TEST_AUTO_APPROVE_ALL", None)
 
         # ── 2. Apply memory settings ──────────────────────────────────────
         if memory_enabled is not None:
@@ -264,6 +281,10 @@ async def _run_tests_bg(
             )
         _running = False
         test_run_active = False
+        # v2.49.13: clear the auto-approve-all flag so it doesn't leak
+        # into subsequent suite runs that don't enable it.
+        import os as _os_cleanup
+        _os_cleanup.environ.pop("HP1_TEST_AUTO_APPROVE_ALL", None)
         # _cancelled stays set so /running can report cancelled=true to GUI
         # until the next run starts. Reset above on next _run_tests_bg call.
 

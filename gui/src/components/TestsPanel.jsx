@@ -321,6 +321,8 @@ function SuiteEditor({ suite, cases, cats, onSave, onCancel }) {
   const [selTests, setSelTests]     = useState(new Set(suite.test_ids || []))
   const [memEnabled, setMemEnabled] = useState(suite.config?.memoryEnabled !== false)
   const [memBackend, setMemBackend] = useState(suite.config?.memoryBackend || 'muninndb')
+  // v2.49.13: suite-level override for per-case auto_confirm
+  const [autoApproveAll, setAutoApproveAll] = useState(suite.config?.auto_approve_all === true)
 
   const toggleCat = (c) => setSelCats(s => { const n = new Set(s); n.has(c) ? n.delete(c) : n.add(c); return n })
   const toggleTest = (id) => setSelTests(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -328,7 +330,7 @@ function SuiteEditor({ suite, cases, cats, onSave, onCancel }) {
   const save = () => onSave({
     id: suite.id, name, description: desc,
     categories: [...selCats], test_ids: [...selTests],
-    config: { memoryEnabled: memEnabled, memoryBackend: memBackend },
+    config: { memoryEnabled: memEnabled, memoryBackend: memBackend, auto_approve_all: autoApproveAll },
   })
 
   return (
@@ -355,6 +357,17 @@ function SuiteEditor({ suite, cases, cats, onSave, onCancel }) {
           ))}
         </div>
       </div>
+      {/* v2.49.13: suite-level override for per-case auto_confirm */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6,
+                      fontFamily: 'var(--font-mono)', fontSize: 10,
+                      marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={autoApproveAll}
+          onChange={(e) => setAutoApproveAll(e.target.checked)}
+        />
+        Auto-approve all plans (overrides per-case auto_confirm)
+      </label>
 
       {/* Category filter */}
       <div>

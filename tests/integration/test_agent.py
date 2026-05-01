@@ -290,10 +290,16 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
         except Exception:
             pass  # Best-effort — agent will still emit and re-prompt
     if tc.triggers_plan:
+        # v2.49.13: HP1_TEST_AUTO_APPROVE_ALL env var (set by the suite
+        # runner when the suite has auto_approve_all=true) overrides the
+        # per-case auto_confirm field. Use the env value when present.
+        import os as _os_cf
+        _aaa = _os_cf.environ.get("HP1_TEST_AUTO_APPROVE_ALL") == "1"
+        approved = True if _aaa else bool(tc.auto_confirm)
         try:
             await http.post(
                 f"{API_BASE}/api/agent/confirm",
-                json={"session_id": session_id, "approved": tc.auto_confirm},
+                json={"session_id": session_id, "approved": approved},
                 timeout=5,
             )
         except Exception:
@@ -351,11 +357,16 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
                     # delivered before /run dispatched the operation_id. Server
                     # idempotently accepts duplicates (last writer wins on the future).
                     if mtyp == "plan_pending" and sid == session_id:
+                        # v2.49.13: same auto_approve_all override as the
+                        # pre-arm site above.
+                        import os as _os_cf2
+                        _aaa2 = _os_cf2.environ.get("HP1_TEST_AUTO_APPROVE_ALL") == "1"
+                        _approved = True if _aaa2 else bool(tc.auto_confirm)
                         try:
                             r_plan = msg.get("plan", {}) or {}
                             captured["plan_summary"] = (r_plan.get("summary") or "")[:300]
                             captured["plan_steps_count"] = len(r_plan.get("steps", []) or [])
-                            captured["plan_approved"] = bool(tc.auto_confirm)
+                            captured["plan_approved"] = _approved
                         except Exception:
                             pass
                         # Up to 3 retries — server has a 300s timeout, but we want
@@ -365,7 +376,7 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
                                 _r = await http.post(
                                     f"{API_BASE}/api/agent/confirm",
                                     json={"session_id": session_id,
-                                          "approved": tc.auto_confirm},
+                                          "approved": _approved},
                                     timeout=5,
                                 )
                                 if _r.status_code == 200:
