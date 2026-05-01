@@ -38,12 +38,27 @@ def _build_url() -> str:
 def _build_engine() -> AsyncEngine:
     url = _build_url()
     if DB_BACKEND == "postgres":
+        # v2.49.10 — when on pgbouncer (transaction pool mode), disable
+        # asyncpg's prepared-statement caches. Server-side prepared
+        # statements don't survive across pgbouncer's per-transaction
+        # backend swaps; cached plans become stale and either trigger
+        # InvalidCachedStatementError or extra re-prepare round trips.
+        # Detection: socket form contains '?host=/var/run/pgbouncer'.
+        on_pgbouncer = "host=/var/run/pgbouncer" in url
+        connect_args: dict = {}
+        if on_pgbouncer:
+            # asyncpg's own per-connection cache.
+            connect_args["statement_cache_size"] = 0
+            # SQLAlchemy asyncpg dialect — controls SQLAlchemy-side
+            # PREPARE issuance.
+            connect_args["prepared_statement_cache_size"] = 0
         return create_async_engine(
             url,
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
             echo=False,
+            connect_args=connect_args,
         )
     else:
         return create_async_engine(

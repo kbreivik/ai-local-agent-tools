@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-29T20:50:56",
+  "updated_at": "2026-05-01T09:49:54",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5020,10 +5020,27 @@
       "filename": "CC_PROMPT_v2.49.9.md",
       "version": "v2.49.9",
       "theme": "docs: PGBOUNCER.md staleness fixes — trust→SCRAM in architecture/bullets, deduped section numbering, Option G/H → plain language",
+      "runner_status": "DONE",
+      "commit_sha": "5dd6eb2",
+      "error": "",
+      "started_at": "2026-04-29T20:50:56",
+      "finished_at": "2026-04-29T20:52:09",
+      "duration_s": 72.68106980000448,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260429_205056_CC_PROMPT_v2.49.9.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.10.md",
+      "version": "v2.49.10",
+      "theme": "fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-04-29T20:50:56",
+      "started_at": "2026-05-01T09:49:54",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

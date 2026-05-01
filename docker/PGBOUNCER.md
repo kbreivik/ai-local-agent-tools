@@ -176,6 +176,30 @@ If you swap DATABASE_URL to the socket form before pgbouncer is
 running, hp1_agent will fail to start with a "no such file" error
 on the socket path.
 
+### 9. asyncpg statement caches must be off (v2.49.10)
+
+`api/db/base.py` detects the pgbouncer socket form and disables
+asyncpg's prepared-statement caches when on pgbouncer:
+
+```python
+connect_args = {
+    "statement_cache_size": 0,            # asyncpg client cache
+    "prepared_statement_cache_size": 0,   # SQLAlchemy asyncpg dialect
+}
+```
+
+**Why this is mandatory in transaction mode**: pgbouncer hands each
+new transaction a potentially different backend session. Prepared
+statements are session-scoped on the PG side; cached client-side
+plans become stale immediately. The first symptom is slow GUI/comms
+because asyncpg re-prepares on every miss; the worst symptom is
+`asyncpg.exceptions.InvalidCachedStatementError`.
+
+If you switch pgbouncer to `pool_mode = session`, the caches CAN
+stay enabled (sessions are sticky) — but session mode defeats the
+purpose of pgbouncer for hp1_agent. Stick with transaction mode and
+the caches off.
+
 ## Debugging
 
 ### "could not connect to server: No such file or directory"
