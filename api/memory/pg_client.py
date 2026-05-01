@@ -34,6 +34,11 @@ def _conn():
 class PgMemoryClient:
     """PG-native engram store with tsvector keyword activation."""
 
+    # v2.49.11: API surface compat with MuninnClient — /api/memory/health
+    # reads client._base for a reachability URL/label. PG backend has no
+    # remote URL, so use a stable identifier the GUI can display.
+    _base = "pg://hp1_agent.pg_engrams"
+
     async def store(self, concept: str, content: str,
                     tags: list[str] | None = None) -> str | None:
         """Insert or strengthen an engram. If concept already exists,

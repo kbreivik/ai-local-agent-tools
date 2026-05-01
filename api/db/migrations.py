@@ -221,6 +221,15 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS plan_approved BOOLEAN DEFAULT FALSE",
         "ALTER TABLE test_run_results ADD COLUMN IF NOT EXISTS operation_id TEXT DEFAULT ''",
     ]),
+    (14, "v2.49.11 — composite index on status_snapshots(component, timestamp DESC)", [
+        # Hot query pattern: 'latest snapshot per component'. Existing
+        # idx_snap_comp(component) alone forces a within-group scan. The
+        # composite index lets PG return the newest row per component via
+        # a single index lookup. Massive reduction in DataFileRead waits
+        # under sustained load (650k+ rows, ~14 components).
+        "CREATE INDEX IF NOT EXISTS idx_snap_comp_ts "
+        "ON status_snapshots (component, timestamp DESC)",
+    ]),
 ]
 
 

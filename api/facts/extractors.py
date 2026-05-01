@@ -249,11 +249,14 @@ def extract_facts_from_kafka_snapshot(snapshot: dict) -> list[dict]:
         _add(facts, "prod.kafka.cluster.brokers_online", "kafka_collector",
              brokers_online)
 
-    # Under-replicated summary from snapshot top-level if present
+    # Under-replicated summary from snapshot top-level if present.
+    # v2.49.11: collector may return either a list of partition descriptors
+    # or an int count. Handle both shapes safely.
     ur = snapshot.get("under_replicated_partitions")
     if ur is not None:
+        ur_count = len(ur) if isinstance(ur, (list, tuple)) else int(ur)
         _add(facts, "prod.kafka.cluster.under_replicated_partitions",
-             "kafka_collector", int(ur))
+             "kafka_collector", ur_count)
 
     for t in snapshot.get("topics", []) or []:
         name = t.get("name")
@@ -264,10 +267,12 @@ def extract_facts_from_kafka_snapshot(snapshot: dict) -> list[dict]:
         _add(facts, f"prod.kafka.topic.{name}.replication_factor",
              "kafka_collector", t.get("replication_factor"))
         # v2.39.2: per-topic under-replicated count
+        # v2.49.11: handle list-or-int shape (same fix as cluster level above)
         t_ur = t.get("under_replicated_partitions", t.get("under_replicated"))
         if t_ur is not None:
+            t_ur_count = len(t_ur) if isinstance(t_ur, (list, tuple)) else int(t_ur)
             _add(facts, f"prod.kafka.topic.{name}.under_replicated_partitions",
-                 "kafka_collector", int(t_ur))
+                 "kafka_collector", t_ur_count)
 
     return facts
 

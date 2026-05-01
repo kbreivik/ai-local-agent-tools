@@ -111,4 +111,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.7.md | v2.49.7 | fix(infra): drop env_file from pgbouncer service (compose #11740 — empty-string override doesn't beat env_file) | DONE (bb54bed) |
 | CC_PROMPT_v2.49.8.md | v2.49.8 | docs+infra: pgbouncer cutover runbook + hp1_agent depends_on pgbouncer (required:false) + .env.example $ gotcha footnote | DONE (ba5aec3) |
 | CC_PROMPT_v2.49.9.md | v2.49.9 | docs: PGBOUNCER.md staleness fixes — trust→SCRAM in architecture/bullets, deduped section numbering, Option G/H → plain language | DONE (5dd6eb2) |
-| CC_PROMPT_v2.49.10.md | v2.49.10 | fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI) | RUNNING |
+| CC_PROMPT_v2.49.10.md | v2.49.10 | fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI) | DONE (21369b9) |
+| CC_PROMPT_v2.49.11.md | v2.49.11 | fix(perf+bugs): status_snapshots(component,timestamp DESC) composite index + 30d retention + kafka extractor list-vs-int + PgMemoryClient._base | RUNNING |

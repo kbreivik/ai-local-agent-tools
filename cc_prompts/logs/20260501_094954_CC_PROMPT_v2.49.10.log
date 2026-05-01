@@ -1,0 +1,391 @@
+========================================================================
+TASK INPUT
+========================================================================
+You are running in automated queue mode.
+
+# DEATHSTAR Prompt Queue Runner — Single-prompt instruction
+
+You are implementing ONE specific prompt for the DEATHSTAR project.
+The prompt file and version are specified below by the calling script.
+
+DO NOT loop to the next prompt. Implement ONLY the prompt provided.
+The runner script (run_queue.py) controls iteration and status tracking —
+your job is one prompt.
+
+---
+
+## Your task for this invocation
+
+### Step 1 — Understand the prompt
+
+Read the prompt content carefully. It specifies:
+- Exact files to create or modify
+- Exact functions to add or change
+- A version number to write to VERSION file
+- A git commit message to use
+
+### Step 2 — Read existing files before editing
+
+Before changing any file, read its current content so you understand
+the existing structure. Use exact function names and file paths from
+the prompt. Never rewrite a whole file when the prompt says to add or
+update a section.
+
+### Step 3 — Implement all changes
+
+Make every change described in the prompt. If the prompt says NEW FILE,
+create it. If it says "add after X" or "replace Y with Z", do exactly
+that. Update the VERSION file to the version number in the prompt header.
+
+### Step 4 — Verify
+
+Run syntax checks on changed Python files:
+
+    cd D:\claude_code\ai-local-agent-tools
+    python -m py_compile <any changed .py files>
+
+If py_compile fails, fix the error before committing.
+
+### Step 5 — Commit and push
+
+Use the exact commit message from the prompt's ## Commit section.
+
+    git add -A
+    git commit -m "<message from prompt>"
+    git push origin main
+
+Verify push succeeded:
+
+    git log --oneline -1
+
+### Step 6 — STOP
+
+After the feature commit is pushed, output a single line:
+
+    PROMPT COMPLETE: <version>
+
+Then stop. Do not read the next prompt. Do not edit
+cc_prompts/INDEX.md, cc_prompts/QUEUE_STATE.json, or
+cc_prompts/QUEUE_STATUS.md — the runner script owns those entirely.
+The runner will invoke you again for the next prompt if needed.
+
+---
+
+## Error handling
+
+If any step fails:
+- Do not proceed to commit
+- Output: PROMPT FAILED: <version> — <reason>
+- Stop immediately
+
+---
+
+## Important notes
+
+- Project root: D:\claude_code\ai-local-agent-tools
+- Read files before editing — prompts reference existing functions
+- Frozensets: append to existing set, don't replace it
+- Test imports: `python -c "from api.db.entity_history import init_entity_history"`
+- One prompt per invocation. The loop is in run_queue.py, not here.
+- INDEX.md, QUEUE_STATE.json, QUEUE_STATUS.md are the runner's domain — never touch them.
+
+
+---
+
+Prompt: CC_PROMPT_v2.49.10.md (v2.49.10)
+Theme: fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI)
+
+Prompt content:
+
+# CC PROMPT — v2.49.10 — fix(db): disable asyncpg statement cache when on pgbouncer socket
+
+## What this does
+
+Fixes slow communication and GUI updates after the v2.49.x cutover to
+pgbouncer in transaction mode.
+
+### Root cause
+
+`api/db/base.py` builds the async SQLAlchemy engine with no
+`connect_args` for asyncpg. Default asyncpg behaviour: maintain a
+client-side prepared statement cache. SQLAlchemy/asyncpg also sends
+server-side `PREPARE` for each unique statement and reuses the cached
+plan across transactions.
+
+This is fine against direct PG. It breaks against pgbouncer in
+**transaction pool mode** — pgbouncer hands each new transaction a
+potentially different backend connection. Server-side prepared
+statements live on a specific backend session; the cached plan from
+transaction N is not on the backend session that handles transaction
+N+1. asyncpg either re-prepares (extra round trips per query, hence
+slow) or raises `InvalidCachedStatementError`.
+
+Symptom on agent-01: 24 client connections, several active for tens
+of seconds, prepared_statement counts climbing per client, GUI updates
+visibly slow.
+
+### Fix
+
+When `DATABASE_URL` points at the pgbouncer socket
+(`?host=/var/run/pgbouncer`), pass `connect_args` that disable
+asyncpg's statement caches:
+
+```python
+connect_args = {
+    "statement_cache_size": 0,
+    "prepared_statement_cache_size": 0,
+}
+```
+
+`statement_cache_size=0` disables asyncpg's own per-connection cache.
+`prepared_statement_cache_size=0` (SQLAlchemy-level for the asyncpg
+dialect) tells SQLAlchemy not to issue `PREPARE` server-side at all.
+Result: every query is sent unprepared. Slightly slower per-query in
+the absolute, but eliminates the transaction-mode prepare/reuse race.
+
+This is the published asyncpg+pgbouncer recipe (see asyncpg issue
+#339, MagicStack/asyncpg discussion).
+
+When `DATABASE_URL` points directly at PG (no pgbouncer), behaviour
+is unchanged — caches stay enabled for the small wins they give.
+
+### Other consideration: pool_size
+
+Current values: `pool_size=10, max_overflow=20` (up to 30 connections
+from hp1_agent). With pgbouncer fronting, this is fine — pgbouncer's
+`DEFAULT_POOL_SIZE=25` handles the multiplexing on the upstream side.
+Don't change pool_size in this prompt; revisit if SHOW POOLS shows
+sustained `cl_waiting > 0` after the cache fix.
+
+Version bump: 2.49.9 → 2.49.10
+
+---
+
+## Change 1 — `api/db/base.py`
+
+Find the `_build_engine` function:
+
+````python
+def _build_engine() -> AsyncEngine:
+    url = _build_url()
+    if DB_BACKEND == "postgres":
+        return create_async_engine(
+            url,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            echo=False,
+        )
+    else:
+        return create_async_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            echo=False,
+        )
+````
+
+Replace with:
+
+````python
+def _build_engine() -> AsyncEngine:
+    url = _build_url()
+    if DB_BACKEND == "postgres":
+        # v2.49.10 — when on pgbouncer (transaction pool mode), disable
+        # asyncpg's prepared-statement caches. Server-side prepared
+        # statements don't survive across pgbouncer's per-transaction
+        # backend swaps; cached plans become stale and either trigger
+        # InvalidCachedStatementError or extra re-prepare round trips.
+        # Detection: socket form contains '?host=/var/run/pgbouncer'.
+        on_pgbouncer = "host=/var/run/pgbouncer" in url
+        connect_args: dict = {}
+        if on_pgbouncer:
+            # asyncpg's own per-connection cache.
+            connect_args["statement_cache_size"] = 0
+            # SQLAlchemy asyncpg dialect — controls SQLAlchemy-side
+            # PREPARE issuance.
+            connect_args["prepared_statement_cache_size"] = 0
+        return create_async_engine(
+            url,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            echo=False,
+            connect_args=connect_args,
+        )
+    else:
+        return create_async_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            echo=False,
+        )
+````
+
+## Change 2 — `docker/PGBOUNCER.md`
+
+Append a new section after "### 8. Startup ordering" (the last
+numbered restriction), before the "## Debugging" heading:
+
+Find:
+
+````markdown
+### 8. Startup ordering
+
+When activating the pgbouncer profile, bring pgbouncer up first,
+wait for the healthcheck to pass, then restart hp1_agent. The
+Activate steps in `docker/README.md` do this in the right order.
+
+If you swap DATABASE_URL to the socket form before pgbouncer is
+running, hp1_agent will fail to start with a "no such file" error
+on the socket path.
+
+## Debugging
+````
+
+Replace with:
+
+````markdown
+### 8. Startup ordering
+
+When activating the pgbouncer profile, bring pgbouncer up first,
+wait for the healthcheck to pass, then restart hp1_agent. The
+Activate steps in `docker/README.md` do this in the right order.
+
+If you swap DATABASE_URL to the socket form before pgbouncer is
+running, hp1_agent will fail to start with a "no such file" error
+on the socket path.
+
+### 9. asyncpg statement caches must be off (v2.49.10)
+
+`api/db/base.py` detects the pgbouncer socket form and disables
+asyncpg's prepared-statement caches when on pgbouncer:
+
+```python
+connect_args = {
+    "statement_cache_size": 0,            # asyncpg client cache
+    "prepared_statement_cache_size": 0,   # SQLAlchemy asyncpg dialect
+}
+```
+
+**Why this is mandatory in transaction mode**: pgbouncer hands each
+new transaction a potentially different backend session. Prepared
+statements are session-scoped on the PG side; cached client-side
+plans become stale immediately. The first symptom is slow GUI/comms
+because asyncpg re-prepares on every miss; the worst symptom is
+`asyncpg.exceptions.InvalidCachedStatementError`.
+
+If you switch pgbouncer to `pool_mode = session`, the caches CAN
+stay enabled (sessions are sticky) — but session mode defeats the
+purpose of pgbouncer for hp1_agent. Stick with transaction mode and
+the caches off.
+
+## Debugging
+````
+
+## Change 3 — VERSION
+
+Update `VERSION`: 2.49.9 → 2.49.10
+
+## Verify
+
+````bash
+# 1. Compose lints clean (no compose change here, but always check)
+docker compose -f docker/docker-compose.yml config > /dev/null
+
+# 2. The new connect_args branch is in base.py
+grep -q 'host=/var/run/pgbouncer' api/db/base.py
+grep -q 'statement_cache_size' api/db/base.py
+grep -q 'prepared_statement_cache_size' api/db/base.py
+
+# 3. The fix triggers only on pgbouncer URL, not direct PG
+python3 - <<'PY'
+import re, sys
+src = open('api/db/base.py').read()
+m = re.search(r'def _build_engine.*?return create_async_engine.*?\)\s*\n\s*else',
+              src, re.DOTALL)
+assert m, "Could not locate postgres branch in _build_engine"
+branch = m.group(0)
+assert 'on_pgbouncer' in branch, "on_pgbouncer detection missing"
+assert 'host=/var/run/pgbouncer' in branch, "socket detection string missing"
+print("OK — pgbouncer-conditional connect_args present")
+PY
+
+# 4. Doc updated
+grep -q 'asyncpg statement caches must be off' docker/PGBOUNCER.md
+grep -q 'InvalidCachedStatementError' docker/PGBOUNCER.md
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "fix(db): disable asyncpg statement cache on pgbouncer socket (v2.49.10)
+
+After the v2.49.x cutover, hp1_agent comms became slow. Root cause:
+asyncpg's prepared statement caches are incompatible with pgbouncer
+transaction-pool mode. Each transaction may get a different backend
+session; server-side prepared plans don't follow. Result: re-prepare
+round trips per query at best, InvalidCachedStatementError at worst.
+
+Fix: api/db/base.py detects DATABASE_URL pointing at the pgbouncer
+socket (?host=/var/run/pgbouncer) and passes
+  connect_args={'statement_cache_size': 0,
+                'prepared_statement_cache_size': 0}
+to create_async_engine. Direct-PG configurations are unchanged.
+
+Reference: asyncpg+pgbouncer published recipe (asyncpg#339).
+Documented in docker/PGBOUNCER.md as restriction #9."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI image rebuild:
+
+````bash
+# On agent-01
+cd /opt/hp1-agent
+git pull origin main
+
+# Image change — wait for CI and pull the rebuilt image
+docker pull ghcr.io/kbreivik/hp1-ai-agent:latest
+
+# Recreate hp1_agent (pgbouncer untouched)
+cd docker
+docker compose --env-file .env up -d --force-recreate hp1_agent
+sleep 10
+docker compose ps hp1_agent
+docker logs hp1_agent --tail 30
+
+# Pgbouncer should now show fewer 'active' clients per page load and
+# noticeably less long-running activity.
+docker exec hp1_pgbouncer sh -c \
+  'psql -h /var/run/pgbouncer -p 6432 -U pgbouncer pgbouncer \
+   -c "SHOW POOLS;"'
+docker exec hp1_pgbouncer sh -c \
+  'psql -h /var/run/pgbouncer -p 6432 -U pgbouncer pgbouncer \
+   -c "SHOW CLIENTS;"' | head -20
+
+# Subjective: GUI should feel responsive again. /api/health fast.
+curl -sf -w 'time=%{time_total}\n' http://localhost:8000/api/health -o /dev/null
+````
+
+If the GUI is still slow, the next thing to look at is hp1_agent's
+sync psycopg2 path (`api/db/pg_pool.py`, `_PooledConnProxy`) — but
+asyncpg accounts for the bulk of query traffic (the API request
+path) so that's where the win should be visible.
+
+
+---
+
+After implementing, commit and push your changes.
+Do NOT modify INDEX.md or any queue status files — the runner handles that.
+========================================================================
+CLAUDE OUTPUT — 2026-05-01 09:49:54
+========================================================================
+PROMPT COMPLETE: v2.49.10
+[STATUS] 1m22s
+
+========================================================================
+EXIT CODE: 0
+DURATION:  1m22s
+========================================================================

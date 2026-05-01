@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-01T09:49:54",
+  "updated_at": "2026-05-01T11:38:47",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5037,10 +5037,27 @@
       "filename": "CC_PROMPT_v2.49.10.md",
       "version": "v2.49.10",
       "theme": "fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI)",
+      "runner_status": "DONE",
+      "commit_sha": "21369b9",
+      "error": "",
+      "started_at": "2026-05-01T09:49:54",
+      "finished_at": "2026-05-01T09:51:17",
+      "duration_s": 82.8629793,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260501_094954_CC_PROMPT_v2.49.10.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.11.md",
+      "version": "v2.49.11",
+      "theme": "fix(perf+bugs): status_snapshots(component,timestamp DESC) composite index + 30d retention + kafka extractor list-vs-int + PgMemoryClient._base",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-05-01T09:49:54",
+      "started_at": "2026-05-01T11:38:47",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
