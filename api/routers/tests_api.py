@@ -34,6 +34,13 @@ RESULTS_PATH = Path(__file__).parent.parent.parent / "data" / "test_results.json
 # Module-level flag to prevent concurrent runs
 _running = False
 
+# v2.49.12 — operator-driven cancel flag. Set by POST /api/tests/cancel.
+# The integration test runner checks this between cases and breaks early.
+# The current in-flight case is allowed to finish (or hit its timeout)
+# rather than being killed mid-stream — killing would leave LM Studio
+# in an inconsistent state.
+_cancelled = False
+
 # Exported flag — checked by api/alerts.py to suppress collector noise
 # during test runs (SSH load from agents causes false vm_hosts/network_ssh alerts)
 test_run_active = False
@@ -53,7 +60,24 @@ async def get_test_results():
 @router.get("/running")
 async def get_test_running():
     """Return whether a test run is in progress."""
-    return {"running": _running}
+    return {"running": _running, "cancelled": _cancelled}
+
+
+@router.post("/cancel")
+async def cancel_tests(_: dict = Depends(get_current_user)):
+    """v2.49.12 — request cancellation of the in-flight test suite.
+    The runner checks this flag between cases and stops as soon as the
+    current case finishes. Returns immediately."""
+    global _cancelled
+    if not _running:
+        return {"cancelled": False, "reason": "no run in progress"}
+    _cancelled = True
+    return {"cancelled": True, "message": "Cancellation requested — current case will finish, then stop"}
+
+
+def is_cancelled() -> bool:
+    """Read-only accessor used by the integration runner via import."""
+    return _cancelled
 
 
 @router.get("/cases")
@@ -98,9 +122,10 @@ async def _run_tests_bg(
     suite_name: str = "",
     caller_token: str = "",
 ) -> None:
-    global _running, test_run_active
+    global _running, test_run_active, _cancelled
     _running = True
     test_run_active = True
+    _cancelled = False
 
     # v2.45.32 — capture pre-run settings so we can restore them after.
     _restore_memory_enabled = None
@@ -239,6 +264,8 @@ async def _run_tests_bg(
             )
         _running = False
         test_run_active = False
+        # _cancelled stays set so /running can report cancelled=true to GUI
+        # until the next run starts. Reset above on next _run_tests_bg call.
 
 
 @router.post("/run")

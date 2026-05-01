@@ -871,12 +871,33 @@ export default function TestsPanel() {
         ))}
         {/* Running indicator */}
         {isRunning && (
-          <div style={{ marginLeft: 'auto', marginRight: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{
-              width: 6, height: 6, borderRadius: '50%', background: 'var(--amber)',
-              animation: 'pulse 1s ease-in-out infinite',
-            }} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--amber)', letterSpacing: '0.1em' }}>RUNNING</span>
+          <div style={{ marginLeft: 'auto', marginRight: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{
+                width: 6, height: 6, borderRadius: '50%', background: 'var(--amber)',
+                animation: 'pulse 1s ease-in-out infinite',
+              }} />
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--amber)', letterSpacing: '0.1em' }}>RUNNING</span>
+            </div>
+            {/* v2.49.12 — Cancel button. Visible only while a suite is in flight. */}
+            <Btn
+              onClick={async () => {
+                if (!confirm('Cancel the running test suite?\n\nThe current case will finish, then the run stops. Partial results are saved.')) return
+                try {
+                  await api('/api/tests/cancel', {
+                    method: 'POST',
+                    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                    body: '{}',
+                  })
+                  // Polling will catch the cancelled flag — no need to mutate state here
+                } catch (e) {
+                  alert('Cancel failed: ' + e.message)
+                }
+              }}
+              style={{ color: 'var(--red)', borderColor: 'rgba(204,40,40,0.4)' }}
+            >
+              Cancel Suite
+            </Btn>
           </div>
         )}
       </div>

@@ -1,0 +1,342 @@
+# CC PROMPT — v2.49.13 — feat(tests): suite-level auto_approve_all flag
+
+## What this does
+
+Adds a suite-level "auto-approve all plans" override that takes
+precedence over per-test-case `auto_confirm` settings. Useful when:
+
+- Running an action-heavy suite where you want every plan_action
+  gate pre-approved without editing each test case.
+- Smoke-testing destructive flows where the test cases were
+  authored conservatively (auto_confirm=False) but the operator
+  trusts the run.
+
+### Mechanism
+
+1. New flag in suite `config` JSONB: `auto_approve_all: bool`. Default
+   false. Stored alongside existing `memoryEnabled`, `memoryBackend`.
+2. `_run_tests_bg` reads the flag from suite config and passes it
+   through to the integration runner via env var
+   `HP1_TEST_AUTO_APPROVE_ALL=1`.
+3. `tests/integration/test_agent.py::run_test` checks the env var.
+   When set, every test case is treated as if `auto_confirm=True` —
+   the pre-arm POST sends `approved=true` regardless of the per-case
+   field.
+4. GUI: checkbox in the suite editor "Auto-approve all plans".
+
+The per-case `auto_confirm` field is preserved as the default; the
+suite flag is a one-shot override.
+
+Version bump: 2.49.12 → 2.49.13
+
+---
+
+## Change 1 — `api/routers/tests_api.py`
+
+Find the `_run_tests_bg` config-loading section (after suite_id is
+resolved):
+
+````python
+        # ── 1. Load suite config if suite_id provided ─────────────────────
+        if suite_id:
+            try:
+                from api.db import test_runs as _tr
+                suites = _tr.list_suites()
+                suite = next((s for s in suites if s["id"] == suite_id), None)
+                if suite:
+                    suite_name = suite_name or suite.get("name", "")
+                    cfg = suite.get("config") or {}
+                    if not categories:
+                        categories = suite.get("categories") or []
+                    if not test_ids:
+                        test_ids = suite.get("test_ids") or []
+                    if memory_enabled is None:
+                        memory_enabled = cfg.get("memoryEnabled", True)
+                    if memory_backend is None:
+                        memory_backend = cfg.get("memoryBackend", "muninndb")
+            except Exception as _se:
+                import logging; logging.getLogger(__name__).debug("suite load: %s", _se)
+````
+
+Replace with (capture the new flag and propagate as env var):
+
+````python
+        # ── 1. Load suite config if suite_id provided ─────────────────────
+        # v2.49.13: also read auto_approve_all and propagate to the runner
+        # via env var HP1_TEST_AUTO_APPROVE_ALL=1.
+        auto_approve_all = False
+        if suite_id:
+            try:
+                from api.db import test_runs as _tr
+                suites = _tr.list_suites()
+                suite = next((s for s in suites if s["id"] == suite_id), None)
+                if suite:
+                    suite_name = suite_name or suite.get("name", "")
+                    cfg = suite.get("config") or {}
+                    if not categories:
+                        categories = suite.get("categories") or []
+                    if not test_ids:
+                        test_ids = suite.get("test_ids") or []
+                    if memory_enabled is None:
+                        memory_enabled = cfg.get("memoryEnabled", True)
+                    if memory_backend is None:
+                        memory_backend = cfg.get("memoryBackend", "muninndb")
+                    auto_approve_all = bool(cfg.get("auto_approve_all", False))
+            except Exception as _se:
+                import logging; logging.getLogger(__name__).debug("suite load: %s", _se)
+
+        # v2.49.13: in-process flag picked up by the integration runner
+        # via os.environ. Cleared in the finally block to avoid leakage
+        # between consecutive suite runs.
+        import os as _os
+        if auto_approve_all:
+            _os.environ["HP1_TEST_AUTO_APPROVE_ALL"] = "1"
+            import logging
+            logging.getLogger(__name__).info(
+                "[tests] suite '%s' has auto_approve_all=True — all plan gates will be approved",
+                suite_name)
+        else:
+            _os.environ.pop("HP1_TEST_AUTO_APPROVE_ALL", None)
+````
+
+Find the `finally:` block at the end of `_run_tests_bg` (where
+`_running` and `test_run_active` are reset):
+
+````python
+        _running = False
+        test_run_active = False
+````
+
+Replace with:
+
+````python
+        _running = False
+        test_run_active = False
+        # v2.49.13: clear the auto-approve-all flag so it doesn't leak
+        # into subsequent suite runs that don't enable it.
+        import os as _os_cleanup
+        _os_cleanup.environ.pop("HP1_TEST_AUTO_APPROVE_ALL", None)
+````
+
+(If v2.49.12's cancel cleanup comment was added at this same location,
+keep both edits — they're separate.)
+
+## Change 2 — `tests/integration/test_agent.py`
+
+Find the `run_test` function. Look for the pre-arm block where
+`/api/agent/confirm` is POSTed. The pattern is:
+
+````python
+    if tc.triggers_plan:
+        try:
+            await http.post(
+                f"{API_BASE}/api/agent/confirm",
+                json={"session_id": session_id, "approved": tc.auto_confirm},
+                timeout=5,
+            )
+        except Exception:
+            pass
+````
+
+Replace with:
+
+````python
+    if tc.triggers_plan:
+        # v2.49.13: HP1_TEST_AUTO_APPROVE_ALL env var (set by the suite
+        # runner when the suite has auto_approve_all=true) overrides the
+        # per-case auto_confirm field. Use the env value when present.
+        import os as _os_cf
+        _aaa = _os_cf.environ.get("HP1_TEST_AUTO_APPROVE_ALL") == "1"
+        approved = True if _aaa else bool(tc.auto_confirm)
+        try:
+            await http.post(
+                f"{API_BASE}/api/agent/confirm",
+                json={"session_id": session_id, "approved": approved},
+                timeout=5,
+            )
+        except Exception:
+            pass
+````
+
+Also update the second confirmation site inside `_collect()` (the
+re-send loop on `plan_pending`). Find:
+
+````python
+                    if mtyp == "plan_pending" and sid == session_id:
+                        try:
+                            r_plan = msg.get("plan", {}) or {}
+                            captured["plan_summary"] = (r_plan.get("summary") or "")[:300]
+                            captured["plan_steps_count"] = len(r_plan.get("steps", []) or [])
+                            captured["plan_approved"] = bool(tc.auto_confirm)
+                        except Exception:
+                            pass
+                        # Up to 3 retries — server has a 300s timeout, but we want
+                        # to surface real failures fast.
+                        for _attempt in range(3):
+                            try:
+                                _r = await http.post(
+                                    f"{API_BASE}/api/agent/confirm",
+                                    json={"session_id": session_id,
+                                          "approved": tc.auto_confirm},
+                                    timeout=5,
+                                )
+                                if _r.status_code == 200:
+                                    break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
+````
+
+Replace with:
+
+````python
+                    if mtyp == "plan_pending" and sid == session_id:
+                        # v2.49.13: same auto_approve_all override as the
+                        # pre-arm site above.
+                        import os as _os_cf2
+                        _aaa2 = _os_cf2.environ.get("HP1_TEST_AUTO_APPROVE_ALL") == "1"
+                        _approved = True if _aaa2 else bool(tc.auto_confirm)
+                        try:
+                            r_plan = msg.get("plan", {}) or {}
+                            captured["plan_summary"] = (r_plan.get("summary") or "")[:300]
+                            captured["plan_steps_count"] = len(r_plan.get("steps", []) or [])
+                            captured["plan_approved"] = _approved
+                        except Exception:
+                            pass
+                        # Up to 3 retries — server has a 300s timeout, but we want
+                        # to surface real failures fast.
+                        for _attempt in range(3):
+                            try:
+                                _r = await http.post(
+                                    f"{API_BASE}/api/agent/confirm",
+                                    json={"session_id": session_id,
+                                          "approved": _approved},
+                                    timeout=5,
+                                )
+                                if _r.status_code == 200:
+                                    break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
+````
+
+## Change 3 — `gui/src/components/TestsPanel.jsx`
+
+Find the suite editor form. Look for the existing checkbox or input
+that controls `memoryEnabled` in the suite config. The pattern is
+typically a form with multiple input rows. We need to add a new
+"Auto-approve all plans" checkbox next to it.
+
+Search for the string `memoryEnabled` in the file. There should be a
+JSX block roughly like:
+
+````jsx
+<label>
+  <input
+    type="checkbox"
+    checked={config.memoryEnabled ?? true}
+    onChange={(e) => setConfig({ ...config, memoryEnabled: e.target.checked })}
+  />
+  Memory enabled
+</label>
+````
+
+Add a new label immediately after that one (or wherever the suite
+config form gathers booleans):
+
+````jsx
+{/* v2.49.13: suite-level override for per-case auto_confirm */}
+<label style={{ display: 'flex', alignItems: 'center', gap: 6,
+                fontFamily: 'var(--font-mono)', fontSize: 10,
+                marginTop: 6 }}>
+  <input
+    type="checkbox"
+    checked={config.auto_approve_all ?? false}
+    onChange={(e) => setConfig({ ...config, auto_approve_all: e.target.checked })}
+  />
+  Auto-approve all plans (overrides per-case auto_confirm)
+</label>
+````
+
+If the suite editor's config-form structure is materially different
+(e.g. uses a different state setter, or the boolean fields are in a
+JSON textarea), adapt the placement — what matters is that the
+suite's `config.auto_approve_all` boolean is editable and persists
+through the existing `upsert_suite` API call.
+
+## Change 4 — `docs/PHASE_v2.49_NOTES.md` (if present, else skip)
+
+If `docs/PHASE_v2.49_NOTES.md` or similar exists in the repo, append
+a note. Otherwise skip this change. Quick check:
+
+````bash
+ls docs/PHASE_v2.49* 2>/dev/null
+````
+
+If a file exists, append:
+
+````markdown
+
+### v2.49.13 — auto_approve_all suite flag
+
+Suite config now supports `auto_approve_all: bool` (default false).
+When true, the runner pre-arms `approved=true` for every plan gate
+regardless of per-case `auto_confirm`. Useful for action-heavy suites
+or one-shot operator-driven runs.
+````
+
+If no such file exists, this change is a no-op — the inline comments
+in code are sufficient documentation.
+
+## Change 5 — VERSION
+
+Update `VERSION`: 2.49.12 → 2.49.13
+
+## Verify
+
+````bash
+# 1. Suite config flag plumbed through tests_api.py
+grep -q 'auto_approve_all' api/routers/tests_api.py
+grep -q 'HP1_TEST_AUTO_APPROVE_ALL' api/routers/tests_api.py
+
+# 2. Runner reads the env var at both pre-arm sites
+grep -c 'HP1_TEST_AUTO_APPROVE_ALL' tests/integration/test_agent.py
+# Expected: ≥ 2 (one in run_test pre-arm, one in _collect re-send)
+
+# 3. GUI form has the new checkbox bound to config.auto_approve_all
+grep -q 'auto_approve_all' gui/src/components/TestsPanel.jsx
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "feat(tests): suite-level auto_approve_all flag (v2.49.13)
+
+New suite config field: auto_approve_all (default false). When true,
+the runner pre-arms 'approved=true' for every plan_action gate
+regardless of the per-case auto_confirm field.
+
+Mechanism: suite runner sets HP1_TEST_AUTO_APPROVE_ALL=1 env var
+before invoking the integration runner; runner checks the env at
+both pre-arm sites (initial pre-arm + plan_pending re-send retry).
+Env var cleared in finally to prevent leakage between runs.
+
+Per-case auto_confirm remains the default; the suite flag is a
+one-shot override for action-heavy or trusted runs.
+
+GUI: new 'Auto-approve all plans' checkbox in the suite editor."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI rebuilds:
+
+````bash
+# Sidecar auto-update or manual recreate per usual flow.
+# To use:
+# 1. Open Tests → Suites → Edit existing suite (or create new)
+# 2. Tick 'Auto-approve all plans' → Save
+# 3. Run that suite — every plan gate is approved automatically
+````

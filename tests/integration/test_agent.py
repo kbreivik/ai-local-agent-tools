@@ -737,6 +737,16 @@ async def run_all_tests(
                 print(f"  [reset] Reset error: {_e}")
             print(f"  → {tc.id}{crit_mark}  {tc.task!r:.60}… ", end="", flush=True)
 
+        # v2.49.12 — suite cancellation check. Operator pressed Cancel
+        # in the GUI; we let the in-flight case finish naturally on the
+        # previous iteration and bail before starting a new one.
+        try:
+            from api.routers.tests_api import is_cancelled
+            if is_cancelled():
+                print(f"\n[runner] Cancellation requested — skipping remaining cases")
+                break
+        except Exception:
+            pass
         result = await run_test(tc, http, token=token)
         results.append(result)
 
