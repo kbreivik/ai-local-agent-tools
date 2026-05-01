@@ -114,4 +114,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.10.md | v2.49.10 | fix(db): disable asyncpg statement cache on pgbouncer socket (transaction-mode prepared-statement incompatibility → slow GUI) | DONE (21369b9) |
 | CC_PROMPT_v2.49.11.md | v2.49.11 | fix(perf+bugs): status_snapshots(component,timestamp DESC) composite index + 30d retention + kafka extractor list-vs-int + PgMemoryClient._base | DONE (d747988) |
 | CC_PROMPT_v2.49.12.md | v2.49.12 | feat(tests): suite-level cancel button (POST /api/tests/cancel + GUI) | DONE (49502ae) |
-| CC_PROMPT_v2.49.13.md | v2.49.13 | feat(tests): suite-level auto_approve_all flag (override per-case auto_confirm via suite config) | RUNNING |
+| CC_PROMPT_v2.49.13.md | v2.49.13 | feat(tests): suite-level auto_approve_all flag (override per-case auto_confirm via suite config) | DONE (a79316c) |
+| CC_PROMPT_v2.49.14.md | v2.49.14 | fix(agent): hard-gate tool list after clarification answer (state flag + tool_choice=required) — closes clarify→audit_log escape in 4 tests | RUNNING |

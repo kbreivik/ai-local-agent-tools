@@ -95,6 +95,43 @@ async def call_llm_step(
         state.propose_state.queued_harness_messages.clear()
 
     # 5. LLM call
+    # v2.49.14 — clarification post-answer gate: when the prior step's
+    # clarifying_question handler set state.clarification_just_answered,
+    # restrict tools_spec to {plan_action, escalate} and force tool_choice
+    # to one of them. Closes the clarify→audit_log escape that v2.45.18's
+    # system-message directive could not enforce by suggestion alone.
+    _gated_tools = tools_spec
+    _gated_choice = "auto"
+    if state.clarification_just_answered:
+        _allow = {"plan_action", "escalate"}
+        _gated_tools = [
+            t for t in tools_spec
+            if (t.get("function") or {}).get("name") in _allow
+        ]
+        if not _gated_tools:
+            # Fail-safe: if neither tool happens to be in the agent-type
+            # allowlist (shouldn't happen — both are in every prompt's
+            # _BASE / META_TOOLS), fall back to the unfiltered list rather
+            # than giving the model an empty tool array.
+            _gated_tools = tools_spec
+            log.warning(
+                "[clarify-gate] neither plan_action nor escalate in tools_spec — "
+                "skipping gate (agent_type=%s)", agent_type,
+            )
+        else:
+            _gated_choice = "required"
+            log.info(
+                "[clarify-gate] tools restricted to %s, tool_choice=required",
+                sorted(_allow),
+            )
+            await manager.send_line(
+                "step",
+                "[clarify-gate] tools restricted to plan_action/escalate",
+                status="ok", session_id=session_id,
+            )
+        # One-shot — clear the flag so the next step is unrestricted.
+        state.clarification_just_answered = False
+
     _step_t0 = _time.monotonic()
     try:
         from api.routers.agent import _step_temperature
@@ -102,8 +139,8 @@ async def call_llm_step(
         response = client.chat.completions.create(
             model=_lm_model(),
             messages=messages,
-            tools=tools_spec,
-            tool_choice="auto",
+            tools=_gated_tools,
+            tool_choice=_gated_choice,
             temperature=_temp,
             max_tokens=2048,
             extra_body={"min_p": 0.1},

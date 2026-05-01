@@ -331,9 +331,13 @@ async def _handle_clarifying_question(
                 "Call plan_action() now."
             ),
         })
+        # v2.49.14 — physical gate: next LLM call gets tools_spec filtered
+        # to {plan_action, escalate} and tool_choice="required". The model
+        # cannot call audit_log on the next step, full stop.
+        state.clarification_just_answered = True
         await manager.send_line(
             "step",
-            "[clarify→plan] system directive injected into LLM context",
+            "[clarify→plan] tool list will be restricted on next step",
             status="ok", session_id=session_id,
         )
     return {

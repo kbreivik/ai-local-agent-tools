@@ -45,6 +45,12 @@ class StepState:
     clarifying_question_count: int = 0                     # v2.47.4 — cap at 2 per run
     clarification_force_nudge_fired: bool = False          # v2.47.4
     no_evidence_rebuke_fired: bool = False     # v2.47.6 — rebuke audit-only / empty exit
+    # v2.49.14 — set by the clarifying_question handler after a non-cancel
+    # answer; consumed by step_llm at the next LLM call. When True, tools_spec
+    # is filtered to {plan_action, escalate} and tool_choice="required" forces
+    # the model to actually pick one. One-shot: cleared in step_llm after use.
+    # Closes the clarify→audit_log escape (4 tests in v2.45.17 baseline).
+    clarification_just_answered: bool = False
 
     # Hallucination guard
     hallucination_block_fired: bool = False                # v2.34.8: legacy flag

@@ -1,0 +1,371 @@
+# CC PROMPT — v2.49.14 — fix(agent): hard-gate tool list after clarification answer
+
+## What this does
+
+Fixes the `clarify→audit_log` escape. After a clarifying_question is
+answered, the agent is supposed to call `plan_action` next. v2.45.18
+already injects a system message saying so, but the model often
+ignores it and calls `audit_log` (or another non-plan tool), failing
+4 action tests in the v2.45.17 baseline.
+
+Status report v2.45.17 claimed the fix was "directive injected into
+WS broadcast list, not LLM messages" — that was outdated. Inspection
+shows the directive IS already in `messages` (step_tools.py:414). The
+real problem: the model receives the directive but ignores it.
+
+### Fix — physical tool gating
+
+Adding a state flag `clarification_just_answered: bool` to StepState,
+set in the clarifying_question handler when the answer is non-cancel.
+Consumed in step_llm.py at the LLM call site:
+
+- When the flag is True on the next step, filter `tools_spec` to a
+  small allow-set: `{plan_action, escalate}`.
+- Set `tool_choice="required"` so the model MUST call one of those
+  two tools (cannot output a free-text message instead).
+- Clear the flag after the LLM call (one-shot effect).
+
+Result: model literally cannot call `audit_log` on the step after a
+clarification answer. It must call `plan_action` (preferred) or
+`escalate` (if it genuinely cannot proceed). No prompt-engineering
+ambiguity, no model-discretion.
+
+### Bonus: also handles `clarify→clarifying_question` loop
+
+The same gating prevents a second back-to-back `clarifying_question`
+call. Models sometimes ask follow-up clarifications when the first
+answer is unsatisfying. With tool list restricted to `{plan_action,
+escalate}`, that loop is closed too.
+
+Version bump: 2.49.13 → 2.49.14
+
+---
+
+## Change 1 — `api/agents/step_state.py`
+
+Find the StepState dataclass body. Look for the existing
+`clarifying_question_count` line:
+
+````python
+    clarifying_question_count: int = 0                     # v2.47.4 — cap at 2 per run
+    clarification_force_nudge_fired: bool = False          # v2.47.4
+    no_evidence_rebuke_fired: bool = False     # v2.47.6 — rebuke audit-only / empty exit
+````
+
+Replace with:
+
+````python
+    clarifying_question_count: int = 0                     # v2.47.4 — cap at 2 per run
+    clarification_force_nudge_fired: bool = False          # v2.47.4
+    no_evidence_rebuke_fired: bool = False     # v2.47.6 — rebuke audit-only / empty exit
+    # v2.49.14 — set by the clarifying_question handler after a non-cancel
+    # answer; consumed by step_llm at the next LLM call. When True, tools_spec
+    # is filtered to {plan_action, escalate} and tool_choice="required" forces
+    # the model to actually pick one. One-shot: cleared in step_llm after use.
+    # Closes the clarify→audit_log escape (4 tests in v2.45.17 baseline).
+    clarification_just_answered: bool = False
+````
+
+## Change 2 — `api/agents/step_tools.py`
+
+Find the clarifying_question handler. The relevant block:
+
+````python
+async def _handle_clarifying_question(
+    tc, fn_args: dict, *,
+    state, session_id: str, task: str, manager, messages: list,
+) -> dict:
+    """Broadcast clarification prompt to GUI and suspend until answered."""
+    from api.clarification import wait_for_clarification
+    from api.memory.feedback import record_feedback_signal as _rfs
+
+    question = fn_args.get("question", "")
+    options  = fn_args.get("options") or []
+    state.negative_signals += 1   # task was ambiguous — mild negative signal
+    asyncio.create_task(_rfs(task, "clarification_needed", question[:120]))
+    await manager.broadcast({
+        "type":      "clarification_needed",
+        "question":  question,
+        "options":   options,
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await manager.send_line(
+        "step", f"[clarification] Waiting for user: {question}",
+        status="ok", session_id=session_id,
+    )
+    answer = await wait_for_clarification(session_id)
+    _is_cancel = answer.lower() in (
+        "cancel", "timeout — proceed with best guess", "",
+    )
+    _directive = (
+        "" if _is_cancel
+        else " Your NEXT tool call MUST be plan_action(). Do NOT call audit_log."
+    )
+    # v2.45.18 — inject system message into the LLM messages list so the
+    # directive is visible in the conversation context on the next turn.
+    # The tool result message alone (with embedded directive) is being
+    # ignored by the model; a follow-up system message is the pattern that
+    # works (see sub-agent distrust signal and budget-truncate nudge).
+    if not _is_cancel:
+        messages.append({
+            "role": "system",
+            "content": (
+                f"[harness] User clarification received: '{answer}'. "
+                "You now have all information needed to proceed. "
+                "Your NEXT tool call MUST be plan_action() with concrete "
+                "summary + steps. "
+                "Do NOT call audit_log. "
+                "Do NOT ask another clarifying_question. "
+                "Do NOT call escalate. "
+                "Call plan_action() now."
+            ),
+        })
+        await manager.send_line(
+            "step",
+            "[clarify→plan] system directive injected into LLM context",
+            status="ok", session_id=session_id,
+        )
+    return {
+        "status":  "ok",
+        "answer":  answer,
+        "message": f"User answered: {answer}.{_directive}",
+        "data":    {"question": question, "answer": answer},
+        "next_required_tool": None if _is_cancel else "plan_action",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+````
+
+Replace with:
+
+````python
+async def _handle_clarifying_question(
+    tc, fn_args: dict, *,
+    state, session_id: str, task: str, manager, messages: list,
+) -> dict:
+    """Broadcast clarification prompt to GUI and suspend until answered."""
+    from api.clarification import wait_for_clarification
+    from api.memory.feedback import record_feedback_signal as _rfs
+
+    question = fn_args.get("question", "")
+    options  = fn_args.get("options") or []
+    state.negative_signals += 1   # task was ambiguous — mild negative signal
+    asyncio.create_task(_rfs(task, "clarification_needed", question[:120]))
+    await manager.broadcast({
+        "type":      "clarification_needed",
+        "question":  question,
+        "options":   options,
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    await manager.send_line(
+        "step", f"[clarification] Waiting for user: {question}",
+        status="ok", session_id=session_id,
+    )
+    answer = await wait_for_clarification(session_id)
+    _is_cancel = answer.lower() in (
+        "cancel", "timeout — proceed with best guess", "",
+    )
+    _directive = (
+        "" if _is_cancel
+        else " Your NEXT tool call MUST be plan_action(). Do NOT call audit_log."
+    )
+    # v2.45.18 — inject system message into the LLM messages list so the
+    # directive is visible in the conversation context on the next turn.
+    # The tool result message alone (with embedded directive) is being
+    # ignored by the model; a follow-up system message is the pattern that
+    # works (see sub-agent distrust signal and budget-truncate nudge).
+    if not _is_cancel:
+        messages.append({
+            "role": "system",
+            "content": (
+                f"[harness] User clarification received: '{answer}'. "
+                "You now have all information needed to proceed. "
+                "Your NEXT tool call MUST be plan_action() with concrete "
+                "summary + steps. "
+                "Do NOT call audit_log. "
+                "Do NOT ask another clarifying_question. "
+                "Do NOT call escalate. "
+                "Call plan_action() now."
+            ),
+        })
+        # v2.49.14 — physical gate: next LLM call gets tools_spec filtered
+        # to {plan_action, escalate} and tool_choice="required". The model
+        # cannot call audit_log on the next step, full stop.
+        state.clarification_just_answered = True
+        await manager.send_line(
+            "step",
+            "[clarify→plan] tool list will be restricted on next step",
+            status="ok", session_id=session_id,
+        )
+    return {
+        "status":  "ok",
+        "answer":  answer,
+        "message": f"User answered: {answer}.{_directive}",
+        "data":    {"question": question, "answer": answer},
+        "next_required_tool": None if _is_cancel else "plan_action",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+````
+
+## Change 3 — `api/agents/step_llm.py`
+
+Find the LLM call block (step 5, around line 95):
+
+````python
+    # 5. LLM call
+    _step_t0 = _time.monotonic()
+    try:
+        from api.routers.agent import _step_temperature
+        _temp = _step_temperature(agent_type, has_tool_calls=True, is_force_summary=False)
+        response = client.chat.completions.create(
+            model=_lm_model(),
+            messages=messages,
+            tools=tools_spec,
+            tool_choice="auto",
+            temperature=_temp,
+            max_tokens=2048,
+            extra_body={"min_p": 0.1},
+        )
+    except Exception as e:
+        await manager.broadcast({
+            "type": "error", "session_id": session_id,
+            "content": f"LM Studio error: {e}", "status": "error",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        return LlmStepResult(response=None, finish="error", msg=None, hard_error=True)
+````
+
+Replace with:
+
+````python
+    # 5. LLM call
+    # v2.49.14 — clarification post-answer gate: when the prior step's
+    # clarifying_question handler set state.clarification_just_answered,
+    # restrict tools_spec to {plan_action, escalate} and force tool_choice
+    # to one of them. Closes the clarify→audit_log escape that v2.45.18's
+    # system-message directive could not enforce by suggestion alone.
+    _gated_tools = tools_spec
+    _gated_choice = "auto"
+    if state.clarification_just_answered:
+        _allow = {"plan_action", "escalate"}
+        _gated_tools = [
+            t for t in tools_spec
+            if (t.get("function") or {}).get("name") in _allow
+        ]
+        if not _gated_tools:
+            # Fail-safe: if neither tool happens to be in the agent-type
+            # allowlist (shouldn't happen — both are in every prompt's
+            # _BASE / META_TOOLS), fall back to the unfiltered list rather
+            # than giving the model an empty tool array.
+            _gated_tools = tools_spec
+            log.warning(
+                "[clarify-gate] neither plan_action nor escalate in tools_spec — "
+                "skipping gate (agent_type=%s)", agent_type,
+            )
+        else:
+            _gated_choice = "required"
+            log.info(
+                "[clarify-gate] tools restricted to %s, tool_choice=required",
+                sorted(_allow),
+            )
+            await manager.send_line(
+                "step",
+                "[clarify-gate] tools restricted to plan_action/escalate",
+                status="ok", session_id=session_id,
+            )
+        # One-shot — clear the flag so the next step is unrestricted.
+        state.clarification_just_answered = False
+
+    _step_t0 = _time.monotonic()
+    try:
+        from api.routers.agent import _step_temperature
+        _temp = _step_temperature(agent_type, has_tool_calls=True, is_force_summary=False)
+        response = client.chat.completions.create(
+            model=_lm_model(),
+            messages=messages,
+            tools=_gated_tools,
+            tool_choice=_gated_choice,
+            temperature=_temp,
+            max_tokens=2048,
+            extra_body={"min_p": 0.1},
+        )
+    except Exception as e:
+        await manager.broadcast({
+            "type": "error", "session_id": session_id,
+            "content": f"LM Studio error: {e}", "status": "error",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        return LlmStepResult(response=None, finish="error", msg=None, hard_error=True)
+````
+
+(Note: only `tools=_gated_tools` and `tool_choice=_gated_choice` change
+inside `chat.completions.create`. The rest of the call is identical.)
+
+## Change 4 — VERSION
+
+Update `VERSION`: 2.49.13 → 2.49.14
+
+## Verify
+
+````bash
+# 1. State flag declared
+grep -q 'clarification_just_answered: bool = False' api/agents/step_state.py
+
+# 2. Handler sets the flag on non-cancel answer
+grep -A 2 'state.clarification_just_answered = True' api/agents/step_tools.py | grep -q 'tool list will be restricted'
+
+# 3. step_llm reads the flag and gates
+grep -q 'state.clarification_just_answered' api/agents/step_llm.py
+grep -q '"plan_action", "escalate"' api/agents/step_llm.py
+grep -q 'tool_choice=_gated_choice' api/agents/step_llm.py
+
+# 4. Flag is one-shot — cleared after use
+grep -A 30 'state.clarification_just_answered:' api/agents/step_llm.py | \
+  grep -q 'state.clarification_just_answered = False'
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "fix(agent): hard-gate tool list after clarification answer (v2.49.14)
+
+The clarify→audit_log escape in 4 tests of the v2.45.17 baseline
+is fixed by physical tool gating, not prompt suggestion.
+
+Mechanism:
+- step_state.py adds clarification_just_answered: bool = False.
+- step_tools.py _handle_clarifying_question sets the flag True after
+  a non-cancel answer is received.
+- step_llm.py at the LLM call site: when the flag is True, filters
+  tools_spec to {plan_action, escalate} and sets tool_choice='required'.
+  Clears the flag after the call (one-shot).
+
+Result: on the step immediately after a clarification answer, the
+model literally cannot call audit_log, escalate-only-because-blocked,
+or another clarifying_question. It must call plan_action (correct
+path) or escalate (if it genuinely cannot proceed).
+
+The v2.45.18 system-message directive is kept as belt-and-braces
+context for the model — both the message AND the tool gate now
+point the same direction. Belt-and-braces is fine; conflicting
+suggestions are not.
+
+Closes 4 expected test failures in the next baseline:
+action-drain-01, action-activate-01, orch-verify-01,
+orch-correlate-01."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI rebuilds:
+
+````bash
+# Sidecar auto-update or manual recreate per usual flow.
+# Then re-run the affected tests:
+# - smoke-mem-on-fast (sanity — should still be 100%)
+# - full-mem-on-baseline (action + orch tests are in here)
+# Compare to v2.45.17 baseline (95.5%, 21/38 mem-on).
+````
