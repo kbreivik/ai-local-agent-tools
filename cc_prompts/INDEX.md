@@ -117,4 +117,5 @@ bash cc_prompts/run_queue.sh
 | CC_PROMPT_v2.49.13.md | v2.49.13 | feat(tests): suite-level auto_approve_all flag (override per-case auto_confirm via suite config) | DONE (a79316c) |
 | CC_PROMPT_v2.49.14.md | v2.49.14 | fix(agent): hard-gate tool list after clarification answer (state flag + tool_choice=required) — closes clarify→audit_log escape in 4 tests | DONE (80d4e07) |
 | CC_PROMPT_v2.49.15.md | v2.49.15 | feat(tests): per-step trace capture (test_step_traces table) + GET /runs/{id}/traces endpoint — retroactive debug for 5 v2.49.14 baseline failures | DONE (7342903) |
-| CC_PROMPT_v2.49.16.md | v2.49.16 | fix(tests): stale data (kafka-stack_kafka1→kafka_broker-1, 0sj1zr8f1pcm→worker-01) + service_version_history name= kwarg alias | RUNNING |
+| CC_PROMPT_v2.49.16.md | v2.49.16 | fix(tests): stale data (kafka-stack_kafka1→kafka_broker-1, 0sj1zr8f1pcm→worker-01) + service_version_history name= kwarg alias | DONE (66cf764) |
+| CC_PROMPT_v2.49.17.md | v2.49.17 | fix(tests): workload-stack_workload→logstash_logstash + preflight stale refs + setup hook DOCKER_HOST routing | RUNNING |

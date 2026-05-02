@@ -63,7 +63,7 @@ TEST_CASES: list[TestCase] = [
         task="list all running services", agent_type="status",
         expect_tools=["service_list"], max_steps=20, timeout_s=120),
     TestCase(id="status-version-01", category="status",
-        task="call service_current_version for workload-stack_workload and report the current running version",
+        task="call service_current_version for logstash_logstash and report the current running version",
         agent_type="status", expect_tools=["service_current_version"],
         max_steps=15, timeout_s=90),
     TestCase(id="status-kafka-01", category="status",
@@ -82,7 +82,7 @@ TEST_CASES: list[TestCase] = [
         task="is elasticsearch healthy?", agent_type="status",
         expect_tools=["elastic_cluster_health"], max_steps=30, timeout_s=120),
     TestCase(id="status-svc-health-01", category="status",
-        task="check health of the workload service", agent_type="status",
+        task="check health of the logstash_logstash service", agent_type="status",
         expect_tools=["service_health"], max_steps=15, timeout_s=180),
 
     # ══ B — RESEARCH ══
@@ -137,10 +137,10 @@ TEST_CASES: list[TestCase] = [
     # ══ D — ACTION ══
 
     TestCase(id="action-upgrade-01", category="action",
-        task="upgrade workload-stack_workload service to nginx:1.27-alpine — call plan_action before executing",
+        task="upgrade logstash_logstash service to docker.elastic.co/logstash/logstash:8.18.0 — call plan_action before executing",
         agent_type="action", expect_tools=["plan_action"], triggers_plan=True,
         plan_risk="medium", auto_confirm=False, stop_after_seconds=50,
-        clarification_answer="workload-stack_workload",
+        clarification_answer="logstash_logstash",
         max_steps=15, timeout_s=240, soft=True),
     TestCase(id="action-rollback-01", category="action",
         task="rollback kafka_broker-1 to previous version",
@@ -211,7 +211,7 @@ TEST_CASES: list[TestCase] = [
         expect_status="success",
         max_steps=10, timeout_s=120, soft=True),
     TestCase(id="orch-verify-01", category="orchestration",
-        task="call post_upgrade_verify for workload-stack_workload to confirm it is healthy after the last upgrade",
+        task="call post_upgrade_verify for logstash_logstash to confirm it is healthy after the last upgrade",
         expect_tools=["post_upgrade_verify"], max_steps=10, timeout_s=180, soft=True),
     TestCase(id="orch-correlate-01", category="orchestration",
         task="use elastic_correlate_operation to correlate the last agent operation with elasticsearch logs",

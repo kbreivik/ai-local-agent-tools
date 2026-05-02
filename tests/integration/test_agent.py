@@ -128,37 +128,46 @@ async def preflight(http: httpx.AsyncClient) -> bool:
     except Exception:
         print("  [preflight] /api/status unreachable — continuing")
 
-    # 4. Node 0sj1zr8f1pcm in active state (needed for drain tests)
+    # 4. Node worker-01 in active state (needed for drain tests).
+    # v2.49.17: switched from stale hex ID '0sj1zr8f1pcm' to hostname.
+    # DOCKER_HOST explicitly set so docker CLI talks to the swarm
+    # manager (agent-01 itself isn't a swarm node).
+    import os as _os_pf
+    _docker_env = {**_os_pf.environ, "DOCKER_HOST": "tcp://192.168.199.21:2375"}
     try:
         proc = subprocess.run(
-            ["docker", "node", "inspect", "0sj1zr8f1pcm",
+            ["docker", "node", "inspect", "worker-01",
              "--format", "{{.Spec.Availability}}"],
             capture_output=True, text=True, timeout=5,
+            env=_docker_env,
         )
         avail = proc.stdout.strip()
         if avail == "active":
-            print("  [preflight] Node 0sj1zr8f1pcm: active")
+            print("  [preflight] Node worker-01: active")
         elif avail == "drain":
-            print("  [preflight] Node 0sj1zr8f1pcm is drained — restoring to active")
+            print("  [preflight] Node worker-01 is drained — restoring to active")
             subprocess.run(
-                ["docker", "node", "update", "--availability", "active", "0sj1zr8f1pcm"],
-                timeout=10, check=False,
+                ["docker", "node", "update", "--availability", "active", "worker-01"],
+                timeout=10, check=False, env=_docker_env,
             )
         else:
-            print(f"  [preflight] Node 0sj1zr8f1pcm availability={avail!r} — continuing")
+            print(f"  [preflight] Node worker-01 availability={avail!r} — continuing")
     except Exception as e:
         print(f"  [preflight] docker node inspect skipped: {e}")
 
     # 5. Kafka services must be on the expected version (BLOCKING)
     # Tests must never run against the wrong image — Kafka downgrades during
     # prior test runs can leave brokers on an unexpected version.
+    # v2.49.17: prefix updated from 'kafka-stack_kafka' (stale stack name)
+    # to 'kafka_broker' (real service name on this cluster).
     EXPECTED_KAFKA_IMAGE = "apache/kafka:4.2.0"
-    KAFKA_SERVICE_PREFIX = "kafka-stack_kafka"
+    KAFKA_SERVICE_PREFIX = "kafka_broker"
     try:
         proc = subprocess.run(
             ["docker", "service", "ls",
              "--format", "{{.Name}}\t{{.Image}}\t{{.Replicas}}"],
             capture_output=True, text=True, timeout=10,
+            env=_docker_env,   # v2.49.17 — talk to swarm manager
         )
         kafka_lines = [
             line for line in proc.stdout.splitlines()
@@ -277,9 +286,17 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
     _step_t_start = time.monotonic()
 
     # Setup hook
+    # v2.49.17 — pass DOCKER_HOST env so 'docker' CLI talks to swarm
+    # manager. The container has the docker CLI binary but no swarm
+    # membership; without the env var, docker commands hit the local
+    # sock and either fail or hang.
     if tc.setup:
         try:
-            subprocess.run(tc.setup, shell=True, timeout=15, check=False)
+            import os as _os_setup
+            _setup_env = {**_os_setup.environ,
+                          "DOCKER_HOST": "tcp://192.168.199.21:2375"}
+            subprocess.run(tc.setup, shell=True, timeout=15,
+                           check=False, env=_setup_env)
             await asyncio.sleep(1)
         except Exception:
             pass
@@ -486,9 +503,14 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
     duration = time.monotonic() - t0
 
     # Teardown hook
+    # v2.49.17 — same DOCKER_HOST routing as setup hook above.
     if tc.teardown:
         try:
-            subprocess.run(tc.teardown, shell=True, timeout=15, check=False)
+            import os as _os_teardown
+            _teardown_env = {**_os_teardown.environ,
+                             "DOCKER_HOST": "tcp://192.168.199.21:2375"}
+            subprocess.run(tc.teardown, shell=True, timeout=15,
+                           check=False, env=_teardown_env)
         except Exception:
             pass
 

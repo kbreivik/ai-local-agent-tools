@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-02T17:57:33",
+  "updated_at": "2026-05-02T20:29:37",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5139,10 +5139,27 @@
       "filename": "CC_PROMPT_v2.49.16.md",
       "version": "v2.49.16",
       "theme": "fix(tests): stale data (kafka-stack_kafka1→kafka_broker-1, 0sj1zr8f1pcm→worker-01) + service_version_history name= kwarg alias",
+      "runner_status": "DONE",
+      "commit_sha": "66cf764",
+      "error": "",
+      "started_at": "2026-05-02T17:57:33",
+      "finished_at": "2026-05-02T18:00:19",
+      "duration_s": 165.63288280001143,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260502_175733_CC_PROMPT_v2.49.16.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.17.md",
+      "version": "v2.49.17",
+      "theme": "fix(tests): workload-stack_workload→logstash_logstash + preflight stale refs + setup hook DOCKER_HOST routing",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-05-02T17:57:33",
+      "started_at": "2026-05-02T20:29:37",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
