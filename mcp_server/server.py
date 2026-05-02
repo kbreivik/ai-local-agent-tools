@@ -64,13 +64,13 @@ def service_resolve_image(image: str, resolve_previous: bool = True) -> dict:
 
 
 @mcp.tool()
-def service_version_history(image: str, count: int = 5) -> dict:
+def service_version_history(image: str = "", count: int = 5, name: str = "") -> dict:
     """
     Return the last {count} stable semver versions for an image from Docker Hub,
     sorted descending. Use when downgrading — pick the version immediately below
-    the current running version.
+    the current running version. Accepts either image=<ref> or name=<service>.
     """
-    return swarm.service_version_history(image, count)
+    return swarm.service_version_history(image=image, count=count, name=name)
 
 
 @mcp.tool()

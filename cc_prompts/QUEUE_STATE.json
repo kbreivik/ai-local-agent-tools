@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-02T14:49:08",
+  "updated_at": "2026-05-02T17:57:33",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5122,10 +5122,27 @@
       "filename": "CC_PROMPT_v2.49.15.md",
       "version": "v2.49.15",
       "theme": "feat(tests): per-step trace capture (test_step_traces table) + GET /runs/{id}/traces endpoint — retroactive debug for 5 v2.49.14 baseline failures",
+      "runner_status": "DONE",
+      "commit_sha": "7342903",
+      "error": "",
+      "started_at": "2026-05-02T14:49:08",
+      "finished_at": "2026-05-02T14:52:26",
+      "duration_s": 198.52653739997186,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260502_144908_CC_PROMPT_v2.49.15.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.16.md",
+      "version": "v2.49.16",
+      "theme": "fix(tests): stale data (kafka-stack_kafka1→kafka_broker-1, 0sj1zr8f1pcm→worker-01) + service_version_history name= kwarg alias",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-05-02T14:49:08",
+      "started_at": "2026-05-02T17:57:33",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

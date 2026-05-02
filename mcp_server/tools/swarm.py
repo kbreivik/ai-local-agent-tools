@@ -257,16 +257,26 @@ def service_resolve_image(image: str, resolve_previous: bool = True) -> dict:
     return _ok(result, msg)
 
 
-def service_version_history(image: str, count: int = 5) -> dict:
+def service_version_history(image: str = "", count: int = 5, name: str = "") -> dict:
     """
     Return the last {count} stable semver versions for an image from Docker Hub,
     sorted descending. Use when downgrading — pick the version immediately below
     the current running version from the returned list.
 
-    IMPORTANT: If passed a service name instead of an image (no '/' in string),
-    this function auto-resolves the running image via service_current_version().
-    Always call service_current_version() first to confirm what is actually running.
+    Accepts either:
+      - image=  (Docker image reference, e.g. "apache/kafka:3.7.1")
+      - name=   (Swarm service name — auto-resolved via service_current_version)
+
+    Both keywords map to the same internal lookup. v2.49.16: 'name' alias
+    added because the LLM frequently calls this with name=<service>; without
+    the alias, the keyword raises TypeError before any resolution logic runs.
     """
+    # v2.49.16 — name is a back-compat alias for image
+    if not image and name:
+        image = name
+    if not image:
+        return _err("service_version_history requires either 'image' or 'name'")
+
     # Auto-resolve service name → actual Docker image
     if "/" not in image and ":" not in image:
         svc_result = service_current_version(image)
