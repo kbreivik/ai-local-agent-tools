@@ -227,6 +227,8 @@ class TestResult:
     plan_steps_count: int = 0
     plan_approved: bool = False
     operation_id: str = ""
+    # v2.49.15 — per-step trace rows (one per WS tool event)
+    step_traces: list[dict] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -267,6 +269,12 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
         "plan_approved": False,
         "operation_id": "",
     }
+
+    # v2.49.15 — per-step trace accumulator. One row per WS tool event;
+    # tagged with the most recent "── Step N ──" marker seen on the wire.
+    step_traces: list[dict] = []
+    _last_step_index = 0
+    _step_t_start = time.monotonic()
 
     # Setup hook
     if tc.setup:
@@ -332,6 +340,8 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
                 stop_task = asyncio.create_task(_auto_stop())
 
             async def _collect():
+                # v2.49.15 — bind enclosing scalars so the trace logic can mutate them
+                nonlocal _last_step_index, _step_t_start
                 async for raw in ws:
                     try:
                         msg = json.loads(raw)
@@ -352,6 +362,37 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
                     messages.append(msg)
                     sid  = msg.get("session_id", "")
                     mtyp = msg.get("type", "")
+
+                    # v2.49.15 — per-step trace capture
+                    if sid == session_id or not sid:
+                        if mtyp == "step":
+                            _line = msg.get("content", "") or ""
+                            if _line.startswith("── Step "):
+                                try:
+                                    _parts = _line.split()
+                                    if len(_parts) >= 3:
+                                        _last_step_index = int(_parts[2])
+                                        _step_t_start = time.monotonic()
+                                except Exception:
+                                    pass
+                        elif mtyp == "tool" and msg.get("tool"):
+                            _now = time.monotonic()
+                            _dur_ms = int((_now - _step_t_start) * 1000)
+                            _status = msg.get("status", "") or ""
+                            _err = ""
+                            if _status in ("failed", "error"):
+                                _err = (msg.get("content", "") or "")[:500]
+                            step_traces.append({
+                                "step_index": _last_step_index,
+                                "tool_name": msg.get("tool", ""),
+                                "tool_args": (msg.get("content", "") or "")[:500],
+                                "duration_ms": _dur_ms,
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "finish_reason": _status,
+                                "error_text": _err,
+                            })
+                            _step_t_start = _now
 
                     # v2.45.32 — re-send the response in case the prearm got
                     # delivered before /run dispatched the operation_id. Server
@@ -456,6 +497,9 @@ async def run_test(tc: TestCase, http: httpx.AsyncClient, token: str = "") -> Te
         m for m in messages
         if not m.get("session_id") or m.get("session_id") == session_id
     ]
+
+    # v2.49.15 — pass step_traces through captured for the evaluator to attach
+    captured["step_traces"] = step_traces
 
     return _evaluate(tc, our_msgs, duration, timed_out, captured=captured)
 
@@ -686,6 +730,7 @@ def _evaluate(tc: TestCase, messages: list[dict], duration: float,
         plan_steps_count=captured.get("plan_steps_count", 0),
         plan_approved=captured.get("plan_approved", False),
         operation_id=captured.get("operation_id", ""),
+        step_traces=captured.get("step_traces", []),
         timed_out=timed_out,
     )
 
@@ -897,6 +942,7 @@ def save_results(results: list[TestResult]) -> None:
                 "plan_steps_count":          r.plan_steps_count,
                 "plan_approved":             r.plan_approved,
                 "operation_id":              r.operation_id,
+                "step_traces":               r.step_traces,
                 "timed_out":        r.timed_out,
                 "timestamp":        r.timestamp,
             }

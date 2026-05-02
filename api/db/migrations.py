@@ -230,6 +230,26 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "CREATE INDEX IF NOT EXISTS idx_snap_comp_ts "
         "ON status_snapshots (component, timestamp DESC)",
     ]),
+    (15, "v2.49.15 — per-test-case step traces for retroactive debug", [
+        """
+        CREATE TABLE IF NOT EXISTS test_step_traces (
+            id                BIGSERIAL PRIMARY KEY,
+            run_id            UUID NOT NULL,
+            test_id           TEXT NOT NULL,
+            step_index        INT  NOT NULL,
+            tool_name         TEXT DEFAULT '',
+            tool_args         TEXT DEFAULT '',
+            duration_ms       INT  DEFAULT 0,
+            prompt_tokens     INT  DEFAULT 0,
+            completion_tokens INT  DEFAULT 0,
+            finish_reason     TEXT DEFAULT '',
+            error_text        TEXT DEFAULT '',
+            timestamp         TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_step_traces_run_test "
+        "ON test_step_traces (run_id, test_id, step_index)",
+    ]),
 ]
 
 

@@ -1,0 +1,390 @@
+# CC PROMPT — v2.49.15 — feat(tests): per-step trace capture + diagnostics endpoint
+
+## What this does
+
+Adds retroactive debug data for failing tests. Currently the `failures`
+JSONB on test_run_results gives the rule that fired ("Expected tool X
+not called"), but no insight into WHY the model didn't call it — what
+it did instead, how long each step took, where time was spent.
+
+After v2.49.14 we have 5 hard failures whose root causes can't be
+diagnosed from the existing data. This prompt adds the missing visibility.
+
+### What gets captured
+
+For each test case run, capture per-step:
+- step number
+- tool name(s) called
+- tool args (truncated to 500 chars)
+- step duration ms
+- LLM prompt/completion tokens
+- finish reason
+- error string if any
+
+Stored in new table `test_step_traces`, linked by `(run_id, test_id)`.
+Written by the test runner during `_collect()` via WS `step` events,
+flushed at the end of each test case alongside `insert_result()`.
+
+### What it does NOT do
+
+- **No agent behaviour changes.** Pure observability.
+- **No new image rebuild requirement** for the migration alone — it
+  runs at startup.
+- **No fix attempts.** This is data-gathering only. Fixes come in
+  later prompts based on what the traces show.
+
+### Migration
+
+Migration 15 creates:
+```sql
+CREATE TABLE IF NOT EXISTS test_step_traces (
+  id          BIGSERIAL PRIMARY KEY,
+  run_id      UUID NOT NULL,
+  test_id     TEXT NOT NULL,
+  step_index  INT  NOT NULL,
+  tool_name   TEXT DEFAULT '',
+  tool_args   TEXT DEFAULT '',
+  duration_ms INT  DEFAULT 0,
+  prompt_tokens     INT DEFAULT 0,
+  completion_tokens INT DEFAULT 0,
+  finish_reason TEXT DEFAULT '',
+  error_text  TEXT DEFAULT '',
+  timestamp   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_step_traces_run_test
+  ON test_step_traces (run_id, test_id, step_index);
+```
+
+Version bump: 2.49.14 → 2.49.15
+
+---
+
+## Change 1 — `api/db/migrations.py`
+
+Append migration 15 to the MIGRATIONS list (after migration 14 from
+v2.49.11):
+
+````python
+    (14, "v2.49.11 — composite index on status_snapshots(component, timestamp DESC)", [
+        ...
+    ]),
+]
+````
+
+Replace the closing `]` with migration 15 inserted before:
+
+````python
+    (14, "v2.49.11 — composite index on status_snapshots(component, timestamp DESC)", [
+        "CREATE INDEX IF NOT EXISTS idx_snap_comp_ts "
+        "ON status_snapshots (component, timestamp DESC)",
+    ]),
+    (15, "v2.49.15 — per-test-case step traces for retroactive debug", [
+        """
+        CREATE TABLE IF NOT EXISTS test_step_traces (
+            id                BIGSERIAL PRIMARY KEY,
+            run_id            UUID NOT NULL,
+            test_id           TEXT NOT NULL,
+            step_index        INT  NOT NULL,
+            tool_name         TEXT DEFAULT '',
+            tool_args         TEXT DEFAULT '',
+            duration_ms       INT  DEFAULT 0,
+            prompt_tokens     INT  DEFAULT 0,
+            completion_tokens INT  DEFAULT 0,
+            finish_reason     TEXT DEFAULT '',
+            error_text        TEXT DEFAULT '',
+            timestamp         TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_step_traces_run_test "
+        "ON test_step_traces (run_id, test_id, step_index)",
+    ]),
+]
+````
+
+(Adjust to match the exact existing text; the key edit is appending
+migration 15 inside the MIGRATIONS list.)
+
+## Change 2 — `api/db/test_runs.py`
+
+Append two helper functions at the bottom of the file (after the
+existing `toggle_schedule` function):
+
+````python
+
+
+# ── Step traces (v2.49.15) ────────────────────────────────────────────────────
+
+def insert_step_traces(run_id: str, test_id: str, traces: list[dict]) -> None:
+    """v2.49.15 — bulk-insert per-step trace rows for a single test case.
+    `traces` is a list of dicts with keys: step_index, tool_name, tool_args,
+    duration_ms, prompt_tokens, completion_tokens, finish_reason, error_text."""
+    if not _is_pg() or not traces:
+        return
+    try:
+        conn = _conn(); cur = conn.cursor()
+        for t in traces:
+            cur.execute("""
+                INSERT INTO test_step_traces
+                    (run_id, test_id, step_index, tool_name, tool_args,
+                     duration_ms, prompt_tokens, completion_tokens,
+                     finish_reason, error_text)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                run_id, test_id,
+                int(t.get('step_index', 0)),
+                str(t.get('tool_name', ''))[:200],
+                str(t.get('tool_args', ''))[:500],
+                int(t.get('duration_ms', 0)),
+                int(t.get('prompt_tokens', 0)),
+                int(t.get('completion_tokens', 0)),
+                str(t.get('finish_reason', ''))[:50],
+                str(t.get('error_text', ''))[:500],
+            ))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        log.debug("insert_step_traces: %s", e)
+
+
+def get_step_traces(run_id: str, test_id: str = None) -> list[dict]:
+    """v2.49.15 — fetch step traces for one run, optionally filtered to
+    a single test_id. Ordered by test_id, step_index ASC."""
+    if not _is_pg():
+        return []
+    try:
+        conn = _conn(); cur = conn.cursor()
+        if test_id:
+            cur.execute("""
+                SELECT test_id, step_index, tool_name, tool_args, duration_ms,
+                       prompt_tokens, completion_tokens, finish_reason, error_text, timestamp
+                FROM test_step_traces
+                WHERE run_id=%s AND test_id=%s
+                ORDER BY step_index ASC
+            """, (run_id, test_id))
+        else:
+            cur.execute("""
+                SELECT test_id, step_index, tool_name, tool_args, duration_ms,
+                       prompt_tokens, completion_tokens, finish_reason, error_text, timestamp
+                FROM test_step_traces
+                WHERE run_id=%s
+                ORDER BY test_id ASC, step_index ASC
+            """, (run_id,))
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("get_step_traces: %s", e)
+        return []
+````
+
+## Change 3 — `tests/integration/test_agent.py`
+
+In the `_collect` async function (where WS messages are consumed),
+capture step events into a per-test-case list. Find the existing WS
+message-handling loop. Look for a section that processes message types
+like `step`, `tool_pending`, `done`. The exact shape varies, but the
+relevant block is around where `mtyp = msg.get("type")` is checked.
+
+Add a step-trace accumulator. At the top of `_collect()` or `run_test()`,
+add:
+
+````python
+    step_traces: list[dict] = []
+    _step_t_start = time.monotonic()
+    _last_step_index = 0
+````
+
+Inside the WS message loop, when a `step` event arrives, record:
+
+````python
+                    if mtyp == "step" and sid == session_id:
+                        # v2.49.15 — capture step boundary for trace
+                        _now = time.monotonic()
+                        _dur_ms = int((_now - _step_t_start) * 1000)
+                        _step_t_start = _now
+                        # extract tool from line content if present
+                        _line = msg.get("line", "") or msg.get("content", "")
+                        _tool_name = ""
+                        # Lines like "── Step N ──" mark step start; skip them
+                        if _line.startswith("── Step"):
+                            try:
+                                _last_step_index = int(_line.split()[2])
+                            except Exception:
+                                pass
+                        elif "called " in _line or "[tool]" in _line.lower():
+                            # crude extraction; refined later if needed
+                            for _tname in (_line.split()[:5] if _line else []):
+                                if _tname.replace("_","").isalnum() and "_" in _tname:
+                                    _tool_name = _tname
+                                    break
+````
+
+If the WS event types differ from what's described, adapt. The key
+requirement: each `step` event with a tool call appends a row to
+`step_traces`.
+
+A simpler, more reliable alternative if WS message shape varies:
+hook into `tool_pending`/`tool_complete` events:
+
+````python
+                    if mtyp == "tool_pending" and sid == session_id:
+                        step_traces.append({
+                            "step_index": _last_step_index,
+                            "tool_name": msg.get("tool_name", ""),
+                            "tool_args": json.dumps(msg.get("tool_args", {}))[:500],
+                            "duration_ms": 0,  # filled on tool_complete
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "finish_reason": "",
+                            "error_text": "",
+                        })
+                    if mtyp == "tool_complete" and sid == session_id:
+                        if step_traces and step_traces[-1].get("duration_ms", 0) == 0:
+                            _now = time.monotonic()
+                            step_traces[-1]["duration_ms"] = int((_now - _step_t_start) * 1000)
+                            _step_t_start = _now
+````
+
+CC: pick whichever of these patterns matches the actual WS event names
+emitted by the agent loop. If neither matches exactly, fall back to:
+**capture every WS event with a non-empty `tool_name` field**, plus
+the `done` event (final). One row per tool call.
+
+After the `_collect()` loop ends and a result dict is built, attach the
+traces to `captured`:
+
+````python
+    captured["step_traces"] = step_traces
+````
+
+Then in `run_all_tests`, after `insert_result()` is called, also flush
+the traces:
+
+````python
+        # v2.49.15 — persist per-step trace rows
+        try:
+            from api.db.test_runs import insert_step_traces as _ist
+            if result.get("step_traces"):
+                _ist(run_id, tc.id, result["step_traces"])
+        except Exception as _ste:
+            print(f"[runner] step trace persist failed: {_ste}")
+````
+
+If the runner currently calls `insert_result(run_id, result)` somewhere,
+add the traces flush right after that call. Search for `insert_result`
+to find the site.
+
+If `result` doesn't reach the runner with the traces in it (because
+`step_traces` is local to `_collect()`), pass them through the
+return value of `run_test`:
+
+````python
+    return {
+        "id":             tc.id,
+        ...existing fields...,
+        "step_traces":    step_traces,   # v2.49.15
+    }
+````
+
+## Change 4 — `api/routers/tests_api.py`
+
+Add a new endpoint to expose traces:
+
+Find the existing `@router.get("/runs/{run_id}")` endpoint. Below it,
+add:
+
+````python
+@router.get("/runs/{run_id}/traces")
+async def get_run_traces(run_id: str, test_id: Optional[str] = None,
+                          _: dict = Depends(get_current_user)):
+    """v2.49.15 — return per-step trace rows for a test run. Optional
+    test_id filters to a single case."""
+    from api.db import test_runs as _tr
+    return {"traces": _tr.get_step_traces(run_id, test_id=test_id)}
+````
+
+## Change 5 — VERSION
+
+Update `VERSION`: 2.49.14 → 2.49.15
+
+## Verify
+
+````bash
+# 1. Migration registered
+grep -q '"v2.49.15 — per-test-case step traces' api/db/migrations.py
+grep -q 'test_step_traces' api/db/migrations.py
+
+# 2. DB helpers added
+grep -q 'def insert_step_traces' api/db/test_runs.py
+grep -q 'def get_step_traces' api/db/test_runs.py
+
+# 3. Test runner captures traces
+grep -q 'step_traces' tests/integration/test_agent.py
+grep -q 'insert_step_traces' tests/integration/test_agent.py
+
+# 4. Endpoint registered
+grep -q '/runs/{run_id}/traces' api/routers/tests_api.py
+````
+
+## Commit
+
+````bash
+git add -A
+git commit -m "feat(tests): per-step trace capture + diagnostics endpoint (v2.49.15)
+
+After v2.49.14 baseline regression we have 5 hard failures whose root
+causes are not diagnosable from existing test_run_results.failures
+JSONB. This adds the missing observability:
+
+- Migration 15: test_step_traces table with (run_id, test_id, step_index)
+  index. Captures per-step tool name, args (500 char), latency, tokens,
+  finish_reason, error_text.
+- Test runner accumulates step_traces during _collect() WS loop and
+  flushes via insert_step_traces() at end of each case alongside
+  insert_result().
+- New endpoint GET /api/tests/runs/{run_id}/traces?test_id=... exposes
+  the data for retroactive debug.
+
+No agent behaviour changes — pure observability. After deploy, re-run
+full-mem-on-baseline and the traces will reveal whether timeouts are
+LM Studio latency, tool execution, or loop behaviour."
+git push origin main
+````
+
+## Deploy
+
+After CC commits and CI rebuilds:
+
+````bash
+# On agent-01 — sidecar will auto-update; manual:
+cd /opt/hp1-agent
+git pull origin main
+docker pull ghcr.io/kbreivik/hp1-ai-agent:latest
+cd docker
+docker compose --env-file .env up -d --force-recreate hp1_agent
+
+# Verify migration applied
+docker exec hp1-postgres psql -U hp1 -d hp1_agent -c \
+  "SELECT version, description FROM schema_versions WHERE version = 15;"
+docker exec hp1-postgres psql -U hp1 -d hp1_agent -c \
+  "\\d test_step_traces"
+
+# Then re-run full-mem-on-baseline. After complete:
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"changeme"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+
+# Get latest run id
+RUN_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8000/api/tests/runs?limit=1' \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("runs",[d])[0]["id"])')
+
+# Pull traces for the 5 known failures
+for tid in research-precheck-01 action-rollback-01 safety-drain-guard-01 safety-vendor-lock-01 orch-verify-01; do
+  echo "─── $tid ───"
+  curl -s -H "Authorization: Bearer $TOKEN" \
+    "http://localhost:8000/api/tests/runs/$RUN_ID/traces?test_id=$tid" \
+    | python3 -m json.tool | head -50
+done
+````

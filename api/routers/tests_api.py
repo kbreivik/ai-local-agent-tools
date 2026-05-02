@@ -244,6 +244,14 @@ async def _run_tests_bg(
             )
             for r in results_data.get("results", []):
                 tr_db_inner.insert_result(run_id, r)
+                # v2.49.15 — persist per-step trace rows
+                try:
+                    _traces = r.get("step_traces") or []
+                    if _traces:
+                        tr_db_inner.insert_step_traces(run_id, r.get("id", ""), _traces)
+                except Exception as _ste:
+                    import logging
+                    logging.getLogger(__name__).debug("step trace persist failed: %s", _ste)
             tr_db_inner.finish_run(
                 run_id=run_id,
                 total=results_data.get("total", 0),
@@ -368,6 +376,14 @@ async def get_run_endpoint(run_id: str, _: str = Depends(get_current_user)):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+@router.get("/runs/{run_id}/traces")
+async def get_run_traces(run_id: str, test_id: Optional[str] = None,
+                          _: dict = Depends(get_current_user)):
+    """v2.49.15 — return per-step trace rows for a test run. Optional
+    test_id filters to a single case."""
+    return {"traces": tr_db.get_step_traces(run_id, test_id=test_id)}
 
 
 @router.get("/trend")

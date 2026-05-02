@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-01T20:25:59",
+  "updated_at": "2026-05-02T14:49:08",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5105,10 +5105,27 @@
       "filename": "CC_PROMPT_v2.49.14.md",
       "version": "v2.49.14",
       "theme": "fix(agent): hard-gate tool list after clarification answer (state flag + tool_choice=required) — closes clarify→audit_log escape in 4 tests",
+      "runner_status": "DONE",
+      "commit_sha": "80d4e07",
+      "error": "",
+      "started_at": "2026-05-01T20:25:59",
+      "finished_at": "2026-05-01T20:27:44",
+      "duration_s": 105.38959740000428,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260501_202559_CC_PROMPT_v2.49.14.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.15.md",
+      "version": "v2.49.15",
+      "theme": "feat(tests): per-step trace capture (test_step_traces table) + GET /runs/{id}/traces endpoint — retroactive debug for 5 v2.49.14 baseline failures",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-05-01T20:25:59",
+      "started_at": "2026-05-02T14:49:08",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",

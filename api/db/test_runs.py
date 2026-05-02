@@ -335,3 +335,68 @@ def toggle_schedule(schedule_id: str, enabled: bool) -> bool:
     except Exception as e:
         log.debug("toggle_schedule: %s", e)
         return False
+
+
+# ── Step traces (v2.49.15) ────────────────────────────────────────────────────
+
+def insert_step_traces(run_id: str, test_id: str, traces: list[dict]) -> None:
+    """v2.49.15 — bulk-insert per-step trace rows for a single test case.
+    `traces` is a list of dicts with keys: step_index, tool_name, tool_args,
+    duration_ms, prompt_tokens, completion_tokens, finish_reason, error_text."""
+    if not _is_pg() or not traces:
+        return
+    try:
+        conn = _conn(); cur = conn.cursor()
+        for t in traces:
+            cur.execute("""
+                INSERT INTO test_step_traces
+                    (run_id, test_id, step_index, tool_name, tool_args,
+                     duration_ms, prompt_tokens, completion_tokens,
+                     finish_reason, error_text)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                run_id, test_id,
+                int(t.get('step_index', 0)),
+                str(t.get('tool_name', ''))[:200],
+                str(t.get('tool_args', ''))[:500],
+                int(t.get('duration_ms', 0)),
+                int(t.get('prompt_tokens', 0)),
+                int(t.get('completion_tokens', 0)),
+                str(t.get('finish_reason', ''))[:50],
+                str(t.get('error_text', ''))[:500],
+            ))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        log.debug("insert_step_traces: %s", e)
+
+
+def get_step_traces(run_id: str, test_id: str = None) -> list[dict]:
+    """v2.49.15 — fetch step traces for one run, optionally filtered to
+    a single test_id. Ordered by test_id, step_index ASC."""
+    if not _is_pg():
+        return []
+    try:
+        conn = _conn(); cur = conn.cursor()
+        if test_id:
+            cur.execute("""
+                SELECT test_id, step_index, tool_name, tool_args, duration_ms,
+                       prompt_tokens, completion_tokens, finish_reason, error_text, timestamp
+                FROM test_step_traces
+                WHERE run_id=%s AND test_id=%s
+                ORDER BY step_index ASC
+            """, (run_id, test_id))
+        else:
+            cur.execute("""
+                SELECT test_id, step_index, tool_name, tool_args, duration_ms,
+                       prompt_tokens, completion_tokens, finish_reason, error_text, timestamp
+                FROM test_step_traces
+                WHERE run_id=%s
+                ORDER BY test_id ASC, step_index ASC
+            """, (run_id,))
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        log.debug("get_step_traces: %s", e)
+        return []
