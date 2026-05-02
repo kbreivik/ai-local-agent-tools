@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-02T20:29:37",
+  "updated_at": "2026-05-02T22:10:04",
   "entries": [
     {
       "filename": "CC_PROMPT_v2.16.1.md",
@@ -5156,10 +5156,27 @@
       "filename": "CC_PROMPT_v2.49.17.md",
       "version": "v2.49.17",
       "theme": "fix(tests): workload-stack_workload→logstash_logstash + preflight stale refs + setup hook DOCKER_HOST routing",
+      "runner_status": "DONE",
+      "commit_sha": "a5a640f",
+      "error": "",
+      "started_at": "2026-05-02T20:29:37",
+      "finished_at": "2026-05-02T20:31:31",
+      "duration_s": 114.03677459998289,
+      "log_file": "D:\\claude_code\\ai-local-agent-tools\\cc_prompts\\logs\\20260502_202937_CC_PROMPT_v2.49.17.log",
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "model": "",
+      "first_waiting_at": ""
+    },
+    {
+      "filename": "CC_PROMPT_v2.49.18.md",
+      "version": "v2.49.18",
+      "theme": "fix(tests): replace docker CLI subprocess with python SDK in setup hooks (container has no docker CLI)",
       "runner_status": "RUNNING",
       "commit_sha": "",
       "error": "",
-      "started_at": "2026-05-02T20:29:37",
+      "started_at": "2026-05-02T22:10:04",
       "finished_at": "",
       "duration_s": 0.0,
       "log_file": "",
