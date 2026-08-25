@@ -6,7 +6,7 @@ description: |
   Swarm state, checking Kafka/Elasticsearch, or before generating a new skill.
   Returns structured summaries only — never raw dumps.
 tools: Read, Glob, Grep, Bash
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 memory: user
 maxTurns: 15
 ---

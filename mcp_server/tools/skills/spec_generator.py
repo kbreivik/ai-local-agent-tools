@@ -307,7 +307,7 @@ def _call_cloud(user_msg: str) -> str:
 
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=2048,
         system=_SPEC_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],

@@ -6,7 +6,7 @@ description: |
   checking compat metadata, reviewing what skills exist, or understanding
   the skill pipeline before making changes.
 tools: Read, Glob, Grep, Bash
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 memory: user
 maxTurns: 15
 ---
