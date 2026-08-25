@@ -5,7 +5,7 @@ description: |
   to upgrade Kafka, Elasticsearch, Filebeat, Docker services, or any swarm-managed
   service. Checks breaking changes, skill compat, and rollback readiness.
 tools: Read, Glob, Grep, Bash
-model: claude-sonnet-4-20250514
+model: claude-sonnet-4-6
 memory: user
 maxTurns: 20
 ---
